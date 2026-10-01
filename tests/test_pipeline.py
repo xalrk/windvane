@@ -367,6 +367,17 @@ class Sessions(unittest.TestCase):
         call = json.loads((self.s.tmp / "calls.jsonl").read_text().splitlines()[-1])
         self.assertEqual(call["tool_ms"], "600000")
 
+    def test_a_killed_session_still_counts_its_tokens(self):
+        marker = self.s.tmp / "streamed"
+        os.environ["FAKE_HANG"] = str(marker)
+        _, killed, _ = runner.run_claude(self.p, "worker", "T-001", "hi", "", self.s.root, ticket="T-001",
+                                         stop_if=lambda: "time" if marker.exists() else None)
+        self.assertEqual(killed, "time")
+        row = json.loads((self.p.state / "ledger.jsonl").read_text().splitlines()[-1])
+        self.assertEqual((row["input"], row["output"], row["cache_read"]), (30, 12, 2000))  # m1 counted once
+        self.assertEqual(row["turns"], 2)
+        self.assertTrue(row["estimated"])
+
     def test_killing_a_worker_kills_the_critic_it_started(self):
         pack = critic.pack_dir(self.p, "T-001")
         pack.mkdir(parents=True)

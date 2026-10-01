@@ -262,7 +262,7 @@ def cmd_stats(a, p):
     agg = {}
     key = (lambda r: r.get("ticket") or r["role"]) if a.by == "ticket" else (lambda r: r["role"])
     for r in rows:
-        g = agg.setdefault(key(r), {"runs": 0, "turns": 0, "in": 0, "out": 0, "cache": 0, "usd": 0.0, "min": 0.0})
+        g = agg.setdefault(key(r), {"runs": 0, "turns": 0, "in": 0, "out": 0, "cache": 0, "usd": 0.0, "min": 0.0, "est": 0})
         g["runs"] += 1
         g["turns"] += r.get("turns") or 0
         g["in"] += (r.get("input") or 0) + (r.get("cache_write") or 0)
@@ -270,12 +270,41 @@ def cmd_stats(a, p):
         g["out"] += r.get("output") or 0
         g["usd"] += r.get("usd") or 0
         g["min"] += r.get("minutes") or 0
+        g["est"] += bool(r.get("estimated"))
     k = lambda n: f"{n / 1000:,.0f}k"
-    print(f"{a.by:12} {'runs':>4} {'turns':>5} {'fresh in':>9} {'cached in':>10} {'out':>7} {'API $':>7} {'min':>5}")
+    usd = lambda v, est: ("≥" if est else "") + f"{v:.2f}"  # a run killed before its result has no $: a floor
+    outcome = ticket_outcomes(p, agg) if a.by == "ticket" else {}
+    col = f" {'outcome':7}" if outcome else ""
+    print(f"{a.by:12}{col} {'runs':>4} {'turns':>5} {'fresh in':>9} {'cached in':>10} {'out':>7} {'API $':>7} {'min':>5}")
     for name, g in sorted(agg.items(), key=lambda kv: -kv[1]["usd"]):
-        print(f"{name[:12]:12} {g['runs']:4} {g['turns']:5} {k(g['in']):>9} {k(g['cache']):>10} {k(g['out']):>7} "
-              f"{g['usd']:7.2f} {g['min']:5.0f}")
+        o = f" {outcome.get(name, '-'):7}" if outcome else ""
+        print(f"{name[:12]:12}{o} {g['runs']:4} {g['turns']:5} {k(g['in']):>9} {k(g['cache']):>10} {k(g['out']):>7} "
+              f"{usd(g['usd'], g['est']):>7} {g['min']:5.0f}")
+    if outcome:
+        merged = [g for n, g in agg.items() if outcome.get(n) == "merged"]
+        tok = lambda gs: sum(g["in"] + g["out"] for g in gs)
+        other = tok(g for n, g in agg.items() if outcome.get(n) in ("open", "parked"))
+        if merged:
+            m = len(merged)
+            print(f"per merged ticket ({m}): {sum(g['runs'] for g in merged) / m:.1f} runs, {k(tok(merged) / m)} tokens, "
+                  f"{usd(sum(g['usd'] for g in merged) / m, sum(g['est'] for g in merged))} API $")
+        print(f"spent on tickets not merged: {k(other)} tokens, {100 * other / max(1, other + tok(merged)):.0f}% "
+              f"of ticket tokens (fresh in + out)")
+    est = sum(g["est"] for g in agg.values())
+    if est:
+        print(f"(≥: {est} runs ended before their result; their tokens are counted from the stream, their API $ is not.)")
     print("(API $ is what the tokens would cost on the API: a relative meter on a subscription.)")
+
+
+def ticket_outcomes(p, agg):
+    """merged / parked / open for each ticket in `agg`, from the queue's git-derived status ("-" for runs that
+    belong to no ticket, like the planner's)."""
+    try:
+        q = Queue(p)
+    except Exception:  # no remote yet: no outcomes rather than no stats
+        return {}
+    names = {"done": "merged", "parked": "parked"}
+    return {t: names.get(q.status(t), "open") for t in agg if t in q.files}
 
 
 def cmd_mode(a, p):

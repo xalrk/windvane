@@ -148,7 +148,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         mark.touch()
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
-    result, killed, final, noise = "", None, {}, []
+    result, killed, final, noise, seen = "", None, {}, [], {}
     with raw.open("w") as out:
         while True:
             if sel.select(timeout=30):
@@ -164,6 +164,9 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
                     continue
                 if ev.get("type") == "rate_limit_event" and usage:
                     usage.update(ev.get("rate_limit_info", {}))
+                elif ev.get("type") == "assistant":
+                    msg = ev.get("message") or {}
+                    seen[msg.get("id") or len(seen)] = msg.get("usage") or {}
                 elif ev.get("type") == "result":
                     result, final = ev.get("result") or "", ev
             if killed is None and stop_if:
@@ -180,10 +183,16 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     if mark:
         mark.unlink(missing_ok=True)
     end, error = ("killed", None) if killed else ending(final, code, noise)
-    u = final.get("usage") or {}
+    u, turns = final.get("usage"), final.get("num_turns")
+    estimated = not u and bool(seen)
+    if estimated:  # killed or crashed before its result event: add up what the stream showed
+        u = {k: sum(m.get(k) or 0 for m in seen.values()) for k in
+             ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
+        turns = len(seen)
+    u = u or {}
     append_jsonl(p.state / "ledger.jsonl", {
         "role": role, "label": label, "ticket": ticket, "model": model, "effort": effort,
-        "minutes": round((time.time() - started) / 60, 1), "turns": final.get("num_turns"),
+        "minutes": round((time.time() - started) / 60, 1), "turns": turns, "estimated": estimated,
         "input": u.get("input_tokens", 0), "output": u.get("output_tokens", 0),
         "cache_read": u.get("cache_read_input_tokens", 0), "cache_write": u.get("cache_creation_input_tokens", 0),
         "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error, "exit": code,
