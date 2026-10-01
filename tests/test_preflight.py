@@ -163,6 +163,21 @@ class Preflight(unittest.TestCase):
             self.cli("answer", "T-001", "B")
         self.assertIn("no question of it waits", str(e.exception.code))
 
+    def test_ctrl_c_keeps_the_answers_typed_and_starts_nothing(self):
+        x = preflight.question("T-001", "Red or blue?", QUESTION.split("\n", 1)[1], "new", 1)
+        replies = iter(["B"])
+
+        def inp(_):
+            try:
+                return next(replies)
+            except StopIteration:
+                raise KeyboardInterrupt
+        with self.assertRaises(SystemExit) as e:
+            preflight.ask(self.p, [x, {**x, "id": "T-001.2", "question": "Big or small?"}], inp, lambda *_: None)
+        self.assertIn("answers above are kept", str(e.exception.code))
+        self.assertIn("Answer: B (blue)", questions.part(self.main_questions(), "Answered"))
+        self.assertNotIn("Big or small?", self.main_questions())
+
 
 class Units(unittest.TestCase):
     def setUp(self):

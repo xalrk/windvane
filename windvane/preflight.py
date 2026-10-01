@@ -242,13 +242,16 @@ def parse(reply, x):
 
 def ask(p, qs, inp=input, say=print):
     """Ask each question at the terminal and record the answers. Enter skips one (a worker that still needs it asks
-    on the phone); `q` skips the rest."""
-    answers = []
+    on the phone); `q` skips the rest; Ctrl-C keeps the answers so far and stops."""
+    answers, stop = [], False
     for i, x in enumerate(qs, 1):
         say(show(x, i, len(qs)))
         try:
             reply = inp(f"  answer ({'/'.join(sorted(x['options']))}, your own words, Enter skips, q skips the rest): ")
         except EOFError:
+            break
+        except KeyboardInterrupt:  # keep what was typed, and don't start the run
+            stop = True
             break
         if reply.strip().lower() == "q":
             break
@@ -257,4 +260,6 @@ def ask(p, qs, inp=input, say=print):
             answers.append((x, *got))
     if answers:
         say(record(p, answers))
+    if stop:
+        raise SystemExit("\npreflight: stopped" + ("; the answers above are kept" if answers else ""))
     return answers
