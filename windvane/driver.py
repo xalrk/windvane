@@ -106,7 +106,7 @@ class Pilot:
         self.feedback = s.get("feedback", {})  # ticket -> what its next worker run must act on
         self.questions = s.get("questions", {})  # ticket -> its open question for the user
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
-        self.skip, self.merged, self.failed, self.held = set(), [], [], []
+        self.skip, self.merged, self.failed = set(), [], []
         self.partials, self.reviews, self.scores = {}, {}, {}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
@@ -491,11 +491,14 @@ class Pilot:
         self.questions[tid] = {"q": q or gist, "opts": opts, "rec": rec, "must_wait": must_wait, "branch": branch,
                                "asked": None}
         self.log(f"{tid}: question for the user: {q or gist}")
-        if quiet_now(p)[0]:
-            self.held.append(tid)  # only money, licence and merged-work questions ask in a quiet time
-        else:
-            self.send_question(tid)
-        self.save()
+        self.save()  # the loop's next pass sends it (state.json keeps it unsent across a restart)
+
+    def send_unsent(self):
+        """Send every stored question not yet sent: held through a quiet time, or left by an earlier run."""
+        for tid, q in list(self.questions.items()):
+            if q["asked"] is None:
+                self.send_question(tid)
+                self.save()
 
     def send_question(self, tid):
         q = self.questions[tid]
@@ -551,12 +554,10 @@ class Pilot:
         if err and not getattr(self, "quiet_err_sent", False):
             self.quiet_err_sent = True
             self.log(f"quiet times: {err}; asking as usual")
+        if not end:  # only money, licence and merged-work questions ask in a quiet time
+            self.send_unsent()
         if self.was_quiet and not end:
             self.log("quiet time over")
-            for tid in self.held:
-                if tid in self.questions:
-                    self.send_question(tid)
-            self.held = []
             picks = provisional(gout(self.p.main_root(), "show", f"{self.p.upstream}:{self.p.questions_rel}"))
             if picks:
                 push(f"Review: {len(picks)} provisional answer{'s' * (len(picks) > 1)}",
@@ -706,15 +707,19 @@ class Pilot:
             if self.n == 1:
                 self.threads[-1].join()
 
-    def run(self, deadline):
-        p = self.p
-        p.state.mkdir(parents=True, exist_ok=True)
-        self.lockfile = open(p.state / "lock", "w")
+    def take_lock(self):
+        """One driver per project; `locked` reads this lock to tell the phone a run is on."""
+        self.p.state.mkdir(parents=True, exist_ok=True)
+        self.lockfile = open(self.p.state / "lock", "w")
         try:
             fcntl.flock(self.lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             self.lockfile.close()
             raise SystemExit("windvane: the autopilot is already running for this project")
+
+    def run(self, deadline):
+        p = self.p
+        self.take_lock()
         (p.state / "STOP").unlink(missing_ok=True)
         self.log(f"autopilot started, until {hhmm(deadline)} (5h cap {self.a.cap:g}%, week cap {self.a.week_cap:g}%"
                  + (f", {self.n} tickets at a time" if self.n > 1 else "") + ")")
@@ -729,6 +734,8 @@ class Pilot:
         finally:
             for t in self.threads:  # the running tickets finish (their runs stop at the deadline at the latest)
                 t.join()
+            if not quiet_now(p)[0]:
+                self.send_unsent()  # a question from a ticket that finished after the loop's last pass
             names = lambda ids: "; ".join(map(self.name, ids)) or "none"
             crit = ", ".join(f"{t} {s:g}" for t, s in self.scores.items())
             summary = (f"Why: {self.stop_reason}.\nMerged: {names(self.merged)}.\n"
@@ -740,6 +747,19 @@ class Pilot:
                  "checkered_flag", ("Usage=usage",))
             self.save()
             self.lockfile.close()
+
+
+def locked(p):
+    """Whether a driver holds this project's lock, foreground or detached: the lock goes when its process does."""
+    f = p.state / "lock"
+    if not f.exists():
+        return False
+    with open(f) as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError:
+            return True
+    return False
 
 
 # ---------- planning
