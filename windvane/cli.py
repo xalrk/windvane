@@ -13,7 +13,7 @@ from . import critic as critic_mod
 from . import driver, jobs, questions, watch
 from .config import DIR, HOME, Project, find
 from .queue import Queue
-from .runner import Usage
+from .runner import Usage, inherited_stop
 from .util import git, gout, hhmm, load_json, now, read_jsonl
 
 
@@ -227,7 +227,8 @@ def cmd_critic(a, p):
     if not p.critic["enabled"]:
         print("CRITIC STEP: skip. The critic is off for this project.")
         return
-    entry, text = critic_mod.judge(p, tid, os.getcwd())
+    usage = Usage(p)
+    entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage))
     print(text)
     if entry is None:
         print("\nCRITIC STEP: none. Fix the pack and run it again; if the critic itself keeps failing, go on.")

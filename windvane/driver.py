@@ -25,7 +25,7 @@ from .config import HOME
 from .jobs import check, tail
 from .questions import (desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
 from .queue import Queue
-from .runner import Usage, run_claude
+from .runner import Usage, over_caps, run_claude
 from .util import git, gout, hhmm, last_match, load_json, log, now, push, save_json, sh
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
@@ -151,19 +151,12 @@ class Pilot:
 
     def stopper(self, kill_at):
         def stop_if():
-            if now() >= kill_at:
-                return "time"
-            u = self.usage
-            if u.five is not None and u.five >= self.a.cap:
-                return "5-hour cap"
-            if u.week is not None and u.week >= self.a.week_cap:
-                return "weekly cap"
-            return "usage limit" if u.rejected else None
+            return "time" if now() >= kill_at else over_caps(self.usage, self.a.cap, self.a.week_cap)
         return stop_if
 
     def claude(self, role, label, prompt, system, cwd, kill_at, allow=(), deny=(), ticket=""):
         text, killed, error = run_claude(self.p, role, label, prompt, system, cwd, allow, deny, self.usage,
-                                         self.stopper(kill_at), ticket)
+                                         self.stopper(kill_at), ticket, (kill_at, self.a.cap, self.a.week_cap))
         if killed:
             self.log(f"  stopped {label}: {killed} ({self.usage.text()})")
         elif not error:

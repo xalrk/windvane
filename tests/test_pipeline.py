@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import time
 import unittest
 from argparse import Namespace
 from datetime import timedelta
@@ -10,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver, jobs  # noqa: E402
+from windvane import critic, driver, jobs, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
@@ -348,6 +349,56 @@ class Parallel(unittest.TestCase):
         self.assertTrue(driver.overlaps({"windvane/"}, {"windvane/driver.py"}))
         self.assertTrue(driver.overlaps({"a.py"}, {"a.py"}))
         self.assertFalse(driver.overlaps({"a.py"}, {"a.pyc", "docs"}))
+
+
+class Sessions(unittest.TestCase):
+    def setUp(self):
+        self.s = Sandbox()
+        self.s.write(".windvane/config.toml", self.s.root.joinpath(".windvane/config.toml").read_text()
+                     .replace("enabled = false", "enabled = true"))
+        self.s.publish("critic on")
+        self.p = Project(self.s.root)
+
+    def tearDown(self):
+        self.s.close()
+
+    def test_tool_calls_get_ten_minutes(self):
+        runner.run_claude(self.p, "worker", "x", "hi", "", self.s.root)
+        call = json.loads((self.s.tmp / "calls.jsonl").read_text().splitlines()[-1])
+        self.assertEqual(call["tool_ms"], "600000")
+
+    def test_killing_a_worker_kills_the_critic_it_started(self):
+        pack = critic.pack_dir(self.p, "T-001")
+        pack.mkdir(parents=True)
+        (pack / "notes.md").write_text("User-facing: yes\nfaster\n")
+        pid_file = self.s.tmp / "critic.pid"
+        os.environ["FAKE_CRITIC_PID"] = str(pid_file)
+        started = time.time()
+        _, killed, _ = runner.run_claude(
+            self.p, "worker", "T-001", "Ticket T-001. Go.", "# windvane worker run", self.s.root,
+            stop_if=lambda: "time" if pid_file.exists() else None, limits=(now() + timedelta(hours=1), 75, 95))
+        self.assertEqual(killed, "time")
+        pid = int(pid_file.read_text())
+        for _ in range(100):
+            stat = Path(f"/proc/{pid}/stat")
+            if not stat.exists() or stat.read_text().split(") ")[-1].startswith("Z"):
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("the critic outlived its worker")
+        self.assertLess(time.time() - started, 30)
+        self.assertEqual(list((self.p.state / "nested").glob("*/*")), [])
+
+    def test_a_nested_session_keeps_the_outer_deadline_and_caps(self):
+        u = runner.Usage(self.p)
+        self.assertIsNone(runner.inherited_stop(self.p, u))
+        os.environ.update(WINDVANE_STOP_AT=str(time.time() + 3600), WINDVANE_CAPS="75,95")
+        stop_if = runner.inherited_stop(self.p, u)
+        self.assertIsNone(stop_if())
+        u.update({"unifiedWindows": {"five_hour": {"utilization": 0.8}}})  # usage.json, as any session writes it
+        self.assertEqual(stop_if(), "5-hour cap")
+        os.environ["WINDVANE_STOP_AT"] = str(time.time() - 1)
+        self.assertEqual(runner.inherited_stop(self.p, u)(), "time")
 
 
 class Heavy(unittest.TestCase):
