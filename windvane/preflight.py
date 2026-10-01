@@ -11,6 +11,7 @@ import re
 import sys
 from datetime import datetime, timedelta
 
+from .config import slots
 from .driver import REVIEW_DENY, clean_detach, ensure_worktree, land, pending_ids, rules
 from .questions import OPT_RE, blocks, give_answer, part
 from .queue import Queue
@@ -34,8 +35,7 @@ def minutes_per_ticket(p, default=60.0):
 
 def likely(p, q, hours, parallel=None):
     """The tickets the run will likely reach in `hours`, in queue order (at most eight: the prompt stays small)."""
-    slots = max(1, parallel or p.ap["parallel"]) if p.cfg["isolate"] else 1
-    n = max(1, min(8, math.ceil(hours * 60 * slots / minutes_per_ticket(p))))
+    n = max(1, min(8, math.ceil(hours * 60 * slots(p, parallel) / minutes_per_ticket(p))))
     return [t for t in q.order if q.status(t) not in ("done", "parked")][:n]
 
 

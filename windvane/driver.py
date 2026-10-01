@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import critic
-from .config import HOME
+from .config import HOME, slots
 from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
 from .queue import Queue
@@ -58,14 +58,23 @@ REVIEW_DENY = ["Edit", "Write", "NotebookEdit", "Agent", "Bash(git push *)", "Ba
                "Bash(gh pr edit *)", "Bash(gh pr comment *)", "Bash(gh pr close *)"]
 
 
-def overlaps(paths, others):
-    """Whether two Touches lists share a file, or one names a directory holding the other's file."""
+def shared(paths, others):
+    """The paths two Touches lists have in common: a file both name, or the file in a directory the other names."""
+    out = set()
     for a in paths:
         for b in others:
             a_, b_ = a.rstrip("/"), b.rstrip("/")
             if a_ == b_ or a_.startswith(b_ + "/") or b_.startswith(a_ + "/"):
-                return True
-    return False
+                out.add(max(a, b, key=len))
+    return sorted(out)
+
+
+def overlaps(paths, others):
+    return bool(shared(paths, others))
+
+
+def nth(n):
+    return {1: "1st", 2: "2nd", 3: "3rd"}.get(n, f"{n}th")
 
 
 def ensure_worktree(p, path, setup=True):
@@ -133,13 +142,15 @@ class Pilot:
         self.sleep = time.sleep  # the retry backoff's; tests make it instant
         self.stop_reason = "unknown"
         self.worker_rules, self.review_rules = rules(p, "WORKER.md"), rules(p, "REVIEW.md")
-        # Parallel slots: each has its own work and ci worktrees. Merges and fetches are serialized.
-        self.n = max(1, getattr(a, "parallel", None) or p.ap["parallel"]) if p.cfg["isolate"] else 1
+        # Parallel slots: each has its own work and ci worktrees, made when first used. Merges and fetches are
+        # serialized. `n` is the most at once; the queue's Touches and the usage window decide how many really run.
+        self.n = slots(p, getattr(a, "parallel", None))
         self.tl = threading.local()
         self.lock, self.merge_lock, self.git_lock = threading.RLock(), threading.Lock(), threading.Lock()
         self.running = {}  # ticket -> slot
         self.owner = {i: None for i in range(self.n)}  # slot -> the ticket whose uncommitted work its tree holds
         self.threads, self.wake = [], threading.Event()
+        self.waits, self.said = [], set()  # why ready tickets can't start beside the running ones; what the log has
 
     def slot_dirs(self, i):
         p = self.p
@@ -160,7 +171,7 @@ class Pilot:
     def save(self):
         with self.lock:
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
-                                        "costs": self.costs[-10:]})
+                                        "costs": self.costs[-10:], "running": dict(self.running)})
 
     def log(self, msg):
         log(self.p, msg)
@@ -640,18 +651,33 @@ class Pilot:
         self.wake.wait(seconds)
         self.wake.clear()
 
+    def clash(self, tid, busy):
+        """Why `tid` can't start beside the `busy` tickets, or "". Tickets run side by side only when their
+        `Touches:` lists don't overlap; one without the line may touch anything, so it runs alone."""
+        touches = self.queue.touches
+        alone = next((b for b in busy if not touches.get(b)), None)
+        if alone:
+            return f"{alone} runs alone (no Touches line)"
+        if busy and not touches.get(tid):
+            return "no Touches line, so it runs alone"
+        for b in busy:
+            both = shared(touches[tid], touches[b])
+            if both:
+                return f"overlaps {b} on {', '.join(both)}"
+        return ""
+
     def pick(self, free):
-        """(ticket, kind, branches, slot) to start in one of the `free` slots, or (None, why, None, None). Tickets
-        run side by side only when their `Touches:` lists don't overlap; one without the line runs alone."""
+        """(ticket, kind, branches, slot) to start in one of the `free` slots, or (None, why, None, None). Notes in
+        `waits` why each ready ticket must wait for the running ones."""
         q = self.queue
-        busy = set(self.running)
-        avoid = set(self.skip) | busy
-        if busy and any(not q.touches.get(t) for t in busy):
-            avoid |= set(q.order)  # something running may touch anything: nothing starts beside it
-        touching = set().union(*(q.touches.get(t, set()) for t in busy)) if busy else set()
+        busy = sorted(self.running)
+        avoid = set(self.skip) | set(busy)
+        self.waits = []
         for t in q.order:
-            if busy and (not q.touches.get(t) or overlaps(q.touches[t], touching)):
+            why = "" if t in avoid or q.status(t, set(self.questions)) not in ("wip", "todo") else self.clash(t, busy)
+            if why:
                 avoid.add(t)
+                self.waits.append(f"{t} waits: {why}")
         while True:
             tid, *rest = q.pick(avoid, set(self.questions))
             if tid is None:
@@ -676,10 +702,19 @@ class Pilot:
             log(self.p, "\n".join(["its last lines:", *e.lines]), echo=False)  # the terminal showed them already
             return False
 
+    def idle_note(self, notes):
+        """Log why a slot sits idle, once per change rather than every pass of the loop."""
+        for n in notes:
+            if n not in self.said:
+                self.log(n)
+        self.said = set(notes)
+
     def start(self, slot, tid, kind, branches, deadline):
         if not self.prepare(slot):
             return
-        self.running[tid] = slot
+        with self.lock:
+            self.running[tid] = slot
+        self.save()  # `windvane status` shows the running tickets
         t = threading.Thread(target=self.slot_run, args=(slot, tid, kind, branches, deadline), daemon=True)
         self.threads.append(t)
         t.start()
@@ -716,11 +751,9 @@ class Pilot:
             if not free:
                 self.pause()
                 continue
-            need = self.est() * (len(self.running) + 1)
-            if self.usage.rejected or self.usage.five + need > self.a.cap:
-                if self.running:
-                    self.pause(60)  # no more slots until the window allows; the running ones go on
-                    continue
+            k = len(self.running) + 1
+            over = self.usage.rejected or self.usage.five + self.est() * k > self.a.cap
+            if over and not self.running:
                 if not self.wait_for_reset(deadline):
                     return
                 continue
@@ -728,8 +761,15 @@ class Pilot:
             self.poll_questions()
             self.queue = Queue(p)
             tid, kind, branches, slot = self.pick(free)
+            if tid is not None and over:  # no more slots until the window allows; the running ones go on
+                why = "usage limit reached" if self.usage.rejected else (
+                    f"usage estimate ({self.usage.five:g}% + {k} x {self.est():.0f}% > cap {self.a.cap:g}%)")
+                self.idle_note([f"no {nth(k)} slot: {why}"])
+                self.pause(60)
+                continue
             if tid is None:
                 if self.running:
+                    self.idle_note(self.waits)
                     self.pause()
                     continue
                 if self.questions:
@@ -746,9 +786,10 @@ class Pilot:
                         continue
                 self.stop_reason = kind
                 return
-            self.idle = False
+            self.idle, self.said = False, set()
             if self.n > 1:
-                self.log(f"{tid}: slot {slot}")
+                beside = f", beside {', '.join(sorted(self.running))}" if self.running else ""
+                self.log(f"{tid}: slot {slot}{beside}")
             self.start(slot, tid, kind, branches, deadline)
             if self.n == 1:
                 self.threads[-1].join()
@@ -769,7 +810,7 @@ class Pilot:
         self.take_lock()
         (p.state / "STOP").unlink(missing_ok=True)
         self.log(f"autopilot started, until {hhmm(deadline)} (5h cap {self.a.cap:g}%, week cap {self.a.week_cap:g}%"
-                 + (f", {self.n} tickets at a time" if self.n > 1 else "") + ")")
+                 + (f", up to {self.n} tickets at a time" if self.n > 1 else "") + ")")
         ready = self.prepare(0)  # before any session or push: a failed setup ends the run with a single push
         if ready:
             self.usage.probe(p)

@@ -30,7 +30,9 @@ floor = 4                 # under this, rethink rather than patch
 revisions = 3
 
 [autopilot]
-parallel = 2              # tickets at a time, each in its own worktrees (only those whose Touches don't overlap)
+parallel = "auto"         # tickets at a time (a number caps it): those whose Touches don't overlap, while
+                          # the usage window has room; each slot gets its own worktrees
+max_parallel = 4          # the most slots "auto" opens
 cap = 75                  # % of the 5-hour window: pause at it until the window resets
 week_cap = 95             # % of the weekly limit: stop
 ticket_hours = 3          # one worker run at most
