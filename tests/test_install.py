@@ -127,6 +127,20 @@ class Installed(unittest.TestCase):
         self.assertFalse((tmp / "state/windvane/install.json").exists())
 
 
+class Checkout(unittest.TestCase):
+    def test_bin_runs_without_leaking_pythonpath(self):
+        """What bin/windvane starts (sessions, checks, bg and heavy jobs) mustn't import the checkout's windvane."""
+        cfg = Path(tempfile.mkdtemp())
+        (cfg / "windvane").mkdir()
+        (cfg / "windvane/machine.toml").write_text("busy = []\nmin_free_gb = 0\n")
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        r = subprocess.run([str(REPO / "bin/windvane"), "heavy", "--", sys.executable, "-c",
+                            "import os; print(os.environ.get('PYTHONPATH'))"], capture_output=True, text=True,
+                           env={**env, "XDG_CONFIG_HOME": str(cfg), "XDG_RUNTIME_DIR": str(cfg)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip().splitlines()[-1], "None")
+
+
 class InstallInProcess(unittest.TestCase):
     """install/uninstall from a checkout, in a throwaway HOME and Claude config dir."""
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
-# windvane entry point; `windvane install` links it into ~/.local/bin.
+# windvane from a checkout (`windvane install` can link it into ~/.local/bin). The checkout goes on sys.path only, not
+# into PYTHONPATH, which every session, check and project command started from here would inherit.
 here="$(dirname "$(readlink -f "$0")")"
-PYTHONPATH="$here/..${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m windvane "$@"
+exec python3 -c 'import sys; sys.path[0] = sys.argv.pop(1); from windvane.cli import main; sys.exit(main())' \
+    "$here/.." "$@"
