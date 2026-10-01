@@ -20,6 +20,8 @@ critic = "opus"
 critic_effort = "high"
 planner = "opus"
 planner_effort = "high"
+preflight = "sonnet"       # reads the next tickets for questions at the start of a run
+preflight_effort = "medium"
 
 [critic]
 enabled = true

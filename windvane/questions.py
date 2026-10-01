@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from .util import load_json, save_json, sh
 
 OPT_RE = re.compile(r"^- \*\*([A-E])\*\*:?\s*(.+)$", re.M)
+BLOCK_RE = re.compile(r"^### (\S+?):?[ \t]+(.*?)$(.*?)(?=^### |^PREFLIGHT:|^## |\Z)", re.M | re.S)
 
 
 def part(text, heading):
@@ -51,6 +52,16 @@ def provisional(text):
         out.append({"ticket": m.group(1), "question": m.group(2).strip(), "built": letter,
                     "option": opts.get(letter, "")})
     return out
+
+
+def blocks(text):
+    """[(ticket, question, body)] for every `### <ID>: <question>` block in `text`."""
+    return [(m.group(1), m.group(2).strip(), m.group(3).strip()) for m in BLOCK_RE.finditer(text or "")]
+
+
+def answered(text, tid):
+    """The `## Answered` blocks for one ticket, as written in QUESTIONS.md."""
+    return [f"### {t}: {q}\n{body}" for t, q, body in blocks(part(text, "Answered")) if t == tid]
 
 
 # ---------- quiet times
