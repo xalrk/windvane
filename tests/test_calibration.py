@@ -53,6 +53,10 @@ class Calibration(unittest.TestCase):
         self.assertIn("first scores: 5-8 (median 6.5)", out)
         self.assertNotIn("T-001", out)
 
+    def test_last_below_one_is_refused(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli(cli.cmd_stats, critic=True, last=0)
+
     def test_overview_line(self):
         out = self.run_cli(cli.cmd_overview)
         self.assertIn("Critic, last 4 tickets: first scores 4-9 (median 6.5); 2 of 4 ended exactly on the pass mark "

@@ -358,6 +358,8 @@ def cmd_stats(a, p):
 
 def critic_stats(a, p):
     """Whether the critic's calibration spreads its scores out, over the last `--last` tickets it scored."""
+    if a.last < 1:
+        sys.exit("--last needs at least 1 ticket")
     c = critic_mod.calibration(read_jsonl(p.state / "critic.jsonl"), p.critic["pass"], a.last)
     if not c:
         print("no critic verdicts yet")
