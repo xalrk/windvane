@@ -54,11 +54,11 @@ def revisions(records):
 
 
 def step(p, score, fixes, revs):
+    """What a verdict leads to. Open "Fix in this ticket" points block a pass whatever the score (the user's call,
+    2026-10-01: T-004 passed at 8 while its critique still named a crash race in its own code)."""
     c = p.critic
-    if score >= c["pass"]:
-        return "pass"
     if fixes == 0:
-        return "scope"
+        return "pass" if score >= c["pass"] else "scope"
     if revs >= c["revisions"]:
         return "accept"
     return "revise" if score >= c["floor"] else "rethink"

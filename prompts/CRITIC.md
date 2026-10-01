@@ -17,8 +17,8 @@ The bar to pass is {pass}; under {floor} means the approach is wrong.
 
 ## Judge only what this ticket can change
 Everything you criticise goes in one of two lists:
-- **Fix in this ticket**: faults in what this ticket made that it can fix within its own scope. Only these send it
-  back, so be strict about what belongs here.
+- **Fix in this ticket**: faults in what this ticket made that it can fix within its own scope. Any point here sends
+  it back, whatever the score, so be strict about what belongs here: a nit you'd let ship goes under "Beyond".
 - **Beyond this ticket**: everything else that dragged the score down, as short follow-up ticket ideas. They cost no
   revision; they feed the next planning run.
 

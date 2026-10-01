@@ -75,7 +75,9 @@ class FakeP:
 class Critic(unittest.TestCase):
     def test_step(self):
         p = FakeP()
-        self.assertEqual(critic.step(p, 8, 2, 0), "pass")
+        self.assertEqual(critic.step(p, 8, 0, 0), "pass")
+        self.assertEqual(critic.step(p, 9, 1, 0), "revise")  # open fixes block a pass, whatever the score
+        self.assertEqual(critic.step(p, 9, 1, 3), "accept")
         self.assertEqual(critic.step(p, 5, 0, 0), "scope")
         self.assertEqual(critic.step(p, 5, 1, 0), "revise")
         self.assertEqual(critic.step(p, 3, 1, 0), "rethink")
