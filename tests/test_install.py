@@ -10,10 +10,13 @@ sys.path.insert(0, str(REPO))
 
 from windvane.cli import add_keyword_hook  # noqa: E402
 
+RUNTIME = tempfile.mkdtemp()
 
-def hook(prompt):
-    out = subprocess.run([sys.executable, str(REPO / "hooks/mention_hook.py")], input=json.dumps({"prompt": prompt}),
-                         capture_output=True, text=True).stdout
+
+def hook(prompt, session=""):
+    out = subprocess.run([sys.executable, str(REPO / "hooks/mention_hook.py")],
+                         input=json.dumps({"prompt": prompt, "session_id": session}), capture_output=True, text=True,
+                         env={"XDG_RUNTIME_DIR": RUNTIME, "PATH": "/usr/bin:/bin"}).stdout
     return json.loads(out)["hookSpecificOutput"]["additionalContext"] if out.strip() else None
 
 
@@ -24,6 +27,11 @@ class KeywordHook(unittest.TestCase):
             self.assertIn("windvane", hook(p) or "", p)
         for p in ("fix the pilot light", "autopilots? no: autopiloting is a word", "build it with claude"):
             self.assertIsNone(hook(p), p)
+
+    def test_once_per_session(self):
+        self.assertIsNotNone(hook("windvane status?", "s-1"))
+        self.assertIsNone(hook("[notice] windvane merged T-003", "s-1"))
+        self.assertIsNotNone(hook("windvane status?", "s-2"))
 
     def test_settings_keep_other_hooks_and_get_it_once(self):
         f = Path(tempfile.mkdtemp()) / "settings.json"
