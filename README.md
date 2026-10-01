@@ -41,7 +41,7 @@ windvane run --for 6h --detach                      # in tmux; `windvane watch` 
 | `preflight [--for 4h] [--json]` | the product questions the next tickets will need, asked now (`run` in a terminal does it first; `--no-preflight` skips) |
 | `status`, `queue`, `overview`, `watch` | what it's doing, the queue, where the project stands, a live view (no tokens) |
 | `stop [--now]` | stop after the current ticket; `--now` kills every session of the run (workers, reviewers, the critics and `bg` jobs they started) and leaves the worktrees for the next run to resume |
-| `deadline 14:00 \| "2026-10-02 09:30" \| +90m` | move a running autopilot's deadline: new tickets keep to it at once, running sessions are stopped by it (within 30 s) |
+| `deadline 14:00 \| "2026-10-02 09:30" \| +90m` | move a running autopilot's deadline: new tickets keep to it at once, running sessions are stopped by it |
 | `plan [goal] [--merge]` | a planner session turns the goal and the critic's follow-up notes into tickets |
 | `new <title>` | a ticket file with the next id |
 | `answer T-007 B` / `answer T-007.1 "free text"` | answer a ticket's (or a preflight) question at the desk |

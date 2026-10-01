@@ -14,7 +14,7 @@ from .util import append_jsonl, load_json, save_json
 
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
 TOOL_MS = "600000"
-POLL = 30  # seconds between stop checks of a quiet session: how soon a moved deadline or `stop --now` acts
+POLL = 5  # seconds between a quiet session's stop checks (small file reads, no tokens): how soon `stop --now` acts
 
 
 def env(extra=None):

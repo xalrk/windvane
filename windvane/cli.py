@@ -19,7 +19,7 @@ from .runner import Usage, inherited_stop
 from .util import git, gout, hhmm, load_json, now, read_jsonl
 
 
-STOP_WAIT = 150  # seconds `stop --now` waits for the run to end: a 30 s poll, then up to 60 s for SIGTERM, and more
+STOP_WAIT = 90  # seconds `stop --now` waits for the run to end: a 5 s poll, then up to 60 s for SIGTERM to work
 
 
 def parse_deadline(until, for_, usage=None):
@@ -174,9 +174,9 @@ def cmd_deadline(a, p):
     t = parse_deadline(None, when[1:], usage) if when.startswith("+") else parse_deadline(when, None, usage)
     if not running(p):
         sys.exit(f"{p.name}: autopilot isn't running; start one with windvane run --until {t:%H:%M}")
-    (p.state / "DEADLINE").write_text(t.isoformat(timespec="minutes"))
+    (p.state / "DEADLINE").write_text(t.isoformat(timespec="seconds"))
     print(f"{p.name}: the run now ends at {t:%Y-%m-%d %H:%M}. New tickets keep to it at once; running sessions are "
-          "stopped by then (within a minute of it)")
+          "stopped by then")
 
 
 def parallel_arg(v):
