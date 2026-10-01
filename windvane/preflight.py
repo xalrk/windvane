@@ -18,7 +18,8 @@ from .runner import run_claude
 from .util import git, gout, load_json, log, now, read_jsonl, save_json
 
 PREFLIGHT_RE = re.compile(r"^PREFLIGHT: (\d+|NONE)", re.M)
-
+# Read, Grep and Glob only: it runs in the user's checkout, and its prompt holds every text it needs.
+DENY = [*REVIEW_DENY, "Bash", "WebFetch", "WebSearch"]
 
 
 def minutes_per_ticket(p, default=60.0):
@@ -86,7 +87,7 @@ def find(p, hours, usage=None, parallel=None):
         ]))
         log(p, f"preflight run ({len(tids)} tickets: {', '.join(tids)})", echo=False)
         text, killed, error = run_claude(p, "preflight", "preflight", prompt, rules(p, "PREFLIGHT.md"), p.main_root(),
-                                         deny=REVIEW_DENY, usage=usage)
+                                         deny=DENY, usage=usage)
         if killed or error or not PREFLIGHT_RE.search(text):
             why = f"preflight: no list ({killed or error or 'no PREFLIGHT line'})"
             log(p, why, echo=False)
@@ -109,7 +110,9 @@ def lookup(p, key):
     """The question `key` names (`T-003.1`, or `T-003` when the ticket has just one): saved by preflight, or a
     provisional answer on main (so `windvane answer` changes one after its ticket merged). None if not exactly one."""
     def pick(qs):
-        hit = [x for x in qs if x["id"].lower() == key.lower()] or [x for x in qs if x["ticket"] == p.norm(key)]
+        hit = [x for x in qs if x["id"].lower() == key.lower()]
+        if not hit and "." not in key:  # a mistyped T-001.2 must not answer T-001.1
+            hit = [x for x in qs if x["ticket"] == p.norm(key)]
         return hit[0] if len(hit) == 1 else None
     x = pick(pending(p))
     if x:
@@ -173,15 +176,19 @@ def followup(p, cd, tid, x, letter, text):
                  "answer\n")
 
 
+def forget(p, ids):
+    """Drop answered questions from the saved preflight list, so they aren't offered again."""
+    save_json(p.state / "preflight.json", {**load_json(p.state / "preflight.json", {}),
+                                           "questions": [x for x in pending(p) if x["id"] not in ids]})
+
+
 def record(p, answers):
     """Commit the answers to main (or hand open phone questions to the driver, which already waits on them).
     Returns a line for the user."""
     phone = [a for a in answers if a[0]["kind"] == "open"]
     for x, letter, text in phone:
         give_answer(p, x["ticket"], letter, text)
-    done = {x["id"] for x, _, _ in answers}
-    save_json(p.state / "preflight.json", {**load_json(p.state / "preflight.json", {}),
-                                           "questions": [x for x in pending(p) if x["id"] not in done]})
+    forget(p, {x["id"] for x, _, _ in answers})
     filed = [a for a in answers if a[0]["kind"] != "open"]
     if not filed:
         return f"{len(phone)} answer{'s' * (len(phone) > 1)} passed to the waiting run" if phone else "no answers"

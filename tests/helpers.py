@@ -20,7 +20,8 @@ emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unif
 log = os.environ.get("FAKE_LOG")
 if log:
     with open(log, "a") as f:
-        f.write(json.dumps({"system": system[:40], "prompt": prompt,
+        deny = json.loads(args[args.index("--settings") + 1])["permissions"]["deny"] if "--settings" in args else []
+        f.write(json.dumps({"system": system[:40], "prompt": prompt, "deny": deny,
                             "tool_ms": os.environ.get("BASH_DEFAULT_TIMEOUT_MS")}) + "\n")
 sh = lambda *c: subprocess.run(c, capture_output=True, text=True).stdout.strip()
 # FAKE_FAIL: what each session does in turn (ok, error, crash, quiet = no RESULT line); a trailing * repeats the last
@@ -105,7 +106,8 @@ elif system.startswith("# windvane planner run"):
         open("stray.txt", "w").write("x")
     text = "PLAN: new=1 noted=0 one ticket"
 elif system.startswith("# windvane preflight"):  # FAKE_PREFLIGHT: the questions it finds
-    text = os.environ.get("FAKE_PREFLIGHT", "") + "\nPREFLIGHT: " + ("1 questions" if os.environ.get("FAKE_PREFLIGHT") else "NONE")
+    found = os.environ.get("FAKE_PREFLIGHT", "")
+    text = found + "\nPREFLIGHT: " + ("1 questions" if found else "NONE")
 emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
 emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01,
       "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100}})

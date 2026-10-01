@@ -135,6 +135,7 @@ class Preflight(unittest.TestCase):
         self.assertEqual(self.calls("preflight"), [])  # T-001 waits on its open question: nothing new to read
         self.cli("answer", "T-001", "A")
         self.assertEqual(questions.desk_answers(self.p)["T-001"]["option"], "A")  # the waiting run takes it
+        self.assertEqual([x["id"] for x in preflight.pending(self.p)], ["T-009.p1"])  # not offered again
         self.cli("answer", "T-009.p1", "A")
         text = self.main_questions()
         self.assertNotIn("Big or small?", questions.part(text, "Provisional"))
@@ -157,6 +158,18 @@ class Preflight(unittest.TestCase):
         self.assertIn("Answer: B (small). Changes the built A: T-002 makes the change",
                       questions.part(self.main_questions(), "Answered"))
         self.assertEqual(Queue(self.p).pick()[:2], ("T-002", "todo"))  # listed in QUEUE.md: it goes first
+
+    def test_the_session_can_only_read(self):
+        self.cli("preflight", "--json")
+        f = self.s.tmp / "calls.jsonl"
+        deny = [json.loads(l)["deny"] for l in f.read_text().splitlines() if "preflight" in l]
+        self.assertTrue(deny and all({"Bash", "Edit", "Write", "WebFetch"} <= set(d) for d in deny))
+
+    def test_a_mistyped_question_id_answers_nothing(self):
+        os.environ["FAKE_PREFLIGHT"] = QUESTION
+        self.cli("preflight", "--json")
+        self.assertIsNone(preflight.lookup(self.p, "T-001.2"))
+        self.assertEqual(preflight.lookup(self.p, "t-001")["id"], "T-001.1")
 
     def test_an_answer_with_no_question_anywhere_says_so(self):
         with self.assertRaises(SystemExit) as e:

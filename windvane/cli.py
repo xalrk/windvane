@@ -252,6 +252,7 @@ def cmd_answer(a, p):
     if tid not in waits:
         sys.exit(f"{tid}: no question of it waits for an answer (open, provisional on {p.main}, or from preflight)")
     questions.give_answer(p, tid, letter, None if letter else a.answer)
+    preflight.forget(p, {tid})  # preflight lists an open phone question under its ticket id
     print(f"{tid}: answer recorded; the autopilot builds it on the ticket's next run")
 
 
