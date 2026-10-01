@@ -42,12 +42,12 @@ Do everything yourself. The user should only have to answer real product questio
    `.windvane/QUEUE.md` (`- T-001 <title>`). A product call nobody has made yet becomes a ticket whose first step
    asks it (the worker rules cover how).
 5. **Calibrate the critic, with the user.** It scores every ticket and sends work back below the bar, so its scale
-   decides what "done" means. Uncalibrated, it drifts toward scoring right at the pass mark.
-   - `.windvane/CRITIC.md`: who uses this, what 10/10 is (name the products to beat), and what 2, 5 and 8 look like
-     here.
+   decides what "done" means. It scores blind (it never sees the bar) on the project's own dimensions.
+   - `.windvane/CRITIC.md`: who uses this, what 10/10 is (name the products to beat), and 2-4 dimensions (the first:
+     does it work at all), each with what 2, 5 and 8 look like here.
    - `.windvane/CALIBRATION.md`: 3 or 4 anchors on your own first tickets, e.g. "T-002's settings screen as a bare
      form with no defaults: 3/10; remembered values, inline validation, works by keyboard: 8/10". Add: most first
-     versions land 4-6, 8+ is earned, and a score sitting on the pass mark needs a reason.
+     versions land 4-6 and 8+ is earned.
    - The bar: `[critic] pass` (default 8) and `revisions` (default 3) in the config. A higher bar means more
      revision rounds, which is better work but more tokens.
    Then **explain it to the user** in a few plain lines: the scale, two anchors, the pass mark and what it costs. Ask

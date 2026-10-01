@@ -424,7 +424,9 @@ class Pilot:
             past = [entry]
         last = past[-1]
         score = last.get("score")
-        self.log(f"{tid}: critic {'-' if score is None else f'{score:g}'}/10 ({last['step']}): {last.get('gist', '')}")
+        dims = " ".join(f"{k}={v:g}" for k, v in last.get("dims", {}).items() if k != "score")
+        self.log(f"{tid}: critic {'-' if score is None else f'{score:g}'}/10{f' ({dims})' if dims else ''} "
+                 f"({last['step']}): {last.get('gist', '')}")
         if last["step"] in ("revise", "rethink"):
             self.feedback[tid] = (f"The critic scored your head {score:g}/10 ({last['step']}). Fix its \"Fix in this "
                                   f"ticket\" points, refresh the pack and run `windvane critic {tid}` again:\n"
