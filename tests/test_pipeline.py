@@ -107,7 +107,17 @@ class Pipeline(unittest.TestCase):
         n = driver.plan(self.p, "make it great", merge=True)
         self.assertEqual(n, 1)
         self.s.git("fetch", "-q", "origin")
-        self.assertIn("T-003", Queue(self.p).files)
+        q = Queue(self.p)
+        self.assertIn("T-003", q.files)
+        self.assertEqual(q.order[0], "T-003")  # its QUEUE.md bullet was kept
+
+    def test_plan_that_writes_outside_windvane_is_discarded(self):
+        import os
+        os.environ["FAKE_PLAN_OUTSIDE"] = "1"
+        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.s.git("fetch", "-q", "origin")
+        self.assertNotIn("T-003", Queue(self.p).files)
+        self.assertEqual(driver.changed_paths(self.p.ci_dir), [])  # the ci worktree is clean again
 
 
 class CheckCache(unittest.TestCase):

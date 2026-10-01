@@ -568,6 +568,21 @@ class Pilot:
 
 # ---------- planning
 
+def changed_paths(cwd):
+    """Every path with uncommitted changes, both sides of a rename. -z: no quoting, no stripped leading spaces."""
+    out = git(cwd, "status", "--porcelain", "-z", "--untracked-files=all").stdout.split("\0")
+    paths, i = [], 0
+    while i < len(out):
+        entry = out[i]
+        if len(entry) > 3:
+            paths.append(entry[3:])
+            if entry[0] in "RC":  # a rename's source follows as its own field
+                i += 1
+                paths.append(out[i])
+        i += 1
+    return paths
+
+
 def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max_new=6):
     """A planner run writes tickets for `goal` (and the critic's follow-ups) on a branch the driver commits;
     `merge` merges it at once. Returns how many tickets it wrote."""
@@ -599,12 +614,12 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
     text, killed = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd, ["Bash(git ls-files *)"], deny,
                               usage, stop_if)
     m = last_match(PLAN_RE, text)
-    changed = [l[3:] for l in gout(cd, "status", "--porcelain", "--untracked-files=all").splitlines()]
+    changed = changed_paths(cd)
     if killed or not m or not changed:
         clean_detach(p, cd, p.upstream)
         log(p, f"plan: nothing written ({killed or (m.group(0) if m else 'no PLAN line')})")
         return 0
-    outside = [c for c in changed if not c.strip('"').startswith(".windvane/")]
+    outside = [c for c in changed if not c.startswith(".windvane/")]
     if outside:
         clean_detach(p, cd, p.upstream)
         log(p, f"plan: wrote outside .windvane/ ({outside[0]}); discarded")

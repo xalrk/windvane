@@ -53,6 +53,10 @@ elif system.startswith("# windvane planner run"):
     ids = re.search(r"## Ids for new tickets.*\n(.*)", prompt).group(1).split(", ")
     os.makedirs(".windvane/tickets", exist_ok=True)
     open(f".windvane/tickets/{ids[0]}.md", "w").write(f"# {ids[0]}: planned\nDepends on: nothing.\n")
+    with open(".windvane/QUEUE.md", "a") as f:  # a tracked file, modified: its status line starts with a space
+        f.write(f"- {ids[0]} planned\n")
+    if os.environ.get("FAKE_PLAN_OUTSIDE"):
+        open("stray.txt", "w").write("x")
     text = "PLAN: new=1 noted=0 one ticket"
 emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
 emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01,
@@ -92,6 +96,7 @@ class Sandbox:
             enabled = false
             """) + config_extra)
         self.write(".windvane/QUESTIONS.md", "# Q\n\n## Open\n\n## Provisional\n\n## Answered\n")
+        self.write(".windvane/QUEUE.md", "# Queue\n")
         self.write("README", "hi\n")
         self.git("add", "-A")
         self.git("commit", "-qm", "init")
