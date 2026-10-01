@@ -28,11 +28,12 @@ windvane run --for 6h --detach                      # in tmux; `windvane watch` 
 | | |
 |---|---|
 | `run --until 18:00 \| --for 6h [--detach] [--replan N]` | work the queue until then; `--replan` plans more tickets when it runs dry |
+| `preflight [--for 4h] [--json]` | the product questions the next tickets will need, asked now (`run` in a terminal does it first; `--no-preflight` skips) |
 | `status`, `queue`, `overview`, `watch` | what it's doing, the queue, where the project stands, a live view (no tokens) |
 | `stop` | stop after the current ticket |
 | `plan [goal] [--merge]` | a planner session turns the goal and the critic's follow-up notes into tickets |
 | `new <title>` | a ticket file with the next id |
-| `answer T-007 B` / `answer T-007 "free text"` | answer a ticket's question at the desk |
+| `answer T-007 B` / `answer T-007.1 "free text"` | answer a ticket's (or a preflight) question at the desk |
 | `stats [--by ticket]` | tokens, turns and minutes per role or ticket |
 | `quiet`, `mode` | quiet times (`~/.local/state/windvane/<name>/quiet.txt`) and what they mean right now |
 | `heavy -- <cmd>` | run a machine-heavy command (engine, render, big build) one at a time on this machine |
@@ -99,6 +100,9 @@ Design choices, and why:
 - **A token ledger** per run, role and ticket, to see where the tokens go and tune models and effort per role.
 - **Planning** from a goal plus the critic's follow-ups, optionally whenever the queue runs dry.
 - **Generic phone questions** through `notify-ask`, with no question PRs or branches to clean up.
+- **Preflight**: a light session reads the tickets likely to run before the deadline and lists the product calls they
+  will need, asked at the terminal (or by a desk Claude session) before the user leaves. Answers go under
+  `## Answered` on main and into that ticket's worker prompt; the phone is left for what nobody could predict.
 
 ## Development
 `python3 -m unittest discover -s tests` runs everything, including the whole driver against a fake `claude`, in a few

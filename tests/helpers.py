@@ -104,6 +104,8 @@ elif system.startswith("# windvane planner run"):
     if os.environ.get("FAKE_PLAN_OUTSIDE"):
         open("stray.txt", "w").write("x")
     text = "PLAN: new=1 noted=0 one ticket"
+elif system.startswith("# windvane preflight"):  # FAKE_PREFLIGHT: the questions it finds
+    text = os.environ.get("FAKE_PREFLIGHT", "") + "\nPREFLIGHT: " + ("1 questions" if os.environ.get("FAKE_PREFLIGHT") else "NONE")
 emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
 emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01,
       "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100}})
