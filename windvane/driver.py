@@ -582,6 +582,7 @@ class Pilot:
     def fail(self, tid, why):
         self.skip.add(tid)
         self.failed.append(tid)
+        self.approved.pop(tid, None)
         self.fail_streak += 1
         self.log(f"{tid}: FAILED: {why}")
         push(f"Failed: {self.name(tid)}", f"{why}. The work so far is on its branch; autopilot moved on.", 4, "x")
