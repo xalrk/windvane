@@ -89,6 +89,12 @@ class Project:
         """Where the driver checks, reviews and merges, always on a detached head."""
         return self.state / "ci" if self.cfg["isolate"] else self.main_root()
 
+    @property
+    def plan_dir(self):
+        """Where planner runs write tickets: always its own worktree, so a desk `plan` can't touch the checkout or
+        the tree the driver is checking in."""
+        return self.state / "plan"
+
     def branch_prefix(self, tid):
         return tid.lower()
 
