@@ -12,11 +12,57 @@ from datetime import datetime
 
 from .util import append_jsonl, load_json, save_json
 
+NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
+TOOL_MS = "600000"
 
 
-def env():
-    """The sessions' environment: AUTOPILOT=1 keeps the user's ntfy hook quiet (the driver pushes its own)."""
-    return {**os.environ, "AUTOPILOT": "1"}
+def env(extra=None):
+    """The sessions' environment: AUTOPILOT=1 keeps the user's ntfy hook quiet (the driver pushes its own). The Bash
+    tool's default timeout is 2 minutes; the rules and `windvane await` assume a tool call may run 10."""
+    return {**os.environ, "AUTOPILOT": "1", "BASH_DEFAULT_TIMEOUT_MS": TOOL_MS, "BASH_MAX_TIMEOUT_MS": TOOL_MS,
+            **(extra or {})}
+
+
+def over_caps(u, cap, week_cap):
+    """Why usage `u` must stop a session, or None."""
+    if u.five is not None and u.five >= cap:
+        return "5-hour cap"
+    if u.week is not None and u.week >= week_cap:
+        return "weekly cap"
+    return "usage limit" if u.rejected else None
+
+
+def inherited_stop(p, usage):
+    """The stop rule of a session started inside another (`windvane critic` from a worker): the outer one's deadline
+    and caps, from the environment the driver set, against usage.json, which every session's stream keeps fresh."""
+    at, caps = os.environ.get("WINDVANE_STOP_AT"), os.environ.get("WINDVANE_CAPS")
+    if not (at and caps):
+        return None
+    cap, week_cap = map(float, caps.split(","))
+
+    def stop_if():
+        if time.time() >= float(at):
+            return "time"
+        fresh = Usage(p)
+        fresh.rejected = usage.rejected
+        return over_caps(fresh, cap, week_cap)
+    return stop_if
+
+
+def kill_nested(p, session):
+    """Stop the sessions started inside `session`. Claude Code runs each Bash command in a session of its own, so
+    killing a worker's process group misses a critic it started: each one registers its group here instead."""
+    d = p.state / "nested" / session
+    for f in d.glob("*") if d.is_dir() else ():
+        try:
+            os.killpg(int(f.name), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, ValueError):
+            pass
+        f.unlink(missing_ok=True)
+    try:
+        d.rmdir()
+    except OSError:  # gone, or a nested session registered just now (its own deadline and caps still stop it)
+        pass
 
 
 class Usage:
@@ -78,8 +124,10 @@ def ending(final, code, noise):
     return "ok", None
 
 
-def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=None, stop_if=None, ticket=""):
-    """Run one headless session to its end. `stop_if()` returns a reason to kill it (deadline, usage cap).
+def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=None, stop_if=None, ticket="",
+               limits=None):
+    """Run one headless session to its end. `stop_if()` returns a reason to kill it (deadline, usage cap);
+    `limits` (kill time, 5-hour cap, weekly cap) passes the same rule on to sessions started inside this one.
     Returns (final text, why it was stopped or None, why it failed or None): a failure is the session's own
     (API error, crash), never the ticket's, so callers can retry it."""
     model, effort = p.models.get(role, "opus"), p.models.get(f"{role}_effort", "high")
@@ -88,9 +136,16 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     cmd = ["claude", "-p", prompt, "--model", model, "--effort", effort, "--permission-mode", "auto",
            "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local",
            "--strict-mcp-config", "--settings", settings_json(allow, deny), "--append-system-prompt", system]
-    started = time.time()
+    started, parent = time.time(), os.environ.get(NEST)
+    extra = {NEST: raw.stem}
+    if limits:
+        extra.update(WINDVANE_STOP_AT=str(limits[0].timestamp()), WINDVANE_CAPS=f"{limits[1]:g},{limits[2]:g}")
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            start_new_session=True, env=env())
+                            start_new_session=True, env=env(extra))
+    mark = p.state / "nested" / parent / str(proc.pid) if parent else None
+    if mark:
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.touch()
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
     result, killed, final, noise = "", None, {}, []
@@ -115,11 +170,15 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
                 killed = stop_if()
                 if killed:
                     os.killpg(proc.pid, signal.SIGTERM)
+                    kill_nested(p, raw.stem)
                     try:
                         proc.wait(60)
                     except subprocess.TimeoutExpired:
                         os.killpg(proc.pid, signal.SIGKILL)
     code = proc.wait()
+    kill_nested(p, raw.stem)  # killed with it, or left running by a Bash call that timed out
+    if mark:
+        mark.unlink(missing_ok=True)
     end, error = ("killed", None) if killed else ending(final, code, noise)
     u = final.get("usage") or {}
     append_jsonl(p.state / "ledger.jsonl", {

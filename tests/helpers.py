@@ -20,7 +20,8 @@ emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unif
 log = os.environ.get("FAKE_LOG")
 if log:
     with open(log, "a") as f:
-        f.write(json.dumps({"system": system[:40], "prompt": prompt}) + "\n")
+        f.write(json.dumps({"system": system[:40], "prompt": prompt,
+                            "tool_ms": os.environ.get("BASH_DEFAULT_TIMEOUT_MS")}) + "\n")
 sh = lambda *c: subprocess.run(c, capture_output=True, text=True).stdout.strip()
 # FAKE_FAIL: what each session does in turn (ok, error, crash, quiet = no RESULT line); a trailing * repeats the last
 steps, step = os.environ.get("FAKE_FAIL", "").split(","), ""
@@ -45,6 +46,14 @@ if system.startswith("# windvane worker run"):
     if log:
         with open(log, "a") as f:
             f.write(json.dumps({"system": "span", "prompt": f"{tid} start {time.time()}"}) + "\n")
+    pid_file = os.environ.get("FAKE_CRITIC_PID")
+    if pid_file:  # `windvane critic` from the Bash tool, which runs each command in a session of its own
+        c = subprocess.Popen(["windvane", "critic", tid], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        while not os.path.exists(pid_file):
+            time.sleep(0.05)
+        emit({"type": "system", "subtype": "critic started"})
+        c.wait()
     time.sleep(float(os.environ.get("FAKE_WORK_S", "0")))
     branch = tid.lower() + "-work"
     if "In progress on branch" in prompt:
@@ -70,6 +79,10 @@ elif system.startswith("# windvane review run"):
     text = f"1. a point\nREVIEW: {verdict} {tid} looks fine"
 elif system.startswith("# windvane critic"):
     tid = re.search(r"Critique (\S+)\.", prompt).group(1)
+    if os.environ.get("FAKE_CRITIC_PID"):  # a slow critic, to be killed with its worker
+        import time
+        open(os.environ["FAKE_CRITIC_PID"], "w").write(str(os.getpid()))
+        time.sleep(60)
     text = f"Score: 9/10\nGood.\nBeyond this ticket:\n- make it faster\nCRITIC: 9/10 {tid} fixes=0 good"
 elif system.startswith("# windvane planner run"):
     ids = re.search(r"## Ids for new tickets.*\n(.*)", prompt).group(1).split(", ")
@@ -108,6 +121,8 @@ class Sandbox:
         self.old_env = dict(os.environ)
         os.environ.clear()
         os.environ.update({**self.old_env, **self.env})
+        for k in ("WINDVANE_SESSION", "WINDVANE_STOP_AT", "WINDVANE_CAPS"):  # when the tests run inside a session
+            os.environ.pop(k, None)
         import shutil
         assert shutil.which("claude") == str(fake) and not shutil.which("notify"), "tests must not reach the real tools"
         self.git("init", "-q", "--bare", "-b", "main", str(self.remote), cwd=self.tmp)
