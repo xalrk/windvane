@@ -59,8 +59,10 @@ def kill_nested(p, session):
         except (ProcessLookupError, PermissionError, ValueError):
             pass
         f.unlink(missing_ok=True)
-    if d.is_dir():
+    try:
         d.rmdir()
+    except OSError:  # gone, or a nested session registered just now: the outer run's end sweeps it
+        pass
 
 
 class Usage:
