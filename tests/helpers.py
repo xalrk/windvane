@@ -10,7 +10,8 @@ REPO = Path(__file__).resolve().parents[1]
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
 # A stand-in for `claude -p ... --output-format stream-json`: plays the role its system prompt names.
-import json, os, re, subprocess, sys
+import json, os, re, signal, subprocess, sys
+signal.signal(signal.SIGTERM, signal.SIG_DFL)  # dies on SIGTERM like `claude`, even under a shell that ignores it
 args = sys.argv[1:]
 prompt = args[args.index("-p") + 1]
 system = args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else ""
@@ -33,10 +34,14 @@ if steps[0] and system:
     step = steps[n] if n < len(steps) else steps[-1] if steps[-1].endswith("*") else ""
     step = step.rstrip("*")
 hang = os.environ.get("FAKE_HANG")
-if hang:  # streams two API messages (the first as two events), then works on until it is killed
+if hang and system.startswith(os.environ.get("FAKE_HANG_ROLE", "")):
+    # streams two API messages (the first as two events), then works on until it is killed
     use = lambda i, o: {"input_tokens": i, "output_tokens": o, "cache_read_input_tokens": 1000}
     for mid, u in (("m1", use(10, 5)), ("m1", use(10, 5)), ("m2", use(20, 7))):
         emit({"type": "assistant", "message": {"id": mid, "usage": u, "content": [{"type": "text", "text": "."}]}})
+    open(hang + ".pid", "w").write(str(os.getpid()))
+    if os.environ.get("FAKE_HANG_LEFTOVER") and system.startswith("# windvane worker run"):
+        open("half-done.txt", "w").write("half\n")  # uncommitted work a killed run leaves in its worktree
     open(hang, "w").write("streamed")
     import time
     time.sleep(60)

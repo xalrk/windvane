@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -18,11 +19,14 @@ from .runner import Usage, inherited_stop
 from .util import git, gout, hhmm, load_json, now, read_jsonl
 
 
-def parse_deadline(until, for_):
+STOP_WAIT = 150  # seconds `stop --now` waits for the run to end: a 30 s poll, then up to 60 s for SIGTERM, and more
+
+
+def parse_deadline(until, for_, usage=None):
     if for_:
         m = re.fullmatch(r"(\d+(?:\.\d+)?)([hm])", for_)
         if not m:
-            sys.exit("--for takes e.g. 90m or 6h")
+            sys.exit(usage or "--for takes e.g. 90m or 6h")
         return now() + timedelta(**{"hours" if m.group(2) == "h" else "minutes": float(m.group(1))})
     for fmt in ("%Y-%m-%d %H:%M",):
         try:
@@ -32,7 +36,7 @@ def parse_deadline(until, for_):
     try:
         t = datetime.strptime(until, "%H:%M")
     except ValueError:
-        sys.exit("--until takes HH:MM or 'YYYY-MM-DD HH:MM'")
+        sys.exit(usage or "--until takes HH:MM or 'YYYY-MM-DD HH:MM'")
     d = now().replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
     return d if d > now() else d + timedelta(days=1)
 
@@ -149,8 +153,30 @@ def cmd_stop(a, p):
         print(f"{p.name}: autopilot isn't running")
         return
     p.state.mkdir(parents=True, exist_ok=True)
-    (p.state / "STOP").touch()
-    print(f"{p.name}: autopilot stops after the current ticket")
+    stop_now = getattr(a, "now", False)  # callers that predate --now pass a Namespace without it
+    if stop_now and not running(p):
+        return print(f"{p.name}: autopilot isn't running")
+    if not stop_now:
+        (p.state / "STOP").touch()
+        return print(f"{p.name}: autopilot stops after the current ticket")
+    (p.state / "STOP").write_text("now")
+    print(f"{p.name}: stopping now: killing the running sessions...", flush=True)
+    for _ in range(STOP_WAIT):  # each session's next poll kills it (SIGTERM, then SIGKILL a minute later)
+        if not driver.locked(p):
+            return print(f"{p.name}: stopped; the worktrees keep their work for the next run")
+        time.sleep(1)
+    print(f"{p.name}: still stopping; `windvane status` shows when it's done")
+
+
+def cmd_deadline(a, p):
+    when = " ".join(a.when)
+    usage = "windvane deadline takes HH:MM, 'YYYY-MM-DD HH:MM' or +90m / +2h"
+    t = parse_deadline(None, when[1:], usage) if when.startswith("+") else parse_deadline(when, None, usage)
+    if not running(p):
+        sys.exit(f"{p.name}: autopilot isn't running; start one with windvane run --until {t:%H:%M}")
+    (p.state / "DEADLINE").write_text(t.isoformat(timespec="minutes"))
+    print(f"{p.name}: the run now ends at {t:%Y-%m-%d %H:%M}. New tickets keep to it at once; running sessions are "
+          "stopped by then (within a minute of it)")
 
 
 def parallel_arg(v):
@@ -384,6 +410,9 @@ def main(argv=None):
     s.add_argument("--json", action="store_true", help="print them for a Claude session to ask")
     s = sub.add_parser("stop", help="stop after the current ticket")
     s.add_argument("--if-running", action="store_true")
+    s.add_argument("--now", action="store_true", help="kill the running sessions now; their worktrees keep the work")
+    s = sub.add_parser("deadline", help="move a running autopilot's deadline")
+    s.add_argument("when", nargs="+", help="HH:MM, 'YYYY-MM-DD HH:MM', or from now: +90m, +2h")
     s = sub.add_parser("status", help="running or not, open questions, the log's tail")
     s.add_argument("--line", action="store_true", help="one line (for the phone)")
     sub.add_parser("overview", help="where the project stands (for the phone)")

@@ -73,7 +73,8 @@ Run `windvane init --check "<the repo's test command>"`, then either write the t
 |---|---|
 | `windvane status` / `queue` / `overview` | state, open questions, the queue, where the project stands |
 | `windvane watch` | live view of the sessions (local, no tokens) |
-| `windvane stop` | stop after the current tickets |
+| `windvane stop` / `stop --now` | stop after the current tickets / kill every session now (worktrees keep the work; the next run resumes it) |
+| `windvane deadline 14:00` (or `+90m`) | move a running autopilot's deadline; running sessions are stopped by it |
 | `windvane answer T-007 B` (or `"free text"`) | answer a ticket's design question at the desk |
 | `windvane stats [--by ticket]` | tokens, turns and minutes per role or ticket |
 | `windvane new "<title>"` / `windvane plan "<goal>"` | add tickets by hand / by a planner run |

@@ -149,6 +149,7 @@ class Pilot:
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
         self.sleep = time.sleep  # the retry backoff's; tests make it instant
         self.stop_reason = "unknown"
+        self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
         self.worker_rules, self.review_rules = rules(p, "WORKER.md"), rules(p, "REVIEW.md")
         # Parallel slots: each has its own work and ci worktrees, made when first used. Merges and fetches are
         # serialized. `n` is the most at once; the queue's Touches and the usage window decide how many really run.
@@ -196,21 +197,47 @@ class Pilot:
         t = self.queue.titles.get(tid, "") if hasattr(self, "queue") else ""
         return f"{t[:45]} ({tid})" if t else tid
 
-    def stopper(self, kill_at):
+    def end(self):
+        """The run's deadline, live: `windvane deadline` moves it by writing DEADLINE in the state dir, and every
+        session's stop rule reads it at each poll, so new tickets and running ones keep to the new time."""
+        try:
+            t = datetime.fromisoformat((self.p.state / "DEADLINE").read_text().strip())
+        except (OSError, ValueError):
+            return self.deadline
+        with self.lock:
+            if t != self.deadline:
+                self.deadline = t
+                self.log(f"deadline moved to {hhmm(t)}")
+        return t
+
+    def stopping_now(self):
+        """`windvane stop --now`: every session of the run is killed at its next poll."""
+        if not self.kill_all:
+            try:
+                self.kill_all = (self.p.state / "STOP").read_text().strip() == "now"
+            except OSError:
+                pass
+        return self.kill_all
+
+    def stopper(self, limit):
+        """A session's stop rule: `limit` (its own time box), the run's deadline as it now is, the caps, a stop now."""
         def stop_if():
-            return "time" if now() >= kill_at else over_caps(self.usage, self.a.cap, self.a.week_cap)
+            if self.stopping_now():
+                return "stop now"
+            return "time" if now() >= min(limit, self.end()) else over_caps(self.usage, self.a.cap, self.a.week_cap)
         return stop_if
 
-    def claude(self, role, label, prompt, system, cwd, kill_at, allow=(), deny=(), ticket=""):
+    def claude(self, role, label, prompt, system, cwd, limit, allow=(), deny=(), ticket=""):
         text, killed, error = run_claude(self.p, role, label, prompt, system, cwd, allow, deny, self.usage,
-                                         self.stopper(kill_at), ticket, (kill_at, self.a.cap, self.a.week_cap))
+                                         self.stopper(limit), ticket,
+                                         (min(limit, self.end()), self.a.cap, self.a.week_cap))
         if killed:
             self.log(f"  stopped {label}: {killed} ({self.usage.text()})")
         elif not error:
             self.crashes = 0
         return text, killed, error
 
-    def crashed(self, label, error, deadline):
+    def crashed(self, label, error):
         """A session died for a reason outside its ticket (API overload, network, not logged in): pause, longer each
         time, and return True to run it again. Too many in a row stop the run instead of failing ticket after ticket
         on a broken API; nothing is pushed until then."""
@@ -218,7 +245,7 @@ class Pilot:
         n, wait = self.p.ap["retries"], self.p.ap["retry_minutes"] * 2 ** (self.crashes - 1)
         if self.crashes > n:
             self.halt = f"{self.crashes} sessions in a row died ({error})"
-        elif now() + timedelta(minutes=wait) >= deadline - timedelta(minutes=self.a.min_slot):
+        elif now() + timedelta(minutes=wait) >= self.end() - timedelta(minutes=self.a.min_slot):
             self.halt = f"a session died ({error}), and there's no time left to retry it"
         if self.halt:
             self.log(f"  {label}: {self.halt}")
@@ -232,10 +259,11 @@ class Pilot:
 
     # ---------- one ticket
 
-    def work(self, tid, kind, branches, deadline):
+    def work(self, tid, kind, branches):
         p, wd = self.p, self.wd
         start_five = self.usage.five
-        kill_at = min(deadline, now() + timedelta(hours=self.a.ticket_hours))
+        limit = now() + timedelta(hours=self.a.ticket_hours)
+        kill_at = min(self.end(), limit)
         wrap = kill_at - timedelta(minutes=20)
         ref = f"{p.remote}/{branches[0]}" if branches else p.upstream
         ticket = gout(wd, "show", f"{ref}:{p.tickets_rel}/{tid}.md") or self.queue.text.get(tid, "")
@@ -263,11 +291,11 @@ class Pilot:
         ]))
         self.log(f"{tid}: worker run ({kind}{', ' + ' '.join(branches) if branches else ''})")
         allow, deny = worker_perms(p)
-        text, killed, error = self.claude("worker", tid, prompt, self.worker_rules, wd, kill_at, allow, deny, tid)
+        text, killed, error = self.claude("worker", tid, prompt, self.worker_rules, wd, limit, allow, deny, tid)
         if error:
-            self.crashed(tid, error, deadline)  # the loop picks the ticket again, with its branch as it now is
+            self.crashed(tid, error)  # the loop picks the ticket again, with its branch as it now is
         else:
-            self.handle(tid, text, killed, deadline)
+            self.handle(tid, text, killed)
         if start_five is not None and self.usage.five is not None and self.usage.five >= start_five:
             self.costs.append(round(self.usage.five - start_five, 1))
         self.save()
@@ -281,9 +309,9 @@ class Pilot:
                     out.append(b)
         return out[:10]
 
-    def handle(self, tid, text, killed, deadline):
+    def handle(self, tid, text, killed):
         if killed:
-            if killed == "time" and now() < deadline - timedelta(minutes=5):
+            if killed == "time" and now() < self.end() - timedelta(minutes=5):
                 self.log(f"{tid}: hit the {self.a.ticket_hours:g}-hour limit for one run; set aside")
                 self.skip.add(tid)
             return
@@ -308,7 +336,7 @@ class Pilot:
             return self.ask(tid, branch, rest)
         sha = next(iter(re.findall(r"\b[0-9a-f]{40}\b", rest)), "") or gout(self.wd, "rev-parse", "HEAD")
         self.feedback.pop(tid, None)
-        self.after(tid, branch, sha, deadline)
+        self.after(tid, branch, sha)
 
     def unfinished_run(self, tid, branch):
         """A run that ended normally but without its RESULT line may have done all the work: one more run, told
@@ -325,9 +353,11 @@ class Pilot:
                                  else ""))
         self.log(f"{tid}: the run ended without a result line; one more run to finish it")
 
-    def after(self, tid, branch, sha, deadline):
+    def after(self, tid, branch, sha):
         """A READY head: critic gate, check, review, merge. Each failed stage writes the next run's feedback."""
         p = self.p
+        if self.stopping_now():  # the next run's worker finds the head pushed and finishes READY again
+            return
         self.fetch()
         if gout(p.main_root(), "rev-parse", "--verify", "-q", f"{sha}^{{commit}}") == "" or \
                 (branch and gout(p.main_root(), "rev-parse", f"{p.remote}/{branch}") != sha):
@@ -341,7 +371,7 @@ class Pilot:
         if res:
             self.log(f"{tid}: only merges {p.main} into the approved {ap['sha'][:7]} and resolves it "
                      f"({len(res[1])} file{'s' * (len(res[1]) != 1)}); the critic's verdict stands")
-        elif not self.critic_gate(tid, sha, deadline, stale=ap and ap["sha"]):
+        elif not self.critic_gate(tid, sha, stale=ap and ap["sha"]) or self.stopping_now():
             return
         ok, summary, logf = self.check_at(sha)
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
@@ -351,7 +381,7 @@ class Pilot:
         if res and not res[0]:  # git merged it cleanly: like any approved head that merges, nothing new to review
             self.log(f"{tid}: a clean merge of {p.main}; no review needed")
             return self.integrate(tid, branch, sha)
-        verdict, review = self.review(tid, branch, sha, deadline, res and (ap["sha"], *res))
+        verdict, review = self.review(tid, branch, sha, res and (ap["sha"], *res))
         if verdict is None:
             return
         if verdict == "CHANGES":
@@ -368,7 +398,7 @@ class Pilot:
         if self.reviews[tid] >= self.p.ap["review_rounds"] + 1:
             self.fail(tid, f"sent back {self.reviews[tid]} times: {self.feedback.get(tid, '')[:200]}")
 
-    def critic_gate(self, tid, sha, deadline, stale=None):
+    def critic_gate(self, tid, sha, stale=None):
         """`stale`: an approved head whose verdict no longer covers this one (it changed more than a resolution)."""
         p = self.p
         if not p.critic["enabled"]:
@@ -386,7 +416,7 @@ class Pilot:
                 return False
             self.log(f"{tid}: critic run (the worker didn't finish it)")
             entry, text = critic.judge(p, tid, self.wd, sha, self.usage,
-                                       self.stopper(min(deadline, now() + timedelta(minutes=30))))
+                                       self.stopper(now() + timedelta(minutes=30)))
             if entry is None:
                 self.log(f"{tid}: the critic gave no verdict; on to the check")  # a help, never a gate on its own failure
                 return True
@@ -410,13 +440,13 @@ class Pilot:
             return False, f"couldn't check out {rev[:12]}", None
         return check(self.p, cd)
 
-    def review(self, tid, branch, sha, deadline, res=None):
+    def review(self, tid, branch, sha, res=None):
         """`res`: (approved head, diff, paths, tree) when the head only resolves a bounce off main: the reviewer
         gets just the resolution."""
         p, cd = self.p, self.cd
         pr = pr_for(p, branch)
         if res:
-            return self.verdict(tid, branch, sha, deadline, pr, self.resolution_prompt(tid, branch, sha, pr, *res))
+            return self.verdict(tid, branch, sha, pr, self.resolution_prompt(tid, branch, sha, pr, *res))
         body = sh(p.main_root(), "gh", "pr", "view", pr, "--json", "body", "-q", ".body") if pr else \
             gout(cd, "log", "--format=%B", f"{p.upstream}..{sha}")
         stat = gout(cd, "diff", "--stat", f"{p.upstream}...{sha}")
@@ -435,7 +465,7 @@ class Pilot:
             f"The diff is {len(diff.splitlines())} lines: read the files that matter with `git diff {p.upstream}...HEAD "
             "-- <path>`.",
         ]))
-        return self.verdict(tid, branch, sha, deadline, pr, prompt)
+        return self.verdict(tid, branch, sha, pr, prompt)
 
     def resolution_prompt(self, tid, branch, sha, pr, approved, diff, paths, tree):
         p = self.p
@@ -454,15 +484,15 @@ class Pilot:
             f"`git diff {tree} HEAD -- <path>`.",
         ]))
 
-    def verdict(self, tid, branch, sha, deadline, pr, prompt):
+    def verdict(self, tid, branch, sha, pr, prompt):
         p, cd = self.p, self.cd
         self.log(f"{tid}: review run")
         while True:
             text, killed, error = self.claude("reviewer", f"{tid}-review", prompt, self.review_rules, cd,
-                                              min(deadline, now() + timedelta(hours=1)),
+                                              now() + timedelta(hours=1),
                                               ["Bash(git diff *)", "Bash(git show *)", "Bash(git log *)"],
                                               REVIEW_DENY, tid)
-            if not error or not self.crashed(f"{tid}-review", error, deadline):
+            if not error or not self.crashed(f"{tid}-review", error):
                 break
         if killed or error:
             return None, ""
@@ -681,9 +711,9 @@ class Pilot:
         recent = self.costs[-3:]
         return max(3.0, sum(recent) / len(recent)) if recent else 8.0
 
-    def wait_for_reset(self, deadline):
+    def wait_for_reset(self):
         until = datetime.fromtimestamp(self.usage.five_reset or time.time() + 3600) + timedelta(minutes=2)
-        if until >= deadline - timedelta(minutes=self.a.min_slot):
+        if until >= self.end() - timedelta(minutes=self.a.min_slot):
             self.stop_reason = f"5-hour window at {self.usage.five:g}%, and it resets too close to the deadline"
             return False
         self.log(f"pausing at {self.usage.text()} until the window resets at {hhmm(until)}")
@@ -694,15 +724,16 @@ class Pilot:
         self.usage.probe(self.p)
         return True
 
-    def stop_check(self, deadline):
+    def stop_check(self):
         """Why no new ticket may start (the run winds down), or None."""
         p = self.p
         if (p.state / "STOP").exists():
+            now_too = self.stopping_now()
             (p.state / "STOP").unlink()
-            return "asked to stop"
+            return "stopped now: the running sessions were killed" if now_too else "asked to stop"
         if self.halt:
             return self.halt
-        if now() >= deadline - timedelta(minutes=self.a.min_slot):
+        if now() >= self.end() - timedelta(minutes=self.a.min_slot):
             return "deadline"
         if self.fail_streak >= 2:
             return "two failed tickets in a row"
@@ -738,16 +769,16 @@ class Pilot:
         recent = self.minutes[-5:]
         return sum(recent) / len(recent) if recent else 10.0
 
-    def serial_fits(self, deadline):
+    def serial_fits(self):
         """Why another slot isn't worth opening, or "". Side by side risks conflicts and reading code that's about to
         change, so a slot opens only when the tickets left wouldn't all finish one at a time before the deadline.
         A running ticket counts as half one: it's under way."""
         q, blocked = self.queue, set(self.questions)
         left = sum(t not in self.skip and q.status(t, blocked) in ("wip", "todo", "waiting") for t in q.order)
         m = self.ticket_minutes()
-        if (left - len(self.running) / 2) * m > (deadline - now()).total_seconds() / 60 - self.a.min_slot:
+        if (left - len(self.running) / 2) * m > (self.end() - now()).total_seconds() / 60 - self.a.min_slot:
             return ""
-        return f"{left} ticket{'s' * (left != 1)} x {m:.0f} min fit before {hhmm(deadline)} one at a time"
+        return f"{left} ticket{'s' * (left != 1)} x {m:.0f} min fit before {hhmm(self.end())} one at a time"
 
     def clash(self, tid, busy):
         """Why `tid` can't start beside the `busy` tickets, or "". Tickets run side by side only when their
@@ -818,7 +849,7 @@ class Pilot:
                 self.log(n)
         self.said = set(notes)
 
-    def start(self, slot, tid, kind, branches, deadline):
+    def start(self, slot, tid, kind, branches):
         if not self.prepare(slot):
             return
         with self.lock:
@@ -828,14 +859,14 @@ class Pilot:
             self.peak = max(self.peak, len(self.running))
             self.began[tid] = time.time()
         self.save()  # `windvane status` shows the running tickets
-        t = threading.Thread(target=self.slot_run, args=(slot, tid, kind, branches, deadline), daemon=True)
+        t = threading.Thread(target=self.slot_run, args=(slot, tid, kind, branches), daemon=True)
         self.threads.append(t)
         t.start()
 
-    def slot_run(self, slot, tid, kind, branches, deadline):
+    def slot_run(self, slot, tid, kind, branches):
         self.tl.wd, self.tl.cd = self.slot_dirs(slot)
         try:
-            self.work(tid, kind, branches, deadline)
+            self.work(tid, kind, branches)
         except Exception as e:  # one ticket's driver error must not take the other slots down
             self.log(f"{tid}: driver error: {e!r}")
             self.fail(tid, f"driver error: {e}")
@@ -856,11 +887,11 @@ class Pilot:
             self.save()
             self.wake.set()
 
-    def loop(self, deadline):
+    def loop(self):
         p = self.p
         while True:
             self.quiet_check()
-            why = self.stop_check(deadline)
+            why = self.stop_check()
             if why:
                 self.stop_reason = why
                 return
@@ -871,7 +902,7 @@ class Pilot:
             k = len(self.running) + 1
             over = self.usage.rejected or self.usage.five + self.est() * k > self.a.cap
             if over and not self.running:
-                if not self.wait_for_reset(deadline):
+                if not self.wait_for_reset():
                     return
                 continue
             self.fetch()
@@ -884,7 +915,7 @@ class Pilot:
                 self.idle_note([f"no {nth(k)} slot: {why}"])
                 self.pause(60)
                 continue
-            no_need = tid is not None and self.running and self.serial_fits(deadline)
+            no_need = tid is not None and self.running and self.serial_fits()
             if no_need:
                 self.idle_note([f"no {nth(k)} slot: {no_need}"])
                 self.pause()
@@ -903,7 +934,7 @@ class Pilot:
                 if self.a.replan and self.plans < self.a.replan:
                     self.plans += 1
                     n = plan(p, self.a.goal or p.cfg["goal"], True, self.usage,
-                             self.stopper(min(deadline, now() + timedelta(minutes=40))), merge=True)
+                             self.stopper(now() + timedelta(minutes=40)), merge=True)
                     if n:
                         continue
                 self.stop_reason = kind
@@ -912,7 +943,7 @@ class Pilot:
             if self.n > 1:
                 beside = f", beside {', '.join(sorted(self.running))}" if self.running else ""
                 self.log(f"{tid}: slot {slot}{beside}")
-            self.start(slot, tid, kind, branches, deadline)
+            self.start(slot, tid, kind, branches)
             if self.n == 1:
                 self.threads[-1].join()
 
@@ -931,6 +962,8 @@ class Pilot:
         p = self.p
         self.take_lock()
         (p.state / "STOP").unlink(missing_ok=True)
+        (p.state / "DEADLINE").unlink(missing_ok=True)  # an earlier run's
+        self.deadline = deadline
         self.log(f"autopilot started, until {hhmm(deadline)} (5h cap {self.a.cap:g}%, week cap {self.a.week_cap:g}%"
                  + (f", up to {self.n} tickets at a time" if self.n > 1 else "") + ")")
         ready = self.prepare(0)  # before any session or push: a failed setup ends the run with a single push
@@ -942,7 +975,7 @@ class Pilot:
             self.stop_reason = self.halt
         try:
             if ready:
-                self.loop(deadline)
+                self.loop()
         except Exception as e:
             self.stop_reason = f"driver error: {e}"
             raise
