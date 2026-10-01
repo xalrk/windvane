@@ -1,5 +1,6 @@
 # <ID>: <title>
 Depends on: nothing.
+Touches: <files or directories it changes; without this line the ticket runs alone>.
 
 ## Goal
 <the problem and why it matters, with evidence>

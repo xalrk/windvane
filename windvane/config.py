@@ -25,10 +25,11 @@ DEFAULTS = {
     "isolate": True,  # work in the autopilot's own worktrees; false: in the checkout itself (huge builds)
     "goal": "",  # what `windvane plan` aims at when given no goal
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
+    "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
     "models": {"worker": "opus", "worker_effort": "high", "reviewer": "opus", "reviewer_effort": "high",
                "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high"},
     "critic": {"enabled": True, "pass": 8, "floor": 4, "revisions": 3},
-    "autopilot": {"cap": 75, "week_cap": 95, "ticket_hours": 3, "min_slot": 30, "answer_wait": 10,
+    "autopilot": {"parallel": 2, "cap": 75, "week_cap": 95, "ticket_hours": 3, "min_slot": 30, "answer_wait": 10,
                   "review_rounds": 3, "partials": 3, "subagents": False, "inline_diff_lines": 1200,
                   "retries": 3, "retry_minutes": 3},  # a session that dies (API, network) reruns after 3, 6, 12 min
 }

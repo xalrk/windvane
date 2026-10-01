@@ -36,7 +36,12 @@ def check(p, cwd, quiet=False):
     log = logs / f"{now():%Y%m%d-%H%M%S}.log"
     start = time.time()
     with log.open("w") as f:
-        code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT).returncode
+        if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
+            code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
+                                   "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd, stdout=f,
+                                  stderr=subprocess.STDOUT, env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])}).returncode
+        else:
+            code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT).returncode
     mins = (time.time() - start) / 60
     if code == 0:
         if key and tree_key(p, cwd) == key:
@@ -53,7 +58,7 @@ def tail(path, n=40):
         return ""
 
 
-def bg(p, name, cmd, cwd):
+def bg(p, name, cmd, cwd, heavy=False):
     d = p.state / "bg"
     d.mkdir(parents=True, exist_ok=True)
     base = d / name
@@ -66,6 +71,8 @@ def bg(p, name, cmd, cwd):
             pass
     Path(f"{base}.exit").unlink(missing_ok=True)
     Path(f"{base}.start").write_text(str(int(time.time())))
+    if heavy:
+        cmd = [str(Path(__file__).parents[1] / "bin/windvane"), "heavy", "--", *cmd]
     proc = subprocess.Popen(["bash", "-c", '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"', str(base), *cmd],
                             cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True)

@@ -17,6 +17,7 @@ capable engineers, not doing it: don't change code.
    ```
    # <ID>: <title, imperative>
    Depends on: <ids, or nothing>.
+   Touches: <the files or directories it will change, comma-separated>.
 
    ## Goal
    <why: the problem, with evidence (file:line, a command and what it printed, the critic's note)>
@@ -25,6 +26,8 @@ capable engineers, not doing it: don't change code.
    ## Done when
    - <checkable outcome, including the tests that prove it>
    ```
+   `Touches:` lets the autopilot run tickets side by side when their lists don't overlap: name every path the work
+   is likely to change, and prefer splitting work so tickets touch different files.
 5. Append the new ids, most valuable first, as `- <ID> <title>` bullets to `.windvane/QUEUE.md` (create it with a
    `# Queue` heading if missing; the queue runs top to bottom, then any unlisted ticket by number).
 

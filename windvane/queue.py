@@ -8,6 +8,7 @@ branches (fetch first).
   parked   `- parked: T-003 (why)` in QUEUE.md: never started
   wip      an unmerged remote branch `t-003-...`: resumed before new work
   waiting  a dependency isn't done
+  touches  `Touches: windvane/driver.py, prompts/` in the header: tickets whose lists don't overlap may run at once
 """
 import re
 from pathlib import Path
@@ -29,6 +30,13 @@ def bullets(text, files, p):
 def depends_on(head, p):
     m = re.search(r"Depends on:(.*?)(?:\.\s|\n\s*\n|\Z)", head, re.S | re.I)
     return [t for t in (p.norm(x) for x in re.findall(p.id_re, m.group(1) if m else "", re.I)) if t]
+
+
+def touches(head):
+    """The paths in a ticket header's `Touches: a.py, docs/` line (files or directories), or an empty set: then the
+    ticket may touch anything, and the autopilot runs nothing beside it."""
+    m = re.search(r"^Touches:(.*)$", head, re.M | re.I)
+    return {x.strip().strip("`").rstrip(".") for x in m.group(1).split(",") if x.strip().strip("`.")} if m else set()
 
 
 def title(text, tid):
@@ -56,6 +64,7 @@ class Queue:
         self.order = listed + sorted((t for t in self.files if t not in listed), key=num)
         self.deps = {t: depends_on("\n".join(self.text[t].splitlines()[:8]), p) for t in self.files}
         self.titles = {t: title(self.text[t], t) for t in self.files}
+        self.touches = {t: touches("\n".join(self.text[t].splitlines()[:8])) for t in self.files}
 
         bp = re.escape(p.prefix.lower())
         merges = gout(cwd, "log", ref, "--merges", "--format=%s")
