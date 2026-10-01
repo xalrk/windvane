@@ -36,6 +36,7 @@ def show(ev, out_lines):
 
 
 def main(p, n=30, out_lines=6):
+    sys.stdout.reconfigure(line_buffering=True)  # piped into less or a file, it still streams
     runs, logf = p.state / "runs", p.state / "autopilot.log"
     current, pos, log_pos = None, 0, logf.stat().st_size if logf.exists() else 0
     first = True
