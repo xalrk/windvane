@@ -3,6 +3,7 @@
 rate_limit_event, so they count the user's other sessions too."""
 import json
 import os
+import re
 import selectors
 import signal
 import subprocess
@@ -62,9 +63,25 @@ def settings_json(allow=(), deny=()):
     return json.dumps({"permissions": {"allow": list(allow), "deny": list(deny)}})
 
 
+def ending(final, code, noise):
+    """How a session ended, as (kind, error text): "ok"; "error" when the result event says the API or the CLI failed
+    (overload, 5xx, not logged in, max turns); "no result" when the process died before one (network drop, crash).
+    `noise` is the stream's last non-JSON lines, where a crash says why."""
+    if not final:
+        why = " ".join(" ".join(noise).split())[-300:]
+        return "no result", f"no result event (exit {code})" + (f": {why}" if why else "")
+    sub = final.get("subtype") or "success"
+    if final.get("is_error") or sub != "success":
+        why = " ".join(str(final.get("result") or final.get("errors") or "").split())
+        why = re.sub(r'\{.*"message":\s*"([^"]*)".*\}', r"\1", why)[:300] or f"exit {code}"  # the API's JSON body
+        return "error", why if sub == "success" else f"{sub}: {why}"  # it reaches the phone: plain words only
+    return "ok", None
+
+
 def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=None, stop_if=None, ticket=""):
     """Run one headless session to its end. `stop_if()` returns a reason to kill it (deadline, usage cap).
-    Returns (final text, why it was stopped or None)."""
+    Returns (final text, why it was stopped or None, why it failed or None): a failure is the session's own
+    (API error, crash), never the ticket's, so callers can retry it."""
     model, effort = p.models.get(role, "opus"), p.models.get(f"{role}_effort", "high")
     raw = p.state / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}-{label}.jsonl"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -76,7 +93,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
                             start_new_session=True, env=env())
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
-    result, killed, final = "", None, {}
+    result, killed, final, noise = "", None, {}, []
     with raw.open("w") as out:
         while True:
             if sel.select(timeout=30):
@@ -88,6 +105,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
                 try:
                     ev = json.loads(line)
                 except ValueError:
+                    noise = (noise + [line.strip()])[-5:] if line.strip() else noise
                     continue
                 if ev.get("type") == "rate_limit_event" and usage:
                     usage.update(ev.get("rate_limit_info", {}))
@@ -101,12 +119,14 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
                         proc.wait(60)
                     except subprocess.TimeoutExpired:
                         os.killpg(proc.pid, signal.SIGKILL)
-    proc.wait()
+    code = proc.wait()
+    end, error = ("killed", None) if killed else ending(final, code, noise)
     u = final.get("usage") or {}
     append_jsonl(p.state / "ledger.jsonl", {
         "role": role, "label": label, "ticket": ticket, "model": model, "effort": effort,
         "minutes": round((time.time() - started) / 60, 1), "turns": final.get("num_turns"),
         "input": u.get("input_tokens", 0), "output": u.get("output_tokens", 0),
         "cache_read": u.get("cache_read_input_tokens", 0), "cache_write": u.get("cache_creation_input_tokens", 0),
-        "usd": final.get("total_cost_usd"), "killed": killed, "stream": raw.name})
-    return result, killed
+        "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error, "exit": code,
+        "stream": raw.name})
+    return result, killed, error

@@ -91,6 +91,67 @@ class Pipeline(unittest.TestCase):
         self.assertIn("option B (blue)", prompts[1])
         self.assertEqual(pilot.merged, ["T-001", "T-002"])
 
+    def pilot(self, fail):
+        """A pilot whose fake sessions do `fail` (FAKE_FAIL) in turn, with an instant backoff and pushes recorded."""
+        import os
+        os.environ["FAKE_FAIL"] = fail
+        pilot = driver.Pilot(self.p, args())
+        self.waits, self.pushes = [], []
+        pilot.sleep = self.waits.append
+        orig, driver.push = driver.push, lambda title, *a, **k: self.pushes.append(title)
+        self.addCleanup(setattr, driver, "push", orig)
+        return pilot
+
+    def roles(self):
+        return [c["system"].split(" run")[0][11:] for c in self.calls() if c["system"]]
+
+    def test_dead_sessions_are_retried_without_failing_the_ticket(self):
+        pilot = self.pilot("error,crash")  # an API error, then a crash with no result event; then all is well
+        pilot.run(now() + timedelta(hours=1))
+        self.assertEqual(pilot.merged, ["T-001", "T-002"])
+        self.assertEqual((pilot.failed, pilot.fail_streak), ([], 0))
+        self.assertFalse([t for t in self.pushes if t.startswith("Failed")])
+        self.assertEqual(self.waits, [60] * 9)  # 3 minutes, then 6
+        self.assertEqual(self.roles(), ["worker"] * 3 + ["review", "worker", "review"])
+        ends = [(r["end"], r["error"]) for r in map(json.loads, (self.p.state / "ledger.jsonl").read_text().splitlines())]
+        self.assertEqual(ends[0], ("error", "API Error: 529 Overloaded"))
+        self.assertEqual(ends[1], ("no result", "no result event (exit 1): Error: socket hang up"))
+        self.assertEqual(ends[2], ("ok", None))
+
+    def test_dead_reviewer_is_retried_in_place(self):
+        pilot = self.pilot("ok,error")
+        pilot.run(now() + timedelta(hours=1))
+        self.assertEqual(pilot.merged, ["T-001", "T-002"])
+        self.assertEqual(self.roles(), ["worker", "review", "review", "worker", "review"])
+
+    def test_sessions_that_keep_dying_stop_the_run_without_failing_tickets(self):
+        pilot = self.pilot("error*")
+        pilot.run(now() + timedelta(hours=1))
+        self.assertEqual(pilot.stop_reason, "4 sessions in a row died (API Error: 529 Overloaded)")
+        self.assertEqual((pilot.merged, pilot.failed), ([], []))
+        self.assertEqual(self.roles(), ["worker"] * 4)
+        self.assertEqual(self.pushes, ["sandbox: autopilot started", "sandbox: autopilot stopped"])
+
+    def test_no_retry_past_the_deadline(self):
+        pilot = self.pilot("crash*")
+        pilot.run(now() + timedelta(minutes=2))
+        self.assertIn("no time left to retry it", pilot.stop_reason)
+        self.assertEqual((self.roles(), self.waits, pilot.failed), (["worker"], [], []))
+
+    def test_missing_result_line_gets_one_more_run(self):
+        pilot = self.pilot("quiet")
+        pilot.run(now() + timedelta(hours=1))
+        self.assertEqual((pilot.merged, pilot.failed), (["T-001", "T-002"], []))
+        prompts = [c["prompt"] for c in self.calls() if "worker" in c["system"]]
+        self.assertIn("ended without the RESULT line for T-001. The worktree is on `t-001-work`", prompts[1])
+        self.assertNotIn("without the RESULT line", prompts[2])  # T-002 starts clean
+
+    def test_missing_result_line_twice_fails_the_ticket(self):
+        pilot = self.pilot("quiet*")
+        pilot.run(now() + timedelta(hours=1))
+        self.assertEqual(pilot.failed, ["T-001"])
+        self.assertEqual(self.roles(), ["worker"] * 2)
+
     def test_check_failure_goes_back_with_its_log(self):
         self.s.write(".windvane/config.toml", (self.s.root / ".windvane/config.toml").read_text()
                      .replace('check = "test -f README"', 'check = "echo boom; false"'))

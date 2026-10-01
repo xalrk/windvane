@@ -69,6 +69,9 @@ What a ticket goes through:
    merges the PR (or pushes, for forge `git`). A conflict or a red merged tree goes back to the worker.
 
 Anything sent back reaches the ticket's next worker run as written feedback; tickets that keep bouncing are set aside.
+A session that dies outside its ticket (API error, network drop, crash) is rerun after a growing pause
+(`retries`, `retry_minutes`), without failing the ticket; sessions that keep dying stop the run with the error.
+A worker that ends without its `RESULT:` line gets one more run to finish.
 
 Design choices, and why:
 - **Your checkout is never touched.** Sessions work in the autopilot's own worktree, so you can keep working at the
