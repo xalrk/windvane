@@ -148,7 +148,7 @@ class Stats(unittest.TestCase):
         run("T-002", 19000, None, estimated=True)
         out = io.StringIO()
         with redirect_stdout(out):
-            cli.cmd_stats(argparse.Namespace(days=7, by="ticket"), p)
+            cli.cmd_stats(argparse.Namespace(days=7, by="ticket", critic=False), p)
         lines = out.getvalue().splitlines()
         self.assertIn("outcome", lines[0])
         self.assertRegex(out.getvalue(), r"T-001\s+merged\s+2 .* ≥1.00 ")

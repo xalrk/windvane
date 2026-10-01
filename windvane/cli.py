@@ -240,9 +240,14 @@ def cmd_overview(a, p):
     work = next((m.group(1) for l in reversed(last_log(p, 200)) if (m := re.search(r" (\S+): worker run", l))), None)
     if running(p) and work:
         lines[-1] = f"Autopilot on, working on {work}: {q.titles.get(work, '')}."
-    scores = [e["score"] for e in read_jsonl(p.state / "critic.jsonl") if e.get("score") is not None][-10:]
-    if scores:
-        lines.append(f"Critic: {sum(scores) / len(scores):.1f}/10 over the last {len(scores)} verdicts.")
+    c = critic_mod.calibration(read_jsonl(p.state / "critic.jsonl"), p.critic["pass"])
+    if c:
+        n = len(c["tickets"])
+        line = (f"Critic, last {n} tickets: first scores {critic_mod.spread(c['first'])}; {c['final_on_bar']} of {n} "
+                f"ended exactly on the pass mark ({c['bar']:g}).")
+        if c["accepted"]:
+            line += f" {c['accepted']} passed only by running out of revisions."
+        lines.append(line)
     print("\n".join(lines))
 
 
@@ -306,6 +311,8 @@ def cmd_new(a, p):
 
 
 def cmd_stats(a, p):
+    if a.critic:
+        return critic_stats(a, p)
     rows = read_jsonl(p.state / "ledger.jsonl")
     since = f"{now() - timedelta(days=a.days):%Y-%m-%d %H:%M}"
     rows = [r for r in rows if r.get("at", "") >= since]
@@ -347,6 +354,25 @@ def cmd_stats(a, p):
     if est:
         print(f"(≥: {est} runs ended before their result; their tokens are counted from the stream, their API $ is not.)")
     print("(API $ is what the tokens would cost on the API: a relative meter on a subscription.)")
+
+
+def critic_stats(a, p):
+    """Whether the critic's calibration spreads its scores out, over the last `--last` tickets it scored."""
+    if a.last < 1:
+        sys.exit("--last needs at least 1 ticket")
+    c = critic_mod.calibration(read_jsonl(p.state / "critic.jsonl"), p.critic["pass"], a.last)
+    if not c:
+        print("no critic verdicts yet")
+        return
+    n, g = len(c["tickets"]), lambda x: f"{x:g}"
+    print(f"critic: last {n} tickets, {c['verdicts']} verdicts, pass mark {g(c['bar'])}/10")
+    print(f"first scores: {critic_mod.spread(c['first'])}")
+    print(f"final scores: {critic_mod.spread(c['final'])}")
+    print(f"needed revisions: {c['revised']} of {n}")
+    print(f"exactly on the pass mark: {c['final_on_bar']} of {n} final scores, {c['on_bar']} of {c['verdicts']} verdicts")
+    print(f"passed only by running out of revisions (accept): {c['accepted']} of {n}")
+    for t, rs in c["tickets"]:
+        print(f"  {t:8} {' → '.join(g(r['score']) for r in rs):14} {rs[-1].get('step', '')}")
 
 
 def ticket_outcomes(p, agg):
@@ -433,6 +459,8 @@ def main(argv=None):
     s = sub.add_parser("stats", help="tokens per role or ticket, from the ledger")
     s.add_argument("--days", type=float, default=7)
     s.add_argument("--by", choices=("role", "ticket"), default="role")
+    s.add_argument("--critic", action="store_true", help="the spread of the critic's scores instead")
+    s.add_argument("--last", type=int, default=10, help="with --critic: over the last N tickets (default 10)")
     sub.add_parser("mode", help="how a design question is handled right now")
     sub.add_parser("quiet", help="show the quiet times")
     s = sub.add_parser("watch", help="follow the running sessions live (costs no tokens)")
