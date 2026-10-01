@@ -399,17 +399,20 @@ class Pilot:
         """A merge counts only once main holds the head: a push or `gh pr merge` can report success without it
         (a no-op push, a hook that rejects late), and the branches about to be deleted may be the only copies."""
         p = self.p
-        git(p.main_root(), "fetch", "-q", p.remote)
+        fetched = any(git(p.main_root(), "fetch", "-q", p.remote).returncode == 0 for _ in range(2))
         if git(p.main_root(), "merge-base", "--is-ancestor", sha, p.upstream).returncode == 0:
             return True
-        self.fail(tid, f"the merge was reported done but {p.upstream} doesn't contain {sha[:12]}; the work is kept "
-                       f"on branch {branch or '(none)'} at {sha[:12]}")
+        why = f"{p.upstream} doesn't contain {sha[:12]}" if fetched else f"couldn't fetch {p.remote} to confirm it"
+        self.fail(tid, f"the merge was reported done but {why}; the work is kept on branch {branch or '(none)'} "
+                       f"at {sha[:12]}")
         return False
 
     def merged_ok(self, tid, branch, sha):
         p = self.p
         if branch:  # only while it still points at the merged head: a later push there is unmerged work
-            git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{sha}", p.remote, "--delete", branch)
+            if git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{sha}", p.remote, "--delete",
+                   branch).returncode and gout(p.main_root(), "ls-remote", "--heads", p.remote, branch):
+                self.log(f"{tid}: kept {p.remote}/{branch}: it moved past the merged head {sha[:7]}")
         git(p.main_root(), "fetch", "-q", "--prune", p.remote)
         wd = p.work_dir
         if not gout(wd, "status", "--porcelain"):
