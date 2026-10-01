@@ -4,9 +4,9 @@ judges the outcome.
 
 The worker leaves an evidence pack in `<state>/critic/<ID>/`: `notes.md` (line 1 `User-facing: yes` or
 `User-facing: no (<why>)`, then what a user now gets and measured numbers) and up to a few images (screenshots,
-contact sheets). It runs `windvane critic <ID>` and follows the last line, `CRITIC STEP`: pass (>= pass mark), scope
-(under it, but nothing this ticket can fix), revise, rethink (under the floor: the approach is wrong), accept (out of
-revisions). Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed `windvane plan`.
+contact sheets). It runs `windvane critic <ID>` and follows the last line, `CRITIC STEP`: pass (lowest dimension >=
+pass mark), scope (under it, but nothing this ticket can fix), revise, rethink (the first dimension under the floor:
+the approach is wrong), accept (out of revisions). The critic scores blind; only the driver knows the bar. Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed `windvane plan`.
 """
 import re
 import statistics
@@ -14,9 +14,11 @@ from pathlib import Path
 
 from .config import HOME
 from .runner import run_claude
-from .util import append_jsonl, git, gout, last_match, load_json, read_jsonl
+from .util import append_jsonl, git, gout, load_json, read_jsonl
 
-CRITIC_RE = re.compile(r"CRITIC: (\d+(?:\.\d+)?)/10 (\S+) fixes=(\d+)[ \t]*(.*)")
+OLD_RE = re.compile(r"CRITIC: (\d+(?:\.\d+)?)/10 (\S+) fixes=(\d+)[ \t]*(.*)")
+CRITIC_RE = re.compile(r"CRITIC: (\S+) ((?:[\w-]+=(?:\d+(?:\.\d+)?|-)[ \t]+)+?)fixes=(\d+)[ \t]*(.*)")
+DIM_RE = re.compile(r"([\w-]+)=(\d+(?:\.\d+)?|-)")
 DONE = ("pass", "scope", "accept", "skip")
 DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]
 
@@ -54,15 +56,38 @@ def revisions(records):
     return sum(r.get("step") in ("revise", "rethink") for r in records)
 
 
-def step(p, score, fixes, revs):
-    """What a verdict leads to. Open "Fix in this ticket" points block a pass whatever the score (the user's call,
-    2026-10-01: T-004 passed at 8 while its critique still named a crash race in its own code)."""
+def verdict(text):
+    """The last CRITIC line as (ticket, {dimension: score}, fixes, gist), or None. The ticket's score is its lowest
+    dimension; `-` marks one the ticket doesn't touch and is left out. An old `CRITIC: 7/10 <ID>` line is one
+    dimension, "score"."""
+    lines = [l for l in (text or "").splitlines() if "CRITIC:" in l]
+    for line in reversed(lines):
+        if m := CRITIC_RE.search(line):
+            dims = {k: float(v) for k, v in DIM_RE.findall(m.group(2)) if v != "-"}
+            if dims:
+                return m.group(1), dims, int(m.group(3)), m.group(4)
+        if m := OLD_RE.search(line):
+            return m.group(2), {"score": float(m.group(1))}, int(m.group(3)), m.group(4)
+    return None
+
+
+def step(p, dims, fixes, revs):
+    """What a verdict leads to. The critic never sees the bar (T-022: shown it, it decided pass or fail first and
+    wrote the matching number); the driver compares here. Open "Fix in this ticket" points block a pass whatever the
+    score (a ticket once passed at 8 while its critique still named a crash race in its own
+    code). Only the first dimension, whether the ticket works at all, can call for a rethink: a wording problem
+    means revise."""
     c = p.critic
     if fixes == 0:
-        return "pass" if score >= c["pass"] else "scope"
+        return "pass" if min(dims.values()) >= c["pass"] else "scope"
     if revs >= c["revisions"]:
         return "accept"
-    return "revise" if score >= c["floor"] else "rethink"
+    return "revise" if next(iter(dims.values())) >= c["floor"] else "rethink"
+
+
+def unscored(critique):
+    """An earlier critique without its score lines, so a revision is judged afresh, not as "last time +1"."""
+    return "\n".join(l for l in critique.splitlines() if not re.match(r"\s*(Scores?:|CRITIC:)", l)).strip()
 
 
 def beyond(critique):
@@ -121,7 +146,7 @@ def system_prompt(p, cwd):
         f = Path(cwd) / rel
         if f.is_file():
             parts.append(f"{head}\n\n{f.read_text()}")
-    return "\n\n".join(parts).replace("{pass}", str(p.critic["pass"])).replace("{floor}", str(p.critic["floor"]))
+    return "\n\n".join(parts)
 
 
 def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None):
@@ -138,7 +163,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None):
         return entry, "Not user-facing: no critique."
     ticket = gout(cwd, "show", f"{rev}:{p.tickets_rel}/{tid}.md")
     stat = "\n".join(gout(cwd, "diff", "--stat", f"{p.upstream}...{rev}").splitlines()[-40:])
-    earlier = [e["critique"] for e in past if e.get("critique")]
+    earlier = [unscored(e["critique"]) for e in past if e.get("critique")]
     prompt = "\n\n".join(filter(None, [
         f"Critique {tid}. Follow the critic rules in your system prompt and end with the CRITIC line.",
         f"## The ticket\n{ticket[:6000]}",
@@ -149,13 +174,14 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None):
     ]))
     text, _, _ = run_claude(p, "critic", f"{tid}-critic", prompt, system_prompt(p, cwd), cwd, deny=DENY,
                             usage=usage, stop_if=stop_if, ticket=tid)
-    m = last_match(CRITIC_RE, text)
-    if not m or p.norm(m.group(2)) != tid:
+    v = verdict(text)
+    if not v or p.norm(v[0]) != tid:
         return None, text or "The critic ended without a verdict."
-    score, fixes = float(m.group(1)), int(m.group(3))
-    critique = text[text.find("Score:"):] if "Score:" in text else text
-    entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": score, "fixes": fixes,
-             "revisions": n, "step": step(p, score, fixes, n), "gist": m.group(4)[:200], "critique": critique}
+    _, dims, fixes, gist = v
+    critique = text[text.find("Score"):] if "Score" in text else text
+    entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
+             "dims": dims, "fixes": fixes, "revisions": n, "step": step(p, dims, fixes, n), "gist": gist[:200],
+             "critique": critique}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
 
