@@ -35,6 +35,7 @@ windvane run --for 6h --detach                      # in tmux; `windvane watch` 
 | `new <title>` | a ticket file with the next id |
 | `answer T-007 B` / `answer T-007.1 "free text"` | answer a ticket's (or a preflight) question at the desk |
 | `stats [--by ticket]` | tokens, turns and minutes per role or ticket |
+| `stats --critic [--last N]` | whether the critic's calibration spreads its scores: first and final scores, revisions, scores on the pass mark |
 | `quiet`, `mode` | quiet times (`~/.local/state/windvane/<name>/quiet.txt`) and what they mean right now |
 | `heavy -- <cmd>` | run a machine-heavy command (engine, render, big build) one at a time on this machine |
 | `check`, `critic T-007`, `bg [--heavy] <name> <cmd>`, `await <name>` | used by the sessions themselves |
