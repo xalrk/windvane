@@ -23,7 +23,7 @@ from pathlib import Path
 from . import critic
 from .config import HOME
 from .jobs import check, tail
-from .questions import (desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
+from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
 from .queue import Queue
 from .runner import Usage, over_caps, run_claude
 from .util import git, gout, hhmm, last_match, load_json, log, now, push, save_json, sh
@@ -196,10 +196,13 @@ class Pilot:
         here = gout(wd, "rev-parse", "--abbrev-ref", "HEAD")
         fb = self.feedback.get(tid)
         pr = pr_for(p, branches[0]) if branches else ""
+        known = self.answered(tid, ref)
         prompt = "\n\n".join(filter(None, [
             f"Ticket {tid}. Follow the worker rules in your system prompt and end with the RESULT line.",
             f"## The ticket\n{ticket[:8000]}",
             f"## Act on this first\n{fb}" if fb else "",
+            "## The user already answered these (under ## Answered in QUESTIONS.md): build them, don't ask again\n"
+            + "\n\n".join(known) if known else "",
             (f"In progress on branch(es) {', '.join(branches)}" + (f", PR #{pr}" if pr else "") + ". Resume it.")
             if branches else "A new ticket: branch it off " + p.upstream + ".",
             f"The worktree is on `{here}` with uncommitted changes from an earlier run:\n{dirty[:1500]}" if dirty else
@@ -221,6 +224,15 @@ class Pilot:
         if start_five is not None and self.usage.five is not None and self.usage.five >= start_five:
             self.costs.append(round(self.usage.five - start_five, 1))
         self.save()
+
+    def answered(self, tid, ref):
+        """The ticket's answered questions on main (preflight puts them there) and on its own branch."""
+        out = []
+        for r in dict.fromkeys((self.p.upstream, ref)):
+            for b in answered(gout(self.wd, "show", f"{r}:{self.p.questions_rel}"), tid):
+                if b not in out:
+                    out.append(b)
+        return out[:10]
 
     def handle(self, tid, text, killed, deadline):
         if killed:
@@ -779,6 +791,41 @@ def changed_paths(cwd):
     return paths
 
 
+def author_ident(p):
+    """`-c user.name/email` for the driver's own commits when the config names an author."""
+    a = p.cfg["author"]
+    return (["-c", f"user.name={a.split('<')[0].strip()}", "-c", f"user.email={a.split('<')[1].rstrip('>').strip()}"]
+            if "<" in a else [])
+
+
+def land(p, cd, branch, title, body, commit=True):
+    """Put the driver's own change in `cd` (staged, or committed when `commit` is off) on main: through a merged PR on
+    github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is)."""
+    if commit:
+        git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:3000])
+    if p.cfg["forge"] == "github":
+        git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+        pr = sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title, "--body", body)
+        pr_n = pr.rstrip("/").rsplit("/", 1)[-1]
+        merged = pr_n.isdigit() and (
+            subprocess.run(["gh", "pr", "merge", pr_n, "--merge"], cwd=p.main_root(), capture_output=True).returncode
+            == 0 or sh(p.main_root(), "gh", "pr", "view", pr_n, "--json", "state", "-q", ".state") == "MERGED")
+        if merged:
+            git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
+        return merged, pr or branch
+    res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
+    if res.returncode:  # main moved meanwhile: the change only adds to .windvane/, so replay it
+        git(p.main_root(), "fetch", "-q", p.remote)
+        if git(cd, *author_ident(p), "rebase", "-q", p.upstream).returncode == 0:
+            res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
+        else:
+            git(cd, "rebase", "--abort")
+        if res.returncode:  # keep the paid-for work on its branch rather than drop it
+            git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+            return False, branch
+    return True, p.main
+
+
 def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max_new=6):
     """A planner run writes tickets for `goal` (and the critic's follow-ups) on a branch the driver commits;
     `merge` merges it at once. Returns how many tickets it merged (with `merge`) or wrote."""
@@ -853,45 +900,29 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
         return 0
     n = int(m.group(1) or 0)
     branch = f"plan-{now():%Y%m%d-%H%M}"
-    author = p.cfg["author"]
-    ident = (["-c", f"user.name={author.split('<')[0].strip()}", "-c",
-              f"user.email={author.split('<')[1].rstrip('>').strip()}"] if "<" in author else [])
     git(cd, "add", "-A", ".windvane")
-    git(cd, *ident, "commit", "-q", "-m", f"Plan: {n} tickets ({m.group(3)[:60]})", "-m", text.strip()[-3000:])
+    git(cd, *author_ident(p), "commit", "-q", "-m", f"Plan: {n} tickets ({m.group(3)[:60]})", "-m",
+        text.strip()[-3000:])
     if notes:
         from .util import append_jsonl
         append_jsonl(p.state / "critic.jsonl", {"ticket": "PLAN", "step": "plan", "notes": len(notes)})
-    if p.cfg["forge"] == "github":
+    if merge:
+        ok, where = land(p, cd, branch, f"Plan: {n} new tickets", text.strip()[-6000:], commit=False)
+        if not ok:
+            return unmerged(p, n, where)
+        log(p, f"plan: {n} tickets on {where} (merged)")
+    elif p.cfg["forge"] == "github":
         git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
         pr = sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title",
                 f"Plan: {n} new tickets", "--body", text.strip()[-6000:])
-        pr_n = pr.rstrip("/").rsplit("/", 1)[-1]
-        merged = False
-        if merge and pr_n.isdigit():
-            res = subprocess.run(["gh", "pr", "merge", pr_n, "--merge"], cwd=p.main_root(), capture_output=True)
-            merged = res.returncode == 0 or sh(p.main_root(), "gh", "pr", "view", pr_n, "--json", "state",
-                                               "-q", ".state") == "MERGED"
-            if merged:
-                git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
-        if merge and not merged:
-            return unmerged(p, n, pr or branch)
-        log(p, f"plan: {n} tickets on {pr or branch}{' (merged)' if merge else ''}")
+        log(p, f"plan: {n} tickets on {pr or branch}")
     else:
-        res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main if merge else branch}")
-        if res.returncode and merge:  # main moved during the session: the plan only adds tickets, so replay it
-            git(p.main_root(), "fetch", "-q", p.remote)
-            if git(cd, *ident, "rebase", "-q", p.upstream).returncode == 0:
-                res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
-            else:
-                git(cd, "rebase", "--abort")
-            if res.returncode:  # keep the paid-for plan on its branch rather than drop it
-                git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
-                return unmerged(p, n, branch)
+        res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
         if res.returncode:
             clean_detach(p, cd, p.upstream)
             log(p, f"plan: push to {branch} refused ({' '.join(res.stderr.split())[:200]}); plan dropped")
             return 0
-        log(p, f"plan: {n} tickets pushed to {p.main if merge else branch}")
+        log(p, f"plan: {n} tickets pushed to {branch}")
     push(f"{p.name}: planned {n} tickets", m.group(3)[:200] or "See the queue.", 3, "memo")
     clean_detach(p, cd, p.upstream)
     return n

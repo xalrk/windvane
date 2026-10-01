@@ -52,9 +52,12 @@ Do everything yourself. The user should only have to answer real product questio
    away, ask with `notify-ask` instead. Adjust and repeat until they're happy. Don't start the run before they answer;
    after 10 minutes with no answer, go with it and say so in step 8.
 6. **Commit and push** (`git add -A && git commit && git push`). The autopilot reads tickets from `origin/main`.
-7. **Start it:** `windvane run --for <hours> --detach --replan 2`. `--replan` plans more tickets from the goal and the
-   critic's notes when the queue runs dry. Before you start it, check `windvane quiet` and ask the user about a
-   deadline if they gave none and one matters (a shutdown, a meeting).
+7. **Start it.** Check `windvane quiet`, and ask the user about a deadline if they gave none and one matters (a
+   shutdown, a meeting). Then `windvane preflight --for <hours> --json`: the product questions the next tickets will
+   need. Ask them with AskUserQuestion (each question's options, recommended one first; up to four at a time), and
+   record each answer with the command in its `answer_with` (a letter, or their own words in quotes). A question they
+   skip goes to their phone later, if a run still needs it. Then `windvane run --for <hours> --detach --no-preflight
+   --replan 2`. `--replan` plans more tickets from the goal and the critic's notes when the queue runs dry.
 8. **Tell the user** in a few lines what you set up, the first tickets, and how to follow it: `windvane watch` (live,
    costs nothing), `windvane status`, their phone's `status`/`overview`/`stop`, and `windvane stop`.
 

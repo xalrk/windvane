@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import critic as critic_mod
-from . import driver, jobs, questions, watch
+from . import driver, jobs, preflight, questions, watch
 from .config import DIR, HOME, Project, find
 from .queue import Queue
 from .runner import Usage, inherited_stop
@@ -149,11 +149,13 @@ def cmd_run(a, p):
     if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
         sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
     p.state.mkdir(parents=True, exist_ok=True)
+    if a.detach and in_tmux(p):  # (the detached run itself starts inside that session)
+        sys.exit(f"already running in tmux session {p.tmux}")
+    if driver.locked(p):
+        sys.exit("already running: stop it with windvane stop")
+    if not a.no_preflight and sys.stdin.isatty():  # never blocks a run started from a script
+        ask_first(p, (deadline - now()).total_seconds() / 3600, a.parallel)
     if a.detach:
-        if in_tmux(p):
-            sys.exit(f"already running in tmux session {p.tmux}")
-        if running(p):
-            sys.exit("already running in the foreground: stop it with windvane stop")
         args, skip = [], False
         for x in sys.argv[1:]:
             if skip or x == "--detach":
@@ -163,6 +165,7 @@ def cmd_run(a, p):
                 skip = True
                 continue
             args.append(x)
+        args += [] if "--no-preflight" in args else ["--no-preflight"]  # asked here already, if at all
         cmd = " ".join(json.dumps(x) for x in [str(HOME / "bin/windvane"), "-C", str(p.main_root()), *args])
         subprocess.run(["tmux", "new-session", "-d", "-s", p.tmux, "-c", str(p.main_root()), cmd], check=True)
         print(f"autopilot running in tmux session {p.tmux} until {hhmm(deadline)}\n"
@@ -170,6 +173,27 @@ def cmd_run(a, p):
               f"  status: windvane status     stop: windvane stop")
         return
     driver.Pilot(p, a).run(deadline)
+
+
+def ask_first(p, hours, parallel=None):
+    print("preflight: reading the next tickets for questions you can answer now...", flush=True)
+    qs = preflight.find(p, hours, Usage(p), parallel)
+    if not qs:
+        print("preflight: no questions; starting")
+        return
+    print(f"preflight: {len(qs)} question{'s' * (len(qs) > 1)}. Enter skips one: a run that needs it asks your phone.")
+    preflight.ask(p, qs)
+
+
+def cmd_preflight(a, p):
+    need(p)
+    hours = (parse_deadline(None, a.for_) - now()).total_seconds() / 3600
+    if not a.json:
+        return ask_first(p, hours) if sys.stdin.isatty() else sys.exit("preflight: no terminal; use --json")
+    qs = preflight.find(p, hours, Usage(p))
+    for x in qs:
+        x["answer_with"] = f"windvane answer {x['id']} <letter, or your own words in quotes>"
+    print(json.dumps(qs, indent=1))
 
 
 def cmd_stop(a, p):
@@ -218,9 +242,17 @@ def cmd_queue(a, p):
 
 
 def cmd_answer(a, p):
-    tid = p.norm(a.ticket) or sys.exit("give a ticket id")
     letter = a.answer.upper() if re.fullmatch(r"[A-Ea-e]", a.answer) else None
+    waits = load_json(p.state / "state.json", {}).get("questions", {})
+    x = preflight.lookup(p, a.ticket) if p.norm(a.ticket) not in waits else None
+    if x:  # a preflight question: recorded on main for the ticket's worker
+        print(f"{x['ticket']}: {preflight.record(p, [(x, letter, None if letter else a.answer)])}")
+        return
+    tid = p.norm(a.ticket) or sys.exit("give a ticket id, or a question's id from preflight (T-003.1)")
+    if tid not in waits:
+        sys.exit(f"{tid}: no question of it waits for an answer (open, provisional on {p.main}, or from preflight)")
     questions.give_answer(p, tid, letter, None if letter else a.answer)
+    preflight.forget(p, {tid})  # preflight lists an open phone question under its ticket id
     print(f"{tid}: answer recorded; the autopilot builds it on the ticket's next run")
 
 
@@ -343,6 +375,7 @@ def main(argv=None):
     g.add_argument("--until", help="HH:MM or 'YYYY-MM-DD HH:MM'")
     g.add_argument("--for", dest="for_", help="e.g. 90m or 6h")
     s.add_argument("--detach", action="store_true", help="run in a tmux session")
+    s.add_argument("--no-preflight", action="store_true", help="start without asking the next tickets' questions")
     s.add_argument("--parallel", type=int, help="tickets at a time (default from config, 2)")
     s.add_argument("--cap", type=float, help="max %% of the 5-hour window (default from config, 75)")
     s.add_argument("--week-cap", type=float, help="stop at this %% of the weekly limit (default 95)")
@@ -352,6 +385,9 @@ def main(argv=None):
     s.add_argument("--replan", type=int, default=0, metavar="N",
                    help="when the queue runs dry, plan new tickets (goal + critic notes), up to N times")
     s.add_argument("--goal", help="the goal for --replan (default: config's goal)")
+    s = sub.add_parser("preflight", help="the questions the next tickets will need, to answer now")
+    s.add_argument("--for", dest="for_", default="4h", help="how long the run will be (default 4h)")
+    s.add_argument("--json", action="store_true", help="print them for a Claude session to ask")
     s = sub.add_parser("stop", help="stop after the current ticket")
     s.add_argument("--if-running", action="store_true")
     s = sub.add_parser("status", help="running or not, open questions, the log's tail")

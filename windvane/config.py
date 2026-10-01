@@ -27,7 +27,8 @@ DEFAULTS = {
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
     "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
     "models": {"worker": "opus", "worker_effort": "high", "reviewer": "opus", "reviewer_effort": "high",
-               "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high"},
+               "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high",
+               "preflight": "sonnet", "preflight_effort": "medium"},  # preflight: a light read of the next tickets
     "critic": {"enabled": True, "pass": 8, "floor": 4, "revisions": 3},
     "autopilot": {"parallel": 2, "cap": 75, "week_cap": 95, "ticket_hours": 3, "min_slot": 30, "answer_wait": 10,
                   "review_rounds": 3, "partials": 3, "subagents": False, "inline_diff_lines": 1200,
