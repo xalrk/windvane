@@ -12,6 +12,8 @@ keep dying (API errors, crashes; each is retried after a growing pause first). A
 session and pauses until the window resets.
 """
 import fcntl
+import os
+import sys
 import threading
 import re
 import shutil
@@ -21,8 +23,8 @@ from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import critic
-from .config import HOME, slots
+from . import critic, selfupdate
+from .config import CHECKOUT, HOME, exe, slots
 from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
 from .queue import Queue
@@ -167,6 +169,10 @@ class Pilot:
         self.limit, self.peak, self.conflicts, self.beside = self.n, 1, 0, set()
         self.began, self.spent = {}, {}
         self.minutes = s.get("minutes", [])
+        # Self-update between tickets (`selfupdate`): the install it pulls (None: off, as in the tests) and how the
+        # driver restarts itself when its own code changed.
+        self.home = HOME if CHECKOUT and os.environ.get("WINDVANE_SELF_UPDATE") != "0" else None
+        self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, set(), None
 
     def slot_dirs(self, i):
         p = self.p
@@ -900,6 +906,8 @@ class Pilot:
             if why:
                 self.stop_reason = why
                 return
+            if not self.running:
+                self.self_update()
             free = [i for i in range(self.n) if i not in self.running.values()]
             if not free or len(self.running) >= self.limit:
                 self.pause()
@@ -952,6 +960,27 @@ class Pilot:
             if self.n == 1:
                 self.threads[-1].join()
 
+    def self_update(self):
+        """Pulls the windvane install between tickets (nothing running) and, when the driver's own code changed,
+        restarts it in place with the deadline as it now is. Each reason to leave the install alone is logged once."""
+        if self.home is None:
+            return
+        said = []
+        again = selfupdate.pull(self.home, said)
+        for line in said:
+            if line not in self.update_said:
+                self.log(line)
+                self.update_said.add(line)
+        if again:
+            names = lambda ids: ", ".join(ids) or "none"
+            self.log(f"windvane restarting with its new code (so far merged: {names(self.merged)}; "
+                     f"failed: {names(self.failed)})")
+            self.save()
+            self.lockfile.close()  # the restarted driver takes it again
+            os.environ["WINDVANE_RESTARTED"] = "1"  # no second "autopilot started" push
+            cmd = [*exe(), *selfupdate.restart_args(self.argv, self.end())]
+            self.execv(cmd[0], cmd)
+
     def take_lock(self):
         """One driver per project; `locked` reads this lock to tell the phone a run is on."""
         self.p.state.mkdir(parents=True, exist_ok=True)
@@ -972,7 +1001,12 @@ class Pilot:
         self.log(f"autopilot started, until {hhmm(deadline)} (5h cap {self.a.cap:g}%, week cap {self.a.week_cap:g}%"
                  + (f", up to {self.n} tickets at a time" if self.n > 1 else "") + ")")
         ready = self.prepare(0)  # before any session or push: a failed setup ends the run with a single push
-        if ready:
+        restarted = os.environ.pop("WINDVANE_RESTARTED", None)
+        if not CHECKOUT:
+            self.newer = selfupdate.newer_release(selfupdate.version())
+            if self.newer:
+                self.log(f"windvane {self.newer} is out: pipx upgrade windvane")
+        if ready and not restarted:
             self.usage.probe(p)
             push(f"{p.name}: autopilot started", f"Until {hhmm(deadline)}. {self.usage.text()}.", 2, "rocket",
                  ("Status=status", "Stop=stop"))
@@ -996,7 +1030,8 @@ class Pilot:
             summary = (f"Why: {self.stop_reason}.\nMerged: {names(self.merged)}.\n"
                        + (f"Critic (/10): {crit}.\n" if crit else "") + side
                        + f"Waiting on you: {names(self.questions)}.\nFailed: {names(self.failed)}.\n"
-                       + (f"{self.usage.text()}." if self.usage.five is not None else ""))
+                       + (f"{self.usage.text()}." if self.usage.five is not None else "")
+                       + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else ""))
             self.log(summary.replace("\n", " "))
             push(f"{p.name}: autopilot stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                  "checkered_flag", ("Usage=usage",))
