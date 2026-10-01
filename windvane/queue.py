@@ -9,6 +9,7 @@ branches (fetch first).
   wip      an unmerged remote branch `t-003-...`: resumed before new work
   waiting  a dependency isn't done
   touches  `Touches: windvane/driver.py, prompts/` in the header: tickets whose lists don't overlap may run at once
+  related  `Related: T-004.` in the header: the same feature through other files, so never run beside T-004
 """
 import re
 from pathlib import Path
@@ -27,8 +28,8 @@ def bullets(text, files, p):
     return out
 
 
-def depends_on(head, p):
-    m = re.search(r"Depends on:(.*?)(?:\.\s|\n\s*\n|\Z)", head, re.S | re.I)
+def depends_on(head, p, key="Depends on"):
+    m = re.search(rf"{key}:(.*?)(?:\.\s|\n\s*\n|\Z)", head, re.S | re.I)
     return [t for t in (p.norm(x) for x in re.findall(p.id_re, m.group(1) if m else "", re.I)) if t]
 
 
@@ -62,9 +63,11 @@ class Queue:
                                          self.files, p) if t in self.files]
         num = lambda t: (int(re.search(r"\d+", t).group()), t)
         self.order = listed + sorted((t for t in self.files if t not in listed), key=num)
-        self.deps = {t: depends_on("\n".join(self.text[t].splitlines()[:8]), p) for t in self.files}
+        heads = {t: "\n".join(self.text[t].splitlines()[:8]) for t in self.files}
+        self.deps = {t: depends_on(heads[t], p) for t in self.files}
+        self.related = {t: depends_on(heads[t], p, "Related") for t in self.files}
         self.titles = {t: title(self.text[t], t) for t in self.files}
-        self.touches = {t: touches("\n".join(self.text[t].splitlines()[:8])) for t in self.files}
+        self.touches = {t: touches(heads[t]) for t in self.files}
 
         bp = re.escape(p.prefix.lower())
         merges = gout(cwd, "log", ref, "--merges", "--format=%s")

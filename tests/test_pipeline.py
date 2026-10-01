@@ -369,7 +369,7 @@ class Setup(unittest.TestCase):
         self.s.publish("setup")
         p = Project(self.s.root)
         pilot = driver.Pilot(p, args(parallel=parallel))
-        self.started = pilot.run(now() + timedelta(hours=1))
+        self.started = pilot.run(now() + timedelta(minutes=15))
         return p, pilot
 
     def calls(self):
@@ -440,7 +440,7 @@ class Parallel(unittest.TestCase):
     def run_pilot(self):
         p = Project(self.s.root)
         pilot = driver.Pilot(p, args(parallel=2))
-        pilot.run(now() + timedelta(hours=1))
+        pilot.run(now() + timedelta(minutes=15))  # 10 min a ticket until measured: 2 need the 2nd slot
         return pilot
 
     def test_disjoint_tickets_run_at_once_and_both_merge(self):
