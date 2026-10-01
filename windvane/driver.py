@@ -159,8 +159,10 @@ class Pilot:
         self.threads, self.wake = [], threading.Event()
         self.waits, self.said = [], set()  # why ready tickets can't start beside the running ones; what the log has
         # Side by side only while it pays: `limit` drops a slot for every 2 conflict bounces between tickets that ran
-        # beside another (`beside`); `peak` is the most that ran at once; `minutes` is recent tickets' wall time.
-        self.limit, self.peak, self.conflicts, self.beside, self.began = self.n, 1, 0, set(), {}
+        # beside another (`beside`); `peak` is the most that ran at once; `minutes` is recent tickets' running time:
+        # `began` is when each running attempt started, `spent` the seconds a ticket's finished attempts ran.
+        self.limit, self.peak, self.conflicts, self.beside = self.n, 1, 0, set()
+        self.began, self.spent = {}, {}
         self.minutes = s.get("minutes", [])
 
     def slot_dirs(self, i):
@@ -511,8 +513,9 @@ class Pilot:
             if branch and git(wd, "merge-base", "--is-ancestor", branch, p.upstream).returncode == 0:
                 git(wd, "branch", "-q", "-D", branch)  # -d's own test would use the deleted remote branch
         self.merged.append(tid)
-        if tid in self.began:
-            self.minutes.append(round((time.time() - self.began[tid]) / 60, 1))
+        with self.lock:  # this attempt is still running: its time so far counts too
+            ran = self.spent.pop(tid, 0) + time.time() - self.began.get(tid, time.time())
+        self.minutes.append(round(ran / 60, 2))
         self.fail_streak = 0
         self.feedback.pop(tid, None)
         self.save()
@@ -669,26 +672,30 @@ class Pilot:
     def conflicted(self, tid):
         """A merge conflict: when the ticket ran beside another, parallel cost a worker run. Every second one drops a
         slot for the rest of the run."""
-        if tid not in self.beside:
-            return
-        self.conflicts += 1
-        if self.conflicts % 2 == 0 and self.limit > 1:
-            self.limit = max(1, min(self.limit, self.peak) - 1)
+        with self.lock:
+            if tid not in self.beside:
+                return
+            self.conflicts += 1
+            drop = self.conflicts % 2 == 0 and self.limit > 1
+            if drop:
+                self.limit = max(1, min(self.limit, self.peak) - 1)
+        if drop:
             self.log(f"{self.conflicts} conflict bounces between side-by-side tickets: at most {self.limit} at a "
                      "time for the rest of the run")
 
     def ticket_minutes(self):
-        """Recent merged tickets' wall-clock minutes, start to merge (10 before any is measured)."""
+        """Recent merged tickets' running minutes, all attempts (10 before any is measured)."""
         recent = self.minutes[-5:]
         return sum(recent) / len(recent) if recent else 10.0
 
     def serial_fits(self, deadline):
         """Why another slot isn't worth opening, or "". Side by side risks conflicts and reading code that's about to
-        change, so a slot opens only when the tickets left wouldn't all finish one at a time before the deadline."""
+        change, so a slot opens only when the tickets left wouldn't all finish one at a time before the deadline.
+        A running ticket counts as half one: it's under way."""
         q, blocked = self.queue, set(self.questions)
         left = sum(t not in self.skip and q.status(t, blocked) in ("wip", "todo", "waiting") for t in q.order)
         m = self.ticket_minutes()
-        if left * m > (deadline - now()).total_seconds() / 60 - self.a.min_slot:
+        if (left - len(self.running) / 2) * m > (deadline - now()).total_seconds() / 60 - self.a.min_slot:
             return ""
         return f"{left} ticket{'s' * (left != 1)} x {m:.0f} min fit before {hhmm(deadline)} one at a time"
 
@@ -769,7 +776,7 @@ class Pilot:
                 self.beside |= {tid, *self.running}
             self.running[tid] = slot
             self.peak = max(self.peak, len(self.running))
-            self.began.setdefault(tid, time.time())
+            self.began[tid] = time.time()
         self.save()  # `windvane status` shows the running tickets
         t = threading.Thread(target=self.slot_run, args=(slot, tid, kind, branches, deadline), daemon=True)
         self.threads.append(t)
@@ -792,6 +799,9 @@ class Pilot:
                     git(wd, "switch", "-q", "--detach")  # free the branch for whichever slot takes it next
             with self.lock:
                 self.running.pop(tid, None)
+                ran = time.time() - self.began.pop(tid, time.time())
+                if tid not in self.merged:  # waiting on an answer or in the queue after a bounce doesn't count
+                    self.spent[tid] = self.spent.get(tid, 0) + ran
                 self.beside.discard(tid)  # a later attempt alone doesn't count its conflicts against parallel
             self.save()
             self.wake.set()

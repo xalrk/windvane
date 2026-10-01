@@ -3,6 +3,7 @@ finishes one at a time before the deadline gets no extra slot."""
 import json
 import os
 import sys
+import time
 import unittest
 from argparse import Namespace
 from datetime import timedelta
@@ -11,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver  # noqa: E402
+from windvane import driver, questions  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
@@ -80,7 +81,7 @@ class Schedule(unittest.TestCase):
         self.ticket("T-001", "a.py")
         self.ticket("T-002", "b.py")
         self.ticket("T-003", "c.py")
-        pilot = self.run_pilot(minutes=25)  # 3 x 10 min one at a time would miss it: all three start
+        pilot = self.run_pilot(minutes=15)  # 3 x 10 min one at a time would miss it: all three start
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002", "T-003"])
         self.assertGreaterEqual(pilot.conflicts, 2)
         self.assertEqual(pilot.limit, 2)
@@ -97,6 +98,29 @@ class Schedule(unittest.TestCase):
         self.assertGreater(at["T-002"] - at["T-001"], 1.4)
         self.assertEqual(pilot.peak, 1)
         self.assertEqual(self.log().count("no 2nd slot: 2 tickets x 10 min fit before"), 1)
+
+    def test_ticket_minutes_count_only_running_time(self):
+        """A late answer to a question isn't time the ticket took: the slot gate would think tickets are slower."""
+        os.environ["FAKE_WORKER"] = "question"
+        self.ticket("T-001", "a.py")
+        self.s.publish()
+        self.p = Project(self.s.root)
+        pilot = driver.Pilot(self.p, args(answer_wait=60))
+        asked, poll = {}, pilot.poll_questions
+
+        def answer_late():
+            for tid in pilot.questions:
+                if time.time() - asked.setdefault(tid, time.time()) > 6:
+                    questions.give_answer(self.p, tid, "B")
+            poll()
+        pilot.poll_questions = answer_late
+        sleep = time.sleep
+        self.addCleanup(setattr, time, "sleep", sleep)
+        time.sleep = lambda sec: sleep(min(sec, 0.2))  # the idle wait for an answer polls often
+        pilot.run(now() + timedelta(minutes=15))
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.assertGreater(time.time() - asked["T-001"], 6)
+        self.assertLess(pilot.minutes[-1] * 60, 6)  # two worker attempts and the checks, not the wait
 
     def test_names_matches_whole_paths(self):
         self.assertTrue(driver.names("see `a.py`.", "a.py"))
