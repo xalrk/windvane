@@ -45,8 +45,8 @@ into main, and in progress while such a branch exists unmerged.
 
 ## On this machine
 `~/.local/state/windvane/<name>/`: `autopilot.log`, each session's stream (`runs/`), `ledger.jsonl`,
-`critic.jsonl`, check passes, background jobs, quiet times, and the two worktrees (`work/` for the sessions, `ci/`
-for the driver's checks and merges).
+`critic.jsonl`, check passes, background jobs, quiet times, and the worktrees (`work/` for the sessions, `ci/`
+for the driver's checks and merges, `plan/` for the planner, which gets its own even with `isolate = false`).
 
 ## The phone (ntfy)
 With the user's `notify`, `notify-ask` and `ntfy-listen` set up, pushes go out for each merge, failure, pause,
