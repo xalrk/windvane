@@ -410,7 +410,7 @@ class Setup(unittest.TestCase):
         os.environ["FAKE_WORK_S"] = "1"
         p, pilot = self.run_pilot('case "$PWD" in *-1) exit 4;; esac', parallel=2)
         self.assertEqual(pilot.merged, ["T-001"])  # slot 0's ticket still finishes
-        self.assertIn("(exit 4) in work-1", pilot.stop_reason)
+        self.assertIn("(exit 4) in " + str(p.state / "work-1"), pilot.stop_reason)
         self.assertFalse((p.state / "work-1").exists())
         workers = [l for l in self.calls() if "windvane worker" in l]
         self.assertEqual(len(workers), 1)

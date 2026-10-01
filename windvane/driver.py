@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import time
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -79,14 +80,18 @@ def ensure_worktree(p, path, setup=True):
     if r.returncode:
         raise SystemExit(f"windvane: can't create the worktree {path}: {r.stderr.strip()}")
     if setup and p.cfg["setup"]:
-        r = subprocess.run(p.cfg["setup"], shell=True, cwd=path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           text=True, errors="replace")
+        log(p, f"setting up {path}: {p.cfg['setup']}")
+        lines = deque(maxlen=15)
+        with subprocess.Popen(p.cfg["setup"], shell=True, cwd=path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, errors="replace") as r:
+            for line in r.stdout:  # shown as it comes (a long `npm ci` doesn't look stuck), the end kept for the log
+                print(line, end="", flush=True)
+                lines.append(line.rstrip())
         if r.returncode:  # a half-made tree fails every check: remove it, so the next start sets it up afresh
             git(root, "worktree", "remove", "--force", str(path))
             shutil.rmtree(path, ignore_errors=True)
             git(root, "worktree", "prune")
-            raise SetupFailed(f"setup `{p.cfg['setup']}` failed (exit {r.returncode}) in {path.name}",
-                              r.stdout.strip().splitlines()[-15:])
+            raise SetupFailed(f"setup `{p.cfg['setup']}` failed (exit {r.returncode}) in {path}", list(lines))
 
 
 class SetupFailed(Exception):
@@ -667,7 +672,8 @@ class Pilot:
         except SetupFailed as e:
             last = e.lines[-1][:200] if e.lines else "no output"
             self.halt = f"{e}: {last}"
-            self.log("\n".join([f"{e}; its last lines:", *e.lines]))
+            self.log(str(e))
+            log(self.p, "\n".join(["its last lines:", *e.lines]), echo=False)  # the terminal showed them already
             return False
 
     def start(self, slot, tid, kind, branches, deadline):
@@ -787,7 +793,7 @@ class Pilot:
             summary = (f"Why: {self.stop_reason}.\nMerged: {names(self.merged)}.\n"
                        + (f"Critic (/10): {crit}.\n" if crit else "")
                        + f"Waiting on you: {names(self.questions)}.\nFailed: {names(self.failed)}.\n"
-                       + (f"{self.usage.text()}." if self.usage.five is not None else "Usage not read."))
+                       + (f"{self.usage.text()}." if self.usage.five is not None else ""))
             self.log(summary.replace("\n", " "))
             push(f"{p.name}: autopilot stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                  "checkered_flag", ("Usage=usage",))
