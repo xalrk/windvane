@@ -49,17 +49,22 @@ def question(tid, q, body, kind, n):
             "built": built.group(1) if built else "", "change_at": built.group(2).strip() if built else ""}
 
 
+def provisionals(qtext):
+    """Provisional answers built without the user, as questions to ask again (ids `T-003.p1`)."""
+    out, seen = [], {}
+    for tid, q, body in blocks(part(qtext, "Provisional")):
+        seen[tid] = seen.get(tid, 0) + 1
+        out.append(question(tid, q, body, "provisional", f"p{seen[tid]}"))
+    return out
+
+
 def waiting(p, qtext):
     """Questions already asked that still wait for the user: open phone questions, provisional answers."""
     out = []
     for tid, q in load_json(p.state / "state.json", {}).get("questions", {}).items():
         out.append({"id": tid, "ticket": tid, "kind": "open", "question": q["q"], "context": "",
-                    "options": q["opts"], "recommendation": q["rec"], "why": "", "built": ""})
-    seen = {}
-    for tid, q, body in blocks(part(qtext, "Provisional")):
-        seen[tid] = seen.get(tid, 0) + 1
-        out.append(question(tid, q, body, "provisional", f"p{seen[tid]}"))
-    return out
+                    "options": q["opts"], "recommendation": q["rec"], "why": "", "built": "", "change_at": ""})
+    return out + provisionals(qtext)
 
 
 def find(p, hours, usage=None, parallel=None):
@@ -101,13 +106,16 @@ def pending(p):
 
 
 def lookup(p, key):
-    """The saved preflight question `key` names (`T-003.1`, or `T-003` when the ticket has just one), or None."""
-    qs = pending(p)
-    hit = [x for x in qs if x["id"].lower() == key.lower()]
-    if not hit:
-        tid = p.norm(key)
-        hit = [x for x in qs if x["ticket"] == tid]
-    return hit[0] if len(hit) == 1 else None
+    """The question `key` names (`T-003.1`, or `T-003` when the ticket has just one): saved by preflight, or a
+    provisional answer on main (so `windvane answer` changes one after its ticket merged). None if not exactly one."""
+    def pick(qs):
+        hit = [x for x in qs if x["id"].lower() == key.lower()] or [x for x in qs if x["ticket"] == p.norm(key)]
+        return hit[0] if len(hit) == 1 else None
+    x = pick(pending(p))
+    if x:
+        return x
+    git(p.main_root(), "fetch", "-q", p.remote)
+    return pick(provisionals(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")))
 
 
 # ---------- recording answers

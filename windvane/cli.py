@@ -248,7 +248,9 @@ def cmd_answer(a, p):
     if x:  # a preflight question: recorded on main for the ticket's worker
         print(f"{x['ticket']}: {preflight.record(p, [(x, letter, None if letter else a.answer)])}")
         return
-    tid = p.norm(a.ticket) or sys.exit("give a ticket id, or a preflight question's id (T-003.1)")
+    tid = p.norm(a.ticket) or sys.exit("give a ticket id, or a question's id from preflight (T-003.1)")
+    if tid not in waits:
+        sys.exit(f"{tid}: no question of it waits for an answer (open, provisional on {p.main}, or from preflight)")
     questions.give_answer(p, tid, letter, None if letter else a.answer)
     print(f"{tid}: answer recorded; the autopilot builds it on the ticket's next run")
 

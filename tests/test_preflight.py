@@ -139,15 +139,15 @@ class Preflight(unittest.TestCase):
         text = self.main_questions()
         self.assertNotIn("Big or small?", questions.part(text, "Provisional"))
         self.assertIn("Answer: A (confirmed the provisional answer)", questions.part(text, "Answered"))
+        self.assertNotIn("T-002", Queue(self.p).files)  # a confirmation writes no ticket
         self.assertIn("### T-000: Old?", questions.part(text, "Answered"))
 
     def test_changing_a_provisional_answer_queues_a_ticket_that_builds_it(self):
         self.s.write(".windvane/QUESTIONS.md", "# Q\n\n## Open\n\n## Provisional\n### T-001: Big or small?\n"
                      "- **A**: big\n- **B**: small\nRecommendation: A, because.\nBuilt: A; to change it: SIZE in x.py\n"
                      "\n## Answered\n")
-        self.s.publish("provisional")
-        preflight.find(self.p, 1)
-        self.assertIn("T-002 will change what was built", self.cli("answer", "T-001.p1", "B"))
+        self.s.publish("provisional")  # no preflight run: `answer` finds it on main (T-007's case, after a merge)
+        self.assertIn("T-002 will change what was built", self.cli("answer", "T-001", "B"))
         self.s.git("fetch", "-q", "origin")
         ticket = self.s.git("show", "origin/main:.windvane/tickets/T-002.md")
         self.assertIn("# T-002: Change T-001's provisional answer: Big or small?", ticket)
@@ -156,6 +156,12 @@ class Preflight(unittest.TestCase):
         self.assertIn("- T-002 change T-001's answer", self.s.git("show", "origin/main:.windvane/QUEUE.md"))
         self.assertIn("Answer: B (small). Changes the built A: T-002 makes the change",
                       questions.part(self.main_questions(), "Answered"))
+        self.assertEqual(Queue(self.p).pick()[:2], ("T-002", "todo"))  # listed in QUEUE.md: it goes first
+
+    def test_an_answer_with_no_question_anywhere_says_so(self):
+        with self.assertRaises(SystemExit) as e:
+            self.cli("answer", "T-001", "B")
+        self.assertIn("no question of it waits", str(e.exception.code))
 
 
 class Units(unittest.TestCase):
