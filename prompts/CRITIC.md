@@ -41,12 +41,12 @@ Call bad things bad, but a fix that needs a product call the docs don't make goe
 Under 250 words, in this shape, ending with exactly one CRITIC line (the scale's dimensions, or `score=<n>`;
 `fixes=` counts "Fix in this ticket"):
 ```
-Scores: works=5 clear=7 lean=-
+Scores: <dim>=5 <dim>=7 <dim>=-
 <one or two sentences: the verdict a user would give>
 Fix in this ticket:
 1. <what a user meets> -> <what fixed looks like>
 Beyond this ticket:
 - <follow-up idea>
 For the user: <optional>
-CRITIC: <ID> works=5 clear=7 lean=- fixes=1 <the gist, one line>
+CRITIC: <ID> <dim>=5 <dim>=7 <dim>=- fixes=1 <the gist, one line>
 ```
