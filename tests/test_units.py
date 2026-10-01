@@ -142,18 +142,18 @@ class Stats(unittest.TestCase):
         run = lambda t, i, usd, **kw: append_jsonl(p.state / "ledger.jsonl", dict(
             role="worker", ticket=t, turns=3, input=i, output=1000, cache_read=0, cache_write=0, usd=usd, **kw))
         run("T-001", 9000, 1.0)
-        run("T-001", 9000, 1.0)
+        run("T-001", 9000, None, estimated=True)
         run("T-002", 19000, None, estimated=True)
         out = io.StringIO()
         with redirect_stdout(out):
             cli.cmd_stats(argparse.Namespace(days=7, by="ticket"), p)
         lines = out.getvalue().splitlines()
         self.assertIn("outcome", lines[0])
-        self.assertRegex(out.getvalue(), r"T-001\s+merged\s+2 ")
-        self.assertRegex(out.getvalue(), r"T-002\s+open\s+1 ")
-        self.assertIn("per merged ticket (1): 2.0 runs, 20k tokens, 2.00 API $", out.getvalue())
+        self.assertRegex(out.getvalue(), r"T-001\s+merged\s+2 .* ≥1.00 ")
+        self.assertRegex(out.getvalue(), r"T-002\s+open\s+1 .* ≥0.00 ")
+        self.assertIn("per merged ticket (1): 2.0 runs, 20k tokens, ≥1.00 API $", out.getvalue())
         self.assertIn("not merged: 20k tokens, 50%", out.getvalue())
-        self.assertIn("1 runs ended before their result", out.getvalue())
+        self.assertIn("(≥: 2 runs ended before their result", out.getvalue())
 
 
 if __name__ == "__main__":
