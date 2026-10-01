@@ -370,6 +370,7 @@ class Pilot:
                                       "intent, rerun the check, push, and finish READY.")
                 self.log(f"{tid}: conflicts with {p.main}; back to the worker")
                 return self.bounce(tid)
+            merge = gout(cd, "rev-parse", "HEAD")
             ok, summary, logf = check(p, cd)
             if not ok:
                 self.feedback[tid] = (f"Merged with the current {p.upstream}, your head {sha[:12]} fails the check: "
@@ -386,24 +387,35 @@ class Pilot:
                                       msg], cwd=p.main_root(), capture_output=True, text=True)
                 merged = res.returncode == 0 or sh(p.main_root(), "gh", "pr", "view", pr, "--json", "state",
                                                    "-q", ".state") == "MERGED"
-            else:
-                res = git(cd, "push", "-q", p.remote, f"HEAD:{p.main}")
+            else:  # by sha, so nothing that moves the ci worktree's HEAD meanwhile can turn it into a no-op
+                res = git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
             if merged:
-                return self.merged_ok(tid, branch, sha)
+                return self.merged_ok(tid, branch, sha) if self.landed(tid, branch, sha) else None
             self.log(f"{tid}: merge refused ({' '.join((res.stderr or res.stdout).split())[:200]}); trying again")
         self.fail(tid, "the merge was refused three times")
 
+    def landed(self, tid, branch, sha):
+        """A merge counts only once main holds the head: a push or `gh pr merge` can report success without it
+        (a no-op push, a hook that rejects late), and the branches about to be deleted may be the only copies."""
+        p = self.p
+        git(p.main_root(), "fetch", "-q", p.remote)
+        if git(p.main_root(), "merge-base", "--is-ancestor", sha, p.upstream).returncode == 0:
+            return True
+        self.fail(tid, f"the merge was reported done but {p.upstream} doesn't contain {sha[:12]}; the work is kept "
+                       f"on branch {branch or '(none)'} at {sha[:12]}")
+        return False
+
     def merged_ok(self, tid, branch, sha):
         p = self.p
-        if branch:
-            git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
+        if branch:  # only while it still points at the merged head: a later push there is unmerged work
+            git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{sha}", p.remote, "--delete", branch)
         git(p.main_root(), "fetch", "-q", "--prune", p.remote)
         wd = p.work_dir
         if not gout(wd, "status", "--porcelain"):
             git(wd, "switch", "-q", "--detach", p.upstream)
-            if branch:
-                git(wd, "branch", "-q", "-D", branch)
+            if branch and git(wd, "merge-base", "--is-ancestor", branch, p.upstream).returncode == 0:
+                git(wd, "branch", "-q", "-D", branch)  # -d's own test would use the deleted remote branch
         self.merged.append(tid)
         self.fail_streak = 0
         self.feedback.pop(tid, None)
