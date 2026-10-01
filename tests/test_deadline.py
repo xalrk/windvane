@@ -72,6 +72,26 @@ class LiveRun(unittest.TestCase):
         self.assertEqual(len(self.workers()), 1)  # T-002 never started
         self.assertIn("deadline moved to", (self.p.state / "autopilot.log").read_text())
 
+    def test_a_paused_run_ends_at_a_deadline_moved_earlier(self):
+        """The 5-hour window is over the cap, so the run sleeps until it resets, an hour away; the deadline moves to
+        now and the run ends within seconds, not at the reset."""
+        os.environ.pop("FAKE_HANG")
+        self.pilot = driver.Pilot(self.p, args(parallel=1, cap=5))  # the fake reports 10%
+        thread = threading.Thread(target=self.pilot.run, args=(now() + timedelta(hours=3),))
+        thread.start()
+        for _ in range(200):
+            log = self.p.state / "autopilot.log"
+            if log.exists() and "pausing at" in log.read_text():
+                break
+            time.sleep(0.05)
+        began = time.time()
+        cli.cmd_deadline(Namespace(when=["+0.02m"]), self.p)
+        thread.join(30)
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.time() - began, 15)
+        self.assertEqual(self.pilot.stop_reason, "deadline")
+        self.assertEqual(self.workers(), [])
+
     def test_a_deadline_moved_later_keeps_the_run_going(self):
         self.start()
         cli.cmd_deadline(Namespace(when=["+3h"]), self.p)

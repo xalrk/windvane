@@ -32,6 +32,7 @@ from .util import git, gout, hhmm, last_match, load_json, log, now, push, save_j
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
+NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 
 
 def rules(p, name):
@@ -252,7 +253,7 @@ class Pilot:
             return False
         self.log(f"  {label} died ({error}); retry {self.crashes}/{n} in {wait:g} min")
         for _ in range(round(wait)):
-            if (self.p.state / "STOP").exists():
+            if (self.p.state / "STOP").exists() or now() >= self.end():
                 return False
             self.sleep(60)
         return True
@@ -719,10 +720,14 @@ class Pilot:
         self.log(f"pausing at {self.usage.text()} until the window resets at {hhmm(until)}")
         push(f"{self.p.name}: paused", f"{self.usage.text()}. Resuming at {hhmm(until)}.", 2, "pause_button",
              ("Usage=usage", "Stop=stop"))
-        while now() < until and not (self.p.state / "STOP").exists():
-            time.sleep(60)
+        self.nap(until)
         self.usage.probe(self.p)
         return True
+
+    def nap(self, until):
+        """Sleep until `until`, waking within seconds for a stop or the run's deadline, which may have moved."""
+        while now() < min(until, self.end()) and not (self.p.state / "STOP").exists():
+            time.sleep(NAP)
 
     def stop_check(self):
         """Why no new ticket may start (the run winds down), or None."""
@@ -929,7 +934,7 @@ class Pilot:
                     if not self.idle:
                         self.log(f"waiting for answers on {', '.join(self.questions)}")
                         self.idle = True
-                    time.sleep(60)
+                    self.nap(now() + timedelta(minutes=1))
                     continue
                 if self.a.replan and self.plans < self.a.replan:
                     self.plans += 1
