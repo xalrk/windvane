@@ -20,6 +20,7 @@ windvane is an autopilot for Claude Code: a Python driver (`windvane/`) that run
 - **Token efficiency is measured, not guessed.** Changes meant to save tokens say how they'd show in
   `windvane stats` (turns, fresh input, output per role).
 - Never put secrets, emails or the ntfy topic names in code, prompts, tests or pushes.
+- **License: MIT.**
 
 ## Style
 Match the surrounding code: small functions, docstrings that say *why*, plain names. User-facing text (pushes, CLI
