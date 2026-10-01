@@ -1,12 +1,12 @@
 """Keeps the running windvane current between tickets: what a run merges into windvane (or what lands upstream) is
 used from the next ticket on, instead of after someone pulls and restarts the driver by hand."""
-import json
-import urllib.request
+import os
+import re
 
 from .util import gout, run
 
 CODE = ("windvane/", "bin/", "prompts/")  # read once by the driver: a change here needs a restart
-PYPI = "https://pypi.org/pypi/windvane/json"
+SOURCE = "https://github.com/xalrk/windvane"  # where `pipx install git+...` took it from
 
 
 def pull(home, said):
@@ -37,16 +37,22 @@ def skip(said, why):
     return None
 
 
-def newer_release(current, latest=None):
-    """For a packaged install: the newer version on PyPI, or None (also when PyPI can't be reached)."""
+def newer_release(current, tags=None):
+    """For a packaged install: the newest release tag (vX.Y.Z) above `current`, or None (also when the repo can't
+    be reached). The tags, not PyPI: the package is installed from git."""
     if current == "0":  # not installed as a package: nothing to compare with
         return None
+    if tags is None:
+        r = run(["git", "ls-remote", "--tags", SOURCE], None, timeout=15,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})  # never a password prompt in an unattended run
+        tags = r.stdout if r.returncode == 0 else ""
+    key = lambda v: tuple(int(x) for x in v.split("."))
+    found = re.findall(r"refs/tags/v(\d+(?:\.\d+)*)$", tags, re.M)
+    best = max(found, key=key, default=None)
     try:
-        latest = latest or json.load(urllib.request.urlopen(PYPI, timeout=5))["info"]["version"]
-    except Exception:
+        return best if best and key(best) > key(current) else None
+    except ValueError:  # a local version like 0.1.0.dev1+g...: not comparable, say nothing
         return None
-    key = lambda v: tuple(int(x) if x.isdigit() else 0 for x in v.split("."))
-    return latest if key(latest) > key(current) else None
 
 
 def restart_args(argv, deadline):

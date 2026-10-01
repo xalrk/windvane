@@ -111,9 +111,11 @@ class Units(unittest.TestCase):
                          ["run", "--until", "2026-10-01 18:45", "--no-preflight"])
 
     def test_newer_release(self):
-        self.assertEqual(selfupdate.newer_release("0.1.0", "0.2.0"), "0.2.0")
-        self.assertIsNone(selfupdate.newer_release("0.2.0", "0.2.0"))
-        self.assertIsNone(selfupdate.newer_release("0", "0.2.0"))  # a checkout: no package to compare
+        tags = "a1\trefs/tags/v0.2.0\nb2\trefs/tags/v0.10.0\nc3\trefs/tags/v0.10.0^{}\nd4\trefs/tags/nightly\n"
+        self.assertEqual(selfupdate.newer_release("0.1.0", tags), "0.10.0")
+        self.assertIsNone(selfupdate.newer_release("0.10.0", tags))
+        self.assertIsNone(selfupdate.newer_release("0.1.0", ""))  # no tags, or the repo unreachable
+        self.assertIsNone(selfupdate.newer_release("0", tags))  # a checkout: no package to compare
 
 
 class Driver(unittest.TestCase):
@@ -163,6 +165,15 @@ class Driver(unittest.TestCase):
         self.assertEqual(self.i.head(), old)
         self.assertEqual(self.log().count("windvane not updated: it has local changes"), 1)
         self.assertEqual(self.calls, [])
+
+    def test_no_merge_means_no_pull_for_a_while(self):
+        self.pilot.self_update()
+        new = self.i.commit("README.md", "docs\n")
+        self.pilot.self_update()  # nothing merged since, and just now: no fetch
+        self.assertNotEqual(self.i.head(), new)
+        self.pilot.merged.append("T-009")
+        self.pilot.self_update()
+        self.assertEqual(self.i.head(), new)
 
     def test_off_in_tests_by_default(self):
         self.assertIsNone(driver.Pilot(self.p, args(parallel=1)).home)

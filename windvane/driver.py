@@ -34,6 +34,7 @@ from .util import git, gout, hhmm, last_match, load_json, log, now, push, save_j
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
+PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 
 
@@ -173,6 +174,7 @@ class Pilot:
         # driver restarts itself when its own code changed.
         self.home = HOME if CHECKOUT and os.environ.get("WINDVANE_SELF_UPDATE") != "0" else None
         self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, set(), None
+        self.pulled = (0, -1)  # (when, merges then): pull after each merge, else every PULL_EVERY seconds at most
 
     def slot_dirs(self, i):
         p = self.p
@@ -963,8 +965,9 @@ class Pilot:
     def self_update(self):
         """Pulls the windvane install between tickets (nothing running) and, when the driver's own code changed,
         restarts it in place with the deadline as it now is. Each reason to leave the install alone is logged once."""
-        if self.home is None:
+        if self.home is None or (time.time() - self.pulled[0] < PULL_EVERY and self.pulled[1] == len(self.merged)):
             return
+        self.pulled = (time.time(), len(self.merged))
         said = []
         again = selfupdate.pull(self.home, said)
         for line in said:

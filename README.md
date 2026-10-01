@@ -117,6 +117,11 @@ A worker that ends without its `RESULT:` line gets one more run to finish.
 Design choices, and why:
 - **Your checkout is never touched.** Sessions work in the autopilot's own worktree, so you can keep working at the
   desk while it runs. (`isolate = false` brings back in-checkout work for projects whose builds can't be duplicated.)
+- **windvane keeps itself current.** Between tickets the driver fast-forwards the windvane checkout it runs from, but
+  only a clean one on `main` (any other is left alone, with one log line), and restarts itself with the same deadline
+  when its code or prompts changed: what it merges into windvane is used from the next ticket on. This is the one
+  exception to the rule above, when windvane works on itself. A pipx/uv install is never changed; the log and the final
+  summary say when a newer release is out.
 - **The driver merges, not a Claude session.** The reviewer only reads, has no merge or push rights, and doesn't sit
   through CI. The driver checks the *merged* tree, which a rebase-before-review flow can't promise.
 - **Fewer tool calls per run.** The ticket, feedback, PR body, critic verdict and diff go into the prompts, so
