@@ -22,7 +22,7 @@ def hook(prompt, session=""):
 
 class KeywordHook(unittest.TestCase):
     def test_fires_on_the_keywords_only(self):
-        for p in ("yo dawg heres my idea, lets build it with windvane", "run autopilot overnight",
+        for p in ("yo dawg heres my idea, lets build it with windvane", "yo claude put windvane on my idea", "run autopilot overnight",
                   "how's the Autopilot doing", "use windvane on this", "auto-pilot status?"):
             self.assertIn("windvane", hook(p) or "", p)
         for p in ("fix the pilot light", "autopilots? no: autopiloting is a word", "build it with claude"):

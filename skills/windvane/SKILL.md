@@ -1,6 +1,6 @@
 ---
 name: windvane
-description: windvane (also "autopilot"), the user's autopilot that builds a project ticket by ticket in fresh headless Claude sessions while they're away. Use whenever the user mentions windvane or autopilot, e.g. "here's my idea, let's build it with windvane", "put autopilot on this repo", "run autopilot overnight", "how's autopilot doing", "stop autopilot".
+description: windvane (also "autopilot"), the user's autopilot that builds a project ticket by ticket in fresh headless Claude sessions while they're away. Use whenever the user mentions windvane or autopilot, e.g. "here's my idea, let's build it with windvane", "yo claude, put windvane on my idea", "put autopilot on this repo", "run autopilot overnight", "how's autopilot doing", "stop autopilot".
 ---
 
 # windvane
@@ -20,8 +20,7 @@ Do everything yourself. The user should only have to answer real product questio
    rules, how to run and test it, and that tests come with every change. Then
    `gh repo create xalrk/<short-name> --private --source . --push`. Repos are private unless the user says otherwise.
 3. **Set up windvane.** Run `windvane init --check "<test command>"`. Put the idea in `goal` in
-   `.windvane/config.toml`. Write `.windvane/CRITIC.md`: who uses it, what a 10/10 is (the products to beat), and
-   what 2/10 and 8/10 look like. Set `heavy_check = true` if the check runs an engine, a render or a big build.
+   `.windvane/config.toml`. Set `heavy_check = true` if the check runs an engine, a render or a big build.
 4. **Write the first tickets yourself.** You already hold the context, so this is cheaper than a planner run. Write
    4 to 8 tickets in `.windvane/tickets/T-001.md` and onward, each sized for one session of at most a few hours:
    ```
@@ -37,16 +36,29 @@ Do everything yourself. The user should only have to answer real product questio
    Write `Touches:` carefully: tickets whose lists don't overlap run in parallel, and a ticket without the line runs
    alone. Put the order in `.windvane/QUEUE.md` (`- T-001 <title>`). A product call nobody has made yet becomes a
    ticket whose first step asks it (the worker rules cover how).
-5. **Commit and push** (`git add -A && git commit && git push`). The autopilot reads tickets from `origin/main`.
-6. **Start it:** `windvane run --for <hours> --detach --replan 2`. `--replan` plans more tickets from the goal and the
+5. **Calibrate the critic, with the user.** It scores every ticket and sends work back below the bar, so its scale
+   decides what "done" means. Uncalibrated, it drifts toward scoring right at the pass mark.
+   - `.windvane/CRITIC.md`: who uses this, what 10/10 is (name the products to beat), and what 2, 5 and 8 look like
+     here.
+   - `.windvane/CALIBRATION.md`: 3 or 4 anchors on your own first tickets, e.g. "T-002's settings screen as a bare
+     form with no defaults: 3/10; remembered values, inline validation, works by keyboard: 8/10". Add: most first
+     versions land 4-6, 8+ is earned, and a score sitting on the pass mark needs a reason.
+   - The bar: `[critic] pass` (default 8) and `revisions` (default 3) in the config. A higher bar means more
+     revision rounds, which is better work but more tokens.
+   Then **explain it to the user** in a few plain lines: the scale, two anchors, the pass mark and what it costs. Ask
+   with AskUserQuestion: looks right / score harsher / score gentler / other changes (they can type them). If they're
+   away, ask with `notify-ask` instead. Adjust and repeat until they're happy. Don't start the run before they answer;
+   after 10 minutes with no answer, go with it and say so in step 8.
+6. **Commit and push** (`git add -A && git commit && git push`). The autopilot reads tickets from `origin/main`.
+7. **Start it:** `windvane run --for <hours> --detach --replan 2`. `--replan` plans more tickets from the goal and the
    critic's notes when the queue runs dry. Before you start it, check `windvane quiet` and ask the user about a
    deadline if they gave none and one matters (a shutdown, a meeting).
-7. **Tell the user** in a few lines what you set up, the first tickets, and how to follow it: `windvane watch` (live,
+8. **Tell the user** in a few lines what you set up, the first tickets, and how to follow it: `windvane watch` (live,
    costs nothing), `windvane status`, their phone's `status`/`overview`/`stop`, and `windvane stop`.
 
 ## On an existing repo ("put autopilot on this")
-Run `windvane init --check "<the repo's test command>"`, write `CRITIC.md`, then either write the tickets for what the
-user wants or run `windvane plan --merge "<goal>"`. Commit, push, and start it as above.
+Run `windvane init --check "<the repo's test command>"`, then either write the tickets for what the user wants or run
+`windvane plan --merge "<goal>"`. Calibrate the critic with the user as in step 5, then commit, push, and start it.
 
 ## Running, watching, steering
 | | |
