@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from .config import exe
+from .runner import NEST
 from .util import gout, now
 
 
@@ -78,6 +79,11 @@ def bg(p, name, cmd, cwd, heavy=False):
                             cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True)
     pid.write_text(str(proc.pid))
+    session = os.environ.get(NEST)
+    if session:  # killed with the session that started it (runner.kill_nested), not left behind by a stop
+        mark = p.state / "nested" / session / str(proc.pid)
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.touch()
     print(f"started '{name}' (log {base}.log); wait with: windvane await {name}")
 
 

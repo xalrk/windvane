@@ -14,6 +14,7 @@ from .util import append_jsonl, load_json, save_json
 
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
 TOOL_MS = "600000"
+POLL = 5  # seconds between a quiet session's stop checks (small file reads, no tokens): how soon `stop --now` acts
 
 
 def env(extra=None):
@@ -151,7 +152,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     result, killed, final, noise, seen = "", None, {}, [], {}
     with raw.open("w") as out:
         while True:
-            if sel.select(timeout=30):
+            if sel.select(timeout=POLL):
                 line = proc.stdout.readline()
                 if not line:
                     break
