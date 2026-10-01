@@ -4,6 +4,7 @@ In git (shared by every checkout): `.windvane/config.toml`, `tickets/`, `QUEUE.m
 `CALIBRATION.md`. On this machine only (`~/.local/state/windvane/<name>/`): the log, each run's stream, the token
 ledger, critic verdicts, check passes, background jobs, quiet times, and the autopilot's two worktrees.
 """
+import copy
 import os
 import re
 import subprocess
@@ -30,14 +31,23 @@ DEFAULTS = {
                "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high",
                "preflight": "sonnet", "preflight_effort": "medium"},  # preflight: a light read of the next tickets
     "critic": {"enabled": True, "pass": 8, "floor": 4, "revisions": 3},
-    "autopilot": {"parallel": 2, "cap": 75, "week_cap": 95, "ticket_hours": 3, "min_slot": 30, "answer_wait": 10,
-                  "review_rounds": 3, "partials": 3, "subagents": False, "inline_diff_lines": 1200,
+    # parallel: "auto" starts another ticket whenever one fits beside the running ones (Touches) and in the usage
+    # window, up to max_parallel; a number caps the slots at that
+    "autopilot": {"parallel": "auto", "max_parallel": 4, "cap": 75, "week_cap": 95, "ticket_hours": 3,
+                  "min_slot": 30, "answer_wait": 10, "review_rounds": 3, "partials": 3, "subagents": False, "inline_diff_lines": 1200,
                   "retries": 3, "retry_minutes": 3},  # a session that dies (API, network) reruns after 3, 6, 12 min
 }
 
 
+def slots(p, parallel=None):
+    """The most tickets a run may work at once: `parallel` (a number or "auto") from the command line or config."""
+    n = parallel or p.ap["parallel"]
+    n = p.ap["max_parallel"] if str(n).lower() == "auto" else int(n)
+    return max(1, n) if p.cfg["isolate"] else 1
+
+
 def _merge(base, over):
-    out = dict(base)
+    out = copy.deepcopy(base)  # a project's settings must never alias (and so change) the shared DEFAULTS
     for k, v in over.items():
         out[k] = _merge(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
     return out

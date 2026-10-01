@@ -206,6 +206,14 @@ def cmd_stop(a, p):
     print(f"{p.name}: autopilot stops after the current ticket")
 
 
+def parallel_arg(v):
+    if v.lower() == "auto":
+        return "auto"
+    if v.isdigit() and int(v) > 0:
+        return int(v)
+    raise argparse.ArgumentTypeError('a number of tickets, or "auto"')
+
+
 def cmd_status(a, p):
     on = running(p)
     if a.line:
@@ -215,6 +223,8 @@ def cmd_status(a, p):
     print(f"autopilot: {('running in tmux ' + p.tmux if in_tmux(p) else 'running') if on else 'not running'}")
     print(f"questions now: {questions.mode(p)}")
     st = load_json(p.state / "state.json", {})
+    for tid, slot in sorted(st.get("running", {}).items(), key=lambda kv: kv[1]) if on else ():
+        print(f"slot {slot}: {tid}")
     for tid, q in st.get("questions", {}).items():
         print(f"waiting on you: {tid}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
     print("\n".join(last_log(p, 12)))
@@ -377,7 +387,8 @@ def main(argv=None):
     g.add_argument("--for", dest="for_", help="e.g. 90m or 6h")
     s.add_argument("--detach", action="store_true", help="run in a tmux session")
     s.add_argument("--no-preflight", action="store_true", help="start without asking the next tickets' questions")
-    s.add_argument("--parallel", type=int, help="tickets at a time (default from config, 2)")
+    s.add_argument("--parallel", type=parallel_arg,
+                   help='most tickets at a time, or "auto" (default from config: auto, up to max_parallel 4)')
     s.add_argument("--cap", type=float, help="max %% of the 5-hour window (default from config, 75)")
     s.add_argument("--week-cap", type=float, help="stop at this %% of the weekly limit (default 95)")
     s.add_argument("--ticket-hours", type=float, help="max hours for one worker run (default 3)")
