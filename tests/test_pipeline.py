@@ -369,7 +369,7 @@ class Setup(unittest.TestCase):
         self.s.publish("setup")
         p = Project(self.s.root)
         pilot = driver.Pilot(p, args(parallel=parallel))
-        pilot.run(now() + timedelta(hours=1))
+        self.started = pilot.run(now() + timedelta(hours=1))
         return p, pilot
 
     def calls(self):
@@ -379,6 +379,7 @@ class Setup(unittest.TestCase):
     def test_failed_setup_stops_the_run_before_any_session(self):
         p, pilot = self.run_pilot("echo installing; echo 'npm ERR! no lockfile' >&2; exit 3")
         self.assertEqual(self.calls(), [])  # not even the usage probe
+        self.assertFalse(self.started)  # `windvane run` exits 1
         self.assertEqual(pilot.merged + pilot.failed, [])
         self.assertIn("setup `echo installing;", pilot.stop_reason)
         self.assertIn("(exit 3)", pilot.stop_reason)
@@ -389,12 +390,19 @@ class Setup(unittest.TestCase):
         self.assertIn("Why: setup `echo installing;", self.pushes[0][1])
         log = (p.state / "autopilot.log").read_text()
         self.assertIn("installing\nnpm ERR! no lockfile", log)  # the command's last lines
+        cfg = self.s.root / ".windvane/config.toml"  # fixed: the next start makes the tree afresh
+        cfg.write_text(cfg.read_text().replace("exit 3", "true"))
+        self.s.publish("fix setup")
+        again = driver.Pilot(Project(self.s.root), args())
+        self.assertTrue(again.run(now() + timedelta(hours=1)))
+        self.assertEqual(sorted(again.merged), ["T-001", "T-002"])
 
     def test_passing_setup_runs_in_each_worktree_and_the_run_goes_on(self):
         ran = self.s.tmp / "setup.log"
         p, pilot = self.run_pilot(f"pwd >> {ran}")
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
         self.assertEqual(pilot.stop_reason, "queue empty")
+        self.assertTrue(self.started)
         self.assertEqual(sorted(Path(l).name for l in ran.read_text().split()), ["ci", "work"])
 
     def test_failed_setup_in_a_later_slot_starts_nothing_more(self):

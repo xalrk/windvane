@@ -758,6 +758,7 @@ class Pilot:
             raise SystemExit("windvane: the autopilot is already running for this project")
 
     def run(self, deadline):
+        """Works tickets until a stop; False when it couldn't start (a failed setup)."""
         p = self.p
         self.take_lock()
         (p.state / "STOP").unlink(missing_ok=True)
@@ -792,6 +793,7 @@ class Pilot:
                  "checkered_flag", ("Usage=usage",))
             self.save()
             self.lockfile.close()
+        return ready
 
 
 def locked(p):

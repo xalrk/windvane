@@ -172,7 +172,8 @@ def cmd_run(a, p):
               f"  watch:  windvane watch      (or tmux attach -t {p.tmux}; leave with Ctrl-b d)\n"
               f"  status: windvane status     stop: windvane stop")
         return
-    driver.Pilot(p, a).run(deadline)
+    if not driver.Pilot(p, a).run(deadline):
+        sys.exit(1)  # it couldn't start (a failed setup): scripts see it
 
 
 def ask_first(p, hours, parallel=None):
