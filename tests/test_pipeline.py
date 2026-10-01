@@ -47,12 +47,28 @@ class Pipeline(unittest.TestCase):
         log = self.s.git("log", "origin/main", "--merges", "--format=%s")
         self.assertIn("Merge T-001: do T-001 (branch t-001-work)", log)
         self.assertEqual(self.s.git("ls-remote", "--heads", "origin", "t-001-*"), "")  # branch deleted
+        self.assertEqual(self.s.git("branch", "--list", "t-001-*", cwd=self.p.work_dir), "")  # local one too
         self.assertFalse((self.s.root / "T-001.txt").exists())  # the user's checkout never moved
         self.assertEqual(self.s.git("rev-parse", "--abbrev-ref", "HEAD"), "main")
         roles = [c["system"].split(" run")[0] for c in self.calls() if c["system"]]  # not the usage probe
         self.assertEqual(roles, ["# windvane worker", "# windvane review"] * 2)
         ledger = (self.p.state / "ledger.jsonl").read_text().splitlines()
         self.assertEqual(len(ledger), 4)
+
+    def test_merge_that_doesnt_land_keeps_the_branches(self):
+        hook = self.s.remote / "hooks" / "post-receive"  # accepts the push to main, then puts main back
+        hook.write_text("#!/bin/sh\nwhile read old new ref; do\n  [ \"$ref\" = refs/heads/main ] && "
+                        "git update-ref refs/heads/main \"$old\"\ndone\nexit 0\n")
+        hook.chmod(0o755)
+        pilot = driver.Pilot(self.p, args())
+        pilot.run(now() + timedelta(seconds=30))  # counted merged, T-001 would be redone until the deadline
+        self.assertEqual(pilot.merged, [])
+        self.assertIn("T-001", pilot.failed)
+        self.s.git("fetch", "-q", "origin")
+        head = self.s.git("rev-parse", "origin/t-001-work")  # the remote branch is still there
+        self.assertNotIn("T-001", self.s.git("log", "origin/main", "--format=%s"))
+        self.assertEqual(self.s.git("rev-parse", "t-001-work", cwd=self.p.work_dir), head)  # and the local one
+        self.assertIn("is kept on branch t-001-work", (self.p.state / "autopilot.log").read_text())
 
     def test_review_changes_feed_the_next_worker_run(self):
         import os
