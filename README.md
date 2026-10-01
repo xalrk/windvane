@@ -10,11 +10,21 @@ The easy way: tell any Claude Code session "here's my idea, let's build it with 
 mention of windvane or autopilot brings in the playbook (`skills/windvane/SKILL.md`): the session makes the private
 repo, sets windvane up, writes the first tickets and starts the run, asking you only real product questions.
 
-By hand:
+Install (Linux; Python 3.11+, git and Claude Code; `gh` for GitHub projects, tmux for `run --detach`):
 ```sh
-git clone https://github.com/xalrk/windvane.git    # anywhere you like
-windvane/bin/windvane install              # windvane on PATH, the skill, and the mention hook
+pipx install git+https://github.com/xalrk/windvane   # or: uv tool install git+https://...
+windvane doctor                                     # what this machine lacks, and the command that fixes each
+windvane install                                    # the skill and the mention hook into Claude Code, asking first
+```
+Without pipx or uv: clone the repo and run `sh install.sh` (a venv in `~/.local/share/windvane`, the command in
+`~/.local/bin`). For working on windvane itself, run `bin/windvane` from a clone; `bin/windvane install` also links it
+onto PATH. `windvane uninstall` takes back exactly what `install` added (it keeps a list in
+`~/.local/state/windvane/install.json`), then `pipx uninstall windvane` (install.sh: delete
+`~/.local/share/windvane` and `~/.local/bin/windvane`). Other platforms: macOS mostly works, but `windvane heavy`
+can't see free memory there (no `/proc/meminfo`) and waits only on busy processes; Windows is untested.
 
+Then, in a project:
+```sh
 cd ~/code/myproject
 windvane init --check "pytest -q"                  # writes .windvane/ (config, queue, questions, critic scale)
 $EDITOR .windvane/CRITIC.md                         # what a 10/10 means for this project
@@ -38,6 +48,8 @@ windvane run --for 6h --detach                      # in tmux; `windvane watch` 
 | `stats --critic [--last N]` | whether the critic's calibration spreads its scores: first and final scores, revisions, scores on the pass mark |
 | `quiet`, `mode` | quiet times (`~/.local/state/windvane/<name>/quiet.txt`) and what they mean right now |
 | `heavy -- <cmd>` | run a machine-heavy command (engine, render, big build) one at a time on this machine |
+| `doctor` | what this machine lacks for windvane (claude logged in, gh, tmux, the phone), with the fix for each |
+| `install [--yes]`, `uninstall [--yes]` | the skill and the mention hook into Claude Code, asking before each change; and out again |
 | `check`, `critic T-007`, `bg [--heavy] <name> <cmd>`, `await <name>` | used by the sessions themselves |
 
 ## In the project (in git)
@@ -52,7 +64,8 @@ Status is derived from git and never maintained by hand: a ticket is done when i
 into main, and in progress while such a branch exists unmerged.
 
 ## On this machine
-`~/.local/state/windvane/<name>/`: `autopilot.log`, each session's stream (`runs/`), `ledger.jsonl`,
+Config in `~/.config/windvane/` (`machine.toml`: `projects_dir` for new projects, `heavy`'s settings), state in
+`~/.local/state/windvane/` (the XDG variables move both). Per project, `~/.local/state/windvane/<name>/`: `autopilot.log`, each session's stream (`runs/`), `ledger.jsonl`,
 `critic.jsonl`, check passes, background jobs, quiet times, and the worktrees (`work/` for the sessions, `ci/`
 for the driver's checks and merges, `plan/` for the planner, which gets its own even with `isolate = false`).
 
@@ -111,4 +124,5 @@ Design choices, and why:
 
 ## Development
 `python3 -m unittest discover -s tests` runs everything, including the whole driver against a fake `claude`, in a few
-seconds. Python 3.11+, standard library only.
+seconds. Python 3.11+, standard library only, including the build: `tools/build_backend.py` is the PEP 517 backend
+`pyproject.toml` names, so installing needs nothing downloaded.

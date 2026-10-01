@@ -8,7 +8,8 @@ description: windvane (also "autopilot"), the user's autopilot that builds a pro
 The user's autopilot (command `windvane`). It works a repo's tickets
 (`.windvane/tickets/`) one fresh session each: worker, then critic, check, reviewer, and a merge done by its driver.
 It runs independent tickets side by side, asks the user design questions on their phone (ntfy), and keeps a token
-ledger. Its README explains it fully; this is the playbook.
+ledger. `windvane <command> --help` explains each command and `windvane doctor` what this machine lacks; this is the
+playbook.
 
 ## A new project from an idea
 Whenever the user gives an idea (any wording, a line or a page) and wants windvane or autopilot to build it.
@@ -20,7 +21,8 @@ Do everything yourself. The user should only have to answer real product questio
    (if it isn't set, ask once and save their answer there), as `<projects_dir>/<short-name>`. Then `git init -b main`, and a minimal skeleton in the stack you chose
    (project files, one smoke test, a test command that passes). Add a `CLAUDE.md` with what the project is, its hard
    rules, how to run and test it, and that tests come with every change. Then
-   `gh repo create xalrk/<short-name> --private --source . --push`. Repos are private unless the user says otherwise.
+   `gh repo create "$(gh api user -q .login)/<short-name>" --private --source . --push`. Repos are private unless the
+   user says otherwise.
 3. **Set up windvane.** Run `windvane init --check "<test command>"`. Put the idea in `goal` in
    `.windvane/config.toml`. Set `heavy_check = true` if the check runs an engine, a render or a big build.
 4. **Write the first tickets yourself.** You already hold the context, so this is cheaper than a planner run. Write

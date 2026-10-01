@@ -65,7 +65,7 @@ def _wheel(directory, files):
     with zipfile.ZipFile(Path(directory) / out, "w", zipfile.ZIP_DEFLATED) as z:
         for arc, data in files.items():
             zi = zipfile.ZipInfo(arc, (2020, 1, 1, 0, 0, 0))
-            zi.external_attr = (0o755 if arc in EXECUTABLE else 0o644) << 16
+            zi.external_attr = (0o100755 if arc in EXECUTABLE else 0o100644) << 16  # a regular file: pip keeps +x
             zi.compress_type = zipfile.ZIP_DEFLATED
             z.writestr(zi, data)
     return out
