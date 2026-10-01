@@ -29,7 +29,8 @@ DEFAULTS = {
                "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high"},
     "critic": {"enabled": True, "pass": 8, "floor": 4, "revisions": 3},
     "autopilot": {"cap": 75, "week_cap": 95, "ticket_hours": 3, "min_slot": 30, "answer_wait": 10,
-                  "review_rounds": 3, "partials": 3, "subagents": False, "inline_diff_lines": 1200},
+                  "review_rounds": 3, "partials": 3, "subagents": False, "inline_diff_lines": 1200,
+                  "retries": 3, "retry_minutes": 3},  # a session that dies (API, network) reruns after 3, 6, 12 min
 }
 
 

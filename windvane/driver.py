@@ -7,8 +7,9 @@ change, and the driver merges it after checking the merged tree too. Anything th
 ticket's next worker run as written feedback. Design questions go to the user's phone; in their quiet times runs
 build their recommendation and record it instead.
 
-Stops at the deadline, `windvane stop`, two failed tickets in a row, an empty queue, or the weekly cap. At the
-5-hour cap it stops the running session and pauses until the window resets.
+Stops at the deadline, `windvane stop`, two failed tickets in a row, an empty queue, the weekly cap, or sessions that
+keep dying (API errors, crashes; each is retried after a growing pause first). At the 5-hour cap it stops the running
+session and pauses until the window resets.
 """
 import fcntl
 import re
@@ -95,6 +96,8 @@ class Pilot:
         self.skip, self.merged, self.failed, self.held = set(), [], [], []
         self.partials, self.reviews, self.scores = {}, {}, {}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
+        self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
+        self.sleep = time.sleep  # the retry backoff's; tests make it instant
         self.stop_reason = "unknown"
         self.worker_rules, self.review_rules = rules(p, "WORKER.md"), rules(p, "REVIEW.md")
 
@@ -122,11 +125,33 @@ class Pilot:
         return stop_if
 
     def claude(self, role, label, prompt, system, cwd, kill_at, allow=(), deny=(), ticket=""):
-        text, killed = run_claude(self.p, role, label, prompt, system, cwd, allow, deny, self.usage,
-                                  self.stopper(kill_at), ticket)
+        text, killed, error = run_claude(self.p, role, label, prompt, system, cwd, allow, deny, self.usage,
+                                         self.stopper(kill_at), ticket)
         if killed:
             self.log(f"  stopped {label}: {killed} ({self.usage.text()})")
-        return text, killed
+        elif not error:
+            self.crashes = 0
+        return text, killed, error
+
+    def crashed(self, label, error, deadline):
+        """A session died for a reason outside its ticket (API overload, network, not logged in): pause, longer each
+        time, and return True to run it again. Too many in a row stop the run instead of failing ticket after ticket
+        on a broken API; nothing is pushed until then."""
+        self.crashes += 1
+        n, wait = self.p.ap["retries"], self.p.ap["retry_minutes"] * 2 ** (self.crashes - 1)
+        if self.crashes > n:
+            self.halt = f"{self.crashes} sessions in a row died ({error})"
+        elif now() + timedelta(minutes=wait) >= deadline - timedelta(minutes=self.a.min_slot):
+            self.halt = f"a session died ({error}), and there's no time left to retry it"
+        if self.halt:
+            self.log(f"  {label}: {self.halt}")
+            return False
+        self.log(f"  {label} died ({error}); retry {self.crashes}/{n} in {wait:g} min")
+        for _ in range(round(wait)):
+            if (self.p.state / "STOP").exists():
+                return False
+            self.sleep(60)
+        return True
 
     # ---------- one ticket
 
@@ -138,6 +163,7 @@ class Pilot:
         ref = f"{p.remote}/{branches[0]}" if branches else p.upstream
         ticket = gout(wd, "show", f"{ref}:{p.tickets_rel}/{tid}.md") or self.queue.text.get(tid, "")
         dirty = gout(wd, "status", "--porcelain")
+        here = gout(wd, "rev-parse", "--abbrev-ref", "HEAD")
         fb = self.feedback.get(tid)
         pr = pr_for(p, branches[0]) if branches else ""
         prompt = "\n\n".join(filter(None, [
@@ -146,8 +172,8 @@ class Pilot:
             f"## Act on this first\n{fb}" if fb else "",
             (f"In progress on branch(es) {', '.join(branches)}" + (f", PR #{pr}" if pr else "") + ". Resume it.")
             if branches else "A new ticket: branch it off " + p.upstream + ".",
-            f"The worktree is on `{gout(wd, 'rev-parse', '--abbrev-ref', 'HEAD')}` with uncommitted changes from an "
-            f"earlier run:\n{dirty[:1500]}" if dirty else "",
+            f"The worktree is on `{here}` with uncommitted changes from an earlier run:\n{dirty[:1500]}" if dirty else
+            f"The worktree is on `{here}`, left by an earlier run." if here not in ("HEAD", *branches) else "",
             (f"The critic is on: your evidence pack goes in {critic.pack_dir(p, tid)}/ (pass mark "
              f"{p.critic['pass']}/10)." if p.critic["enabled"] else "The critic is off for this run: skip rules step 6."),
             f"Check command (`windvane check` runs it): `{p.cfg['check']}`." if p.cfg["check"] else
@@ -157,8 +183,11 @@ class Pilot:
         ]))
         self.log(f"{tid}: worker run ({kind}{', ' + ' '.join(branches) if branches else ''})")
         allow, deny = worker_perms(p)
-        text, killed = self.claude("worker", tid, prompt, self.worker_rules, wd, kill_at, allow, deny, tid)
-        self.handle(tid, text, killed, deadline)
+        text, killed, error = self.claude("worker", tid, prompt, self.worker_rules, wd, kill_at, allow, deny, tid)
+        if error:
+            self.crashed(tid, error, deadline)  # the loop picks the ticket again, with its branch as it now is
+        else:
+            self.handle(tid, text, killed, deadline)
         if start_five is not None and self.usage.five is not None and self.usage.five >= start_five:
             self.costs.append(round(self.usage.five - start_five, 1))
         self.save()
@@ -170,11 +199,12 @@ class Pilot:
                 self.skip.add(tid)
             return
         m = last_match(RESULT_RE, text)
-        if not m or self.p.norm(m.group(2)) != tid:
-            return self.fail(tid, "the run ended without a result line")
-        status, rest = m.group(1), m.group(3).strip()
         branch = gout(self.p.work_dir, "rev-parse", "--abbrev-ref", "HEAD")
         branch = "" if branch == "HEAD" else branch
+        if not m or self.p.norm(m.group(2)) != tid:
+            return self.unfinished_run(tid, branch)
+        self.unfinished.discard(tid)
+        status, rest = m.group(1), m.group(3).strip()
         if status == "PARTIAL":
             self.partials[tid] = self.partials.get(tid, 0) + 1
             self.log(f"{tid}: partial ({self.partials[tid]}): {rest}")
@@ -190,6 +220,21 @@ class Pilot:
         sha = next(iter(re.findall(r"\b[0-9a-f]{40}\b", rest)), "") or gout(self.p.work_dir, "rev-parse", "HEAD")
         self.feedback.pop(tid, None)
         self.after(tid, branch, sha, deadline)
+
+    def unfinished_run(self, tid, branch):
+        """A run that ended normally but without its RESULT line may have done all the work: one more run, told
+        where its branch is, can finish it. Twice in a row fails the ticket."""
+        if tid in self.unfinished:
+            return self.fail(tid, "the run ended without a result line, twice")
+        self.unfinished.add(tid)
+        head = gout(self.p.work_dir, "rev-parse", "--short=12", "HEAD")
+        old = self.feedback.get(tid, "")
+        self.feedback[tid] = (f"Your last run ended without the RESULT line for {tid}. The worktree is on "
+                              f"`{branch or 'a detached HEAD'}` at {head}: finish the rules' steps still left from "
+                              "there, then end with the RESULT line."
+                              + (f"\n\nWhat that run had to act on:\n{old}" if old and "RESULT line" not in old[:80]
+                                 else ""))
+        self.log(f"{tid}: the run ended without a result line; one more run to finish it")
 
     def after(self, tid, branch, sha, deadline):
         """A READY head: critic gate, check, review, merge. Each failed stage writes the next run's feedback."""
@@ -287,10 +332,14 @@ class Pilot:
             "-- <path>`.",
         ]))
         self.log(f"{tid}: review run")
-        text, killed = self.claude("reviewer", f"{tid}-review", prompt, self.review_rules, cd,
-                                   min(deadline, now() + timedelta(hours=1)), ["Bash(git diff *)", "Bash(git show *)",
-                                                                                "Bash(git log *)"], REVIEW_DENY, tid)
-        if killed:
+        while True:
+            text, killed, error = self.claude("reviewer", f"{tid}-review", prompt, self.review_rules, cd,
+                                              min(deadline, now() + timedelta(hours=1)),
+                                              ["Bash(git diff *)", "Bash(git show *)", "Bash(git log *)"],
+                                              REVIEW_DENY, tid)
+            if not error or not self.crashed(f"{tid}-review", error, deadline):
+                break
+        if killed or error:
             return None, ""
         m = last_match(REVIEW_RE, text)
         if not m:
@@ -491,6 +540,9 @@ class Pilot:
                 (p.state / "STOP").unlink()
                 self.stop_reason = "asked to stop"
                 return
+            if self.halt:
+                self.stop_reason = self.halt
+                return
             if now() >= deadline - timedelta(minutes=self.a.min_slot):
                 self.stop_reason = "deadline"
                 return
@@ -560,7 +612,7 @@ class Pilot:
                        + f"Waiting on you: {names(self.questions)}.\nFailed: {names(self.failed)}.\n"
                        f"{self.usage.text()}.")
             self.log(summary.replace("\n", " "))
-            push(f"{p.name}: autopilot stopped", summary, 4 if self.failed or self.questions else 3,
+            push(f"{p.name}: autopilot stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                  "checkered_flag", ("Usage=usage",))
             self.save()
             self.lock.close()
@@ -611,13 +663,13 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
     log(p, f"plan run ({len(notes)} critic notes)")
     deny = ["Agent", "Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
             "Bash(gh *)", "NotebookEdit"]
-    text, killed = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd, ["Bash(git ls-files *)"], deny,
-                              usage, stop_if)
+    text, killed, error = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd,
+                                     ["Bash(git ls-files *)"], deny, usage, stop_if)
     m = last_match(PLAN_RE, text)
     changed = changed_paths(cd)
     if killed or not m or not changed:
         clean_detach(p, cd, p.upstream)
-        log(p, f"plan: nothing written ({killed or (m.group(0) if m else 'no PLAN line')})")
+        log(p, f"plan: nothing written ({killed or error or (m.group(0) if m else 'no PLAN line')})")
         return 0
     outside = [c for c in changed if not c.startswith(".windvane/")]
     if outside:

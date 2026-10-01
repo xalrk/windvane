@@ -115,8 +115,8 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None):
         f"## Files the change touches\n{stat}",
         "## Your earlier critiques of this ticket, oldest first\n" + "\n---\n".join(earlier) if earlier else "",
     ]))
-    text, _ = run_claude(p, "critic", f"{tid}-critic", prompt, system_prompt(p, cwd), cwd, deny=DENY,
-                         usage=usage, stop_if=stop_if, ticket=tid)
+    text, _, _ = run_claude(p, "critic", f"{tid}-critic", prompt, system_prompt(p, cwd), cwd, deny=DENY,
+                            usage=usage, stop_if=stop_if, ticket=tid)
     m = last_match(CRITIC_RE, text)
     if not m or p.norm(m.group(2)) != tid:
         return None, text or "The critic ended without a verdict."

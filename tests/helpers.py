@@ -22,6 +22,21 @@ if log:
     with open(log, "a") as f:
         f.write(json.dumps({"system": system[:40], "prompt": prompt}) + "\n")
 sh = lambda *c: subprocess.run(c, capture_output=True, text=True).stdout.strip()
+# FAKE_FAIL: what each session does in turn (ok, error, crash, quiet = no RESULT line); a trailing * repeats the last
+steps, step = os.environ.get("FAKE_FAIL", "").split(","), ""
+if steps[0] and system:
+    count = log + ".n"
+    n = int(open(count).read()) if os.path.exists(count) else 0
+    open(count, "w").write(str(n + 1))
+    step = steps[n] if n < len(steps) else steps[-1] if steps[-1].endswith("*") else ""
+    step = step.rstrip("*")
+if step == "error":
+    emit({"type": "result", "subtype": "success", "is_error": True, "num_turns": 1,
+          "result": 'API Error: 529 {"type":"overloaded_error","message":"Overloaded"}'})
+    sys.exit(1)
+if step == "crash":
+    print("Error: socket hang up", file=sys.stderr, flush=True)
+    sys.exit(1)
 text = "ok"
 if system.startswith("# windvane worker run"):
     tid = re.search(r"Ticket (\S+)\.", prompt).group(1)
@@ -42,6 +57,8 @@ if system.startswith("# windvane worker run"):
         sh("git", "add", "-A"); sh("git", "commit", "-qm", f"{tid}: build")
         sh("git", "push", "-q", "-u", "origin", "HEAD")
         text = f"done\nRESULT: READY {tid} {sh('git', 'rev-parse', 'HEAD')}"
+        if step == "quiet":
+            text = "done, all pushed"
 elif system.startswith("# windvane review run"):
     tid = re.search(r"Review (\S+) at head", prompt).group(1)
     verdict = os.environ.get("FAKE_REVIEW", "APPROVE")
