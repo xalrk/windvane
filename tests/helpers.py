@@ -69,8 +69,10 @@ if system.startswith("# windvane worker run"):
         sh("git", "switch", branch)
     else:
         sh("git", "switch", "-c", branch, "origin/main")
-    with open(f"{tid}.txt", "a") as f:
-        f.write("built\n")
+    resolve_only = os.environ.get("FAKE_RESOLVE_ONLY") and "conflicts with" in prompt  # merges main, nothing more
+    if not resolve_only:
+        with open(f"{tid}.txt", "a") as f:
+            f.write("built\n")
     if os.environ.get("FAKE_CONFLICT"):  # every ticket rewrites one file: a merge after another's conflicts
         if "conflicts with" in prompt:
             sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
@@ -81,7 +83,8 @@ if system.startswith("# windvane worker run"):
         sh("git", "add", "-A"); sh("git", "commit", "-qm", "question"); sh("git", "push", "-q", "-u", "origin", "HEAD")
         text = f"RESULT: BLOCKED {tid} Red or blue?"
     else:
-        sh("git", "add", "-A"); sh("git", "commit", "-qm", f"{tid}: build")
+        if not resolve_only:
+            sh("git", "add", "-A"); sh("git", "commit", "-qm", f"{tid}: build")
         sh("git", "push", "-q", "-u", "origin", "HEAD")
         text = f"done\nRESULT: READY {tid} {sh('git', 'rev-parse', 'HEAD')}"
         if step == "quiet":

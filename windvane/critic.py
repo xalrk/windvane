@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .config import HOME
 from .runner import run_claude
-from .util import append_jsonl, gout, last_match, read_jsonl
+from .util import append_jsonl, git, gout, last_match, load_json, read_jsonl
 
 CRITIC_RE = re.compile(r"CRITIC: (\d+(?:\.\d+)?)/10 (\S+) fixes=(\d+)[ \t]*(.*)")
 DONE = ("pass", "scope", "accept", "skip")
@@ -158,6 +158,46 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None):
              "revisions": n, "step": step(p, score, fixes, n), "gist": m.group(4)[:200], "critique": critique}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
+
+
+def resolution(cwd, approved, head, upstream, why="conflict"):
+    """What `head` holds beyond an approved head and the main it merged in, when that's all it is: a merge-conflict
+    bounce (why "conflict") or a red merged tree (why "red") the worker fixed by merging main. Returns (diff, paths,
+    tree) or None when anything else changed, which needs the full critic and review again.
+
+    The diff runs from git's own merge of the approved head and that main (conflict markers and all) to `head`, so
+    main's changes drop out and only the resolution is left. Every new commit off main must be a merge of main or a
+    fix, and the fixes may touch only the conflicted files (for a red tree: files either side changed)."""
+    ok = lambda *a: git(cwd, *a).returncode == 0
+    if not approved or approved == head or not ok("merge-base", "--is-ancestor", approved, head):
+        return None
+    merges = 0
+    for line in gout(cwd, "rev-list", "--parents", head, f"^{approved}", f"^{upstream}").splitlines():
+        others = line.split()[2:]  # a merge's parents after the first: each must be on main
+        if not all(ok("merge-base", "--is-ancestor", x, upstream) for x in others):
+            return None
+        merges += bool(others)
+    base = gout(cwd, "merge-base", head, upstream)
+    r = git(cwd, "merge-tree", "--write-tree", "--name-only", "--no-messages", approved, base)
+    if not merges or not base or r.returncode not in (0, 1):
+        return None
+    tree, *conflicted = r.stdout.splitlines()
+    allowed = set(filter(None, conflicted))
+    if why == "red":
+        fork = gout(cwd, "merge-base", approved, base)
+        for side in (approved, base):
+            allowed |= set(gout(cwd, "diff", "--name-only", fork, side).splitlines())
+    paths = sorted(filter(None, gout(cwd, "diff", "--name-only", tree, head).splitlines()))
+    if not set(paths) <= allowed:
+        return None
+    return gout(cwd, "diff", tree, head), paths, tree
+
+
+def stands(p, tid, cwd, rev="HEAD"):
+    """The approved head whose verdict still holds for `rev` (it only resolves a bounce off main), or ""."""
+    ap = load_json(p.state / "state.json", {}).get("approved", {}).get(tid)
+    head = gout(cwd, "rev-parse", rev)
+    return ap["sha"] if ap and resolution(cwd, ap["sha"], head, p.upstream, ap.get("why")) else ""
 
 
 def next_step(p, tid, entry):

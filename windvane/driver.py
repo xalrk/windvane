@@ -142,6 +142,7 @@ class Pilot:
         self.feedback = s.get("feedback", {})  # ticket -> what its next worker run must act on
         self.questions = s.get("questions", {})  # ticket -> its open question for the user
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
+        self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.skip, self.merged, self.failed = set(), [], []
         self.partials, self.reviews, self.scores = {}, {}, {}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
@@ -184,6 +185,7 @@ class Pilot:
     def save(self):
         with self.lock:
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
+                                        "approved": dict(self.approved),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
                                         "running": dict(self.running)})
 
@@ -332,14 +334,24 @@ class Pilot:
             self.feedback[tid] = (f"Your RESULT line named {sha[:12]}, but `{p.remote}/{branch or '?'}` isn't at it. "
                                   "Push the final head, then finish READY with its full sha.")
             return self.log(f"{tid}: READY head {sha[:12]} isn't pushed; back to the worker")
-        if not self.critic_gate(tid, sha, deadline):
+        ap = self.approved.get(tid)
+        res = ap and critic.resolution(self.cd, ap["sha"], sha, p.upstream, ap.get("why"))
+        if ap and not res:
+            self.approved.pop(tid)  # more than a resolution: the full critic and review again
+        if res:
+            self.log(f"{tid}: only merges {p.main} into the approved {ap['sha'][:7]} and resolves it "
+                     f"({len(res[1])} file{'s' * (len(res[1]) != 1)}); the critic's verdict stands")
+        elif not self.critic_gate(tid, sha, deadline, stale=ap and ap["sha"]):
             return
         ok, summary, logf = self.check_at(sha)
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
         if not ok:
             self.feedback[tid] = f"The check fails on {sha[:12]}: {summary}\n```\n{tail(logf, 40)}\n```"
             return self.bounce(tid)
-        verdict, review = self.review(tid, branch, sha, deadline)
+        if res and not res[0]:  # git merged it cleanly: like any approved head that merges, nothing new to review
+            self.log(f"{tid}: a clean merge of {p.main}; no review needed")
+            return self.integrate(tid, branch, sha)
+        verdict, review = self.review(tid, branch, sha, deadline, res and (ap["sha"], *res))
         if verdict is None:
             return
         if verdict == "CHANGES":
@@ -356,13 +368,14 @@ class Pilot:
         if self.reviews[tid] >= self.p.ap["review_rounds"] + 1:
             self.fail(tid, f"sent back {self.reviews[tid]} times: {self.feedback.get(tid, '')[:200]}")
 
-    def critic_gate(self, tid, sha, deadline):
+    def critic_gate(self, tid, sha, deadline, stale=None):
+        """`stale`: an approved head whose verdict no longer covers this one (it changed more than a resolution)."""
         p = self.p
         if not p.critic["enabled"]:
             return True
         past = critic.history(p, tid)
-        if past and past[-1]["step"] in ("revise", "rethink") and past[-1].get("sha") and \
-                not sha.startswith(past[-1]["sha"]):
+        if past and past[-1].get("sha") and not sha.startswith(past[-1]["sha"]) and \
+                (past[-1]["step"] in ("revise", "rethink") or (stale or "").startswith(past[-1]["sha"])):
             past = []  # judged an older head: this one needs its own verdict
         if not past or past[-1]["step"] not in critic.DONE:
             if critic.pack(p, tid)[0] is None:
@@ -397,9 +410,13 @@ class Pilot:
             return False, f"couldn't check out {rev[:12]}", None
         return check(self.p, cd)
 
-    def review(self, tid, branch, sha, deadline):
+    def review(self, tid, branch, sha, deadline, res=None):
+        """`res`: (approved head, diff, paths, tree) when the head only resolves a bounce off main: the reviewer
+        gets just the resolution."""
         p, cd = self.p, self.cd
         pr = pr_for(p, branch)
+        if res:
+            return self.verdict(tid, branch, sha, deadline, pr, self.resolution_prompt(tid, branch, sha, pr, *res))
         body = sh(p.main_root(), "gh", "pr", "view", pr, "--json", "body", "-q", ".body") if pr else \
             gout(cd, "log", "--format=%B", f"{p.upstream}..{sha}")
         stat = gout(cd, "diff", "--stat", f"{p.upstream}...{sha}")
@@ -418,6 +435,27 @@ class Pilot:
             f"The diff is {len(diff.splitlines())} lines: read the files that matter with `git diff {p.upstream}...HEAD "
             "-- <path>`.",
         ]))
+        return self.verdict(tid, branch, sha, deadline, pr, prompt)
+
+    def resolution_prompt(self, tid, branch, sha, pr, approved, diff, paths, tree):
+        p = self.p
+        inline = len(diff.splitlines()) <= p.ap["inline_diff_lines"]
+        return "\n\n".join(filter(None, [
+            f"Review {tid} at head {sha} (branch {branch}{', PR #' + pr if pr else ''}): only its merge resolution. "
+            "Follow the review rules in your system prompt and end with the REVIEW line.",
+            f"## Only the resolution\nThe critic and the reviewer approved head {approved[:12]}; merged with "
+            f"{p.upstream} it then conflicted or failed the check, and the worker merged {p.upstream} in. The diff "
+            f"below runs from git's own merge of the two (conflict markers and all) to the new head, so {p.upstream}'s "
+            "changes are left out. Check only that it keeps both sides' intent and breaks nothing: the rest was "
+            "approved.",
+            f"## The ticket\n{self.queue.text.get(tid, '')[:6000]}",
+            f"## The resolution ({', '.join(paths)})\n```diff\n{diff}\n```" if inline else
+            f"The resolution is {len(diff.splitlines())} lines in {', '.join(paths)}: read it with "
+            f"`git diff {tree} HEAD -- <path>`.",
+        ]))
+
+    def verdict(self, tid, branch, sha, deadline, pr, prompt):
+        p, cd = self.p, self.cd
         self.log(f"{tid}: review run")
         while True:
             text, killed, error = self.claude("reviewer", f"{tid}-review", prompt, self.review_rules, cd,
@@ -460,6 +498,7 @@ class Pilot:
                                       f"{p.upstream}` into your branch, resolve the conflicts keeping both sides' "
                                       "intent, rerun the check, push, and finish READY.")
                 self.log(f"{tid}: conflicts with {p.main}; back to the worker")
+                self.approve_bounce(tid, sha, "conflict")
                 self.conflicted(tid)
                 return self.bounce(tid)
             merge = gout(cd, "rev-parse", "HEAD")
@@ -469,6 +508,7 @@ class Pilot:
                                       f"{summary}\n```\n{tail(logf, 40)}\n```\nMerge {p.upstream} into your branch "
                                       "and fix it.")
                 self.log(f"{tid}: the merged tree fails the check; back to the worker")
+                self.approve_bounce(tid, sha, "red")
                 return self.bounce(tid)
             if p.cfg["forge"] == "github":
                 pr = pr_for(p, branch)
@@ -486,6 +526,14 @@ class Pilot:
                 return self.merged_ok(tid, branch, sha) if self.landed(tid, branch, sha) else None
             self.log(f"{tid}: merge refused ({' '.join((res.stderr or res.stdout).split())[:200]}); trying again")
         self.fail(tid, "the merge was refused three times")
+
+    def approve_bounce(self, tid, sha, why):
+        """An approved head sent back only for main's sake: if the worker just merges main and fixes that, the critic's
+        verdict stands and the reviewer sees only the fix (the earlier head keeps it, when this is a second bounce)."""
+        ap = self.approved.setdefault(tid, {"sha": sha, "why": why})
+        ap["why"] = "red" if "red" in (why, ap["why"]) else why
+        self.feedback[tid] += (" If that's all you change, the critic's verdict stands: don't run `windvane critic` "
+                               "again; the reviewer sees only your resolution.")
 
     def landed(self, tid, branch, sha):
         """A merge counts only once main holds the head: a push or `gh pr merge` can report success without it
@@ -518,6 +566,7 @@ class Pilot:
         self.minutes.append(round(ran / 60, 2))
         self.fail_streak = 0
         self.feedback.pop(tid, None)
+        self.approved.pop(tid, None)
         self.save()
         score = self.scores.get(tid)
         self.log(f"{tid}: merged {sha[:7]} · {self.usage.text()}")
@@ -533,6 +582,7 @@ class Pilot:
     def fail(self, tid, why):
         self.skip.add(tid)
         self.failed.append(tid)
+        self.approved.pop(tid, None)
         self.fail_streak += 1
         self.log(f"{tid}: FAILED: {why}")
         push(f"Failed: {self.name(tid)}", f"{why}. The work so far is on its branch; autopilot moved on.", 4, "x")
