@@ -1,5 +1,6 @@
 """Which ready ticket starts beside the running ones: related work waits, conflicts cost a slot, and a queue that
 finishes one at a time before the deadline gets no extra slot."""
+import json
 import os
 import sys
 import unittest
@@ -37,13 +38,9 @@ class Schedule(unittest.TestCase):
         pilot.run(now() + timedelta(minutes=minutes))
         return pilot
 
-    def starts(self):
-        return Path(self.s.tmp / "calls.jsonl").read_text()
-
     def start_times(self):
-        import json
         out = {}
-        for l in self.starts().splitlines():
+        for l in (self.s.tmp / "calls.jsonl").read_text().splitlines():
             c = json.loads(l)
             if c["system"] == "span":
                 tid, _, at = c["prompt"].split()
