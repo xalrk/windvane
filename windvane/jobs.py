@@ -11,6 +11,7 @@ import sys
 import time
 from pathlib import Path
 
+from .config import exe
 from .util import gout, now
 
 
@@ -72,7 +73,7 @@ def bg(p, name, cmd, cwd, heavy=False):
     Path(f"{base}.exit").unlink(missing_ok=True)
     Path(f"{base}.start").write_text(str(int(time.time())))
     if heavy:
-        cmd = [str(Path(__file__).parents[1] / "bin/windvane"), "heavy", "--", *cmd]
+        cmd = [*exe(), "heavy", "--", *cmd]
     proc = subprocess.Popen(["bash", "-c", '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"', str(base), *cmd],
                             cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True)

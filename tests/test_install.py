@@ -8,7 +8,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from windvane.cli import add_keyword_hook  # noqa: E402
+from windvane.install import add_keyword_hook  # noqa: E402
 
 RUNTIME = tempfile.mkdtemp()
 
