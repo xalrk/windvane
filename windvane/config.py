@@ -8,11 +8,15 @@ import copy
 import os
 import re
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parent
-HOME = PKG.parent  # the windvane checkout: prompts/ and templates/
+# Where prompts/, templates/, skills/ and hooks/ are: inside the package when installed (pipx, uv, pip), at the top of
+# a git checkout run through bin/windvane or an editable install.
+HOME = PKG if (PKG / "prompts").is_dir() else PKG.parent
+CHECKOUT = HOME == PKG.parent
 DIR = ".windvane"
 
 DEFAULTS = {
@@ -37,6 +41,20 @@ DEFAULTS = {
                   "min_slot": 30, "answer_wait": 10, "review_rounds": 3, "partials": 3, "subagents": False, "inline_diff_lines": 1200,
                   "retries": 3, "retry_minutes": 3},  # a session that dies (API, network) reruns after 3, 6, 12 min
 }
+
+
+def exe():
+    """The command that starts this same windvane from anywhere (tmux, the phone's hooks, background jobs), where
+    PATH may differ: the checkout's bin/windvane, the installed console script, or the interpreter as a last resort."""
+    for f in (HOME / "bin/windvane", Path(sys.executable).parent / "windvane"):
+        if f.is_file() and os.access(f, os.X_OK):
+            return [str(f)]
+    return [sys.executable, "-m", "windvane"]
+
+
+def user_dir(var, default):
+    """An XDG base directory's windvane folder: config (~/.config/windvane) or state (~/.local/state/windvane)."""
+    return Path(os.environ.get(var) or Path.home() / default) / "windvane"
 
 
 def slots(p, parallel=None):
@@ -74,7 +92,7 @@ class Project:
         self.id_re = rf"{re.escape(self.prefix)}-\d+[a-z]?"
         self.remote, self.main = c["remote"], c["main"]
         self.upstream = f"{self.remote}/{self.main}"
-        self.state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "windvane" / self.name
+        self.state = user_dir("XDG_STATE_HOME", ".local/state") / self.name
         self.tmux = f"windvane-{self.name}"
         self.models = c["models"]
         self.critic = c["critic"]

@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import critic as critic_mod
-from . import driver, jobs, preflight, questions, watch
-from .config import DIR, HOME, Project, find
+from . import doctor, driver, install, jobs, preflight, questions, watch
+from .config import DIR, HOME, Project, exe, find, toplevel
 from .queue import Queue
 from .runner import Usage, inherited_stop
 from .util import git, gout, hhmm, load_json, now, read_jsonl
@@ -74,65 +74,12 @@ def cmd_init(a):
         if not (d / name).exists():
             (d / name).write_text((HOME / "templates" / name).read_text())
     p = Project(root)
-    hooks = install_hooks(p)
+    hooks = install.phone_hooks(p)
     print(f"windvane set up in {d}\n  project name: {p.name}; state on this machine: {p.state}\n"
           f"  edit {DIR}/config.toml (the check command!) and {DIR}/CRITIC.md (what a 10 means here)\n"
           f"  then commit {DIR}/ and push it to {p.upstream}: the autopilot reads tickets from there")
     if hooks:
         print(f"  phone: status/stop/overview hooks in {', '.join(hooks)}")
-
-
-def install_hooks(p):
-    base = Path.home() / ".config/ntfy"
-    if not base.exists():
-        return []
-    made = []
-    exe = HOME / "bin/windvane"
-    for kind, args in (("status.d", "status --line"), ("stop.d", "stop --if-running"), ("overview.d", "overview")):
-        d = base / kind
-        d.mkdir(exist_ok=True)
-        f = d / f"windvane-{p.name}"
-        f.write_text(f"#!/usr/bin/env bash\n# windvane {p.name}: `{args.split()[0]}` from the phone (ntfy-listen)\n"
-                     f"exec {exe} -C {p.main_root()} {args}\n")
-        f.chmod(0o755)
-        made.append(str(d))
-    return made
-
-
-def cmd_install(a):
-    target = Path.home() / ".local/bin/windvane"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.is_symlink() or target.exists():
-        target.unlink()
-    target.symlink_to(HOME / "bin/windvane")
-    print(f"{target} -> {HOME / 'bin/windvane'}")
-    claude_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    skill = claude_dir / "skills/windvane"
-    skill.parent.mkdir(parents=True, exist_ok=True)
-    if skill.is_symlink() or not skill.exists():
-        skill.unlink(missing_ok=True)
-        skill.symlink_to(HOME / "skills/windvane")
-        print(f"{skill} -> {HOME / 'skills/windvane'} (the playbook new sessions load)")
-    if add_keyword_hook(claude_dir / "settings.json"):
-        print("~/.claude/settings.json: a hook that brings windvane in whenever a prompt mentions it or autopilot")
-
-
-def add_keyword_hook(settings):
-    """Add the UserPromptSubmit keyword hook to Claude Code's user settings, once, keeping everything else."""
-    cmd = str(HOME / "hooks/mention_hook.py")
-    try:
-        data = json.loads(settings.read_text()) if settings.exists() else {}
-    except ValueError:
-        print(f"{settings} isn't valid JSON: add the hook yourself (UserPromptSubmit -> {cmd})")
-        return False
-    groups = data.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
-    if any(h.get("command") == cmd for g in groups for h in g.get("hooks", [])):
-        return False
-    groups.append({"hooks": [{"type": "command", "command": cmd, "timeout": 5}]})
-    tmp = settings.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    tmp.replace(settings)
-    return True
 
 
 def need(p):
@@ -166,7 +113,7 @@ def cmd_run(a, p):
                 continue
             args.append(x)
         args += [] if "--no-preflight" in args else ["--no-preflight"]  # asked here already, if at all
-        cmd = " ".join(json.dumps(x) for x in [str(HOME / "bin/windvane"), "-C", str(p.main_root()), *args])
+        cmd = " ".join(json.dumps(x) for x in [*exe(), "-C", str(p.main_root()), *args])
         subprocess.run(["tmux", "new-session", "-d", "-s", p.tmux, "-c", str(p.main_root()), cmd], check=True)
         print(f"autopilot running in tmux session {p.tmux} until {hhmm(deadline)}\n"
               f"  watch:  windvane watch      (or tmux attach -t {p.tmux}; leave with Ctrl-b d)\n"
@@ -406,7 +353,11 @@ def main(argv=None):
     s.add_argument("--name")
     s.add_argument("--check", help="the project's CI command")
     s.add_argument("--forge", choices=("github", "git"))
-    sub.add_parser("install", help="put windvane on PATH (~/.local/bin)")
+    s = sub.add_parser("install", help="add the windvane skill and the mention hook to Claude Code, asking first")
+    s.add_argument("--yes", action="store_true", help="make every change without asking (for scripts)")
+    s = sub.add_parser("uninstall", help="remove exactly what install added")
+    s.add_argument("--yes", action="store_true", help="without asking")
+    sub.add_parser("doctor", help="what this machine lacks for windvane, and how to fix it")
     s = sub.add_parser("run", help="work the tickets until a deadline")
     g = s.add_mutually_exclusive_group()
     g.add_argument("--until", help="HH:MM or 'YYYY-MM-DD HH:MM'")
@@ -471,8 +422,11 @@ def main(argv=None):
         os.chdir(a.cwd)
     if a.cmd == "init":
         return cmd_init(a)
-    if a.cmd == "install":
-        return cmd_install(a)
+    if a.cmd in ("install", "uninstall"):
+        return getattr(install, a.cmd)(a.yes)
+    if a.cmd == "doctor":
+        root = toplevel()
+        return doctor.main(Project(root) if root else None)
     if a.cmd == "heavy":
         from .heavy import run as heavy_run
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command

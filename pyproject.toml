@@ -1,0 +1,19 @@
+[build-system]
+requires = []  # tools/build_backend.py is standard library only: building needs no download
+build-backend = "build_backend"
+backend-path = ["tools"]
+
+[project]
+name = "windvane"
+version = "0.1.0"
+description = "An autopilot for Claude Code: works a git project's tickets unattended, with a critic, a reviewer and phone questions"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = []
+
+[project.urls]
+Source = "https://github.com/xalrk/windvane"
+
+[project.scripts]
+"windvane" = "windvane.cli:main"

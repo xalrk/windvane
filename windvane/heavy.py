@@ -7,6 +7,8 @@ that tool, waiting on its own lock); instead it waits until no process matching 
 
     busy = ["UnrealEditor", "ShaderCompile", "blender"]   # process-name regexes (pgrep) of heavy work started elsewhere
     min_free_gb = 6                                           # wait for this much MemAvailable before starting
+
+Free memory comes from Linux's /proc/meminfo; elsewhere (macOS) it isn't known, and only `busy` is waited on.
 """
 import fcntl
 import os
@@ -17,12 +19,14 @@ import time
 import tomllib
 from pathlib import Path
 
+from .config import user_dir
+
 # Process names, not command lines: `pgrep -f blender` would match any Claude session whose prompt says "blender".
 DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb": 6}
 
 
 def machine():
-    f = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "windvane/machine.toml"
+    f = user_dir("XDG_CONFIG_HOME", ".config") / "machine.toml"
     try:
         return {**DEFAULTS, **tomllib.loads(f.read_text())}
     except (OSError, ValueError):
@@ -44,7 +48,10 @@ def free_gb():
 def busy(patterns):
     """The first busy pattern with a running process (other than this one's own tree), or None."""
     for pat in patterns:
-        out = subprocess.run(["pgrep", pat], capture_output=True, text=True).stdout.split()
+        try:
+            out = subprocess.run(["pgrep", pat], capture_output=True, text=True).stdout.split()
+        except OSError:  # no pgrep (a minimal system): nothing can be seen running
+            return None
         if [p for p in out if int(p) not in (os.getpid(), os.getppid())]:
             return pat
     return None

@@ -1,4 +1,4 @@
-# windvane settings for this project (https://github.com/xalrk/windvane). Every key is optional.
+# windvane settings for this project. Every key is optional.
 name = ""                 # state dir, phone question ids, tmux session
 prefix = "T"              # ticket ids: T-001, T-002a
 remote = "origin"
