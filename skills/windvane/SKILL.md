@@ -36,8 +36,9 @@ Do everything yourself. The user should only have to answer real product questio
    - <checkable outcome, with the tests that prove it>
    ```
    Write `Touches:` carefully: tickets whose lists don't overlap run in parallel, and a ticket without the line runs
-   alone. Put the order in `.windvane/QUEUE.md` (`- T-001 <title>`). A product call nobody has made yet becomes a
-   ticket whose first step asks it (the worker rules cover how).
+   alone. Name test files (`tests/test_<topic>.py`), not `tests/`, which overlaps every ticket. Put the order in
+   `.windvane/QUEUE.md` (`- T-001 <title>`). A product call nobody has made yet becomes a ticket whose first step
+   asks it (the worker rules cover how).
 5. **Calibrate the critic, with the user.** It scores every ticket and sends work back below the bar, so its scale
    decides what "done" means. Uncalibrated, it drifts toward scoring right at the pass mark.
    - `.windvane/CRITIC.md`: who uses this, what 10/10 is (name the products to beat), and what 2, 5 and 8 look like
@@ -74,7 +75,7 @@ Run `windvane init --check "<the repo's test command>"`, then either write the t
 | `windvane answer T-007 B` (or `"free text"`) | answer a ticket's design question at the desk |
 | `windvane stats [--by ticket]` | tokens, turns and minutes per role or ticket |
 | `windvane new "<title>"` / `windvane plan "<goal>"` | add tickets by hand / by a planner run |
-| `windvane run --until 13:50 --parallel 3` | a deadline, and more tickets at a time (default 2) |
+| `windvane run --until 13:50 --parallel 3` | a deadline, and at most 3 tickets at a time (default "auto": up to 4, as Touches and usage allow) |
 | `windvane heavy -- <cmd>` | run an engine/render/big build one at a time on this machine |
 
 The user overruling a critic score: add a line to `.windvane/CALIBRATION.md` (date, ticket, critic's score, theirs,

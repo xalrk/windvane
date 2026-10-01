@@ -77,8 +77,12 @@ What a ticket goes through:
 
 Anything sent back reaches the ticket's next worker run as written feedback; tickets that keep bouncing are set aside.
 
-**Parallel tickets** (`parallel = 2`, `--parallel N`): tickets run side by side, each in its own pair of
-worktrees, when their `Touches:` lines don't overlap. A ticket without the line runs alone. Every ticket still gets
+**Parallel tickets** (`parallel = "auto"`, the default, up to `max_parallel = 4`; a number such as `parallel = 2`
+or `--parallel 2` caps it): another ticket starts whenever one is ready whose `Touches:` line doesn't overlap the
+running ones' and the usage window has room for one more (the 5-hour usage now plus the recent cost per ticket times
+the tickets running, under `cap`). Each slot gets its own pair of worktrees when first used. A ticket without the
+line runs alone. The log says why a slot sits idle (`T-010 waits: overlaps T-008 on windvane/driver.py`, `no 3rd
+slot: usage estimate`), and `windvane status` lists the running tickets and their slots. Every ticket still gets
 exactly one fresh session, so this cuts wall-clock time without costing tokens. Merges stay one at a time, each
 checked on the tree main will really have.
 
