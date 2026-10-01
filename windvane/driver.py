@@ -676,6 +676,15 @@ def pending_ids(p):
     return ids
 
 
+def unmerged(p, n, where):
+    """A plan that couldn't merge counts as none (so `run --replan` doesn't take it for new work), but the user
+    hears where it waits: it was a paid planner session."""
+    clean_detach(p, p.plan_dir, p.upstream)
+    log(p, f"plan: {n} tickets on {where}, not merged; merge it by hand")
+    push(f"{p.name}: plan not merged", f"{n} tickets wait on {where}: merge it by hand.", 4, "warning")
+    return 0
+
+
 def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
     cd = p.plan_dir
     git(p.main_root(), "fetch", "-q", "--prune", p.remote)
@@ -738,18 +747,24 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
             if merged:
                 git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
         if merge and not merged:
-            clean_detach(p, cd, p.upstream)
-            log(p, f"plan: {n} tickets on {pr or branch}, not merged; merge it by hand")
-            return 0
+            return unmerged(p, n, pr or branch)
         log(p, f"plan: {n} tickets on {pr or branch}{' (merged)' if merge else ''}")
     else:
-        target = p.main if merge else branch
-        res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{target}")
+        res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main if merge else branch}")
+        if res.returncode and merge:  # main moved during the session: the plan only adds tickets, so replay it
+            git(p.main_root(), "fetch", "-q", p.remote)
+            if git(cd, *ident, "rebase", "-q", p.upstream).returncode == 0:
+                res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
+            else:
+                git(cd, "rebase", "--abort")
+            if res.returncode:  # keep the paid-for plan on its branch rather than drop it
+                git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+                return unmerged(p, n, branch)
         if res.returncode:
             clean_detach(p, cd, p.upstream)
-            log(p, f"plan: push to {target} refused ({' '.join(res.stderr.split())[:200]}); plan dropped")
+            log(p, f"plan: push to {branch} refused ({' '.join(res.stderr.split())[:200]}); plan dropped")
             return 0
-        log(p, f"plan: {n} tickets pushed to {target}")
+        log(p, f"plan: {n} tickets pushed to {p.main if merge else branch}")
     push(f"{p.name}: planned {n} tickets", m.group(3)[:200] or "See the queue.", 3, "memo")
     clean_detach(p, cd, p.upstream)
     return n

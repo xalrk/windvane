@@ -1,5 +1,6 @@
 """The whole driver against a fake `claude`: worker -> check -> review -> merge, questions, and planning."""
 import json
+import os
 import sys
 import unittest
 from argparse import Namespace
@@ -234,11 +235,39 @@ class Pipeline(unittest.TestCase):
                       '  merge) echo "not mergeable" >&2; exit 1 ;;\n  view) echo OPEN ;;\nesac\n')
         gh.chmod(0o755)
         self.config(forge='"github"')
+        pushes = self.pushes()
         self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.assertEqual(pushes, ["sandbox: plan not merged"])
         self.s.git("fetch", "-q", "origin")
         self.assertNotIn("T-003", Queue(self.p).files)
         self.assertIn("plan-", self.s.git("ls-remote", "--heads", "origin", "plan-*"))  # kept for its PR
         self.assertIn("not merged", (self.p.state / "autopilot.log").read_text())
+
+    def pushes(self):
+        pushes, orig = [], driver.push
+        driver.push = lambda title, *a, **k: pushes.append(title)
+        self.addCleanup(setattr, driver, "push", orig)
+        return pushes
+
+    def test_plan_replays_onto_a_main_that_moved(self):
+        os.environ["FAKE_PLAN_MOVE_MAIN"] = "1"
+        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 1)
+        self.s.git("fetch", "-q", "origin")
+        self.assertIn("T-003", Queue(self.p).files)
+        self.assertIn("moved", self.s.git("log", "origin/main", "--format=%s"))
+
+    def test_plan_that_cant_reach_main_is_kept_on_its_branch(self):
+        hook = self.s.remote / "hooks" / "pre-receive"  # main refuses every push
+        hook.write_text("#!/bin/sh\nwhile read old new ref; do [ \"$ref\" = refs/heads/main ] && exit 1; done\n"
+                        "exit 0\n")
+        hook.chmod(0o755)
+        pushes = self.pushes()
+        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.assertEqual(pushes, ["sandbox: plan not merged"])
+        self.s.git("fetch", "-q", "origin")
+        self.assertNotIn("T-003", Queue(self.p).files)
+        branch = self.s.git("ls-remote", "--heads", "origin", "plan-*").split("refs/heads/")[1]
+        self.assertIn(".windvane/tickets/T-003.md", self.s.git("ls-tree", "-r", "--name-only", f"origin/{branch}"))
 
     def test_plan_while_another_plan_runs_does_nothing(self):
         import fcntl
