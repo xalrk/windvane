@@ -1,6 +1,6 @@
 ---
 name: windvane
-description: windvane (also "autopilot"), the user's autopilot that builds a project ticket by ticket in fresh headless Claude sessions while they're away. Use whenever the user mentions windvane or autopilot, e.g. "here's my idea, let's build it with windvane", "yo claude, put windvane on my idea", "put autopilot on this repo", "run autopilot overnight", "how's autopilot doing", "stop autopilot".
+description: windvane (also "autopilot"), the user's autopilot that builds a project ticket by ticket in fresh headless Claude sessions while they're away. Use whenever the user mentions windvane or autopilot in any wording, e.g. "here's my idea, let's build it with windvane", "yo claude, put windvane on my idea", "put autopilot on this repo", "run autopilot overnight", "how's autopilot doing", "stop autopilot".
 ---
 
 # windvane
@@ -10,7 +10,8 @@ The user's autopilot (`~/Documents/windvane`, command `windvane`). It works a re
 It runs independent tickets side by side, asks the user design questions on their phone (ntfy), and keeps a token
 ledger. Its README explains it fully; this is the playbook.
 
-## "Here's my idea, let's build it with windvane": a new project
+## A new project from an idea
+Whenever the user gives an idea (any wording, a line or a page) and wants windvane or autopilot to build it.
 Do everything yourself. The user should only have to answer real product questions.
 1. **Pin the idea down.** Restate it in a few lines. Ask only the questions that change what gets built (who it's
    for, the platform or stack when it matters, the one thing it must do well), in one AskUserQuestion with
@@ -56,7 +57,7 @@ Do everything yourself. The user should only have to answer real product questio
 8. **Tell the user** in a few lines what you set up, the first tickets, and how to follow it: `windvane watch` (live,
    costs nothing), `windvane status`, their phone's `status`/`overview`/`stop`, and `windvane stop`.
 
-## On an existing repo ("put autopilot on this")
+## On an existing repo (the user wants windvane on the current project)
 Run `windvane init --check "<the repo's test command>"`, then either write the tickets for what the user wants or run
 `windvane plan --merge "<goal>"`. Calibrate the critic with the user as in step 5, then commit, push, and start it.
 
