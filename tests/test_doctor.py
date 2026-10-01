@@ -66,6 +66,13 @@ class Doctor(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertRegex(out, r"MISSING +gh logged in +-> gh auth login")
 
+    def test_a_broken_skill_link_says_so(self):
+        skill = self.tmp / "claude/skills/windvane"
+        skill.parent.mkdir(parents=True)
+        skill.symlink_to(self.tmp / "gone/skills/windvane")
+        out, _ = self.run_doctor()
+        self.assertRegex(out, r"optional +the windvane skill .*: a broken link to .*gone.* -> windvane install")
+
     def test_off_linux_it_says_what_degrades(self):
         with mock.patch.object(sys, "platform", "darwin"):
             out, code = self.run_doctor()

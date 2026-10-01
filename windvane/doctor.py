@@ -2,6 +2,7 @@
 
 Free and quick: it runs only local commands (`claude auth status`, `gh auth status`), never a Claude session."""
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -64,7 +65,11 @@ def checks(p=None):
     add(shutil.which("windvane"), True, "`windvane` on PATH",
         "windvane install" if CHECKOUT else "pipx ensurepath (or add ~/.local/bin to PATH)")
     skill = install.claude_dir() / "skills/windvane"
-    add(skill.exists(), False, f"the windvane skill in {skill.parent}", "windvane install")
+    if skill.is_symlink() and not skill.exists():  # e.g. pipx reinstalled windvane on a newer Python
+        add(False, False, f"the windvane skill in {skill.parent}: a broken link to {os.readlink(skill)}",
+            "windvane install")
+    else:
+        add(skill.exists(), False, f"the windvane skill in {skill.parent}", "windvane install")
     settings = install.claude_dir() / "settings.json"
     add(install.has_keyword_hook(settings, any_copy=True), False, f"the mention hook in {settings}",
         "windvane install")

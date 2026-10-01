@@ -122,6 +122,7 @@ class Installed(unittest.TestCase):
 
         r = run(str(exe), "uninstall", "--yes")
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"rm -r {tmp / 'data/windvane'} ~/.local/bin/windvane", r.stdout)  # install.sh's way out
         self.assertEqual((claude_dir / "settings.json").read_text(), ODD_SETTINGS)
         self.assertEqual(sorted(p.name for p in claude_dir.iterdir()), ["settings.json"])
         self.assertFalse((tmp / "state/windvane/install.json").exists())
@@ -162,7 +163,7 @@ class InstallInProcess(unittest.TestCase):
         self.quiet(install.install, True)
         self.assertTrue((self.claude / "settings.json").exists())
         self.assertEqual(os.readlink(self.tmp / "home/.local/bin/windvane"), str(REPO / "bin/windvane"))
-        self.quiet(install.uninstall, True)
+        self.assertIn("The checkout itself stays", self.quiet(install.uninstall, True))
         self.assertFalse(self.claude.exists())
         self.assertFalse((self.tmp / "home/.local").exists())
 
@@ -182,6 +183,8 @@ class InstallInProcess(unittest.TestCase):
     def test_leaves_a_real_skill_dir_and_restores_an_older_link(self):
         (self.claude / "skills/windvane").mkdir(parents=True)
         old = self.tmp / "old-checkout/bin/windvane"
+        old.parent.mkdir(parents=True)
+        old.write_text("#!/bin/sh\n")
         link = self.tmp / "home/.local/bin/windvane"
         link.parent.mkdir(parents=True)
         link.symlink_to(old)
@@ -191,6 +194,15 @@ class InstallInProcess(unittest.TestCase):
         self.quiet(install.uninstall, True)
         self.assertTrue((self.claude / "skills/windvane").is_dir())
         self.assertEqual(os.readlink(link), str(old))
+
+    def test_replaces_a_broken_skill_link_and_doesnt_bring_it_back(self):
+        skill = self.claude / "skills/windvane"
+        skill.parent.mkdir(parents=True)
+        skill.symlink_to(self.tmp / "venv-of-an-older-python/windvane/skills/windvane")
+        self.quiet(install.install, True)
+        self.assertEqual(skill.resolve(), (REPO / "skills/windvane").resolve())
+        self.quiet(install.uninstall, True)
+        self.assertFalse(skill.exists() or skill.is_symlink())
 
     def test_installing_twice_adds_once(self):
         self.quiet(install.install, True)

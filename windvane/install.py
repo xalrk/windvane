@@ -120,7 +120,21 @@ def uninstall(yes=False):
     for e in reversed(m["paths"]):
         remove_path(e)
     save({"paths": [], "settings": []})
-    print("removed. The package itself goes with: pipx uninstall windvane (or uv tool uninstall)")
+    print(f"removed. {removal_hint()}")
+
+
+def removal_hint():
+    """How to remove windvane itself, which depends on how it was installed: a checkout, pipx, uv or install.sh."""
+    if CHECKOUT:
+        return f"The checkout itself stays: delete {HOME} when you no longer want it."
+    prefix = Path(sys.prefix).resolve()
+    if prefix == (user_dir("XDG_DATA_HOME", ".local/share") / "venv").resolve():
+        return f"The package itself (install.sh's): rm -r {prefix.parent} ~/.local/bin/windvane"
+    if "pipx" in prefix.parts:
+        return "The package itself: pipx uninstall windvane"
+    if "uv" in prefix.parts:
+        return "The package itself: uv tool uninstall windvane"
+    return f"The package itself: {Path(sys.executable).name} -m pip uninstall windvane (in {prefix})"
 
 
 def remove_path(e):
@@ -134,7 +148,7 @@ def remove_path(e):
     elif kind == "link":
         if t.is_symlink() and os.readlink(t) == e["source"]:
             t.unlink()
-            if e.get("was"):
+            if e.get("was") and (t.parent / e["was"]).exists():  # the link it replaced, unless that was broken
                 t.symlink_to(e["was"])
         elif t.exists() or t.is_symlink():
             print(f"{t} changed since install, so it's left alone")
