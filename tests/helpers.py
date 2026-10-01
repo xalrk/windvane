@@ -31,6 +31,14 @@ if steps[0] and system:
     open(count, "w").write(str(n + 1))
     step = steps[n] if n < len(steps) else steps[-1] if steps[-1].endswith("*") else ""
     step = step.rstrip("*")
+hang = os.environ.get("FAKE_HANG")
+if hang:  # streams two API messages (the first as two events), then works on until it is killed
+    use = lambda i, o: {"input_tokens": i, "output_tokens": o, "cache_read_input_tokens": 1000}
+    for mid, u in (("m1", use(10, 5)), ("m1", use(10, 5)), ("m2", use(20, 7))):
+        emit({"type": "assistant", "message": {"id": mid, "usage": u, "content": [{"type": "text", "text": "."}]}})
+    open(hang, "w").write("streamed")
+    import time
+    time.sleep(60)
 if step == "error":
     emit({"type": "result", "subtype": "success", "is_error": True, "num_turns": 1,
           "result": 'API Error: 529 {"type":"overloaded_error","message":"Overloaded"}'})

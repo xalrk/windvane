@@ -1,12 +1,16 @@
+import argparse
+import io
 import sys
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import critic, questions  # noqa: E402
+from windvane import cli, critic, questions  # noqa: E402
+from windvane.util import append_jsonl  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -118,6 +122,38 @@ class QueueFromGit(unittest.TestCase):
         self.assertEqual(q.pick(), ("T-001", "wip", ["t-001-y"]))
         self.assertEqual(q.pick(skip={"T-001"})[0], "T-004a")
         self.assertEqual(q.next_id(), "T-005")
+
+
+class Stats(unittest.TestCase):
+    def test_by_ticket_shows_outcomes_and_cost_per_merged_ticket(self):
+        s = Sandbox()
+        self.addCleanup(s.close)
+        s.ticket("T-001")
+        s.ticket("T-002")
+        s.publish()
+        s.git("switch", "-q", "-c", "t-001-x")
+        s.write("x", "1")
+        s.git("add", "-A")
+        s.git("commit", "-qm", "x")
+        s.git("switch", "-q", "main")
+        s.git("merge", "-q", "--no-ff", "-m", "Merge T-001: x (branch t-001-x)", "t-001-x")
+        s.git("push", "-q", "origin", "main")
+        p = Project(s.root)
+        run = lambda t, i, usd, **kw: append_jsonl(p.state / "ledger.jsonl", dict(
+            role="worker", ticket=t, turns=3, input=i, output=1000, cache_read=0, cache_write=0, usd=usd, **kw))
+        run("T-001", 9000, 1.0)
+        run("T-001", 9000, 1.0)
+        run("T-002", 19000, None, estimated=True)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cli.cmd_stats(argparse.Namespace(days=7, by="ticket"), p)
+        lines = out.getvalue().splitlines()
+        self.assertIn("outcome", lines[0])
+        self.assertRegex(out.getvalue(), r"T-001\s+merged\s+2 ")
+        self.assertRegex(out.getvalue(), r"T-002\s+open\s+1 ")
+        self.assertIn("per merged ticket (1): 2.0 runs, 20k tokens, 2.00 API $", out.getvalue())
+        self.assertIn("not merged: 20k tokens, 50%", out.getvalue())
+        self.assertIn("1 runs ended before their result", out.getvalue())
 
 
 if __name__ == "__main__":
