@@ -12,8 +12,8 @@ repo, sets windvane up, writes the first tickets and starts the run, asking you 
 
 By hand:
 ```sh
-git clone git@github.com:xalrk/windvane.git ~/Documents/windvane
-~/Documents/windvane/bin/windvane install          # ~/.local/bin/windvane, the skill, and the mention hook
+git clone https://github.com/xalrk/windvane.git    # anywhere you like
+windvane/bin/windvane install              # windvane on PATH, the skill, and the mention hook
 
 cd ~/code/myproject
 windvane init --check "pytest -q"                  # writes .windvane/ (config, queue, questions, critic scale)

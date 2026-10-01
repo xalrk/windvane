@@ -5,7 +5,7 @@ description: windvane (also "autopilot"), the user's autopilot that builds a pro
 
 # windvane
 
-The user's autopilot (`~/Documents/windvane`, command `windvane`). It works a repo's tickets
+The user's autopilot (command `windvane`). It works a repo's tickets
 (`.windvane/tickets/`) one fresh session each: worker, then critic, check, reviewer, and a merge done by its driver.
 It runs independent tickets side by side, asks the user design questions on their phone (ntfy), and keeps a token
 ledger. Its README explains it fully; this is the playbook.
@@ -16,7 +16,8 @@ Do everything yourself. The user should only have to answer real product questio
 1. **Pin the idea down.** Restate it in a few lines. Ask only the questions that change what gets built (who it's
    for, the platform or stack when it matters, the one thing it must do well), in one AskUserQuestion with
    recommendations. Decide engineering questions yourself.
-2. **Make the repo.** Use `~/Documents/<short-name>`, `git init -b main`, and a minimal skeleton in the stack you chose
+2. **Make the repo.** Put it in the user's projects folder: `projects_dir` in `~/.config/windvane/machine.toml`
+   (if it isn't set, ask once and save their answer there), as `<projects_dir>/<short-name>`. Then `git init -b main`, and a minimal skeleton in the stack you chose
    (project files, one smoke test, a test command that passes). Add a `CLAUDE.md` with what the project is, its hard
    rules, how to run and test it, and that tests come with every change. Then
    `gh repo create xalrk/<short-name> --private --source . --push`. Repos are private unless the user says otherwise.

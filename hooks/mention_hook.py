@@ -19,8 +19,8 @@ if seen and seen.exists():
     sys.exit(0)
 if re.search(r"\bwind-?vane|\bauto-?pilot\b", prompt, re.I):
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": (
-        "The user mentioned windvane / autopilot: their own Claude Code autopilot (~/Documents/windvane, command "
-        "`windvane`), which builds a project ticket by ticket in fresh headless sessions with a critic, a reviewer, "
+        "The user mentioned windvane / autopilot: their own Claude Code autopilot (command `windvane`)"
+        ", which builds a project ticket by ticket in fresh headless sessions with a critic, a reviewer, "
         "phone questions and parallel slots. Load the `windvane` skill (Skill tool) before acting: it is the "
         "playbook for starting a new project from an idea, putting it on an existing repo, and running, watching or "
         "stopping it.")}}))
