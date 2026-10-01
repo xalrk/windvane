@@ -792,6 +792,7 @@ class Pilot:
                     git(wd, "switch", "-q", "--detach")  # free the branch for whichever slot takes it next
             with self.lock:
                 self.running.pop(tid, None)
+                self.beside.discard(tid)  # a later attempt alone doesn't count its conflicts against parallel
             self.save()
             self.wake.set()
 
