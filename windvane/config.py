@@ -42,7 +42,10 @@ DEFAULTS = {
 def slots(p, parallel=None):
     """The most tickets a run may work at once: `parallel` (a number or "auto") from the command line or config."""
     n = parallel or p.ap["parallel"]
-    n = p.ap["max_parallel"] if str(n).lower() == "auto" else int(n)
+    try:
+        n = int(p.ap["max_parallel"] if str(n).lower() == "auto" else n)
+    except ValueError:
+        raise SystemExit(f'windvane: parallel = {n!r} in config.toml: use a number of tickets or "auto"')
     return max(1, n) if p.cfg["isolate"] else 1
 
 

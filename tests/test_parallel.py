@@ -125,6 +125,8 @@ class Slots(unittest.TestCase):
         self.assertEqual(slots(p, 2), 2)
         p.ap["max_parallel"] = 6
         self.assertEqual(slots(p, "auto"), 6)
+        with self.assertRaisesRegex(SystemExit, 'parallel = .two. in config.toml: use a number of tickets or "auto"'):
+            slots(p, "two")
         p.cfg["isolate"] = False
         self.assertEqual(slots(p, "auto"), 1)  # one checkout: one ticket
 
