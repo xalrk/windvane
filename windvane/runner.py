@@ -61,7 +61,7 @@ def kill_nested(p, session):
         f.unlink(missing_ok=True)
     try:
         d.rmdir()
-    except OSError:  # gone, or a nested session registered just now: the outer run's end sweeps it
+    except OSError:  # gone, or a nested session registered just now (its own deadline and caps still stop it)
         pass
 
 
