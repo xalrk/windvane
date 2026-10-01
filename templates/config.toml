@@ -9,6 +9,7 @@ setup = ""                # run once in each fresh autopilot worktree (e.g. "npm
 isolate = true            # work in the autopilot's own worktrees; false: in this checkout (for huge builds)
 goal = ""                 # what `windvane plan` and `run --replan` aim at when given no goal
 author = ""               # "Name <email>" for the driver's own commits (merges, plans); default: git's
+heavy_check = false       # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
 
 [models]                  # model and effort per role
 worker = "opus"
@@ -27,6 +28,7 @@ floor = 4                 # under this, rethink rather than patch
 revisions = 3
 
 [autopilot]
+parallel = 2              # tickets at a time, each in its own worktrees (only those whose Touches don't overlap)
 cap = 75                  # % of the 5-hour window: pause at it until the window resets
 week_cap = 95             # % of the weekly limit: stop
 ticket_hours = 3          # one worker run at most

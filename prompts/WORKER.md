@@ -42,6 +42,9 @@ Then stop. Don't start a second ticket.
 A tool call stops at 10 minutes. Start anything that may run longer with `windvane bg <name> <command...>` and wait
 with `windvane await <name>`, which blocks up to ~9.5 minutes; call it again while it says `RUNNING`. Never poll
 with `sleep` loops: every poll re-reads your whole context.
+**Machine-heavy** commands (a game engine, a render, a big build) other runs may start too: run them only through
+`windvane heavy -- <command>` (or `windvane bg --heavy <name> <command...>`), which takes turns with every other
+heavy job on this machine. Other tickets may be running beside yours in their own worktrees: stay in yours.
 
 ## Decisions
 - **Engineering** calls the docs leave open (code layout, algorithms, test shape, tooling): make them, and say why in

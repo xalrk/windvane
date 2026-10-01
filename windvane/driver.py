@@ -12,6 +12,7 @@ keep dying (API errors, crashes; each is retried after a growing pause first). A
 session and pauses until the window resets.
 """
 import fcntl
+import threading
 import re
 import shutil
 import subprocess
@@ -54,6 +55,16 @@ def worker_perms(p):
 REVIEW_DENY = ["Edit", "Write", "NotebookEdit", "Agent", "Bash(git push *)", "Bash(git commit *)",
                "Bash(git switch *)", "Bash(git checkout *)", "Bash(git reset *)", "Bash(gh pr merge *)",
                "Bash(gh pr edit *)", "Bash(gh pr comment *)", "Bash(gh pr close *)"]
+
+
+def overlaps(paths, others):
+    """Whether two Touches lists share a file, or one names a directory holding the other's file."""
+    for a in paths:
+        for b in others:
+            a_, b_ = a.rstrip("/"), b.rstrip("/")
+            if a_ == b_ or a_.startswith(b_ + "/") or b_.startswith(a_ + "/"):
+                return True
+    return False
 
 
 def ensure_worktree(p, path, setup=True):
@@ -102,10 +113,34 @@ class Pilot:
         self.sleep = time.sleep  # the retry backoff's; tests make it instant
         self.stop_reason = "unknown"
         self.worker_rules, self.review_rules = rules(p, "WORKER.md"), rules(p, "REVIEW.md")
+        # Parallel slots: each has its own work and ci worktrees. Merges and fetches are serialized.
+        self.n = max(1, getattr(a, "parallel", None) or p.ap["parallel"]) if p.cfg["isolate"] else 1
+        self.tl = threading.local()
+        self.lock, self.merge_lock, self.git_lock = threading.RLock(), threading.Lock(), threading.Lock()
+        self.running = {}  # ticket -> slot
+        self.owner = {i: None for i in range(self.n)}  # slot -> the ticket whose uncommitted work its tree holds
+        self.threads, self.wake = [], threading.Event()
+
+    def slot_dirs(self, i):
+        p = self.p
+        return (p.work_dir, p.ci_dir) if i == 0 else (p.state / f"work-{i}", p.state / f"ci-{i}")
+
+    @property
+    def wd(self):
+        return getattr(self.tl, "wd", self.p.work_dir)
+
+    @property
+    def cd(self):
+        return getattr(self.tl, "cd", self.p.ci_dir)
+
+    def fetch(self):
+        with self.git_lock:
+            git(self.p.main_root(), "fetch", "-q", "--prune", self.p.remote)
 
     def save(self):
-        save_json(self.state_file, {"feedback": self.feedback, "questions": self.questions,
-                                    "costs": self.costs[-10:]})
+        with self.lock:
+                save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
+                                        "costs": self.costs[-10:]})
 
     def log(self, msg):
         log(self.p, msg)
@@ -158,7 +193,7 @@ class Pilot:
     # ---------- one ticket
 
     def work(self, tid, kind, branches, deadline):
-        p, wd = self.p, self.p.work_dir
+        p, wd = self.p, self.wd
         start_five = self.usage.five
         kill_at = min(deadline, now() + timedelta(hours=self.a.ticket_hours))
         wrap = kill_at - timedelta(minutes=20)
@@ -201,7 +236,7 @@ class Pilot:
                 self.skip.add(tid)
             return
         m = last_match(RESULT_RE, text)
-        branch = gout(self.p.work_dir, "rev-parse", "--abbrev-ref", "HEAD")
+        branch = gout(self.wd, "rev-parse", "--abbrev-ref", "HEAD")
         branch = "" if branch == "HEAD" else branch
         if not m or self.p.norm(m.group(2)) != tid:
             return self.unfinished_run(tid, branch)
@@ -219,7 +254,7 @@ class Pilot:
             return self.fail(tid, rest)
         if status == "BLOCKED":
             return self.ask(tid, branch, rest)
-        sha = next(iter(re.findall(r"\b[0-9a-f]{40}\b", rest)), "") or gout(self.p.work_dir, "rev-parse", "HEAD")
+        sha = next(iter(re.findall(r"\b[0-9a-f]{40}\b", rest)), "") or gout(self.wd, "rev-parse", "HEAD")
         self.feedback.pop(tid, None)
         self.after(tid, branch, sha, deadline)
 
@@ -229,7 +264,7 @@ class Pilot:
         if tid in self.unfinished:
             return self.fail(tid, "the run ended without a result line, twice")
         self.unfinished.add(tid)
-        head = gout(self.p.work_dir, "rev-parse", "--short=12", "HEAD")
+        head = gout(self.wd, "rev-parse", "--short=12", "HEAD")
         old = self.feedback.get(tid, "")
         self.feedback[tid] = (f"Your last run ended without the RESULT line for {tid}. The worktree is on "
                               f"`{branch or 'a detached HEAD'}` at {head}: finish the rules' steps still left from "
@@ -241,7 +276,7 @@ class Pilot:
     def after(self, tid, branch, sha, deadline):
         """A READY head: critic gate, check, review, merge. Each failed stage writes the next run's feedback."""
         p = self.p
-        git(p.main_root(), "fetch", "-q", "--prune", p.remote)
+        self.fetch()
         if gout(p.main_root(), "rev-parse", "--verify", "-q", f"{sha}^{{commit}}") == "" or \
                 (branch and gout(p.main_root(), "rev-parse", f"{p.remote}/{branch}") != sha):
             self.feedback[tid] = (f"Your RESULT line named {sha[:12]}, but `{p.remote}/{branch or '?'}` isn't at it. "
@@ -287,7 +322,7 @@ class Pilot:
                 self.bounce(tid)
                 return False
             self.log(f"{tid}: critic run (the worker didn't finish it)")
-            entry, text = critic.judge(p, tid, p.work_dir, sha, self.usage,
+            entry, text = critic.judge(p, tid, self.wd, sha, self.usage,
                                        self.stopper(min(deadline, now() + timedelta(minutes=30))))
             if entry is None:
                 self.log(f"{tid}: the critic gave no verdict; on to the check")  # a help, never a gate on its own failure
@@ -307,13 +342,13 @@ class Pilot:
         return True
 
     def check_at(self, rev):
-        cd = self.p.ci_dir
+        cd = self.cd
         if not clean_detach(self.p, cd, rev):
             return False, f"couldn't check out {rev[:12]}", None
         return check(self.p, cd)
 
     def review(self, tid, branch, sha, deadline):
-        p, cd = self.p, self.p.ci_dir
+        p, cd = self.p, self.cd
         pr = pr_for(p, branch)
         body = sh(p.main_root(), "gh", "pr", "view", pr, "--json", "body", "-q", ".body") if pr else \
             gout(cd, "log", "--format=%B", f"{p.upstream}..{sha}")
@@ -353,12 +388,16 @@ class Pilot:
                f"**windvane review: {m.group(1)}** at {sha[:7]}\n\n{text.strip()[-6000:]}")
         return m.group(1), text
 
-    def integrate(self, tid, branch, sha, tries=3):
+    def integrate(self, tid, branch, sha):
+        with self.merge_lock:  # one merge at a time: each checks the tree main will really have
+            return self._integrate(tid, branch, sha)
+
+    def _integrate(self, tid, branch, sha, tries=3):
         """Merge the approved head into main: test the merge, check the merged tree, then merge (PR or push)."""
-        p, cd = self.p, self.p.ci_dir
+        p, cd = self.p, self.cd
         title = self.queue.titles.get(tid, tid)
         for _ in range(tries):
-            git(p.main_root(), "fetch", "-q", "--prune", p.remote)
+            self.fetch()
             clean_detach(p, cd, p.upstream)
             author = p.cfg["author"]
             ident = (["-c", f"user.name={author.split('<')[0].strip()}", "-c",
@@ -401,7 +440,8 @@ class Pilot:
         """A merge counts only once main holds the head: a push or `gh pr merge` can report success without it
         (a no-op push, a hook that rejects late), and the branches about to be deleted may be the only copies."""
         p = self.p
-        fetched = any(git(p.main_root(), "fetch", "-q", p.remote).returncode == 0 for _ in range(2))
+        with self.git_lock:  # parallel slots fetch too: one at a time, or one fails on a locked ref
+            fetched = any(git(p.main_root(), "fetch", "-q", p.remote).returncode == 0 for _ in range(2))
         if git(p.main_root(), "merge-base", "--is-ancestor", sha, p.upstream).returncode == 0:
             return True
         why = f"{p.upstream} doesn't contain {sha[:12]}" if fetched else f"couldn't fetch {p.remote} to confirm it"
@@ -415,8 +455,8 @@ class Pilot:
             if git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{sha}", p.remote, "--delete",
                    branch).returncode and gout(p.main_root(), "ls-remote", "--heads", p.remote, branch):
                 self.log(f"{tid}: kept {p.remote}/{branch}: it moved past the merged head {sha[:7]}")
-        git(p.main_root(), "fetch", "-q", "--prune", p.remote)
-        wd = p.work_dir
+        self.fetch()
+        wd = self.wd
         if not gout(wd, "status", "--porcelain"):
             git(wd, "switch", "-q", "--detach", p.upstream)
             if branch and git(wd, "merge-base", "--is-ancestor", branch, p.upstream).returncode == 0:
@@ -447,7 +487,7 @@ class Pilot:
 
     def ask(self, tid, branch, gist):
         p = self.p
-        git(p.main_root(), "fetch", "-q", p.remote)
+        self.fetch()
         text = gout(p.main_root(), "show", f"{p.remote}/{branch}:{p.questions_rel}") if branch else ""
         sec = section(text, tid)
         opts, rec, must_wait, q = parts(sec)
@@ -549,40 +589,109 @@ class Pilot:
         self.usage.probe(self.p)
         return True
 
+    def stop_check(self, deadline):
+        """Why no new ticket may start (the run winds down), or None."""
+        p = self.p
+        if (p.state / "STOP").exists():
+            (p.state / "STOP").unlink()
+            return "asked to stop"
+        if self.halt:
+            return self.halt
+        if now() >= deadline - timedelta(minutes=self.a.min_slot):
+            return "deadline"
+        if self.fail_streak >= 2:
+            return "two failed tickets in a row"
+        if self.usage.five is None or (time.time() - self.usage.at > 300 and not self.idle):
+            self.usage.probe(p)
+        if self.usage.five is None:
+            return "couldn't read usage (is `claude` logged in?)"
+        if self.usage.week is not None and self.usage.week >= self.a.week_cap:
+            return f"weekly usage at {self.usage.week:g}% (cap {self.a.week_cap:g}%)"
+        return None
+
+    def pause(self, seconds=30):
+        """Wait until a slot finishes or `seconds` pass."""
+        self.wake.wait(seconds)
+        self.wake.clear()
+
+    def pick(self, free):
+        """(ticket, kind, branches, slot) to start in one of the `free` slots, or (None, why, None, None). Tickets
+        run side by side only when their `Touches:` lists don't overlap; one without the line runs alone."""
+        q = self.queue
+        busy = set(self.running)
+        avoid = set(self.skip) | busy
+        if busy and any(not q.touches.get(t) for t in busy):
+            avoid |= set(q.order)  # something running may touch anything: nothing starts beside it
+        touching = set().union(*(q.touches.get(t, set()) for t in busy)) if busy else set()
+        for t in q.order:
+            if busy and (not q.touches.get(t) or overlaps(q.touches[t], touching)):
+                avoid.add(t)
+        while True:
+            tid, *rest = q.pick(avoid, set(self.questions))
+            if tid is None:
+                return None, rest[0], None, None
+            own = next((i for i, o in self.owner.items() if o == tid), None)
+            slot = own if own is not None else next((i for i in free if self.owner[i] is None), None)
+            if slot is not None and slot in free:
+                return tid, rest[0], rest[1], slot
+            avoid.add(tid)
+
+    def start(self, slot, tid, kind, branches, deadline):
+        self.running[tid] = slot
+        ensure_worktree(self.p, self.slot_dirs(slot)[0])
+        ensure_worktree(self.p, self.slot_dirs(slot)[1])
+        t = threading.Thread(target=self.slot_run, args=(slot, tid, kind, branches, deadline), daemon=True)
+        self.threads.append(t)
+        t.start()
+
+    def slot_run(self, slot, tid, kind, branches, deadline):
+        self.tl.wd, self.tl.cd = self.slot_dirs(slot)
+        try:
+            self.work(tid, kind, branches, deadline)
+        except Exception as e:  # one ticket's driver error must not take the other slots down
+            self.log(f"{tid}: driver error: {e!r}")
+            self.fail(tid, f"driver error: {e}")
+        finally:
+            wd = self.wd
+            if gout(wd, "status", "--porcelain"):
+                self.owner[slot] = tid  # its leftovers stay here: only this ticket resumes in this slot
+            else:
+                self.owner[slot] = None
+                if gout(wd, "rev-parse", "--abbrev-ref", "HEAD") not in ("HEAD", ""):
+                    git(wd, "switch", "-q", "--detach")  # free the branch for whichever slot takes it next
+            with self.lock:
+                self.running.pop(tid, None)
+            self.save()
+            self.wake.set()
+
     def loop(self, deadline):
         p = self.p
         while True:
             self.quiet_check()
-            if (p.state / "STOP").exists():
-                (p.state / "STOP").unlink()
-                self.stop_reason = "asked to stop"
+            why = self.stop_check(deadline)
+            if why:
+                self.stop_reason = why
                 return
-            if self.halt:
-                self.stop_reason = self.halt
-                return
-            if now() >= deadline - timedelta(minutes=self.a.min_slot):
-                self.stop_reason = "deadline"
-                return
-            if self.fail_streak >= 2:
-                self.stop_reason = "two failed tickets in a row"
-                return
-            if self.usage.five is None or (time.time() - self.usage.at > 300 and not self.idle):
-                self.usage.probe(p)
-            if self.usage.five is None:
-                self.stop_reason = "couldn't read usage (is `claude` logged in?)"
-                return
-            if self.usage.week is not None and self.usage.week >= self.a.week_cap:
-                self.stop_reason = f"weekly usage at {self.usage.week:g}% (cap {self.a.week_cap:g}%)"
-                return
-            if self.usage.rejected or self.usage.five + self.est() > self.a.cap:
+            free = [i for i in range(self.n) if i not in self.running.values()]
+            if not free:
+                self.pause()
+                continue
+            need = self.est() * (len(self.running) + 1)
+            if self.usage.rejected or self.usage.five + need > self.a.cap:
+                if self.running:
+                    self.pause(60)  # no more slots until the window allows; the running ones go on
+                    continue
                 if not self.wait_for_reset(deadline):
                     return
                 continue
-            git(p.main_root(), "fetch", "-q", "--prune", p.remote)
+            self.fetch()
             self.poll_questions()
             self.queue = Queue(p)
-            tid, *rest = self.queue.pick(self.skip, set(self.questions))
+            tid, kind, branches, slot = self.pick(free)
             if tid is None:
+                if self.running:
+                    self.pause()
+                    continue
                 if self.questions:
                     if not self.idle:
                         self.log(f"waiting for answers on {', '.join(self.questions)}")
@@ -595,24 +704,27 @@ class Pilot:
                              self.stopper(min(deadline, now() + timedelta(minutes=40))), merge=True)
                     if n:
                         continue
-                self.stop_reason = rest[0]
+                self.stop_reason = kind
                 return
             self.idle = False
-            self.work(tid, rest[0], rest[1], deadline)
+            if self.n > 1:
+                self.log(f"{tid}: slot {slot}")
+            self.start(slot, tid, kind, branches, deadline)
+            if self.n == 1:
+                self.threads[-1].join()
 
     def run(self, deadline):
         p = self.p
         p.state.mkdir(parents=True, exist_ok=True)
-        self.lock = open(p.state / "lock", "w")
+        self.lockfile = open(p.state / "lock", "w")
         try:
-            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(self.lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            self.lock.close()
+            self.lockfile.close()
             raise SystemExit("windvane: the autopilot is already running for this project")
         (p.state / "STOP").unlink(missing_ok=True)
-        ensure_worktree(p, p.work_dir)
-        ensure_worktree(p, p.ci_dir)
-        self.log(f"autopilot started, until {hhmm(deadline)} (5h cap {self.a.cap:g}%, week cap {self.a.week_cap:g}%)")
+        self.log(f"autopilot started, until {hhmm(deadline)} (5h cap {self.a.cap:g}%, week cap {self.a.week_cap:g}%"
+                 + (f", {self.n} tickets at a time" if self.n > 1 else "") + ")")
         self.usage.probe(p)
         push(f"{p.name}: autopilot started", f"Until {hhmm(deadline)}. {self.usage.text()}.", 2, "rocket",
              ("Status=status", "Stop=stop"))
@@ -622,6 +734,8 @@ class Pilot:
             self.stop_reason = f"driver error: {e}"
             raise
         finally:
+            for t in self.threads:  # the running tickets finish (their runs stop at the deadline at the latest)
+                t.join()
             names = lambda ids: "; ".join(map(self.name, ids)) or "none"
             crit = ", ".join(f"{t} {s:g}" for t, s in self.scores.items())
             summary = (f"Why: {self.stop_reason}.\nMerged: {names(self.merged)}.\n"
@@ -632,7 +746,7 @@ class Pilot:
             push(f"{p.name}: autopilot stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                  "checkered_flag", ("Usage=usage",))
             self.save()
-            self.lock.close()
+            self.lockfile.close()
 
 
 # ---------- planning

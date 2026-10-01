@@ -18,7 +18,7 @@ from helpers import Sandbox  # noqa: E402
 
 
 def args(**kw):
-    a = dict(cap=75, week_cap=95, ticket_hours=1, min_slot=0, answer_wait=10, replan=0, goal="")
+    a = dict(cap=75, week_cap=95, ticket_hours=1, min_slot=0, answer_wait=10, replan=0, goal="", parallel=1)
     a.update(kw)
     return Namespace(**a)
 
@@ -36,7 +36,8 @@ class Pipeline(unittest.TestCase):
 
     def calls(self):
         f = self.s.tmp / "calls.jsonl"
-        return [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+        calls = [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+        return [c for c in calls if c["system"] != "span"]
 
     def test_tickets_merge_in_dependency_order_and_checkout_is_untouched(self):
         pilot = driver.Pilot(self.p, args())
@@ -298,3 +299,80 @@ class CheckCache(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Parallel(unittest.TestCase):
+    """Tickets whose Touches don't overlap run side by side, each in its own worktrees; others take turns."""
+
+    def setUp(self):
+        import os
+        self.s = Sandbox()
+        os.environ["FAKE_WORK_S"] = "1.5"
+
+    def tearDown(self):
+        self.s.close()
+
+    def spans(self):
+        f = self.s.tmp / "calls.jsonl"
+        starts = [json.loads(l)["prompt"].split() for l in f.read_text().splitlines()
+                  if json.loads(l)["system"] == "span"]
+        return {t: float(at) for t, _, at in starts}
+
+    def run_pilot(self):
+        p = Project(self.s.root)
+        pilot = driver.Pilot(p, args(parallel=2))
+        pilot.run(now() + timedelta(hours=1))
+        return pilot
+
+    def test_disjoint_tickets_run_at_once_and_both_merge(self):
+        self.s.ticket("T-001", touches="a.py")
+        self.s.ticket("T-002", touches="docs/")
+        self.s.publish()
+        pilot = self.run_pilot()
+        self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
+        at = self.spans()
+        self.assertLess(abs(at["T-001"] - at["T-002"]), 1.0)  # started together, not one after the other
+        self.assertTrue((self.s.tmp / "state/windvane/sandbox/work-1").exists())
+
+    def test_overlapping_or_unknown_touches_take_turns(self):
+        self.s.ticket("T-001", touches="windvane/")
+        self.s.ticket("T-002", touches="windvane/driver.py")
+        self.s.ticket("T-003")  # no Touches: runs alone
+        self.s.publish()
+        pilot = self.run_pilot()
+        self.assertEqual(sorted(pilot.merged), ["T-001", "T-002", "T-003"])
+        at = sorted(self.spans().values())
+        self.assertTrue(all(b - a >= 1.4 for a, b in zip(at, at[1:])))
+
+    def test_overlaps(self):
+        self.assertTrue(driver.overlaps({"windvane/"}, {"windvane/driver.py"}))
+        self.assertTrue(driver.overlaps({"a.py"}, {"a.py"}))
+        self.assertFalse(driver.overlaps({"a.py"}, {"a.pyc", "docs"}))
+
+
+class Heavy(unittest.TestCase):
+    def test_runs_the_command_and_nests_without_deadlock(self):
+        import os
+        import subprocess
+        import tempfile
+        from windvane import heavy
+        env_tmp = tempfile.mkdtemp()
+        old = dict(os.environ)
+        os.environ.update({"XDG_RUNTIME_DIR": env_tmp, "XDG_CONFIG_HOME": env_tmp})
+        try:
+            (Path(env_tmp) / "windvane").mkdir()
+            (Path(env_tmp) / "windvane/machine.toml").write_text('busy = []\nmin_free_gb = 0\n')
+            self.assertEqual(heavy.run(["sh", "-c", "exit 3"], wait_s=5), 3)
+            inner = f"{sys.executable} -c 'import sys; sys.path.insert(0, \"{Path(__file__).resolve().parents[1]}\"); " \
+                    "from windvane.heavy import run; sys.exit(run([\"true\"], wait_s=2))'"
+            self.assertEqual(heavy.run(inner, wait_s=5), 0)  # a heavy tool calling another heavy tool
+            with open(heavy.lock_path(), "w") as held:  # someone else holds the machine: give up after the wait
+                import fcntl
+                fcntl.flock(held, fcntl.LOCK_EX)
+                out = subprocess.run([sys.executable, "-c", f"import sys; sys.path.insert(0, '{Path(__file__).resolve().parents[1]}'); "
+                                      "from windvane.heavy import run; sys.exit(run(['true'], wait_s=1))"],
+                                     capture_output=True, text=True)
+                self.assertEqual(out.returncode, 75)
+        finally:
+            os.environ.clear()
+            os.environ.update(old)

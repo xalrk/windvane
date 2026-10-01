@@ -6,9 +6,14 @@ the project's check, a fresh read-only reviewer, and a merge. Questions reach yo
 everything cost.
 
 ## Quick start
+The easy way: tell any Claude Code session "here's my idea, let's build it with windvane". After `install`, a
+mention of windvane or autopilot brings in the playbook (`skills/windvane/SKILL.md`): the session makes the private
+repo, sets windvane up, writes the first tickets and starts the run, asking you only real product questions.
+
+By hand:
 ```sh
 git clone git@github.com:xalrk/windvane.git ~/Documents/windvane
-~/Documents/windvane/bin/windvane install          # links ~/.local/bin/windvane
+~/Documents/windvane/bin/windvane install          # ~/.local/bin/windvane, the skill, and the mention hook
 
 cd ~/code/myproject
 windvane init --check "pytest -q"                  # writes .windvane/ (config, queue, questions, critic scale)
@@ -30,7 +35,8 @@ windvane run --for 6h --detach                      # in tmux; `windvane watch` 
 | `answer T-007 B` / `answer T-007 "free text"` | answer a ticket's question at the desk |
 | `stats [--by ticket]` | tokens, turns and minutes per role or ticket |
 | `quiet`, `mode` | quiet times (`~/.local/state/windvane/<name>/quiet.txt`) and what they mean right now |
-| `check`, `critic T-007`, `bg <name> <cmd>`, `await <name>` | used by the sessions themselves |
+| `heavy -- <cmd>` | run a machine-heavy command (engine, render, big build) one at a time on this machine |
+| `check`, `critic T-007`, `bg [--heavy] <name> <cmd>`, `await <name>` | used by the sessions themselves |
 
 ## In the project (in git)
 - `.windvane/config.toml`: the check command, forge (`github` PRs or plain `git`), models and effort per role, the
@@ -69,6 +75,16 @@ What a ticket goes through:
    merges the PR (or pushes, for forge `git`). A conflict or a red merged tree goes back to the worker.
 
 Anything sent back reaches the ticket's next worker run as written feedback; tickets that keep bouncing are set aside.
+
+**Parallel tickets** (`parallel = 2`, `--parallel N`): tickets run side by side, each in its own pair of
+worktrees, when their `Touches:` lines don't overlap. A ticket without the line runs alone. Every ticket still gets
+exactly one fresh session, so this cuts wall-clock time without costing tokens. Merges stay one at a time, each
+checked on the tree main will really have.
+
+**Heavy work** (`windvane heavy -- <cmd>`, and `heavy_check = true` for an engine or render check): one machine-heavy
+job at a time across every slot and project. It also waits while anything named in `~/.config/windvane/machine.toml`'s
+`busy` list (Unreal, Blender by default) is running or free RAM is under `min_free_gb`. It never takes other tools'
+locks, so a heavy command that is itself a locking tool can't deadlock.
 A session that dies outside its ticket (API error, network drop, crash) is rerun after a growing pause
 (`retries`, `retry_minutes`), without failing the ticket; sessions that keep dying stop the run with the error.
 A worker that ends without its `RESULT:` line gets one more run to finish.

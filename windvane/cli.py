@@ -98,6 +98,33 @@ def cmd_install(a):
         target.unlink()
     target.symlink_to(HOME / "bin/windvane")
     print(f"{target} -> {HOME / 'bin/windvane'}")
+    claude_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    skill = claude_dir / "skills/windvane"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    if skill.is_symlink() or not skill.exists():
+        skill.unlink(missing_ok=True)
+        skill.symlink_to(HOME / "skills/windvane")
+        print(f"{skill} -> {HOME / 'skills/windvane'} (the playbook new sessions load)")
+    if add_keyword_hook(claude_dir / "settings.json"):
+        print("~/.claude/settings.json: a hook that brings windvane in whenever a prompt mentions it or autopilot")
+
+
+def add_keyword_hook(settings):
+    """Add the UserPromptSubmit keyword hook to Claude Code's user settings, once, keeping everything else."""
+    cmd = str(HOME / "hooks/mention_hook.py")
+    try:
+        data = json.loads(settings.read_text()) if settings.exists() else {}
+    except ValueError:
+        print(f"{settings} isn't valid JSON: add the hook yourself (UserPromptSubmit -> {cmd})")
+        return False
+    groups = data.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
+    if any(h.get("command") == cmd for g in groups for h in g.get("hooks", [])):
+        return False
+    groups.append({"hooks": [{"type": "command", "command": cmd, "timeout": 5}]})
+    tmp = settings.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.replace(settings)
+    return True
 
 
 def need(p):
@@ -276,6 +303,7 @@ def main(argv=None):
     g.add_argument("--until", help="HH:MM or 'YYYY-MM-DD HH:MM'")
     g.add_argument("--for", dest="for_", help="e.g. 90m or 6h")
     s.add_argument("--detach", action="store_true", help="run in a tmux session")
+    s.add_argument("--parallel", type=int, help="tickets at a time (default from config, 2)")
     s.add_argument("--cap", type=float, help="max %% of the 5-hour window (default from config, 75)")
     s.add_argument("--week-cap", type=float, help="stop at this %% of the weekly limit (default 95)")
     s.add_argument("--ticket-hours", type=float, help="max hours for one worker run (default 3)")
@@ -298,7 +326,11 @@ def main(argv=None):
     s = sub.add_parser("critic", help="have the critic judge a ticket's evidence pack")
     s.add_argument("ticket")
     s = sub.add_parser("bg", help="start a long command in the background")
+    s.add_argument("--heavy", action="store_true", help="run it under the machine-wide heavy lock")
     s.add_argument("name")
+    s.add_argument("command", nargs=argparse.REMAINDER)
+    s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
+    s.add_argument("--wait", type=float, default=60, help="minutes to wait for the machine before giving up")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("await", help="wait (up to ~9.5 min) for a bg command")
     s.add_argument("name")
@@ -325,6 +357,10 @@ def main(argv=None):
         return cmd_init(a)
     if a.cmd == "install":
         return cmd_install(a)
+    if a.cmd == "heavy":
+        from .heavy import run as heavy_run
+        cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
+        sys.exit(heavy_run(cmd, a.wait * 60) if cmd else "heavy: give a command")
     p = find()
     if a.cmd == "run":
         for k in ("cap", "week_cap", "ticket_hours", "min_slot", "answer_wait"):
@@ -332,7 +368,7 @@ def main(argv=None):
                 setattr(a, k, p.ap[k])
     if a.cmd == "bg":
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
-        return jobs.bg(p, a.name, cmd, os.getcwd()) if cmd else sys.exit("bg: give a command")
+        return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy) if cmd else sys.exit("bg: give a command")
     if a.cmd == "await":
         return jobs.await_(p, a.name, a.lines)
     if a.cmd == "watch":

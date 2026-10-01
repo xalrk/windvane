@@ -41,6 +41,11 @@ text = "ok"
 if system.startswith("# windvane worker run"):
     tid = re.search(r"Ticket (\S+)\.", prompt).group(1)
     behaviour = os.environ.get("FAKE_WORKER", "ready")
+    import time
+    if log:
+        with open(log, "a") as f:
+            f.write(json.dumps({"system": "span", "prompt": f"{tid} start {time.time()}"}) + "\n")
+    time.sleep(float(os.environ.get("FAKE_WORK_S", "0")))
     branch = tid.lower() + "-work"
     if "In progress on branch" in prompt:
         sh("git", "switch", branch)
@@ -132,8 +137,9 @@ class Sandbox:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(text)
 
-    def ticket(self, tid, deps=""):
-        self.write(f".windvane/tickets/{tid}.md", f"# {tid}: do {tid}\nDepends on: {deps or 'nothing'}.\n")
+    def ticket(self, tid, deps="", touches=None):
+        self.write(f".windvane/tickets/{tid}.md", f"# {tid}: do {tid}\nDepends on: {deps or 'nothing'}.\n"
+                   + (f"Touches: {touches}.\n" if touches else ""))
 
     def publish(self, msg="tickets"):
         self.git("add", "-A")
