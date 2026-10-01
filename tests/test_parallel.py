@@ -42,7 +42,7 @@ class Slots(unittest.TestCase):
     def run_pilot(self, **kw):
         self.p = Project(self.s.root)
         pilot = driver.Pilot(self.p, args(**kw))
-        pilot.run(now() + timedelta(hours=1))
+        pilot.run(now() + timedelta(minutes=15))  # 10 min a ticket until measured: 2 or more need slots
         return pilot
 
     def starts(self):

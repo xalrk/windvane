@@ -71,6 +71,10 @@ if system.startswith("# windvane worker run"):
         sh("git", "switch", "-c", branch, "origin/main")
     with open(f"{tid}.txt", "a") as f:
         f.write("built\n")
+    if os.environ.get("FAKE_CONFLICT"):  # every ticket rewrites one file: a merge after another's conflicts
+        if "conflicts with" in prompt:
+            sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
+        open("shared.txt", "w").write(tid + "\n")
     if behaviour == "question" and "answered" not in prompt and "didn't answer" not in prompt:
         q = open(".windvane/QUESTIONS.md").read().replace("## Open\n", f"## Open\n### {tid}: Red or blue?\nContext.\n- **A**: red\n- **B**: blue\nRecommendation: A, because.\n", 1)
         open(".windvane/QUESTIONS.md", "w").write(q)

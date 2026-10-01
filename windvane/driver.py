@@ -69,6 +69,13 @@ def shared(paths, others):
     return sorted(out)
 
 
+def names(text, path):
+    """Whether a ticket's text names `path` as a path of its own (`a.py` doesn't match `data.py` or `a.py.bak`); a
+    directory (`docs/`) matches anything under it too."""
+    end = "" if path.endswith("/") else r"(?![\w/-]|\.\w)"
+    return re.search(rf"(?<![\w/.-]){re.escape(path)}{end}", text) is not None
+
+
 def overlaps(paths, others):
     return bool(shared(paths, others))
 
@@ -151,6 +158,10 @@ class Pilot:
         self.owner = {i: None for i in range(self.n)}  # slot -> the ticket whose uncommitted work its tree holds
         self.threads, self.wake = [], threading.Event()
         self.waits, self.said = [], set()  # why ready tickets can't start beside the running ones; what the log has
+        # Side by side only while it pays: `limit` drops a slot for every 2 conflict bounces between tickets that ran
+        # beside another (`beside`); `peak` is the most that ran at once; `minutes` is recent tickets' wall time.
+        self.limit, self.peak, self.conflicts, self.beside, self.began = self.n, 1, 0, set(), {}
+        self.minutes = s.get("minutes", [])
 
     def slot_dirs(self, i):
         p = self.p
@@ -171,7 +182,8 @@ class Pilot:
     def save(self):
         with self.lock:
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
-                                        "costs": self.costs[-10:], "running": dict(self.running)})
+                                        "costs": self.costs[-10:], "minutes": self.minutes[-10:],
+                                        "running": dict(self.running)})
 
     def log(self, msg):
         log(self.p, msg)
@@ -446,6 +458,7 @@ class Pilot:
                                       f"{p.upstream}` into your branch, resolve the conflicts keeping both sides' "
                                       "intent, rerun the check, push, and finish READY.")
                 self.log(f"{tid}: conflicts with {p.main}; back to the worker")
+                self.conflicted(tid)
                 return self.bounce(tid)
             merge = gout(cd, "rev-parse", "HEAD")
             ok, summary, logf = check(p, cd)
@@ -498,6 +511,8 @@ class Pilot:
             if branch and git(wd, "merge-base", "--is-ancestor", branch, p.upstream).returncode == 0:
                 git(wd, "branch", "-q", "-D", branch)  # -d's own test would use the deleted remote branch
         self.merged.append(tid)
+        if tid in self.began:
+            self.minutes.append(round((time.time() - self.began[tid]) / 60, 1))
         self.fail_streak = 0
         self.feedback.pop(tid, None)
         self.save()
@@ -651,10 +666,38 @@ class Pilot:
         self.wake.wait(seconds)
         self.wake.clear()
 
+    def conflicted(self, tid):
+        """A merge conflict: when the ticket ran beside another, parallel cost a worker run. Every second one drops a
+        slot for the rest of the run."""
+        if tid not in self.beside:
+            return
+        self.conflicts += 1
+        if self.conflicts % 2 == 0 and self.limit > 1:
+            self.limit = max(1, min(self.limit, self.peak) - 1)
+            self.log(f"{self.conflicts} conflict bounces between side-by-side tickets: at most {self.limit} at a "
+                     "time for the rest of the run")
+
+    def ticket_minutes(self):
+        """Recent merged tickets' wall-clock minutes, start to merge (10 before any is measured)."""
+        recent = self.minutes[-5:]
+        return sum(recent) / len(recent) if recent else 10.0
+
+    def serial_fits(self, deadline):
+        """Why another slot isn't worth opening, or "". Side by side risks conflicts and reading code that's about to
+        change, so a slot opens only when the tickets left wouldn't all finish one at a time before the deadline."""
+        q, blocked = self.queue, set(self.questions)
+        left = sum(t not in self.skip and q.status(t, blocked) in ("wip", "todo", "waiting") for t in q.order)
+        m = self.ticket_minutes()
+        if left * m > (deadline - now()).total_seconds() / 60 - self.a.min_slot:
+            return ""
+        return f"{left} ticket{'s' * (left != 1)} x {m:.0f} min fit before {hhmm(deadline)} one at a time"
+
     def clash(self, tid, busy):
         """Why `tid` can't start beside the `busy` tickets, or "". Tickets run side by side only when their
-        `Touches:` lists don't overlap; one without the line may touch anything, so it runs alone."""
-        touches = self.queue.touches
+        `Touches:` lists don't overlap and they aren't related: a planner's `Related:` line, or a ticket naming a
+        running one or a file it changes (it builds on unmerged work). One without Touches may touch anything."""
+        q = self.queue
+        touches = q.touches
         alone = next((b for b in busy if not touches.get(b)), None)
         if alone:
             return f"{alone} runs alone (no Touches line)"
@@ -664,6 +707,15 @@ class Pilot:
             both = shared(touches[tid], touches[b])
             if both:
                 return f"overlaps {b} on {', '.join(both)}"
+        text = q.text.get(tid, "")
+        for b in busy:
+            if b in q.related.get(tid, []) or tid in q.related.get(b, []):
+                return f"related to {b}"
+            if re.search(rf"\b{re.escape(b)}\b", text):
+                return f"names {b}, which is running"
+            path = next((x for x in sorted(touches[b]) if names(text, x)), None)
+            if path:
+                return f"names {path}, which {b} changes"
         return ""
 
     def pick(self, free):
@@ -713,7 +765,11 @@ class Pilot:
         if not self.prepare(slot):
             return
         with self.lock:
+            if self.running:
+                self.beside |= {tid, *self.running}
             self.running[tid] = slot
+            self.peak = max(self.peak, len(self.running))
+            self.began.setdefault(tid, time.time())
         self.save()  # `windvane status` shows the running tickets
         t = threading.Thread(target=self.slot_run, args=(slot, tid, kind, branches, deadline), daemon=True)
         self.threads.append(t)
@@ -748,7 +804,7 @@ class Pilot:
                 self.stop_reason = why
                 return
             free = [i for i in range(self.n) if i not in self.running.values()]
-            if not free:
+            if not free or len(self.running) >= self.limit:
                 self.pause()
                 continue
             k = len(self.running) + 1
@@ -766,6 +822,11 @@ class Pilot:
                     f"usage estimate ({self.usage.five:g}% + {k} x {self.est():.0f}% > cap {self.a.cap:g}%)")
                 self.idle_note([f"no {nth(k)} slot: {why}"])
                 self.pause(60)
+                continue
+            no_need = tid is not None and self.running and self.serial_fits(deadline)
+            if no_need:
+                self.idle_note([f"no {nth(k)} slot: {no_need}"])
+                self.pause()
                 continue
             if tid is None:
                 if self.running:
@@ -831,8 +892,10 @@ class Pilot:
                 self.send_unsent()  # a question from a ticket that finished after the loop's last pass
             names = lambda ids: "; ".join(map(self.name, ids)) or "none"
             crit = ", ".join(f"{t} {s:g}" for t, s in self.scores.items())
+            side = (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
+                    f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else "")
             summary = (f"Why: {self.stop_reason}.\nMerged: {names(self.merged)}.\n"
-                       + (f"Critic (/10): {crit}.\n" if crit else "")
+                       + (f"Critic (/10): {crit}.\n" if crit else "") + side
                        + f"Waiting on you: {names(self.questions)}.\nFailed: {names(self.failed)}.\n"
                        + (f"{self.usage.text()}." if self.usage.five is not None else ""))
             self.log(summary.replace("\n", " "))

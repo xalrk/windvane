@@ -81,10 +81,15 @@ Anything sent back reaches the ticket's next worker run as written feedback; tic
 or `--parallel 2` caps it): another ticket starts whenever one is ready whose `Touches:` line doesn't overlap the
 running ones' and the usage window has room for one more (the 5-hour usage now plus the recent cost per ticket times
 the tickets running, under `cap`). Each slot gets its own pair of worktrees when first used. A ticket without the
-line runs alone. The log says why a slot sits idle (`T-010 waits: overlaps T-008 on windvane/driver.py`, `no 3rd
-slot: usage estimate`), and `windvane status` lists the running tickets and their slots. Every ticket still gets
-exactly one fresh session, so this cuts wall-clock time without costing tokens. Merges stay one at a time, each
-checked on the tree main will really have.
+line runs alone. Related work waits too, since a worker beside it would read code about to change and bounce on a
+conflict: a ticket naming a running ticket's id or a file in its `Touches:`, or tied to it by a planner's `Related:`
+line. A held ticket keeps its place; the next one down that passes starts instead. A slot opens only when it pays:
+when the tickets left, at recent tickets' minutes each, wouldn't finish one at a time before the deadline. Every 2
+merge conflicts between side-by-side tickets drop a slot for the rest of the run. The log says why a slot sits idle
+(`T-010 waits: overlaps T-008 on windvane/driver.py`, `T-013 waits: names windvane/critic.py, which T-010 changes`,
+`no 2nd slot: 3 tickets x 9 min fit before 18:45 one at a time`), the run's summary counts conflict bounces, and
+`windvane status` lists the running tickets and their slots. Merges stay one at a time, each checked on the tree
+main will really have.
 
 **Heavy work** (`windvane heavy -- <cmd>`, and `heavy_check = true` for an engine or render check): one machine-heavy
 job at a time across every slot and project. It also waits while anything named in `~/.config/windvane/machine.toml`'s
