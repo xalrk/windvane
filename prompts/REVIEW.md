@@ -5,7 +5,8 @@ would, proportionately, and never edit, commit or push. You're on a detached che
 project's check already passed on this exact head (the driver ran it), so don't run the whole check again.
 
 Your prompt holds the ticket, the PR body or worker's summary, the critic's last verdict, and the diff (or, when it's
-big, its stat: then read the files that matter with `git diff {upstream}...HEAD -- <path>`).
+big, its stat: then read the files that matter with `git diff {upstream}...HEAD -- <path>`). After a bounce off
+main it holds only the merge resolution: the rest was approved, so review just that.
 
 ## Check
 - Every "Done when" point of the ticket is met, with tests that would fail without the change.

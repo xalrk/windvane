@@ -232,6 +232,11 @@ def cmd_critic(a, p):
     if not p.critic["enabled"]:
         print("CRITIC STEP: skip. The critic is off for this project.")
         return
+    stood = critic_mod.stands(p, tid, os.getcwd())
+    if stood:
+        print(f"CRITIC STEP: pass. The verdict on {stood[:12]} stands: since then you only merged {p.upstream} and "
+              "resolved it. Go on to the check.")
+        return
     usage = Usage(p)
     entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage))
     print(text)
