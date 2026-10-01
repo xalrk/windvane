@@ -113,6 +113,7 @@ class Queue:
                         + (f"  [{' '.join(self.wip[t])}]" if t in self.wip else ""))
         return "\n".join(rows)
 
-    def next_id(self):
-        nums = [int(re.search(r"\d+", t).group()) for t in self.files]
+    def next_id(self, taken=()):
+        """The id after every ticket on the ref and every id in `taken` (claimed elsewhere, e.g. an open plan)."""
+        nums = [int(re.search(r"\d+", t).group()) for t in [*self.files, *taken]]
         return f"{self.p.prefix}-{max(nums, default=0) + 1:03d}"

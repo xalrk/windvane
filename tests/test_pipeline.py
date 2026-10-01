@@ -1,5 +1,6 @@
 """The whole driver against a fake `claude`: worker -> check -> review -> merge, questions, and planning."""
 import json
+import os
 import sys
 import unittest
 from argparse import Namespace
@@ -195,7 +196,87 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
         self.s.git("fetch", "-q", "origin")
         self.assertNotIn("T-003", Queue(self.p).files)
-        self.assertEqual(driver.changed_paths(self.p.ci_dir), [])  # the ci worktree is clean again
+        self.assertEqual(driver.changed_paths(self.p.plan_dir), [])  # the plan worktree is clean again
+
+    def config(self, **kw):
+        """Rewrite the top of the project's config (e.g. isolate, forge) and publish it."""
+        f = self.s.root / ".windvane/config.toml"
+        text = f.read_text().replace('forge = "git"\n', "".join(f"{k} = {v}\n" for k, v in kw.items()))
+        f.write_text(text if "forge" in kw else 'forge = "git"\n' + text)
+        self.s.publish("config")
+        self.p = Project(self.s.root)
+
+    def test_plan_leaves_the_checkout_alone_without_isolate(self):
+        self.config(isolate="false")
+        self.s.git("switch", "-q", "-c", "mine")
+        self.s.write("README", "my edit\n")
+        self.s.write("notes.txt", "untracked\n")
+        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 1)
+        self.assertEqual(self.s.git("rev-parse", "--abbrev-ref", "HEAD"), "mine")
+        self.assertEqual((self.s.root / "README").read_text(), "my edit\n")
+        self.assertEqual((self.s.root / "notes.txt").read_text(), "untracked\n")
+        self.assertEqual(self.s.git("status", "--porcelain"), "M README\n?? notes.txt")
+        self.s.git("fetch", "-q", "origin")
+        self.assertIn("T-003", Queue(self.p).files)
+
+    def test_plan_skips_ids_claimed_by_an_open_plan(self):
+        self.s.git("switch", "-q", "-c", "plan-20260101-0000")
+        self.s.ticket("T-003")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-qm", "plan")
+        self.s.git("push", "-q", "origin", "HEAD")
+        self.s.git("switch", "-q", "main")
+        self.assertEqual(driver.plan(self.p, "make it great"), 1)
+        prompt = [c["prompt"] for c in self.calls() if "planner" in c["system"]][0]
+        self.assertIn("## Ids for new tickets, in order (at most 6)\nT-004, ", prompt)
+
+    def test_plan_whose_merge_is_refused_counts_nothing(self):
+        gh = self.s.bin / "gh"  # opens the PR, refuses to merge it
+        gh.write_text('#!/bin/sh\ncase "$2" in\n  create) echo https://github.com/o/r/pull/7 ;;\n'
+                      '  merge) echo "not mergeable" >&2; exit 1 ;;\n  view) echo OPEN ;;\nesac\n')
+        gh.chmod(0o755)
+        self.config(forge='"github"')
+        pushes = self.pushes()
+        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.assertEqual(pushes, ["sandbox: plan not merged"])
+        self.s.git("fetch", "-q", "origin")
+        self.assertNotIn("T-003", Queue(self.p).files)
+        self.assertIn("plan-", self.s.git("ls-remote", "--heads", "origin", "plan-*"))  # kept for its PR
+        self.assertIn("not merged", (self.p.state / "autopilot.log").read_text())
+
+    def pushes(self):
+        pushes, orig = [], driver.push
+        driver.push = lambda title, *a, **k: pushes.append(title)
+        self.addCleanup(setattr, driver, "push", orig)
+        return pushes
+
+    def test_plan_replays_onto_a_main_that_moved(self):
+        os.environ["FAKE_PLAN_MOVE_MAIN"] = "1"
+        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 1)
+        self.s.git("fetch", "-q", "origin")
+        self.assertIn("T-003", Queue(self.p).files)
+        self.assertIn("moved", self.s.git("log", "origin/main", "--format=%s"))
+
+    def test_plan_that_cant_reach_main_is_kept_on_its_branch(self):
+        hook = self.s.remote / "hooks" / "pre-receive"  # main refuses every push
+        hook.write_text("#!/bin/sh\nwhile read old new ref; do [ \"$ref\" = refs/heads/main ] && exit 1; done\n"
+                        "exit 0\n")
+        hook.chmod(0o755)
+        pushes = self.pushes()
+        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.assertEqual(pushes, ["sandbox: plan not merged"])
+        self.s.git("fetch", "-q", "origin")
+        self.assertNotIn("T-003", Queue(self.p).files)
+        branch = self.s.git("ls-remote", "--heads", "origin", "plan-*").split("refs/heads/")[1]
+        self.assertIn(".windvane/tickets/T-003.md", self.s.git("ls-tree", "-r", "--name-only", f"origin/{branch}"))
+
+    def test_plan_while_another_plan_runs_does_nothing(self):
+        import fcntl
+        self.p.state.mkdir(parents=True, exist_ok=True)
+        with open(self.p.state / "plan.lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.assertEqual([c for c in self.calls() if "planner" in c["system"]], [])
 
 
 class CheckCache(unittest.TestCase):

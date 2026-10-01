@@ -77,6 +77,9 @@ elif system.startswith("# windvane planner run"):
     open(f".windvane/tickets/{ids[0]}.md", "w").write(f"# {ids[0]}: planned\nDepends on: nothing.\n")
     with open(".windvane/QUEUE.md", "a") as f:  # a tracked file, modified: its status line starts with a space
         f.write(f"- {ids[0]} planned\n")
+    if os.environ.get("FAKE_PLAN_MOVE_MAIN"):  # someone merges to main while the planner works
+        c = sh("git", "commit-tree", "origin/main^{tree}", "-p", "origin/main", "-m", "moved")
+        sh("git", "push", "-q", "origin", f"{c}:refs/heads/main")
     if os.environ.get("FAKE_PLAN_OUTSIDE"):
         open("stray.txt", "w").write("x")
     text = "PLAN: new=1 noted=0 one ticket"
