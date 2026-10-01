@@ -21,7 +21,7 @@ DEFAULTS = {
     "main": "main",
     "forge": "github",  # github: PRs through gh; git: the driver merges and pushes to main itself
     "check": "",  # the project's CI command, run by `windvane check` (empty: no check)
-    "setup": "",  # run once in a fresh worktree (e.g. "npm ci")
+    "setup": "",  # run once in a fresh worktree (e.g. "npm ci"); failing stops the run
     "isolate": True,  # work in the autopilot's own worktrees; false: in the checkout itself (huge builds)
     "goal": "",  # what `windvane plan` aims at when given no goal
     "author": "",  # "Name <email>" for the driver's own commits; default: git's

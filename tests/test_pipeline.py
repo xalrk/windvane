@@ -349,6 +349,65 @@ class CheckCache(unittest.TestCase):
         self.assertIn("not recorded", summary)
 
 
+class Setup(unittest.TestCase):
+    """The project's `setup` command runs in each fresh worktree; a failed one stops the run before any session."""
+
+    def setUp(self):
+        self.s = Sandbox()
+        self.s.ticket("T-001", touches="a.py")
+        self.s.ticket("T-002", touches="docs/")
+        self.pushes = []
+        orig, driver.push = driver.push, lambda title, msg, *a, **k: self.pushes.append((title, msg))
+        self.addCleanup(setattr, driver, "push", orig)
+
+    def tearDown(self):
+        self.s.close()
+
+    def run_pilot(self, setup, parallel=1):
+        cfg = self.s.root / ".windvane/config.toml"
+        cfg.write_text(f"setup = {json.dumps(setup)}\n" + cfg.read_text())
+        self.s.publish("setup")
+        p = Project(self.s.root)
+        pilot = driver.Pilot(p, args(parallel=parallel))
+        pilot.run(now() + timedelta(hours=1))
+        return p, pilot
+
+    def calls(self):
+        f = self.s.tmp / "calls.jsonl"
+        return f.read_text().splitlines() if f.exists() else []
+
+    def test_failed_setup_stops_the_run_before_any_session(self):
+        p, pilot = self.run_pilot("echo installing; echo 'npm ERR! no lockfile' >&2; exit 3")
+        self.assertEqual(self.calls(), [])  # not even the usage probe
+        self.assertEqual(pilot.merged + pilot.failed, [])
+        self.assertIn("setup `echo installing;", pilot.stop_reason)
+        self.assertIn("(exit 3)", pilot.stop_reason)
+        self.assertIn("npm ERR! no lockfile", pilot.stop_reason)
+        self.assertFalse(p.work_dir.exists())
+        self.assertNotIn(str(p.work_dir), self.s.git("worktree", "list"))
+        self.assertEqual([t for t, _ in self.pushes], ["sandbox: autopilot stopped"])  # the one push says why
+        self.assertIn("Why: setup `echo installing;", self.pushes[0][1])
+        log = (p.state / "autopilot.log").read_text()
+        self.assertIn("installing\nnpm ERR! no lockfile", log)  # the command's last lines
+
+    def test_passing_setup_runs_in_each_worktree_and_the_run_goes_on(self):
+        ran = self.s.tmp / "setup.log"
+        p, pilot = self.run_pilot(f"pwd >> {ran}")
+        self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
+        self.assertEqual(pilot.stop_reason, "queue empty")
+        self.assertEqual(sorted(Path(l).name for l in ran.read_text().split()), ["ci", "work"])
+
+    def test_failed_setup_in_a_later_slot_starts_nothing_more(self):
+        import os
+        os.environ["FAKE_WORK_S"] = "1"
+        p, pilot = self.run_pilot('case "$PWD" in *-1) exit 4;; esac', parallel=2)
+        self.assertEqual(pilot.merged, ["T-001"])  # slot 0's ticket still finishes
+        self.assertIn("(exit 4) in work-1", pilot.stop_reason)
+        self.assertFalse((p.state / "work-1").exists())
+        workers = [l for l in self.calls() if "windvane worker" in l]
+        self.assertEqual(len(workers), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
 
