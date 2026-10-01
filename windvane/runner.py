@@ -3,6 +3,7 @@
 rate_limit_event, so they count the user's other sessions too."""
 import json
 import os
+import re
 import selectors
 import signal
 import subprocess
@@ -69,9 +70,11 @@ def ending(final, code, noise):
     if not final:
         why = " ".join(" ".join(noise).split())[-300:]
         return "no result", f"no result event (exit {code})" + (f": {why}" if why else "")
-    if final.get("is_error") or final.get("subtype", "success") != "success":
-        why = " ".join(str(final.get("result") or final.get("errors") or "").split())[:300]
-        return "error", f"{final.get('subtype') or 'error'}: {why or f'exit {code}'}"
+    sub = final.get("subtype") or "success"
+    if final.get("is_error") or sub != "success":
+        why = " ".join(str(final.get("result") or final.get("errors") or "").split())
+        why = re.sub(r'\{.*"message":\s*"([^"]*)".*\}', r"\1", why)[:300] or f"exit {code}"  # the API's JSON body
+        return "error", why if sub == "success" else f"{sub}: {why}"  # it reaches the phone: plain words only
     return "ok", None
 
 
