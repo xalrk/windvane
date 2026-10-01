@@ -34,6 +34,8 @@ from .util import git, gout, hhmm, last_match, load_json, log, now, push, save_j
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
+CARRIED = ("skip", "merged", "failed", "partials", "reviews", "scores", "plans", "fail_streak", "peak", "conflicts",
+           "spent", "update_said")  # the run's own memory, handed to the driver a self-update restarts
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 
@@ -173,7 +175,7 @@ class Pilot:
         # Self-update between tickets (`selfupdate`): the install it pulls (None: off, as in the tests) and how the
         # driver restarts itself when its own code changed.
         self.home = HOME if CHECKOUT and os.environ.get("WINDVANE_SELF_UPDATE") != "0" else None
-        self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, set(), None
+        self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, [], None
         self.pulled = (0, -1)  # (when, merges then): pull after each merge, else every PULL_EVERY seconds at most
 
     def slot_dirs(self, i):
@@ -973,16 +975,28 @@ class Pilot:
         for line in said:
             if line not in self.update_said:
                 self.log(line)
-                self.update_said.add(line)
+                self.update_said.append(line)
         if again:
             names = lambda ids: ", ".join(ids) or "none"
             self.log(f"windvane restarting with its new code (so far merged: {names(self.merged)}; "
                      f"failed: {names(self.failed)})")
             self.save()
+            save_json(self.p.state / "restart.json", {k: sorted(v) if isinstance(v, set) else v
+                                                      for k, v in vars(self).items() if k in CARRIED})
             self.lockfile.close()  # the restarted driver takes it again
-            os.environ["WINDVANE_RESTARTED"] = "1"  # no second "autopilot started" push
+            os.environ["WINDVANE_RESTARTED"] = "1"  # no second "autopilot started" push; it reads restart.json
             cmd = [*exe(), *selfupdate.restart_args(self.argv, self.end())]
             self.execv(cmd[0], cmd)
+
+    def carry_over(self, restarted):
+        """A self-update restart goes on with the run it replaced: the same tickets set aside or failed, the same
+        replan budget, and the same merges in the final summary. Any other start begins afresh."""
+        f = self.p.state / "restart.json"
+        if restarted:
+            for k, v in load_json(f, {}).items():
+                if k in CARRIED:
+                    setattr(self, k, set(v) if k == "skip" else v)
+        f.unlink(missing_ok=True)
 
     def take_lock(self):
         """One driver per project; `locked` reads this lock to tell the phone a run is on."""
@@ -1005,6 +1019,7 @@ class Pilot:
                  + (f", up to {self.n} tickets at a time" if self.n > 1 else "") + ")")
         ready = self.prepare(0)  # before any session or push: a failed setup ends the run with a single push
         restarted = os.environ.pop("WINDVANE_RESTARTED", None)
+        self.carry_over(restarted)
         if not CHECKOUT:
             self.newer = selfupdate.newer_release(selfupdate.version())
             if self.newer:

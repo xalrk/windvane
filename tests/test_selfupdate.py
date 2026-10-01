@@ -166,6 +166,36 @@ class Driver(unittest.TestCase):
         self.assertEqual(self.log().count("windvane not updated: it has local changes"), 1)
         self.assertEqual(self.calls, [])
 
+    def test_the_restarted_driver_goes_on_with_the_run(self):
+        """What the run did before the restart counts after it: a failed ticket isn't picked again, the replan
+        budget isn't reset, and the final summary lists the merges from before."""
+        self.s.ticket("T-003")
+        self.s.write(".windvane/QUEUE.md", "# Queue\n- done: T-001 (merged before the restart)\n")
+        self.s.publish("one more")
+        self.pilot.merged, self.pilot.failed, self.pilot.skip, self.pilot.plans = ["T-001"], ["T-002"], {"T-002"}, 1
+        self.i.commit("windvane/driver.py", "v2\n")
+        self.pilot.take_lock()  # as run() would have
+        self.pilot.deadline = now() + timedelta(hours=2)
+        with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
+            self.pilot.self_update()
+        again = driver.Pilot(self.p, args(parallel=1))
+        again.home = self.i.home
+        with redirect_stdout(io.StringIO()):
+            again.run(now() + timedelta(hours=2))  # the restart set WINDVANE_RESTARTED, as the exec'd driver sees it
+        self.assertEqual(again.merged, ["T-001", "T-003"])
+        self.assertEqual((again.failed, again.plans), (["T-002"], 1))
+        self.assertNotIn("T-002: worker run", self.log())
+        self.assertIn("Merged: do T-001 (T-001); do T-003 (T-003). Waiting on you: none. Failed: do T-002 (T-002)", self.log())
+        self.assertFalse((self.p.state / "restart.json").exists())
+
+    def test_a_fresh_start_forgets_an_old_restart_file(self):
+        self.p.state.mkdir(parents=True, exist_ok=True)
+        (self.p.state / "restart.json").write_text('{"skip": ["T-001"], "merged": ["T-000"]}')
+        self.pilot.home = None
+        with redirect_stdout(io.StringIO()):
+            self.pilot.run(now() + timedelta(hours=2))
+        self.assertEqual(self.pilot.merged, ["T-001", "T-002"])
+
     def test_no_merge_means_no_pull_for_a_while(self):
         self.pilot.self_update()
         new = self.i.commit("README.md", "docs\n")
