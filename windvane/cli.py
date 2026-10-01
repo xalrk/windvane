@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -36,8 +37,15 @@ def parse_deadline(until, for_):
     return d if d > now() else d + timedelta(days=1)
 
 
+def in_tmux(p):
+    return bool(shutil.which("tmux")) and subprocess.run(
+        ["tmux", "has-session", "-t", f"={p.tmux}"], capture_output=True).returncode == 0
+
+
 def running(p):
-    return subprocess.run(["tmux", "has-session", "-t", f"={p.tmux}"], capture_output=True).returncode == 0
+    """A run started without --detach holds the lock but has no tmux session; tmux covers the moment before a
+    detached run takes the lock."""
+    return driver.locked(p) or in_tmux(p)
 
 
 def last_log(p, n=1):
@@ -142,8 +150,10 @@ def cmd_run(a, p):
         sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
     p.state.mkdir(parents=True, exist_ok=True)
     if a.detach:
-        if running(p):
+        if in_tmux(p):
             sys.exit(f"already running in tmux session {p.tmux}")
+        if running(p):
+            sys.exit("already running in the foreground: stop it with windvane stop")
         args, skip = [], False
         for x in sys.argv[1:]:
             if skip or x == "--detach":
@@ -177,7 +187,7 @@ def cmd_status(a, p):
         last = (last_log(p) or [""])[0][11:]
         print(f"{p.name}: autopilot {'running' if on else 'off'}" + (f". Last: {last}" if last else ""))
         return
-    print(f"autopilot: {'running in tmux ' + p.tmux if on else 'not running'}")
+    print(f"autopilot: {('running in tmux ' + p.tmux if in_tmux(p) else 'running') if on else 'not running'}")
     print(f"questions now: {questions.mode(p)}")
     st = load_json(p.state / "state.json", {})
     for tid, q in st.get("questions", {}).items():

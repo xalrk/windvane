@@ -280,6 +280,57 @@ class Pipeline(unittest.TestCase):
         self.assertEqual([c for c in self.calls() if "planner" in c["system"]], [])
 
 
+class PhoneSync(unittest.TestCase):
+    """What the phone's status/stop hooks and questions see when a run isn't the detached one that started them."""
+    def setUp(self):
+        self.s = Sandbox()
+        self.s.ticket("T-001")
+        self.s.publish()
+        self.p = Project(self.s.root)
+
+    def tearDown(self):
+        self.s.close()
+
+    def cli(self, fn, **kw):
+        import contextlib
+        import io
+        from windvane import cli
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            getattr(cli, fn)(Namespace(**kw), self.p)
+        return out.getvalue()
+
+    def test_a_foreground_run_shows_as_running_and_stops_from_the_phone(self):
+        os.environ["PATH"] = str(self.s.bin)  # no tmux: only the lock can tell
+        self.assertIn("autopilot off", self.cli("cmd_status", line=True))
+        self.assertIn("isn't running", self.cli("cmd_stop", if_running=True))
+        self.assertFalse((self.p.state / "STOP").exists())
+        pilot = driver.Pilot(self.p, args())
+        pilot.take_lock()
+        self.addCleanup(pilot.lockfile.close)
+        self.assertIn("autopilot running", self.cli("cmd_status", line=True))
+        self.assertIn("stops after the current ticket", self.cli("cmd_stop", if_running=True))
+        self.assertTrue((self.p.state / "STOP").exists())
+
+    def test_a_question_left_unsent_is_sent_by_the_next_run(self):
+        record = self.s.tmp / "asks.txt"
+        fake = self.s.bin / "notify-ask"
+        fake.write_text(f"#!/bin/sh\necho \"$@\" >> {record}\n")
+        fake.chmod(0o755)
+        self.p.state.mkdir(parents=True, exist_ok=True)
+        (self.p.state / "state.json").write_text(json.dumps({"questions": {"T-001": {
+            "q": "Red or blue?", "opts": {"A": "red", "B": "blue"}, "rec": "A", "must_wait": False,
+            "branch": "t-001-x", "asked": None}}}))  # asked in a quiet time; that run stopped before it ended
+        pilot = driver.Pilot(self.p, args(answer_wait=60))
+        orig = driver.time.sleep
+        driver.time.sleep = lambda s: (self.p.state / "STOP").touch()  # the idle wait for an answer ends the run
+        self.addCleanup(setattr, driver.time, "sleep", orig)
+        pilot.run(now() + timedelta(hours=1))
+        self.assertIn(f"{self.p.qid('T-001')} T-001: Red or blue?", record.read_text())
+        self.assertEqual(record.read_text().count("Red or blue?"), 1)
+        self.assertIsNotNone(json.loads((self.p.state / "state.json").read_text())["questions"]["T-001"]["asked"])
+
+
 class CheckCache(unittest.TestCase):
     def setUp(self):
         self.s = Sandbox()
