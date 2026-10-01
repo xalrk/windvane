@@ -1,0 +1,38 @@
+# windvane settings for this project (https://github.com/xalrk/windvane). Every key is optional.
+name = ""                 # state dir, phone question ids, tmux session
+prefix = "T"              # ticket ids: T-001, T-002a
+remote = "origin"
+main = "main"
+forge = "github"          # github: PRs through gh; git: the driver merges and pushes to main itself
+check = ""                # the project's CI command, run by `windvane check` (e.g. "npm test", "pytest -q")
+setup = ""                # run once in each fresh autopilot worktree (e.g. "npm ci")
+isolate = true            # work in the autopilot's own worktrees; false: in this checkout (for huge builds)
+goal = ""                 # what `windvane plan` and `run --replan` aim at when given no goal
+author = ""               # "Name <email>" for the driver's own commits (merges, plans); default: git's
+
+[models]                  # model and effort per role
+worker = "opus"
+worker_effort = "high"
+reviewer = "opus"
+reviewer_effort = "high"
+critic = "opus"
+critic_effort = "high"
+planner = "opus"
+planner_effort = "high"
+
+[critic]
+enabled = true
+pass = 8                  # this or more goes on
+floor = 4                 # under this, rethink rather than patch
+revisions = 3
+
+[autopilot]
+cap = 75                  # % of the 5-hour window: pause at it until the window resets
+week_cap = 95             # % of the weekly limit: stop
+ticket_hours = 3          # one worker run at most
+min_slot = 30             # no new ticket with fewer minutes left before the deadline
+answer_wait = 10          # minutes a phone question waits before the run builds its recommendation
+review_rounds = 3         # reviews asking for changes before a ticket is set aside
+partials = 3              # runs in a row that run out of time before a ticket is set aside
+subagents = false         # let worker runs spawn subagents (costly; one fresh session per ticket is the design)
+inline_diff_lines = 1200  # the reviewer gets diffs up to this size in its prompt

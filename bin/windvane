@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# windvane entry point; `windvane install` links it into ~/.local/bin.
+here="$(dirname "$(readlink -f "$0")")"
+PYTHONPATH="$here/..${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m windvane "$@"
