@@ -9,6 +9,7 @@ contact sheets). It runs `windvane critic <ID>` and follows the last line, `CRIT
 revisions). Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed `windvane plan`.
 """
 import re
+import statistics
 from pathlib import Path
 
 from .config import HOME
@@ -81,6 +82,37 @@ def followups(p):
                 seen.add(b.lower())
                 out.append((r.get("ticket"), b))
     return out
+
+
+def calibration(recs, bar, last=10):
+    """How the critic's scores spread over the last `last` tickets it scored, to show whether the calibration works:
+    in the first self-run every final score sat exactly on the pass mark. Not-user-facing skips and plan markers carry
+    no score and are left out. Returns None when nothing was scored."""
+    by, latest = {}, {}
+    for i, r in enumerate(recs):
+        if r.get("score") is not None and r.get("ticket") != "PLAN":
+            by.setdefault(r["ticket"], []).append(r)
+            latest[r["ticket"]] = i
+    order = sorted(by, key=latest.get)[-last:]
+    if not order:
+        return None
+    tickets = [(t, by[t]) for t in order]
+    scores = [r["score"] for _, rs in tickets for r in rs]
+    return {
+        "bar": bar, "tickets": tickets, "verdicts": len(scores),
+        "first": [rs[0]["score"] for _, rs in tickets], "final": [rs[-1]["score"] for _, rs in tickets],
+        "revised": sum(any(r.get("step") in ("revise", "rethink") for r in rs) for _, rs in tickets),
+        "final_on_bar": sum(rs[-1]["score"] == bar for _, rs in tickets),
+        "on_bar": sum(x == bar for x in scores),
+        "accepted": sum(rs[-1].get("step") == "accept" for _, rs in tickets),
+    }
+
+
+def spread(xs):
+    """"4-8 (median 6)": the range and middle of some scores."""
+    n = lambda x: f"{x:g}"
+    lo, hi = min(xs), max(xs)
+    return f"{n(lo)}-{n(hi)} (median {n(statistics.median(xs))})" if lo != hi else f"all {n(lo)}"
 
 
 def system_prompt(p, cwd):
