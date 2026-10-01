@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from . import critic
 from .config import HOME
@@ -55,9 +56,10 @@ REVIEW_DENY = ["Edit", "Write", "NotebookEdit", "Agent", "Bash(git push *)", "Ba
                "Bash(gh pr edit *)", "Bash(gh pr comment *)", "Bash(gh pr close *)"]
 
 
-def ensure_worktree(p, path):
-    """The autopilot's own worktree at `path`, created detached at upstream (and set up) when missing."""
-    if not p.cfg["isolate"] or (path / ".git").exists():
+def ensure_worktree(p, path, setup=True):
+    """The autopilot's own worktree at `path`, created detached at upstream (and set up) when missing. With
+    isolate off, work_dir and ci_dir are the checkout itself, which is left alone."""
+    if path == p.main_root() or (path / ".git").exists():
         return
     root = p.main_root()
     git(root, "fetch", "-q", p.remote)
@@ -65,7 +67,7 @@ def ensure_worktree(p, path):
     r = git(root, "worktree", "add", "--detach", str(path), p.upstream)
     if r.returncode:
         raise SystemExit(f"windvane: can't create the worktree {path}: {r.stderr.strip()}")
-    if p.cfg["setup"]:
+    if setup and p.cfg["setup"]:
         subprocess.run(p.cfg["setup"], shell=True, cwd=path)
 
 
@@ -652,15 +654,37 @@ def changed_paths(cwd):
 
 def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max_new=6):
     """A planner run writes tickets for `goal` (and the critic's follow-ups) on a branch the driver commits;
-    `merge` merges it at once. Returns how many tickets it wrote."""
-    cd = p.ci_dir
-    ensure_worktree(p, cd)
+    `merge` merges it at once. Returns how many tickets it merged (with `merge`) or wrote."""
+    p.state.mkdir(parents=True, exist_ok=True)
+    with open(p.state / "plan.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            log(p, "plan: another plan is running")
+            return 0
+        return _plan(p, goal, use_followups, usage, stop_if, merge, max_new)
+
+
+def pending_ids(p):
+    """Ticket ids on unmerged remote `plan-*` branches: a plan whose PR is still open has claimed them."""
+    ids = set()
+    branches = gout(p.main_root(), "branch", "-r", "--no-merged", p.upstream, "--format=%(refname:short)")
+    for b in branches.split():
+        if b.startswith(f"{p.remote}/plan-"):
+            names = gout(p.main_root(), "ls-tree", "--name-only", b, p.tickets_rel + "/").split()
+            ids |= {p.norm(Path(n).stem) for n in names if n.endswith(".md")} - {None}
+    return ids
+
+
+def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
+    cd = p.plan_dir
     git(p.main_root(), "fetch", "-q", "--prune", p.remote)
+    ensure_worktree(p, cd, setup=False)
     if not clean_detach(p, cd, p.upstream):
         log(p, "plan: can't check out main")
         return 0
     q = Queue(p)
-    first = int(re.search(r"\d+", q.next_id()).group())
+    first = int(re.search(r"\d+", q.next_id(pending_ids(p))).group())
     ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + max_new)]
     notes = critic.followups(p) if use_followups else []
     if not goal and not notes:
@@ -706,14 +730,25 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
         pr = sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title",
                 f"Plan: {n} new tickets", "--body", text.strip()[-6000:])
         pr_n = pr.rstrip("/").rsplit("/", 1)[-1]
+        merged = False
         if merge and pr_n.isdigit():
-            subprocess.run(["gh", "pr", "merge", pr_n, "--merge"], cwd=p.main_root(),
-                           capture_output=True)
-            git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
+            res = subprocess.run(["gh", "pr", "merge", pr_n, "--merge"], cwd=p.main_root(), capture_output=True)
+            merged = res.returncode == 0 or sh(p.main_root(), "gh", "pr", "view", pr_n, "--json", "state",
+                                               "-q", ".state") == "MERGED"
+            if merged:
+                git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
+        if merge and not merged:
+            clean_detach(p, cd, p.upstream)
+            log(p, f"plan: {n} tickets on {pr or branch}, not merged; merge it by hand")
+            return 0
         log(p, f"plan: {n} tickets on {pr or branch}{' (merged)' if merge else ''}")
     else:
         target = p.main if merge else branch
-        git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{target}")
+        res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{target}")
+        if res.returncode:
+            clean_detach(p, cd, p.upstream)
+            log(p, f"plan: push to {target} refused ({' '.join(res.stderr.split())[:200]}); plan dropped")
+            return 0
         log(p, f"plan: {n} tickets pushed to {target}")
     push(f"{p.name}: planned {n} tickets", m.group(3)[:200] or "See the queue.", 3, "memo")
     clean_detach(p, cd, p.upstream)
