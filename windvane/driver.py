@@ -456,7 +456,8 @@ class Pilot:
         if line:
             self.scale_said = True
             self.log(line)
-            push(f"{self.p.name}: critic scale collapsed", line.split(": ", 1)[1], 3, "warning")
+            push(f"{self.p.name}: critic scale collapsed", line.split(": ", 1)[1] + ". The run goes on.", 3,
+                 "warning")
 
     def check_at(self, rev):
         cd = self.cd

@@ -72,7 +72,7 @@ class CollapseCheck(unittest.TestCase):
         self.assertEqual(log.count("Critic scale collapsed"), 1)
         self.assertIn(LINE, log)
         self.assertEqual(self.pushes, [("sandbox: critic scale collapsed",
-                                        "8 of 10 first scores are 8; recalibrate at the desk")])
+                                        "8 of 10 first scores are 8; recalibrate at the desk. The run goes on.")])
         self.assertIn(LINE, self.run_cli(cli.cmd_overview).splitlines())
         self.assertIn(LINE, self.run_cli(cli.cmd_stats, critic=True, last=10).splitlines())
 
