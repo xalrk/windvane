@@ -4,14 +4,17 @@ branches (fetch first).
   tickets  `.windvane/tickets/<ID>.md`; the header (first 8 lines) may hold `Depends on: T-001, T-002.`
   order    bullets in `.windvane/QUEUE.md` (`- T-003 ...` or `- **T-003** ...`) first, in order, then every other
            ticket by number; a bullet naming a split ticket's parent (T-004) stands for its parts (T-004a, T-004b)
-  done     a merge on main from its branch (`t-003-...`), or `- done: T-003 (why)` in QUEUE.md
+  done     a merge on main from its branch (`t-003-...`, the whole branch name: `q-t-003-x` is another branch), or
+           `- done: T-003 (why)` in QUEUE.md
   parked   `- parked: T-003 (why)` in QUEUE.md: never started
-  wip      an unmerged remote branch `t-003-...`: resumed before new work
+  wip      an unmerged remote branch `t-003-...`: resumed before new work, unless no commit touched it for
+           `stale_days`: then it waits for its turn in the order like new work
   waiting  a dependency isn't done
   touches  `Touches: windvane/driver.py, prompts/` in the header: tickets whose lists don't overlap may run at once
   related  `Related: T-004.` in the header: the same feature through other files, so never run beside T-004
 """
 import re
+import time
 from pathlib import Path
 
 from .util import gout
@@ -38,6 +41,15 @@ def touches(head):
     ticket may touch anything, and the autopilot runs nothing beside it."""
     m = re.search(r"^Touches:(.*)$", head, re.M | re.I)
     return {x.strip().strip("`").rstrip(".") for x in m.group(1).split(",") if x.strip().strip("`.")} if m else set()
+
+
+def merged_branches(subjects, bp):
+    """The ticket ids whose branches merge subjects name, by where a branch name starts in the subjects git and
+    GitHub write: `Merge T-012: ... (branch t-012-x)` (the driver's), `Merge pull request #5 from owner/t-012-x`,
+    `Merge branch 't-012-x'`, `Merge remote-tracking branch 'origin/t-012-x'`. An id inside another branch's name
+    (`q-t-012-scope`, a question branch) isn't that ticket's merge."""
+    start = r"(?:\(branch |\bfrom [\w.-]+/|\bbranch '(?:[\w.-]+/)?)"
+    return re.findall(rf"{start}({bp}-\d+[a-z]?)-[\w.-]", subjects, re.I)
 
 
 def title(text, tid):
@@ -71,15 +83,22 @@ class Queue:
 
         bp = re.escape(p.prefix.lower())
         merges = gout(cwd, "log", ref, "--merges", "--format=%s")
-        self.done = {p.norm(m) for m in re.findall(rf"\b({bp}-\d+[a-z]?)-[\w.-]", merges, re.I)}
+        self.done = {p.norm(m) for m in merged_branches(merges, bp)}
         self.done |= {p.norm(m) for m in re.findall(rf"^\s*-\s*done:\s*({p.id_re})", qmd, re.M | re.I)}
         self.parked = {p.norm(m) for m in re.findall(rf"^\s*-\s*parked:\s*({p.id_re})", qmd, re.M | re.I)}
         self.done.discard(None)
-        self.wip = {}
-        for b in gout(cwd, "branch", "-r", "--no-merged", ref, "--format=%(refname:short)").split():
+        self.wip, fresh = {}, set()
+        old = time.time() - float(p.ap["stale_days"]) * 86400
+        for line in gout(cwd, "branch", "-r", "--no-merged", ref,
+                         "--format=%(refname:short) %(committerdate:unix)").splitlines():
+            b, _, when = line.partition(" ")
             m = re.fullmatch(rf"{re.escape(p.remote)}/({bp}-\d+[a-z]?)-.+", b, re.I)
             if m and p.norm(m.group(1)) not in self.done:
-                self.wip.setdefault(p.norm(m.group(1)), []).append(b.split("/", 1)[1])
+                tid = p.norm(m.group(1))
+                self.wip.setdefault(tid, []).append(b.split("/", 1)[1])
+                if int(when or 0) > old:
+                    fresh.add(tid)
+        self.stale = set(self.wip) - fresh  # every branch untouched for stale_days: the order decides, not "wip"
 
     def is_done(self, tid):
         if tid in self.done:
@@ -101,9 +120,9 @@ class Queue:
     def pick(self, skip=(), blocked=()):
         """(ticket, "wip"|"todo", its branches) for the next run, or (None, why)."""
         ready = [(t, self.status(t, blocked)) for t in self.order if t not in skip]
-        for want in ("wip", "todo"):
+        for wants in (("wip",), ("wip", "todo")):
             for t, s in ready:
-                if s == want:
+                if s in wants and (len(wants) == 2 or t not in self.stale):
                     return t, s, self.wip.get(t, [])
         left = sum(s not in ("done", "parked") for _, s in ready)
         return None, (f"{left} tickets left, none ready (questions, dependencies or skipped)" if left
@@ -113,7 +132,8 @@ class Queue:
         rows = []
         for t in self.order:
             rows.append(f"{t:8} {self.status(t, blocked):8} {self.titles[t][:70]}"
-                        + (f"  [{' '.join(self.wip[t])}]" if t in self.wip else ""))
+                        + (f"  [{' '.join(self.wip[t])}{', stale' if t in self.stale else ''}]"
+                           if t in self.wip else ""))
         return "\n".join(rows)
 
     def next_id(self, taken=()):

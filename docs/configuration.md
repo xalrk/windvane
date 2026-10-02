@@ -79,6 +79,7 @@ See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 | `inline_diff_lines` | `1200` | Diffs up to this many lines are put straight into the reviewer's prompt, saving it the tool calls to fetch them; larger ones it reads itself. |
 | `retries` | `3` | How many times a session that dies outside its ticket's control (API error, network drop, crash) is rerun before the run stops with the error. |
 | `retry_minutes` | `3` | The first pause before such a rerun; each further one doubles it (3, 6, 12 minutes). |
+| `stale_days` | `3` | Days. An unfinished ticket branch with no commit for this long is no longer resumed before new work: it waits for its turn in the queue order. |
 
 ## machine.toml
 
