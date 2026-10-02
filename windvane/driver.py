@@ -753,12 +753,13 @@ class Pilot:
         self.usage.probe(self.p)
         return True
 
-    def nap(self, until):
-        """Sleep until `until`, waking within seconds for a stop, the run's deadline (which may have moved) or a
-        message from the phone (an answer to build)."""
+    def nap(self, until, answers=False):
+        """Sleep until `until`, waking within seconds for a stop or the run's deadline (which may have moved).
+        Phone messages are handled throughout, but only a wait for `answers` ends early on one: a tap on Usage
+        during a usage pause must not cut the pause short."""
         while now() < min(until, self.end()) and not (self.p.state / "STOP").exists():
             time.sleep(NAP)
-            if phone.pump():
+            if phone.pump() and answers:
                 return
 
     def stop_check(self):
@@ -968,7 +969,7 @@ class Pilot:
                     if not self.idle:
                         self.log(f"waiting for answers on {', '.join(self.questions)}")
                         self.idle = True
-                    self.nap(now() + timedelta(minutes=1))
+                    self.nap(now() + timedelta(minutes=1), answers=True)
                     continue
                 if self.a.replan and self.plans < self.a.replan:
                     self.plans += 1

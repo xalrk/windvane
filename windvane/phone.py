@@ -11,6 +11,7 @@ fixed commands, or a letter choosing among the options windvane itself wrote for
 The user's own `notify` / `notify-ask` scripts, when on PATH, are used instead (detection first, built-in second).
 """
 import fcntl
+import functools
 import json
 import os
 import re
@@ -95,12 +96,20 @@ RULES = [
 ]
 
 
-def words(c):
-    """Names that identify the user or open the phone: $USER, git's name and email, the topics, `redact`."""
-    found = {os.environ.get("USER", ""), c.get("topic", ""), c.get("reply_topic", ""), *c.get("redact", [])}
+@functools.cache
+def git_names():
+    """Git's user name and the local part of its email: read once per process, not twice on every push."""
+    out = []
     for key in ("user.name", "user.email"):
         r = subprocess.run(["git", "config", "--global", key], capture_output=True, text=True)
-        found.add(r.stdout.strip().split("@")[0])
+        out.append(r.stdout.strip().split("@")[0])
+    return tuple(out)
+
+
+def words(c):
+    """Names that identify the user or open the phone: $USER, git's name and email, the topics, `redact`."""
+    found = {os.environ.get("USER", ""), c.get("topic", ""), c.get("reply_topic", ""), *c.get("redact", []),
+             *git_names()}
     return sorted((w for w in found if len(w) >= 3), key=len, reverse=True)
 
 

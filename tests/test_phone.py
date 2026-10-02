@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from windvane import cli, driver, phone  # noqa: E402
 from windvane.config import Project  # noqa: E402
+from windvane.runner import Usage  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_pipeline import args  # noqa: E402
@@ -113,6 +114,7 @@ class PhoneTest(unittest.TestCase):
         self.c = {"enabled": True, "server": self.ntfy.url, "topic": phone.new_topic(),
                   "reply_topic": phone.new_topic()}
         phone.save_conf(self.c)
+        phone.git_names.cache_clear()  # git's name comes from this sandbox's HOME
         for k, v in (("PUMP_EVERY", 0), ("RETRY", 0.1), ("_last_pump", 0.0)):
             self.addCleanup(setattr, phone, k, getattr(phone, k))
             setattr(phone, k, v)
@@ -315,6 +317,21 @@ class WithTheDriver(PhoneTest):
         self.assertEqual(pilot.merged, ["T-001", "T-002"])
         self.assertTrue(any(m.get("title") == "Answer recorded" for m in self.pushes()))
 
+    def test_a_tap_on_usage_doesnt_end_a_usage_pause(self):
+        self.addCleanup(setattr, driver, "NAP", driver.NAP)
+        driver.NAP = 0.2
+        pilot = driver.Pilot(self.p, args())
+        pilot.deadline = now() + timedelta(hours=1)
+        pilot.usage.five, pilot.usage.five_reset = 90, time.time() - 120 + 4  # the pause lasts about 4 s
+        threading.Timer(1.2, self.phone_sends, ("usage",)).start()
+        t = time.time()
+        with mock.patch.object(Usage, "probe") as probe:
+            self.assertTrue(pilot.wait_for_reset())
+        self.assertGreater(time.time() - t, 3)  # the pause sleeps through the tap
+        self.assertTrue(any(m.get("title") == "Claude usage" for m in self.pushes()))  # yet the tap is answered
+        self.assertEqual(sum(m.get("title", "").endswith(": paused") for m in self.pushes()), 1)
+        probe.assert_called_once()  # when the pause ends, not on the tap
+
     def test_a_stop_sent_between_runs_doesnt_stop_the_next(self):
         phone.mark_now()
         self.phone_sends("stop")  # tapped after the last run ended, with no listener to take it
@@ -343,7 +360,7 @@ class WithTheDriver(PhoneTest):
                     self.press(m, "B")
             orig()
         pilot.poll_questions = press_then_poll
-        pilot.nap = lambda until: None
+        pilot.nap = lambda until, answers=False: None
         with mock.patch.object(phone, "send", side_effect=flaky):
             pilot.run(now() + timedelta(hours=1))
         log = (self.p.state / "autopilot.log").read_text()
