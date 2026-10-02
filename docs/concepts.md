@@ -22,7 +22,8 @@ Retry with exponential backoff, at most 5 tries. Don't change the upload API.
 
 - **Depends on:** tickets that must be merged first. A ticket waits until all of them are. Anything else named here
   (`the user`, `M9`, free text) makes it wait too, until a `- done: M9 (why)` line in `QUEUE.md` names it.
-  `windvane queue` shows what each waiting ticket waits on.
+  `windvane queue` shows what each waiting ticket waits on. To release one ticket waiting on `the user`, edit its
+  `Depends on:` line; `- done: the user` releases all of them.
 - **Touches:** the files and directories the ticket changes. It decides what may run in parallel (below). A ticket
   without this line runs alone.
 - **Related:** (optional, written by the planner) open tickets that change the same feature through other files.

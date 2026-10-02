@@ -35,16 +35,20 @@ def bullets(text, files, p):
     return out
 
 
+def header_line(head, key):
+    """The text of a header's `<key>:` line, up to its full stop, a blank line or the next `Key:` line."""
+    m = re.search(rf"{key}:(.*?)(?:\.\s|\n\s*\n|\n(?=[\w ]+:)|\Z)", head, re.S | re.I)
+    return m.group(1) if m else ""
+
+
 def depends_on(head, p, key="Depends on"):
-    m = re.search(rf"{key}:(.*?)(?:\.\s|\n\s*\n|\Z)", head, re.S | re.I)
-    return [t for t in (p.norm(x) for x in re.findall(p.id_re, m.group(1) if m else "", re.I)) if t]
+    return [t for t in (p.norm(x) for x in re.findall(p.id_re, header_line(head, key), re.I)) if t]
 
 
 def outside(head, p):
     """The `Depends on:` items that aren't ticket ids (`the user`, `M9`, free text), without notes in
     brackets. An item naming a ticket (`T-004 (the parser)`) is a ticket dependency, and `nothing` is none."""
-    m = re.search(r"Depends on:(.*?)(?:\.\s|\n\s*\n|\n(?=[\w ]+:)|\Z)", head, re.S | re.I)
-    items = re.split(r",|;|\band\b", re.sub(r"\([^)]*\)", "", m.group(1)) if m else "")
+    items = re.split(r",|;|\band\b", re.sub(r"\([^)]*\)", "", header_line(head, "Depends on")))
     items = (" ".join(x.split()).strip(" .`*") for x in items)
     return [x for x in items if x and x.lower() not in ("nothing", "none") and not re.search(p.id_re, x, re.I)]
 
