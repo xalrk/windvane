@@ -672,8 +672,14 @@ class Pilot:
         wait = "" if q["must_wait"] or not q["rec"] else (
             f" No answer in {self.a.answer_wait:g} min: I go with {q['rec']} and mark it to revisit.")
         opts = [q["opts"][k] for k in sorted(q["opts"])]
-        if not phone.ask(self.p.qid(tid), f"{self.name(tid)}: {q['q']}{wait}", opts):
+        sent = phone.ask(self.p.qid(tid), f"{self.name(tid)}: {q['q']}{wait}", opts)
+        if sent is None:
             self.log(f"{tid}: no phone; answer at the desk with `windvane answer {tid} <letter>`")
+        elif not sent:  # the next pass sends it again; the wait for an answer starts once it's out
+            q["asked"] = None
+            if not q.get("send_failed"):
+                self.log(f"{tid}: the phone push failed; trying again on the next pass")
+            q["send_failed"] = True
 
     def poll_questions(self):
         p = self.p
@@ -748,10 +754,12 @@ class Pilot:
         return True
 
     def nap(self, until):
-        """Sleep until `until`, waking within seconds for a stop or the run's deadline, which may have moved."""
+        """Sleep until `until`, waking within seconds for a stop, the run's deadline (which may have moved) or a
+        message from the phone (an answer to build)."""
         while now() < min(until, self.end()) and not (self.p.state / "STOP").exists():
             time.sleep(NAP)
-            phone.pump()
+            if phone.pump():
+                return
 
     def stop_check(self):
         """Why no new ticket may start (the run winds down), or None."""
@@ -1026,7 +1034,7 @@ class Pilot:
         """Works tickets until a stop; False when it couldn't start (a failed setup)."""
         p = self.p
         self.take_lock()
-        phone.register(p)
+        phone.start_run(p)
         (p.state / "STOP").unlink(missing_ok=True)
         (p.state / "DEADLINE").unlink(missing_ok=True)  # an earlier run's
         self.deadline = deadline

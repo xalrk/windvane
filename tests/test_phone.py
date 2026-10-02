@@ -253,6 +253,16 @@ class Replies(PhoneTest):
         self.assertEqual([m["title"] for m in new], ["Commands"])  # only the reply topic's junk gets the help
         self.assertFalse((phone.state_dir() / "answers").exists())
 
+    def test_before_the_start_answers_count_but_commands_dont(self):
+        m = self.ask()
+        phone.mark_now()
+        self.press(m, "B")
+        self.phone_sends("status")
+        before = len(self.pushes())
+        phone.listen(once=True, since=time.time() + 5)  # both were sent before this run started
+        self.assertEqual(phone.answer("sandbox-t-001"), "ANSWER B\tblue")
+        self.assertEqual([m["title"] for m in self.pushes()[before:]], ["Answer recorded"])
+
     def test_the_stream_listener_answers_status(self):
         phone.register(self.p)
         done = threading.Event()
@@ -283,7 +293,47 @@ class WithTheDriver(PhoneTest):
 
     def test_an_answer_from_the_phone_is_built(self):
         os.environ["FAKE_WORKER"] = "question"
+        self.addCleanup(setattr, driver, "NAP", driver.NAP)
+        driver.NAP = 0.2
         pilot = driver.Pilot(self.p, args(answer_wait=60))
+        done = threading.Event()
+        self.addCleanup(done.set)
+
+        def phone_user():  # taps B on each question while the run waits for it
+            pressed = set()
+            while not done.is_set():
+                for m in self.pushes():
+                    if m.get("title", "").startswith("Question") and m["id"] not in pressed:
+                        pressed.add(m["id"])
+                        self.press(m, "B")
+                time.sleep(0.1)
+        threading.Thread(target=phone_user, daemon=True).start()
+        t = time.time()
+        pilot.run(now() + timedelta(hours=1))
+        self.assertLess(time.time() - t, 30)  # the waiting run wakes for the answer, not after its minute's nap
+        self.assertIn("option B (blue)", self.worker_prompts()[1])
+        self.assertEqual(pilot.merged, ["T-001", "T-002"])
+        self.assertTrue(any(m.get("title") == "Answer recorded" for m in self.pushes()))
+
+    def test_a_stop_sent_between_runs_doesnt_stop_the_next(self):
+        phone.mark_now()
+        self.phone_sends("stop")  # tapped after the last run ended, with no listener to take it
+        time.sleep(1.1)  # ntfy's times are in whole seconds
+        pilot = driver.Pilot(self.p, args())
+        pilot.run(now() + timedelta(hours=1))
+        self.assertEqual(pilot.merged, ["T-001", "T-002"])
+        self.assertFalse(any(m.get("title") == "Stop" for m in self.pushes()))
+
+    def test_a_question_whose_push_failed_is_sent_again(self):
+        os.environ["FAKE_WORKER"] = "question"
+        pilot = driver.Pilot(self.p, args(answer_wait=60))
+        real, fails = phone.send, []
+
+        def flaky(c, title, *a, **k):
+            if title.startswith("Question") and not fails:
+                fails.append(title)
+                return False
+            return real(c, title, *a, **k)
         orig = pilot.poll_questions
 
         def press_then_poll():
@@ -293,10 +343,14 @@ class WithTheDriver(PhoneTest):
                     self.press(m, "B")
             orig()
         pilot.poll_questions = press_then_poll
-        pilot.run(now() + timedelta(hours=1))
+        pilot.nap = lambda until: None
+        with mock.patch.object(phone, "send", side_effect=flaky):
+            pilot.run(now() + timedelta(hours=1))
+        log = (self.p.state / "autopilot.log").read_text()
+        self.assertEqual(log.count("the phone push failed"), 1)
+        asked = [m for m in self.pushes() if m.get("title", "").startswith("Question") and "T-001" in m["message"]]
+        self.assertEqual(len(asked), 1)
         self.assertIn("option B (blue)", self.worker_prompts()[1])
-        self.assertEqual(pilot.merged, ["T-001", "T-002"])
-        self.assertTrue(any(m.get("title") == "Answer recorded" for m in self.pushes()))
 
     def test_stop_from_the_phone_stops_the_run(self):
         pilot = driver.Pilot(self.p, args())

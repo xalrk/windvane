@@ -154,14 +154,14 @@ def push(title, msg, prio=3, tags="", buttons=()):
 # ---------- questions
 
 def ask(qid, question, options):
-    """Send a question with buttons for A and B and "Answer on computer" (C to E are typed). False when there's no
-    phone: it then waits for `windvane answer` at the desk."""
+    """Send a question with buttons for A and B and "Answer on computer" (C to E are typed). True when sent, False
+    when the push failed (worth another try), None when there's no phone: it then waits for `windvane answer`."""
     if shutil.which("notify-ask"):
         subprocess.run(["notify-ask", qid, question, *options], capture_output=True)
         return True
     c = conf()
     if not on(c):
-        return False
+        return None
     opts = dict(zip("ABCDE", options))
     d = state_dir()
     for sub in ("questions", "answers"):
@@ -280,9 +280,13 @@ def is_command(text):
                              r"\s*", text))
 
 
-def handle(c, text):
-    """Act on one message from the phone. Unknown text only gets the list of commands back."""
+def handle(c, text, stale=False):
+    """Act on one message from the phone. Unknown text only gets the list of commands back. A `stale` message (sent
+    before this run or listener started) may still answer a question, but commands from then are dropped: a Stop
+    tapped after the last run ended must not end the next one."""
     w = text.strip().lower().split()
+    if stale and not (w[:1] in (["answer"], ["later"]) or len(w) == 1 and re.fullmatch(r"[a-e]\.?", w[0])):
+        return
     if len(w) == 1 and re.fullmatch(r"[a-e]\.?", w[0]):
         return answer_newest(c, w[0][0].upper())
     if w == ["status"]:
@@ -303,10 +307,12 @@ def handle(c, text):
 
 # ---------- the listener
 
-def listen(once=False, until=lambda: False):
+def listen(once=False, until=lambda: False, since=None):
     """Read the reply topic (and exact commands typed on the push topic) and act on each message. `once`: what's
     there now, then return (a run does this itself between tickets); otherwise hold a stream open until `until()`.
-    One reader at a time on this machine, so no command is done twice."""
+    Commands sent before `since` (default: now) are stale. One reader at a time on this machine, so no command is
+    done twice."""
+    since = time.time() if since is None else since
     d = state_dir()
     d.mkdir(parents=True, exist_ok=True)
     lock = open(d / "listen.lock", "w")
@@ -317,7 +323,7 @@ def listen(once=False, until=lambda: False):
         if once:
             return False
         raise SystemExit("windvane phone: already listening on this machine")
-    recent = []
+    recent, handled = [], 0
     try:
         while not until():
             c = conf()
@@ -326,9 +332,9 @@ def listen(once=False, until=lambda: False):
                     return False
                 raise SystemExit("windvane phone: the phone is off (windvane phone setup)")
             last = d / "last-id"
-            since = last.read_text().strip() if last.exists() else mark_now()
+            after = last.read_text().strip() if last.exists() else mark_now()
             server = c.get("server", SERVER).rstrip("/")
-            url = f"{server}/{c['reply_topic']},{c['topic']}/json?since={since}" + ("&poll=1" if once else "")
+            url = f"{server}/{c['reply_topic']},{c['topic']}/json?since={after}" + ("&poll=1" if once else "")
             try:
                 with urllib.request.urlopen(url, timeout=15 if once else 90) as stream:
                     for raw in stream:
@@ -342,7 +348,8 @@ def listen(once=False, until=lambda: False):
                         now = time.time()
                         recent = [t for t in recent if now - t < 60] + [now]
                         if len(recent) <= 10:  # a flood isn't the user
-                            handle(c, text[:200])
+                            handle(c, text[:200], ev.get("time", 0) < int(since))
+                            handled += 1
                         if until():
                             break
             except (OSError, ValueError) as e:  # a dropped stream, a keepalive timeout, a server restart
@@ -351,25 +358,34 @@ def listen(once=False, until=lambda: False):
                 print(f"windvane phone: {type(e).__name__}; reconnecting", file=sys.stderr, flush=True)
                 time.sleep(RETRY)
             if once:
-                return True
+                return handled
     finally:
         lock.close()
 
 
 _last_pump = 0.0
+_run_start = None
+
+
+def start_run(p):
+    """A run starts: its project becomes reachable from the phone, and only commands from now on reach it."""
+    global _run_start
+    register(p)
+    _run_start = time.time()
 
 
 def pump():
     """A run's own look at the reply topic, at most every PUMP_EVERY seconds: answers and `stop` reach it even
-    without the listener service. Nothing when the listener (or the user's ntfy-listen) already reads it."""
+    without the listener service. Nothing when the listener (or the user's ntfy-listen) already reads it. How many
+    messages it acted on, so a waiting run wakes up for an answer."""
     global _last_pump
     if shutil.which("notify-ask") or time.time() - _last_pump < PUMP_EVERY or not on(conf()):
-        return
+        return 0
     _last_pump = time.time()
     try:
-        listen(once=True)
+        return listen(once=True, since=_run_start) or 0
     except Exception:  # the phone must never stop a run
-        pass
+        return 0
 
 
 # ---------- `windvane phone ...` at the desk
