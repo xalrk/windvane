@@ -1392,6 +1392,7 @@ def changed_paths(cwd):
 
 
 def said(renumbered):
+    """The renumbering for a merge message, log line or PR comment."""
     return "renumbered " + ", ".join(renumbered) if renumbered else "no number collided"
 
 

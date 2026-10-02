@@ -8,6 +8,7 @@ only on lines the branch itself added (in any file): main's lines mean main's en
 caller bounces the ticket as before.
 """
 import re
+import subprocess
 from pathlib import Path
 
 from .util import git, gout
@@ -112,11 +113,18 @@ def renumber_line(line, mapping, rule, entry=False):
     return line
 
 
+def raw(cd, *args):
+    """git's stdout as is: unstripped (a line's own leading or trailing spaces count when matching it), and strict
+    UTF-8, so a file that isn't raises UnicodeDecodeError and resolve() refuses rather than guess."""
+    r = subprocess.run(["git", *args], cwd=cd, capture_output=True)
+    return r.stdout.decode() if r.returncode == 0 else ""
+
+
 def added_lines(cd):
     """Per file, the lines the branch (MERGE_HEAD) added since it left main."""
     base = gout(cd, "merge-base", "HEAD", "MERGE_HEAD")
     out, f = {}, None
-    for line in gout(cd, "diff", "-U0", "--no-color", "--no-renames", base, "MERGE_HEAD").split("\n"):
+    for line in raw(cd, "diff", "-U0", "--no-color", "--no-renames", base, "MERGE_HEAD").split("\n"):
         if line.startswith("+++ "):
             f = line[6:].rstrip("\t") if line.startswith("+++ b/") else None  # git ends a path with a space by a tab
         elif f and line.startswith("+"):
@@ -127,7 +135,16 @@ def added_lines(cd):
 def resolve(cd, rule_list):
     """Resolve the merge in progress in `cd` (HEAD main, MERGE_HEAD the branch) and stage it. Returns the renumbering
     as lines like "D-5 → D-6 (docs/DECISIONS.md)" ([] when no number collided), or None when it isn't only appended
-    entries: then the caller aborts the merge, which also drops anything written here."""
+    entries, or a file it would read isn't UTF-8 (the branch's references there can't be followed safely): then the
+    caller aborts the merge, which also drops anything written here."""
+    try:
+        return merge(cd, rule_list)
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def merge(cd, rule_list):
+    """resolve() itself; a file it can't read or decode raises."""
     by_file = {r["file"]: r for r in rule_list}
     conflicted = gout(cd, "diff", "--name-only", "--diff-filter=U").splitlines()
     if not conflicted or any(f not in by_file for f in conflicted):
@@ -138,15 +155,12 @@ def resolve(cd, rule_list):
         stages = {int(s.split()[2]) for s in gout(cd, "ls-files", "-u", "--", f).splitlines()}
         if not {2, 3} <= stages or git(cd, "checkout", "--conflict=diff3", "--", f).returncode:
             return None
-        try:
-            parts = hunks(read(Path(cd) / f))
-        except (OSError, UnicodeDecodeError):
-            return None
+        parts = hunks(read(Path(cd) / f))
         if parts is None:
             return None
-        ours = gout(cd, "show", f":2:{f}")
-        theirs = gout(cd, "show", f":3:{f}")
-        base = gout(cd, "show", f":1:{f}") if 1 in stages else ""
+        ours = raw(cd, "show", f":2:{f}")
+        theirs = raw(cd, "show", f":3:{f}")
+        base = raw(cd, "show", f":1:{f}") if 1 in stages else ""
         new = [n for h in parts if isinstance(h, tuple) for n in numbers(rule, "".join(h[2]))]
         if any(isinstance(h, tuple) and (h[1] or not whole_entries(rule, h[0]) or not whole_entries(rule, h[2]))
                for h in parts) or set(new) & set(numbers(rule, base)):
@@ -171,7 +185,7 @@ def resolve(cd, rule_list):
             if bare(line) not in added.get(f, ()):
                 return line
             if f not in main_lines:
-                main_lines[f] = {bare(l) for l in lines(gout(cd, "show", f"HEAD:{f}"))}
+                main_lines[f] = {bare(l) for l in lines(raw(cd, "show", f"HEAD:{f}"))}
             if bare(line) in main_lines[f]:
                 return line
         for rule, mapping, _ in maps:
@@ -195,10 +209,7 @@ def resolve(cd, rule_list):
             path = Path(cd) / f
             if f in staged or not path.is_file():
                 continue
-            try:
-                text = read(path)
-            except (OSError, UnicodeDecodeError):
-                continue
+            text = read(path)
             new_text = "".join(rewrite(f, l) for l in lines(text))
             if new_text != text:
                 write(path, new_text)

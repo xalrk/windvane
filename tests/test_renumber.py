@@ -47,7 +47,7 @@ class Resolve(unittest.TestCase):
             self.git("switch", "-q", on)
         for f, text in files.items():
             (self.dir / f).parent.mkdir(parents=True, exist_ok=True)
-            (self.dir / f).write_text(text)
+            (self.dir / f).write_bytes(text) if isinstance(text, bytes) else (self.dir / f).write_text(text)
         self.git("add", "-A")
         self.git("commit", "-qm", "change")
         self.git("switch", "-q", "main")
@@ -109,6 +109,18 @@ class Resolve(unittest.TestCase):
         self.assertEqual((self.dir / "win notes.txt").read_bytes(), b"x\r\ny\r\nsee D-4\x0c and D-4\r\n")
         self.assertEqual((self.dir / "docs/DECISIONS.md").read_bytes(),
                          (crlf + "| D-3 | main's |\r\n| D-4 | topic's\x0cpage |\r\n").encode())
+
+    def test_lines_keep_their_own_edge_spaces(self):
+        self.commit({"docs/DECISIONS.md": LOG + "| D-3 | main's |\n"}, on="main")
+        self.commit({"docs/DECISIONS.md": LOG + "| D-3 | topic's |\n", "zz.md": "  see D-3  \n"}, on="topic")
+        self.assertEqual(self.merge(), ["D-3 → D-4 (docs/DECISIONS.md)"])
+        self.assertEqual(self.read("zz.md"), "  see D-4  \n")  # the diff's last line, spaces and all
+
+    def test_a_file_that_isnt_utf8_is_refused_not_raised(self):
+        self.commit({"docs/DECISIONS.md": LOG + "| D-3 | main's |\n"}, on="main")
+        self.commit({"docs/DECISIONS.md": LOG + "| D-3 | topic's |\n", "x.txt": "caf\xe9 D-3\n".encode("latin-1")},
+                    on="topic")
+        self.assertIsNone(self.merge())
 
     def test_a_changed_entry_is_refused(self):
         self.commit({"docs/DECISIONS.md": LOG.replace("two", "2") + "| D-3 | main's |\n"}, on="main")
