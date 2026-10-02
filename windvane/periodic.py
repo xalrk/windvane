@@ -142,7 +142,8 @@ class Periodic:
             f"## Ids for new tickets, in order (at most 6)\n{', '.join(ids)}",
             f"Time limit: {hhmm(limit)}; check with `date`.",
         ]))
-        self.log(f"{name}: periodic session ({e['minutes']} min" + (f", {len(notes)} critic notes)" if triage else ")"))
+        said = f", {len(notes)} critic note{'s' * (len(notes) != 1)}" if triage else ""
+        self.log(f"{name}: periodic session ({e['minutes']} min{said})")
         deny = ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
                 "Bash(git reset *)", "Bash(gh *)"] + ([] if p.ap["subagents"] else ["Agent"])
         system = rules(p, "PERIODIC.md") + "\n" + own_rules
@@ -202,12 +203,13 @@ class Periodic:
             (cd / f).write_text(text)
         git(cd, "add", "-A", DIR)
         n = len(tickets)
-        title = f"Periodic: {n} new ticket{'s' * (n != 1)}" + (" (held)" if land == "hold" else "")
+        title = f"Periodic: {n} new ticket{'s' * (n != 1)}"
         ok, where = land_on_main(p, cd, f"periodic-{now():%Y%m%d-%H%M}", title,
                                  f"Written by the [[periodic]] session {name}; land = {land}.")
         how = {"near": f"right after {anchor}" if anchor else "at the top", "next": "at the top",
                "end": "at the end", "hold": "held for the desk"}.get(land, "")
-        self.log(f"{title} ({', '.join(tickets) or 'queue lines only'}{', ' + how if tickets else ''}) on {where}" + ("" if ok else ", not merged; merge it by hand"))
+        what = f"{', '.join(tickets)}, {how}" if tickets else "queue lines only"
+        self.log(f"{title} ({what}) on {where}" + ("" if ok else ", not merged; merge it by hand"))
         if land == "hold":
             self.held += tickets
         if not ok:
