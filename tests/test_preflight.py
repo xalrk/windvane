@@ -108,7 +108,7 @@ class Preflight(unittest.TestCase):
         self.addCleanup(setattr, sys, "argv", sys.argv)
         sys.argv = ["windvane", "run", "--for", "1h", "--detach"]
         self.cli(*sys.argv[1:], stdin=Untouchable())
-        self.assertTrue(seen[0][-1].endswith('"run" "--for" "1h" "--no-preflight"'))
+        self.assertTrue(seen[0][-1].endswith('"run" "--for" "1h" "--no-preflight" "--supervise"'))  # restarted after a crash
 
     def test_json_then_desk_answer(self):
         os.environ["FAKE_PREFLIGHT"] = QUESTION
