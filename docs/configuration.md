@@ -92,7 +92,8 @@ the [README](../README.md#periodic-sessions) for an example.
 | `name` | `periodic-<n>` | Its name in the log, the phone push and the ledger (`periodic:<name>`). |
 | `every` | unset | Run after this many merged tickets (counted over the run, restarts included). Unset: it runs only as another entry's `then`. |
 | `minutes` | `60` | The session's time limit. It is skipped when the deadline is nearer. |
-| `setup` | `""` | A shell command run first on current `main` (a build). A failure skips this round and is logged. |
+| `setup` | `""` | A shell command run first on current `main` (a build), with no input. A failure skips this round and is logged; so does a setup still running at `setup_minutes`, when the session would no longer fit before the deadline, or at any `windvane stop`. |
+| `setup_minutes` | `60` | The longest `setup` may run. |
 | `prompt` | required | The project's rules file for the session, a path in the repo. |
 | `then` | `""` | Another `[[periodic]]` entry run right after, given this one's final text and the files it names. |
 

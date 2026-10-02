@@ -1049,6 +1049,27 @@ class Pilot:
             return False
         return True
 
+    def periodic_setup(self, e, cd):
+        """Run `e`'s setup with no stdin, within `setup_minutes` and so the session still fits before the deadline;
+        any stop ends it (nothing is paid for yet). Why it failed, or ""."""
+        until = min(now() + timedelta(minutes=e["setup_minutes"]), self.end() - timedelta(minutes=e["minutes"]))
+        with subprocess.Popen(e["setup"], shell=True, cwd=cd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, start_new_session=True) as proc:
+            lines = deque(maxlen=1)
+            reader = threading.Thread(target=lambda: lines.extend(proc.stdout), daemon=True)
+            reader.start()
+            why = ""
+            while proc.poll() is None and not why:
+                why = ("stopped" if (self.p.state / "STOP").exists() else "out of time" if now() >= until else "")
+                if not why:
+                    time.sleep(0.2)
+            if why:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+            reader.join(5)
+        last = lines[0].decode(errors="replace").strip()[:200] if lines else "no output"
+        return why or (f"exit {proc.returncode}: {last}" if proc.returncode else "")
+
     def periodic_session(self, e, cd, prev):
         """One periodic session; its final text, or None when it was skipped or didn't finish."""
         name, p = e["name"], self.p
@@ -1056,13 +1077,7 @@ class Pilot:
             return None
         if e["setup"]:
             self.log(f"{name}: setup `{e['setup']}`")
-            try:
-                r = subprocess.run(e["setup"], shell=True, cwd=cd, capture_output=True, text=True, errors="replace",
-                                   timeout=max(1, (self.end() - now()).total_seconds() - 60 * e["minutes"]))
-                last = (r.stdout + r.stderr).strip().splitlines()[-1:] or ["no output"]
-                failed = f"exit {r.returncode}: {last[0][:200]}" if r.returncode else ""
-            except subprocess.TimeoutExpired:
-                failed = "still running when the session would no longer fit before the deadline"
+            failed = self.periodic_setup(e, cd)
             if failed:
                 self.log(f"{name}: skipped this round: setup failed ({failed})")
                 return None

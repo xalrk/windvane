@@ -70,6 +70,23 @@ class Periodic(unittest.TestCase):
         self.assertNotIn("periodic", [k for k, _ in self.sessions()])
         self.assertIn("playtest: skipped this round: setup failed (exit 3: broken build)", self.log())
 
+    def test_a_hung_setup_ends_at_stop_now(self):
+        import threading
+        import time
+        self.make(PLAYTEST + 'setup = "touch started; read x; sleep 60"\n', tickets=2)  # waits on stdin, then hangs
+
+        def stop_when_started():
+            while not (self.p.ci_dir / "started").exists():
+                time.sleep(0.1)
+            (self.p.state / "STOP").write_text("now")
+        threading.Thread(target=stop_when_started, daemon=True).start()
+        began = time.time()
+        pilot = self.run_pilot()
+        self.assertLess(time.time() - began, 30)
+        self.assertNotIn("periodic", [k for k, _ in self.sessions()])
+        self.assertIn("playtest: skipped this round: setup failed (stopped)", self.log())
+        self.assertIn("stopped now", pilot.stop_reason)
+
     def test_setup_runs_on_current_main_first(self):
         self.make(PLAYTEST + 'setup = "test -f T-002.txt && touch built.flag"\n', tickets=2)
         self.run_pilot()
