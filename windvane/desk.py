@@ -105,7 +105,7 @@ class Desk:
             return self.desk_leave(n, d, "merge didn't land", f"`gh pr merge` succeeded, but {p.upstream} doesn't "
                                    f"contain {head[:7]}.")
         if git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{head}", p.remote, "--delete",
-               branch).returncode:
+               branch).returncode and gout(p.main_root(), "ls-remote", "--heads", p.remote, branch):
             self.log(f"desk PR #{n}: kept {p.remote}/{branch}: it moved past the merged head")
         self.desk_done(d, head)
         self.desk_merged.append(n)
