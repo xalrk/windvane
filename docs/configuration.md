@@ -1,0 +1,102 @@
+# Configuration reference
+
+windvane reads three files. Every key in every file is optional; the defaults below apply when a key is missing.
+
+| File | Where | What |
+|---|---|---|
+| `.windvane/config.toml` | in the project, committed | how this project is built, checked, reviewed and merged |
+| `machine.toml` | `~/.config/windvane/` | settings for this machine: where new projects go, `windvane heavy` |
+| `phone.toml` | `~/.config/windvane/` | the ntfy phone, written by `windvane phone setup` (see [Phone setup](phone.md)) |
+
+`XDG_CONFIG_HOME` moves `~/.config`, and `XDG_STATE_HOME` moves the state directory (`~/.local/state/windvane/`).
+
+`windvane init` writes a commented `.windvane/config.toml` with every key at its default. Command-line options of
+`windvane run` (`--parallel`, `--cap`, `--week-cap`, `--ticket-hours`, `--min-slot`, `--answer-wait`) override the
+matching keys for one run.
+
+## Top level
+
+| Key | Default | Meaning |
+|---|---|---|
+| `name` | the repository's directory name | The project's short name: its state directory (`~/.local/state/windvane/<name>/`), the tmux session (`windvane-<name>`), and the prefix of phone question ids. Lower case letters, digits and dashes. |
+| `prefix` | `"T"` | Ticket id prefix: `T-001`, `T-002`, and `T-002a` for a ticket split off another. Ticket branches start with the id in lower case (`t-001-...`). |
+| `remote` | `"origin"` | The git remote sessions push to and the driver merges into. |
+| `main` | `"main"` | The branch work is merged into. Sessions may never push to it or check it out. |
+| `forge` | `"github"` | `github`: workers open pull requests with `gh` and the driver merges them. `git`: no pull requests; the driver merges the ticket branch and pushes `main` itself. |
+| `check` | `""` | The project's test command, run by `windvane check` in the worker's worktree and by the driver on every pushed head and merged tree, e.g. `"pytest -q"` or `"npm test"`. Empty means no check. |
+| `setup` | `""` | A command run once in each fresh autopilot worktree before it is used, e.g. `"npm ci"`. If it fails, the run stops with its output. |
+| `isolate` | `true` | Work in the autopilot's own worktrees. `false` runs sessions in your checkout instead, for projects whose builds can't be duplicated; it also limits the run to one ticket at a time. |
+| `goal` | `""` | What `windvane plan` and `windvane run --replan` aim at when no goal is given. |
+| `author` | git's identity | `"Name <email>"` for the driver's own commits (merges, planned tickets). |
+| `heavy_check` | `false` | The check itself is machine-heavy (a game engine, a render): run it under `windvane heavy`, one at a time on this machine. |
+
+## [models]
+
+The Claude model and effort level for each kind of session. Models are anything `claude --model` accepts (`opus`,
+`sonnet`, `haiku`, or a full model id); effort is anything `claude --effort` accepts, such as `medium` or `high`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `worker` | `"opus"` | Builds each ticket. |
+| `worker_effort` | `"high"` | |
+| `reviewer` | `"opus"` | Reads the diff and approves or asks for changes. |
+| `reviewer_effort` | `"high"` | |
+| `critic` | `"opus"` | Scores each ticket's outcome. |
+| `critic_effort` | `"high"` | |
+| `planner` | `"opus"` | Writes tickets for `windvane plan`. |
+| `planner_effort` | `"high"` | |
+| `preflight` | `"sonnet"` | Reads the next tickets for predictable questions when a run starts: a light job. |
+| `preflight_effort` | `"medium"` | |
+
+`windvane stats` shows tokens and turns per role, which is what to look at before changing these. See
+[Token efficiency](tokens.md).
+
+## [critic]
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Run the critic. `false` skips it: tickets go straight from the worker to the check and the review. |
+| `pass` | `8` | The pass mark out of 10. A ticket whose lowest dimension scores this or more goes on. The critic never sees it: it scores blind, and the driver applies the mark. |
+| `floor` | `4` | Under this on the first dimension (does it work at all), the worker is told to rethink the approach instead of patching it. |
+| `revisions` | `3` | How many times the worker may revise for the critic. After the last one the ticket goes on with its score recorded (`accept`). |
+
+See [Concepts: the critic](concepts.md#the-critic-and-calibration).
+
+## [autopilot]
+
+| Key | Default | Meaning |
+|---|---|---|
+| `parallel` | `"auto"` | How many tickets run at once. `"auto"` opens another slot whenever a ready ticket doesn't overlap the running ones, the usage window has room, and another slot would finish sooner than working one at a time, up to `max_parallel`. A number caps the slots at that; `1` works one ticket at a time. |
+| `max_parallel` | `4` | The most slots `"auto"` opens. |
+| `cap` | `75` | Percent of Claude's 5-hour usage window. At this level the run pauses until the window resets, then carries on. |
+| `week_cap` | `95` | Percent of the weekly usage limit. At this level the run stops. |
+| `ticket_hours` | `3` | The longest one worker run may take. A run that hits it is stopped and the ticket is set aside. |
+| `min_slot` | `30` | Minutes. No new ticket (or retry) starts with less than this left before the deadline. |
+| `answer_wait` | `10` | Minutes a question sent to the phone waits for an answer. After that the run builds the recommended option and records it as provisional, so you can change it later. |
+| `review_rounds` | `3` | Reviews in a row asking for changes before the ticket is set aside for you. |
+| `partials` | `3` | Worker runs in a row that run out of time before the ticket is set aside (it is probably too big: split it). |
+| `subagents` | `false` | Let worker sessions spawn subagents. Off by default: one fresh session per ticket is the design, and subagents multiply token use. |
+| `inline_diff_lines` | `1200` | Diffs up to this many lines are put straight into the reviewer's prompt, saving it the tool calls to fetch them; larger ones it reads itself. |
+| `retries` | `3` | How many times a session that dies outside its ticket's control (API error, network drop, crash) is rerun before the run stops with the error. |
+| `retry_minutes` | `3` | The first pause before such a rerun; each further one doubles it (3, 6, 12 minutes). |
+
+## machine.toml
+
+Settings for this machine, shared by every project on it.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `projects_dir` | none | Where the windvane skill creates new projects when you start one from a Claude Code session. |
+| `busy` | `["UnrealEditor", "ShaderCompile", "blender"]` | Process names (regular expressions, as `pgrep` matches them) of heavy work started outside windvane. `windvane heavy` waits while any of them runs. |
+| `min_free_gb` | `6` | `windvane heavy` waits until at least this much memory is available. Linux only; elsewhere only `busy` is waited on. |
+
+## Quiet times
+
+Not a TOML file: `~/.local/state/windvane/<name>/quiet.txt` lists times when nobody should be asked anything, one
+per line:
+```
+daily 23:00-08:00
+2026-10-02 13:00-15:00
+```
+In a quiet time workers build their recommended option for any product question and mark it provisional instead of
+asking. `windvane quiet` shows the file and what it means right now; `windvane mode` prints only the latter.
