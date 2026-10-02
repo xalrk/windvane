@@ -353,7 +353,8 @@ def cmd_stats(a, p):
     if est:
         print(f"(≥: {est} runs ended before their result; their tokens are counted from the stream, their API $ is not.)")
     print("(API $ is what the tokens would cost on the API: a relative meter on a subscription.)")
-    print("(base: a run's first-turn context; cached/turn: what each turn re-reads, base plus what the run has added.)")
+    print("(base: a run's first-turn context, \"-\" for runs logged before windvane kept it; cached/turn: what each "
+          "turn re-reads, base plus what the run has added.)")
 
 
 def critic_stats(a, p):

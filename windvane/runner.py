@@ -113,6 +113,10 @@ TOOLS = {"worker": ["Bash", "Read", "Edit", "Write"], "fix": ["Bash", "Read", "E
          "planner": ["Bash", "Read", "Edit", "Write"], "reviewer": ["Bash", "Read"],
          "critic": ["Read", "Glob", "Grep"], "preflight": ["Read", "Glob", "Grep"]}
 NO_MCP = json.dumps({"mcpServers": {}})
+# The flags every session's command line uses that an older `claude` may not know: `windvane doctor` checks them,
+# since a CLI that lacks one fails every session at launch.
+CLI_FLAGS = ("--effort", "--setting-sources", "--strict-mcp-config", "--mcp-config", "--tools",
+             "--disable-slash-commands", "--append-system-prompt")
 
 
 def lean_flags(p, role):

@@ -18,7 +18,8 @@ times its context size, so windvane cuts turns:
 - **A lean base context**: each role starts with only the built-in tools its rules use (the worker: Bash, Read, Edit,
   Write; the critic and preflight: Read, Glob, Grep; the reviewer: Bash, Read), no MCP servers, no skills and none
   of your own hooks. Every tool's description is re-read on every turn: the full set doubled a session's first turn.
-  A project's `[[periodic]]` sessions keep the default tools and the project's skills.
+  A project's `[[periodic]]` sessions keep the default tools and the project's skills. `windvane doctor` says when
+  the installed `claude` is too old for these flags.
 - **Slow growth**: everything a tool prints is re-read on each later turn, so the rules ask for test failures and
   the summary line, diffs by file, and independent tool calls in one turn.
 - **Light roles get light models**: preflight runs on Sonnet at medium effort by default.
@@ -38,7 +39,7 @@ critic         42   199      632k     3,368k    108k    7.89    23  21.2k       
 planner         1    11       74k       376k     16k    0.99     3  17.4k       34.2k
 preflight       2     2       26k        18k      1k    0.11     0      -        9.1k
 (API $ is what the tokens would cost on the API: a relative meter on a subscription.)
-(base: a run's first-turn context; cached/turn: what each turn re-reads, base plus what the run has added.)
+(base: a run's first-turn context, "-" for runs logged before windvane kept it; cached/turn: what each turn re-reads, base plus what the run has added.)
 ```
 
 | Column | Meaning |

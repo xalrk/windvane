@@ -12,7 +12,7 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from windvane import install  # noqa: E402
+from windvane import install, runner  # noqa: E402
 from windvane.install import add_keyword_hook  # noqa: E402
 
 RUNTIME = tempfile.mkdtemp()
@@ -51,7 +51,9 @@ class KeywordHook(unittest.TestCase):
         self.assertEqual(data["hooks"]["Stop"][0]["hooks"][0]["command"], "x")
 
 
-FAKES = {"claude": '#!/bin/sh\n[ "$1 $2" = "auth status" ] && echo \'{"loggedIn": true}\'\nexit 0\n',
+HELP = " ".join(runner.CLI_FLAGS)  # `claude --help`, as far as doctor reads it
+FAKES = {"claude": '#!/bin/sh\n[ "$1 $2" = "auth status" ] && echo \'{"loggedIn": true}\'\n'
+                   f'[ "$1" = "--help" ] && echo "{HELP} --allowedTools --disallowed-tools"\nexit 0\n',
          "gh": "#!/bin/sh\nexit 0\n", "tmux": "#!/bin/sh\nexit 0\n"}
 
 
