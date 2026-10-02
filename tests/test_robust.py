@@ -89,6 +89,24 @@ class Supervisor(unittest.TestCase):
         q = Queue(self.p)
         self.assertEqual((q.status("T-001"), q.status("T-002")), ("done", "done"))
 
+    def test_a_crash_beside_a_running_ticket_lets_it_finish_and_never_reruns_it(self):
+        """The crashing driver waits for its running tickets (they merge or end as usual) before it exits, so a
+        restart starts no worker session again for them: a crash costs no ticket twice."""
+        self.s.ticket("T-001", touches="a.txt")
+        self.s.ticket("T-002", touches="b.txt")
+        self.s.publish("touches")
+        os.environ["FAKE_WORK_S"] = "1"
+        crashed = []
+        self.crash_when(lambda pilot: "T-001" in pilot.running and not crashed and not crashed.append(1))
+        argv = ["-C", str(self.s.root), "run", "--for", "2h", "--parallel", "2", "--no-preflight"]
+        with redirect_stdout(io.StringIO()):
+            driver.supervise(self.p, argv, cli.parse_deadline(None, "2h"), start=self.start, sleep=lambda s: None)
+        self.assertEqual(len(self.calls), 2)
+        log = self.log()
+        self.assertLess(log.index("T-001: merged"), log.index("driver crashed"))  # finished before the exit
+        self.assertEqual((log.count("T-001: worker run"), log.count("T-002: worker run")), (1, 1))
+        self.assertIn("Merged: do T-001 (T-001); do T-002 (T-002)", self.pushes[-1][1])
+
     def test_a_fourth_crash_in_an_hour_stops_with_one_push(self):
         self.crash_when(lambda pilot: True)
         rc, _ = self.supervise("--for", "2h")
