@@ -87,6 +87,22 @@ class Periodic(unittest.TestCase):
         self.assertIn("playtest: skipped this round: setup failed (stopped)", self.log())
         self.assertIn("stopped now", pilot.stop_reason)
 
+    def test_a_setup_that_ends_as_the_stop_comes(self):
+        import subprocess
+        from unittest import mock
+        self.make(PLAYTEST + 'setup = "true"\n', tickets=0)
+        pilot = driver.Pilot(self.p, args())
+        pilot.deadline = now() + timedelta(hours=1)
+        self.p.state.mkdir(parents=True, exist_ok=True)
+        (self.p.state / "STOP").write_text("now")
+        polls, real_wait = [], subprocess.Popen.wait
+
+        def poll(proc):  # still running at the first look, ended and reaped by the next
+            polls.append(1)
+            return None if len(polls) == 1 else real_wait(proc)
+        with mock.patch.object(subprocess.Popen, "poll", poll):
+            self.assertEqual(pilot.periodic_setup(self.p.periodic["playtest"], self.s.root), "stopped")
+
     def test_setup_runs_on_current_main_first(self):
         self.make(PLAYTEST + 'setup = "test -f T-002.txt && touch built.flag"\n', tickets=2)
         self.run_pilot()

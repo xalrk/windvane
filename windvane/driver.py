@@ -1064,7 +1064,10 @@ class Pilot:
                 if not why:
                     time.sleep(0.2)
             if why:
-                os.killpg(proc.pid, signal.SIGKILL)
+                try:  # the whole group: a build's own children too
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:  # it ended (and was reaped) as the stop came
+                    pass
                 proc.wait()
             reader.join(5)
         last = lines[0].decode(errors="replace").strip()[:200] if lines else "no output"
