@@ -89,6 +89,17 @@ class CollapseCheck(unittest.TestCase):
         self.assertEqual(self.pushes, [])
         self.assertIsNone(critic.collapsed([{"ticket": f"T-00{i}", "score": 8, "fixes": 0} for i in range(4)]))
 
+    def test_a_recalibration_starts_afresh(self):
+        self.record(COLLAPSED)
+        self.s.write(".windvane/CRITIC.md", "# Scale\nworks: 2 crashes, 5 ..., 8 ...\n")
+        new = [{"ticket": f"T-03{i}", "score": 8, "fixes": 0, "step": "pass", "scale": critic.scale(self.p, self.s.root)}
+               for i in range(4)]
+        for r in new:
+            append_jsonl(self.p.state / "critic.jsonl", r)
+        self.assertIsNone(critic.collapsed(critic.read_jsonl(self.p.state / "critic.jsonl")))  # 4 on the new scale
+        append_jsonl(self.p.state / "critic.jsonl", {**new[0], "ticket": "T-035"})
+        self.assertIn("5 of 5 first scores are 8", critic.collapsed(critic.read_jsonl(self.p.state / "critic.jsonl")))
+
     def test_a_score_set_by_the_fix_count(self):
         recs = [{"ticket": t, "score": s, "fixes": f, "step": st} for t, s, f, st in BY_FIXES]
         self.assertEqual(critic.collapsed(recs), "Critic scale collapsed: the fix count sets the score (0 fixes: 9, "

@@ -8,6 +8,7 @@ contact sheets). It runs `windvane critic <ID>` and follows the last line, `CRIT
 pass mark), scope (under it, but nothing this ticket can fix), revise, rethink (the first dimension under the floor:
 the approach is wrong), accept (out of revisions). The critic scores blind; only the driver knows the bar. Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed `windvane plan`.
 """
+import hashlib
 import re
 import statistics
 from pathlib import Path
@@ -137,8 +138,10 @@ def collapsed(recs, last=10, least=5):
     """One line when the scale stopped measuring anything, else None. Over the last `last` tickets scored (at least
     `least` of them): half or more of their first scores on one value, or every verdict's score but one in ten set by
     its fix count alone. The first self-run did both: 8 of its last 10 first scores were 8, and 0 fixes always meant
-    8, 1 fix 7, so the score only repeated the fix list."""
-    c = calibration(recs, None, last)
+    8, 1 fix 7, so the score only repeated the fix list. Only verdicts on the newest scale count: a recalibration
+    starts afresh."""
+    now = next((r.get("scale") for r in reversed(recs) if r.get("score") is not None), None)
+    c = calibration([r for r in recs if r.get("scale") == now], None, last)
     if not c or len(c["tickets"]) < least:
         return None
     n = lambda x: f"{x:g}"
@@ -165,6 +168,12 @@ def spread(xs):
     n = lambda x: f"{x:g}"
     lo, hi = min(xs), max(xs)
     return f"{n(lo)}-{n(hi)} (median {n(statistics.median(xs))})" if lo != hi else f"all {n(lo)}"
+
+
+def scale(p, cwd):
+    """A short hash of the project's scale files: verdicts on an older scale don't count toward `collapsed`."""
+    text = "".join(f.read_text() for rel in (p.rubric_rel, p.calibration_rel) if (f := Path(cwd) / rel).is_file())
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
 def system_prompt(p, cwd):
@@ -208,7 +217,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None):
     critique = text[text.find("Score"):] if "Score" in text else text
     entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
              "dims": dims, "fixes": fixes, "revisions": n, "step": step(p, dims, fixes, n), "gist": gist[:200],
-             "critique": critique}
+             "critique": critique, "scale": scale(p, cwd)}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
 
