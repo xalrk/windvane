@@ -309,7 +309,7 @@ def cmd_stats(a, p):
     rows = read_jsonl(p.state / "ledger.jsonl")
     since = f"{now() - timedelta(days=a.days):%Y-%m-%d %H:%M}"
     rows = [r for r in rows if r.get("at", "") >= since]
-    if a.periodic:
+    if getattr(a, "periodic", False):
         return periodic_stats(rows, a.days)
     rows = [r for r in rows if not r.get("event")]  # a periodic score, not a session
     if not rows:
