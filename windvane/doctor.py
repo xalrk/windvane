@@ -3,11 +3,12 @@
 Free and quick: it runs only local commands (`claude auth status`, `gh auth status`), never a Claude session."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 
-from . import install, phone
+from . import install, phone, runner
 from .config import CHECKOUT
 
 
@@ -33,6 +34,13 @@ def claude_logged_in():
         return r.returncode == 0
 
 
+def claude_lacks():
+    """The session flags this `claude` doesn't list in its help: an older CLI that fails every session at launch."""
+    r = run_quiet(["claude", "--help"])
+    text = r.stdout if r else ""
+    return [f for f in runner.CLI_FLAGS if not re.search(rf"(?<![\w-]){f}(?![\w-])", text)]
+
+
 def checks(p=None):
     """(level, what, fix) per check: level "ok", "need" (windvane can't run without it) or "optional"."""
     out = []
@@ -51,6 +59,9 @@ def checks(p=None):
     add(has_claude, True, "Claude Code (`claude`)", "curl -fsSL https://claude.ai/install.sh | bash")
     if has_claude:
         add(claude_logged_in(), True, "Claude Code logged in", "claude auth login")
+        lacks = claude_lacks()
+        add(not lacks, True, f"Claude Code new enough ({version('claude') or '?'}"
+            + (f" lacks {', '.join(lacks)})" if lacks else ")"), "claude update")
     github = bool(p and p.exists and p.cfg["forge"] == "github")
     why = "this project's forge is github" if github else "for projects with forge = github"
     has_gh = bool(shutil.which("gh"))
