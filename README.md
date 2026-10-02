@@ -18,21 +18,15 @@ while they are busy elsewhere, without touching their checkout and without mergi
 
 ## What a run looks like
 
-`windvane watch` follows every session live (it costs no tokens):
+`windvane watch` follows every session live (it costs no tokens). An excerpt from a real run, lines shortened:
 ```
-══ 20261002-004612-T-015.jsonl
-› The fake ntfy server now drops the stream after one message; checking the run reconnects.
-  Bash: python3 -m unittest tests.test_phone -q
-    ----------------------------------------------------------------------
-    Ran 41 tests in 6.2s
-    … (+1 lines)
-  Edit: windvane/phone.py
-  Bash: windvane critic T-015
-    Scores: works=7 clear=7 lean=8
-
-    Someone who isn't on your machine now gets pushes, can tap A/B and can send Stop with nothing extra to install…
-    … (+24 lines)
-■ done: 38 turns, 9 min
+══ 20261002-004600-T-015.jsonl
+› Pushed the fix; refreshing the critic's evidence pack and asking the critic.
+  Bash: git status --short | head -3; windvane check 2>&1 | tail -4
+    CHECK PASSED in 2.7 min
+› I fixed the bug the reviewer found: tapping Usage or Status on the phone during a usage pause no longer ends…
+■ done: 26 turns, 9 min
+[driver] 2026-10-02 00:55 T-015: critic 7/10 (works=7 clear=7 lean=8) (scope): built-in ntfy phone is solid…
 [driver] 2026-10-02 00:55 T-015: check on ade6446: CHECK PASSED (reused the pass from 00:54 for this tree)
 [driver] 2026-10-02 00:55 T-015: review run
 [driver] 2026-10-02 00:57 T-015: review approve: meets every Done-when point with tests against a fake server
@@ -44,6 +38,8 @@ Your phone gets a push for each merge, failure and question:
 Done: T-015 Phone notifications and answers that work for anyone
 Built, checked, reviewed and merged. Critic 7/10. 5h 5% · week 9%
 ```
+(`Critic 7/10` is the critic's score for the ticket, its lowest dimension; `5h 5% · week 9%` is how much of Claude's
+5-hour and weekly usage limits is used so far.)
 
 `windvane stats` shows where the tokens went:
 ```
