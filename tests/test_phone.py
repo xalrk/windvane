@@ -192,7 +192,8 @@ class Setup(PhoneTest):
         self.assertEqual(stat.S_IMODE(phone.conf_path().stat().st_mode), 0o600)
         for t in (c["topic"], c["reply_topic"]):
             self.assertRegex(t, r"^[A-Za-z0-9_-]{32}$")
-            self.assertFalse(re.search(r"(?i)claude|ntfy|sandbox|" + re.escape(os.environ.get("USER", "x")), t))
+            user = os.environ.get("USER", "")  # unset in a bare CI shell: a stand-in letter would match by chance
+            self.assertFalse(re.search(r"(?i)claude|ntfy|sandbox" + (f"|{re.escape(user)}" if user else ""), t))
         self.assertNotEqual(c["topic"], c["reply_topic"])
         self.assertIn("test push: sent", out.getvalue())
         self.assertIn(c["topic"], out.getvalue())  # at the desk only, to subscribe
