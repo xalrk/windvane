@@ -26,7 +26,7 @@ from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import critic, phone, selfupdate
+from . import critic, phone, renumber, selfupdate
 from .desk import Desk
 from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
@@ -552,13 +552,9 @@ class Pilot(Desk):
         for _ in range(tries):
             self.fetch()
             clean_detach(p, cd, p.upstream)
-            author = p.cfg["author"]
-            ident = (["-c", f"user.name={author.split('<')[0].strip()}", "-c",
-                      f"user.email={author.split('<')[1].rstrip('>').strip()}"] if "<" in author else [])
             msg = f"Merge {tid}: {title} (branch {branch})"
-            r = git(cd, *ident, "merge", "--no-ff", "-m", msg, sha)
-            if r.returncode:
-                git(cd, "merge", "--abort")
+            ok, renumbered = self.merge_main(sha, msg)
+            if not ok:
                 self.feedback[tid] = (f"Your approved head {sha[:12]} conflicts with {p.upstream}: `git merge "
                                       f"{p.upstream}` into your branch, resolve the conflicts keeping both sides' "
                                       "intent, rerun the check, push, and finish READY.")
@@ -566,7 +562,10 @@ class Pilot(Desk):
                 self.approve_bounce(tid, sha, "conflict")
                 self.conflicted(tid)
                 return self.bounce(tid)
-            merge = gout(cd, "rev-parse", "HEAD")
+            merge, head = gout(cd, "rev-parse", "HEAD"), sha
+            if renumbered is not None:
+                self.log(f"{tid}: conflicted with {p.main} only in appended entries: {said(renumbered)}; resolved "
+                         "without a worker run")
             ok, summary, logf = check(p, cd)
             if not ok:
                 self.feedback[tid] = (f"Merged with the current {p.upstream}, your head {sha[:12]} fails the check: "
@@ -580,7 +579,15 @@ class Pilot(Desk):
                 if not pr:
                     self.feedback[tid] = "No open PR for your branch: open it (`gh pr create`) and finish READY."
                     return self.bounce(tid)
-                res = subprocess.run(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", sha, "--subject",
+                if renumbered is not None:  # GitHub merges the branch: it has to hold the resolution
+                    if git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{sha}", p.remote,
+                           f"{merge}:refs/heads/{branch}").returncode:
+                        self.log(f"{tid}: couldn't push the resolution to {branch}; trying again")
+                        continue
+                    head = merge
+                    sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
+                       f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}.")
+                res = subprocess.run(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", head, "--subject",
                                       msg], cwd=p.main_root(), capture_output=True, text=True)
                 merged = res.returncode == 0 or sh(p.main_root(), "gh", "pr", "view", pr, "--json", "state",
                                                    "-q", ".state") == "MERGED"
@@ -588,9 +595,23 @@ class Pilot(Desk):
                 res = git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
             if merged:
-                return self.merged_ok(tid, branch, sha) if self.landed(tid, branch, sha) else None
+                return self.merged_ok(tid, branch, head) if self.landed(tid, branch, head) else None
             self.log(f"{tid}: merge refused ({' '.join((res.stderr or res.stdout).split())[:200]}); trying again")
         self.fail(tid, "the merge was refused three times")
+
+    def merge_main(self, rev, msg):
+        """Merge `rev` into main in the ci worktree (left on the merge). A conflict only in appended entries of
+        `[[append_only]]` files is resolved and committed with the renumbering in its message. Returns (merged,
+        the renumbering: None for a clean merge)."""
+        cd, ident = self.cd, author_ident(self.p)
+        if git(cd, *ident, "merge", "--no-ff", "-m", msg, rev).returncode == 0:
+            return True, None
+        done = renumber.resolve(cd, self.p.append_only) if self.p.append_only else None
+        if done is not None and git(cd, *ident, "commit", "-q", "--no-verify", "-m", msg, "-m",
+                                    "Appended entries kept from both sides: " + said(done)).returncode == 0:
+            return True, done
+        git(cd, "merge", "--abort")
+        return False, None
 
     def approve_bounce(self, tid, sha, why):
         """An approved head sent back only for main's sake: if the worker just merges main and fixes that, the critic's
@@ -1368,6 +1389,10 @@ def changed_paths(cwd):
                 paths.append(out[i])
         i += 1
     return paths
+
+
+def said(renumbered):
+    return "renumbered " + ", ".join(renumbered) if renumbered else "no number collided"
 
 
 def author_ident(p):
