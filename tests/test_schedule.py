@@ -1,5 +1,5 @@
 """Which ready ticket starts beside the running ones: related work waits, conflicts cost a slot, and a queue that
-finishes one at a time before the deadline gets no extra slot."""
+finishes one at a time before the deadline gets no extra slot unless the usage window is under half the cap."""
 import json
 import os
 import sys
@@ -89,7 +89,18 @@ class Schedule(unittest.TestCase):
                       self.log())
         self.assertIn("Side by side: up to 3 at once,", self.log())
 
-    def test_a_short_queue_with_a_far_deadline_stays_at_one_slot(self):
+    def test_usage_under_half_the_cap_opens_a_slot_even_when_the_queue_fits(self):
+        self.ticket("T-001", "a.py")
+        self.ticket("T-002", "b.py")
+        pilot = self.run_pilot(minutes=600)  # 10% of the 5-hour window, cap 75: headroom to spend on speed
+        self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
+        at = self.start_times()
+        self.assertLess(abs(at["T-002"] - at["T-001"]), 1.0)
+        self.assertEqual(pilot.peak, 2)
+        self.assertNotIn("no 2nd slot", self.log())
+
+    def test_a_short_queue_with_a_far_deadline_stays_at_one_slot_past_half_the_cap(self):
+        os.environ["FAKE_FIVE"] = "0.4"  # 40% of the window, cap 75: no headroom, and one at a time fits
         self.ticket("T-001", "a.py")
         self.ticket("T-002", "b.py")
         pilot = self.run_pilot(minutes=600)

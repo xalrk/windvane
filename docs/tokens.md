@@ -16,7 +16,8 @@ times its context size, so windvane cuts turns:
 - **Long commands don't poll**: sessions start them with `windvane bg` and block on `windvane await`, rather than
   checking in a loop, each check re-reading the context.
 - **Light roles get light models**: preflight runs on Sonnet at medium effort by default.
-- **Parallel slots open only when they pay**: when one at a time wouldn't finish the queue before the deadline.
+- **Parallel slots open only when they pay**: when one at a time wouldn't finish the queue before the deadline, or
+  the 5-hour window is under half of `cap` (headroom that would otherwise go unused).
 
 ## `windvane stats`
 

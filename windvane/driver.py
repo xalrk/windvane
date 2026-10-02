@@ -809,8 +809,11 @@ class Pilot:
 
     def serial_fits(self):
         """Why another slot isn't worth opening, or "". Side by side risks conflicts and reading code that's about to
-        change, so a slot opens only when the tickets left wouldn't all finish one at a time before the deadline.
-        A running ticket counts as half one: it's under way."""
+        change, so a slot opens when the 5-hour window is under half the cap (headroom the user chose to spend on
+        speed) or when the tickets left wouldn't all finish one at a time before the deadline. A running ticket
+        counts as half one: it's under way."""
+        if self.usage.five is not None and self.usage.five < self.a.cap / 2:
+            return ""
         q, blocked = self.queue, set(self.questions)
         left = sum(t not in self.skip and q.status(t, blocked) in ("wip", "todo", "waiting") for t in q.order)
         m = self.ticket_minutes()

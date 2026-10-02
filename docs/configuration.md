@@ -66,7 +66,7 @@ See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 
 | Key | Default | Meaning |
 |---|---|---|
-| `parallel` | `"auto"` | How many tickets run at once. `"auto"` opens another slot whenever a ready ticket doesn't overlap the running ones, the usage window has room, and another slot would finish sooner than working one at a time, up to `max_parallel`. A number caps the slots at that; `1` works one ticket at a time. |
+| `parallel` | `"auto"` | How many tickets run at once. `"auto"` opens another slot whenever a ready ticket doesn't overlap the running ones, the usage window has room, and either the window is under half of `cap` or one at a time wouldn't finish before the deadline, up to `max_parallel`. A number caps the slots at that; `1` works one ticket at a time. |
 | `max_parallel` | `4` | The most slots `"auto"` opens. |
 | `cap` | `75` | Percent of Claude's 5-hour usage window. At this level the run pauses until the window resets, then carries on. |
 | `week_cap` | `95` | Percent of the weekly usage limit. At this level the run stops. |

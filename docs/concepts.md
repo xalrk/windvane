@@ -80,8 +80,8 @@ With `parallel = "auto"` (the default), windvane starts another ticket beside th
 - it doesn't name a running ticket's id or one of the files that ticket touches, and isn't `Related:` to it;
 - the 5-hour usage window has room for one more: current usage plus the recent cost per ticket times the tickets
   running stays under `cap`;
-- another slot pays: the tickets left, at recent tickets' minutes each, wouldn't finish one at a time before the
-  deadline.
+- another slot pays: the 5-hour window is under half of `cap`, or the tickets left, at recent tickets' minutes each,
+  wouldn't finish one at a time before the deadline.
 
 A held ticket keeps its place in the queue; the next one that passes starts instead. Each slot gets its own pair of
 worktrees. Every two merge conflicts between side-by-side tickets drop one slot for the rest of the run. Merges stay
