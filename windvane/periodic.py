@@ -187,14 +187,14 @@ class Periodic:
         (or, held, doesn't)."""
         from .driver import DIR, clean_detach, land as land_on_main
         p = self.p
+        titles = {t: title_of(keep[f], t) for f in keep for t in [p.norm(Path(f).stem)] if t in tickets}
         if land == "ask" and tickets:
-            land = self.ask_land(name, tickets)
+            land = self.ask_land(name, tickets, titles)
         self.fetch()
         clean_detach(p, cd, p.upstream)
         q, anchor = Queue(p), None
         if tickets:
             anchor = q.pick(self.skip)[0] if land == "near" else None
-            titles = {t: title_of(keep[f], t) for f in keep for t in [p.norm(Path(f).stem)] if t in tickets}
             titles[anchor] = q.titles.get(anchor, "")
             queue = keep.get(p.queue_rel) or gout(cd, "show", f"HEAD:{p.queue_rel}") + "\n"
             keep[p.queue_rel] = place(queue, tickets, land, anchor, titles, name, p)
@@ -215,7 +215,7 @@ class Periodic:
         if not ok:
             push(f"{p.name}: tickets not merged", f"{title} wait on {where}: merge it by hand.", 4, "warning")
 
-    def ask_land(self, name, tickets):
+    def ask_land(self, name, tickets, titles):
         """`land = "ask"`: one phone question, near / end / hold; waits up to `answer_wait` minutes (and never past
         the deadline or a stop). No answer, "later", no phone or a quiet time: hold."""
         p = self.p
@@ -224,7 +224,9 @@ class Periodic:
         if quiet_now(p)[0]:
             self.log(f"{name}: quiet time, no question; the tickets are held")
             return "hold"
-        sent = phone.ask(qid, f"{p.name}: {name} wrote {n} ticket{'s' * (n != 1)} ({', '.join(tickets)}). Queue them? "
+        which = "; ".join(f"{t} {titles.get(t, '')[:60]}".strip() for t in tickets)
+        which = which if len(which) <= 400 else which[:399] + "…"
+        sent = phone.ask(qid, f"{p.name}: {name} wrote {n} ticket{'s' * (n != 1)}: {which}. Queue them? "
                          f"No answer in {self.a.answer_wait:g} min: hold.", [o for _, o in ASK_LAND])
         if not sent:
             self.log(f"{name}: {'no phone' if sent is None else 'the question did not send'}; the tickets are held")
@@ -233,7 +235,7 @@ class Periodic:
         while now() < until and not (p.state / "STOP").exists():
             got = phone.answer(qid)
             if got.startswith("ANSWER"):
-                letter = got.split()[1][:1].upper()
+                letter = (got.split()[1:] or [""])[0][:1].upper()
                 land = dict(zip("ABC", (k for k, _ in ASK_LAND))).get(letter, "hold")
                 self.log(f"{name}: answered {letter}: {land}")
                 return land

@@ -99,7 +99,9 @@ class Land(Base):
                 mock.patch.object(driver.phone, "answer", return_value=""):
             pilot, q = self.landed("ask", answer_wait=0.01)
         self.assertEqual(ask.call_count, 1)
-        self.assertIn("T-004", ask.call_args[0][1])
+        self.assertIn("triage wrote 1 ticket: T-004 found. Queue them? No answer in 0.01 min: hold.",
+                      ask.call_args[0][1])  # titles: the one push is all the user decides on
+        self.assertEqual(ask.call_args[0][2][2], "hold them, parked in QUEUE.md, for you at the desk")
         self.assertEqual(q.status("T-004"), "parked")
         self.assertIn("triage: no answer; the tickets are held", self.log())
 
