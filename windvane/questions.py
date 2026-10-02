@@ -10,15 +10,15 @@ A worker that needs a call it may not make writes it into `.windvane/QUESTIONS.m
     Recommendation: A, because ...
     Waits for the user: <why>        (only for money, licences, undoing merged work)
 
-The driver sends it to the phone with `notify-ask` and skips the ticket until it's answered (phone, or
+The driver sends it to the phone (phone.py), if there is one, and skips the ticket until it's answered (phone, or
 `windvane answer` at the desk). No answer in `answer_wait` minutes: the next run builds the recommendation and
 records it under `## Provisional`. In a quiet time (`quiet.txt`) nothing is asked: runs build the recommendation.
 """
 import re
-import shutil
 from datetime import datetime, timedelta
 
-from .util import load_json, save_json, sh
+from . import phone
+from .util import load_json, save_json
 
 OPT_RE = re.compile(r"^- \*\*([A-E])\*\*:?\s*(.+)$", re.M)
 BLOCK_RE = re.compile(r"^### (\S+?):?[ \t]+(.*?)$(.*?)(?=^### |^PREFLIGHT:|^## |\Z)", re.M | re.S)
@@ -121,8 +121,5 @@ def give_answer(p, tid, option=None, text=None):
 
 
 def phone_answer(p, tid):
-    """"ANSWER <letter>\t<text>", "LATER" or "" from notify-ask."""
-    if not shutil.which("notify-ask"):
-        return ""
-    out = sh(p.main_root(), "notify-ask", "--get", p.qid(tid))
-    return out if out.startswith(("ANSWER", "LATER")) else ""
+    """"ANSWER <letter>\t<text>", "LATER" or "" from the phone."""
+    return phone.answer(p.qid(tid))

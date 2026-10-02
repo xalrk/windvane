@@ -1,6 +1,5 @@
 """Small shared helpers: git, the log, phone pushes, JSON state files."""
 import json
-import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -42,13 +41,9 @@ def log(p, msg, echo=True):
 
 
 def push(title, msg, prio=3, tags="", buttons=()):
-    """A phone push through `notify` (ntfy; it censors secrets and names). Silently nothing without it."""
-    if not shutil.which("notify"):
-        return
-    args = ["notify", "-t", title, "-p", str(prio), "-g", tags]
-    for b in buttons[:3]:
-        args += ["-a", b]
-    subprocess.run(args + [msg], timeout=30, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    """A phone push (censored first), when there's a phone: see phone.py. Silently nothing without one."""
+    from . import phone
+    phone.push(title, msg, prio, tags, buttons)
 
 
 def load_json(path, default):

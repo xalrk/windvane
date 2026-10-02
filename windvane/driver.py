@@ -23,7 +23,7 @@ from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import critic, selfupdate
+from . import critic, phone, selfupdate
 from .config import CHECKOUT, HOME, exe, slots
 from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
@@ -671,14 +671,13 @@ class Pilot:
         q["asked"] = time.time()
         wait = "" if q["must_wait"] or not q["rec"] else (
             f" No answer in {self.a.answer_wait:g} min: I go with {q['rec']} and mark it to revisit.")
-        if shutil.which("notify-ask"):
-            subprocess.run(["notify-ask", self.p.qid(tid), f"{self.name(tid)}: {q['q']}{wait}",
-                            *[q["opts"][k] for k in sorted(q["opts"])]], capture_output=True)
-        else:
-            self.log(f"{tid}: no notify-ask; answer at the desk with `windvane answer {tid} <letter>`")
+        opts = [q["opts"][k] for k in sorted(q["opts"])]
+        if not phone.ask(self.p.qid(tid), f"{self.name(tid)}: {q['q']}{wait}", opts):
+            self.log(f"{tid}: no phone; answer at the desk with `windvane answer {tid} <letter>`")
 
     def poll_questions(self):
         p = self.p
+        phone.pump()
         desk = desk_answers(p)
         for tid, q in list(self.questions.items()):
             if q["asked"] is None:
@@ -752,6 +751,7 @@ class Pilot:
         """Sleep until `until`, waking within seconds for a stop or the run's deadline, which may have moved."""
         while now() < min(until, self.end()) and not (self.p.state / "STOP").exists():
             time.sleep(NAP)
+            phone.pump()
 
     def stop_check(self):
         """Why no new ticket may start (the run winds down), or None."""
@@ -1026,6 +1026,7 @@ class Pilot:
         """Works tickets until a stop; False when it couldn't start (a failed setup)."""
         p = self.p
         self.take_lock()
+        phone.register(p)
         (p.state / "STOP").unlink(missing_ok=True)
         (p.state / "DEADLINE").unlink(missing_ok=True)  # an earlier run's
         self.deadline = deadline
