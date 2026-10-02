@@ -946,14 +946,6 @@ class Pilot:
                 return
             if not self.running:
                 self.self_update()
-            due = self.periodic_due()
-            if due and self.running:  # it runs on a quiet tree: no new ticket until the running ones finish
-                self.idle_note([f"{due['name']} is due: waiting for {', '.join(sorted(self.running))} to finish"])
-                self.pause()
-                continue
-            if due:
-                self.periodic(due)
-                continue
             free = [i for i in range(self.n) if i not in self.running.values()]
             if not free or len(self.running) >= self.limit:
                 self.pause()
@@ -963,6 +955,14 @@ class Pilot:
             if over and not self.running:
                 if not self.wait_for_reset():
                     return
+                continue
+            due = self.periodic_due()
+            if due and self.running:  # it runs on a quiet tree: no new ticket until the running ones finish
+                self.idle_note([f"{due['name']} is due: waiting for {', '.join(sorted(self.running))} to finish"])
+                self.pause()
+                continue
+            if due:
+                self.periodic(due)
                 continue
             self.fetch()
             self.poll_questions()
