@@ -6,10 +6,13 @@ branches (fetch first).
            ticket by number; a bullet naming a split ticket's parent (T-004) stands for its parts (T-004a, T-004b)
   done     a merge on main from its branch (`t-003-...`, the whole branch name: `q-t-003-x` is another branch), or
            `- done: T-003 (why)` in QUEUE.md
+  last     `- last: T-003 (why)` in QUEUE.md: after every ticket not marked last, in the order of these lines
   parked   `- parked: T-003 (why)` in QUEUE.md: never started
   wip      an unmerged remote branch `t-003-...`: resumed before new work, unless no commit touched it for
            `stale_days`: then it waits for its turn in the order like new work
-  waiting  a dependency isn't done
+  waiting  a dependency isn't done; a `Depends on:` item that isn't a ticket id (`the user`, `M9`) waits until
+           `- done: M9 (why)` in QUEUE.md names it
+  asked    a question for it under `## Open` in QUESTIONS.md, whoever wrote it: blocked until it's answered
   touches  `Touches: windvane/driver.py, prompts/` in the header: tickets whose lists don't overlap may run at once
   related  `Related: T-004.` in the header: the same feature through other files, so never run beside T-004
 """
@@ -17,6 +20,7 @@ import re
 import time
 from pathlib import Path
 
+from .questions import blocks, part
 from .util import gout
 
 
@@ -34,6 +38,15 @@ def bullets(text, files, p):
 def depends_on(head, p, key="Depends on"):
     m = re.search(rf"{key}:(.*?)(?:\.\s|\n\s*\n|\Z)", head, re.S | re.I)
     return [t for t in (p.norm(x) for x in re.findall(p.id_re, m.group(1) if m else "", re.I)) if t]
+
+
+def outside(head, p):
+    """The `Depends on:` items that aren't ticket ids (`the user`, `M9`, free text), without notes in
+    brackets. An item naming a ticket (`T-004 (the parser)`) is a ticket dependency, and `nothing` is none."""
+    m = re.search(r"Depends on:(.*?)(?:\.\s|\n\s*\n|\n(?=[\w ]+:)|\Z)", head, re.S | re.I)
+    items = re.split(r",|;|\band\b", re.sub(r"\([^)]*\)", "", m.group(1)) if m else "")
+    items = (" ".join(x.split()).strip(" .`*") for x in items)
+    return [x for x in items if x and x.lower() not in ("nothing", "none") and not re.search(p.id_re, x, re.I)]
 
 
 def touches(head):
@@ -71,12 +84,16 @@ class Queue:
                 self.files[tid] = n
         self.text = {t: show(f) for t, f in self.files.items()}
         qmd = show(p.queue_rel)
-        listed = [t for t in bullets(re.sub(r"^\s*-\s*(done|parked):.*$", "", qmd, flags=re.M | re.I),
+        listed = [t for t in bullets(re.sub(r"^\s*-\s*(done|parked|last):.*$", "", qmd, flags=re.M | re.I),
                                          self.files, p) if t in self.files]
+        last = [t for t in bullets("".join(f"- {x}\n" for x in re.findall(r"^\s*-\s*last:(.*)$", qmd, re.M | re.I)),
+                                   self.files, p) if t in self.files]
         num = lambda t: (int(re.search(r"\d+", t).group()), t)
-        self.order = listed + sorted((t for t in self.files if t not in listed), key=num)
+        first = [t for t in listed if t not in last]
+        self.order = first + sorted((t for t in self.files if t not in first and t not in last), key=num) + last
         heads = {t: "\n".join(self.text[t].splitlines()[:8]) for t in self.files}
         self.deps = {t: depends_on(heads[t], p) for t in self.files}
+        self.outside = {t: outside(heads[t], p) for t in self.files}
         self.related = {t: depends_on(heads[t], p, "Related") for t in self.files}
         self.titles = {t: title(self.text[t], t) for t in self.files}
         self.touches = {t: touches(heads[t]) for t in self.files}
@@ -86,6 +103,12 @@ class Queue:
         self.done = {p.norm(m) for m in merged_branches(merges, bp)}
         self.done |= {p.norm(m) for m in re.findall(rf"^\s*-\s*done:\s*({p.id_re})", qmd, re.M | re.I)}
         self.parked = {p.norm(m) for m in re.findall(rf"^\s*-\s*parked:\s*({p.id_re})", qmd, re.M | re.I)}
+        self.done_words = {" ".join(m.split()).strip(" .`*").lower()
+                           for m in re.findall(r"^\s*-\s*done:\s*([^(\n]+)", qmd, re.M | re.I)}
+        self.asked = {}
+        for t, question, _ in blocks(part(show(p.questions_rel), "Open")):
+            if p.norm(t) in self.files:
+                self.asked.setdefault(p.norm(t), question)
         self.done.discard(None)
         self.wip, fresh = {}, set()
         old = time.time() - float(p.ap["stale_days"]) * 86400
@@ -111,11 +134,16 @@ class Queue:
             return "done"
         if tid in self.parked:
             return "parked"
-        if tid in blocked:
+        if tid in blocked or tid in self.asked:
             return "blocked"
-        if not all(self.is_done(d) for d in self.deps.get(tid, [])):
+        if self.waits_on(tid):
             return "waiting"
         return "wip" if tid in self.wip else "todo"
+
+    def waits_on(self, tid):
+        """What `tid` still waits on: its undone dependencies, ticket ids and outside ones alike."""
+        return ([d for d in self.deps.get(tid, []) if not self.is_done(d)]
+                + [x for x in self.outside.get(tid, []) if x.lower() not in self.done_words])
 
     def pick(self, skip=(), blocked=()):
         """(ticket, "wip"|"todo", its branches) for the next run, or (None, why)."""
@@ -131,9 +159,12 @@ class Queue:
     def listing(self, blocked=()):
         rows = []
         for t in self.order:
-            rows.append(f"{t:8} {self.status(t, blocked):8} {self.titles[t][:70]}"
+            s = self.status(t, blocked)
+            why = {"waiting": f"waiting on: {', '.join(self.waits_on(t))}",
+                   "blocked": f"question: {self.asked[t][:60]}" if t in self.asked else ""}.get(s, "")
+            rows.append(f"{t:8} {s:8} {self.titles[t][:70]}"
                         + (f"  [{' '.join(self.wip[t])}{', stale' if t in self.stale else ''}]"
-                           if t in self.wip else ""))
+                           if t in self.wip else "") + (f"  ({why})" if why else ""))
         return "\n".join(rows)
 
     def next_id(self, taken=()):

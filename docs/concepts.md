@@ -20,7 +20,9 @@ Retry with exponential backoff, at most 5 tries. Don't change the upload API.
 - After 5 failures the error names the file and the last HTTP status.
 ```
 
-- **Depends on:** tickets that must be merged first. A ticket waits until all of them are.
+- **Depends on:** tickets that must be merged first. A ticket waits until all of them are. Anything else named here
+  (`the user`, `M9`, free text) makes it wait too, until a `- done: M9 (why)` line in `QUEUE.md` names it.
+  `windvane queue` shows what each waiting ticket waits on.
 - **Touches:** the files and directories the ticket changes. It decides what may run in parallel (below). A ticket
   without this line runs alone.
 - **Related:** (optional, written by the planner) open tickets that change the same feature through other files.
@@ -35,11 +37,15 @@ you to look at (`--merge` merges them at once).
 ### The queue and ticket status
 
 `.windvane/QUEUE.md` gives the order: tickets listed as `- T-004` are worked top to bottom, then any other ticket by
-number. Two more kinds of line:
+number. More kinds of line:
 ```
 - done: T-002 (folded into T-005)     counts as merged without a merge of its own
+- done: M9 (beta shipped)             releases tickets with `Depends on: M9`
 - parked: T-003 (needs a design call)  never started
+- last: T-009 (polish)                runs after every ticket not marked last, in the order of these lines
 ```
+A ticket with a question under `## Open` in `QUESTIONS.md` on `main` waits until it's answered (moved under
+`## Answered`), whoever wrote it: a question written at the desk stops its ticket like a worker's does.
 Status is never kept by hand: it is derived from git. A ticket is **done** when its branch (`t-007-...`, by the
 name's start: `q-t-007-...` is another branch) is merged into `main`, **in progress** while such a branch exists
 unmerged (a new run resumes it first, unless nobody committed to it for `stale_days`: then it waits for its turn in
