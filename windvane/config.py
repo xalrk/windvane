@@ -75,6 +75,30 @@ def _merge(base, over):
     return out
 
 
+def periodic(entries):
+    """`[[periodic]]` sessions by name: a project's own session (a playtest, an audit) run every `every` merges, or
+    only as another entry's `then` when `every` is unset. Mistakes stop the run at once rather than at the Nth merge."""
+    out = {}
+    for i, e in enumerate(entries if isinstance(entries, list) else [entries]):
+        name = str(e.get("name") or f"periodic-{i + 1}")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or name in out:
+            raise SystemExit(f"windvane: [[periodic]] name = {name!r}: use a unique word of letters, digits, - or _")
+        if not e.get("prompt"):
+            raise SystemExit(f"windvane: [[periodic]] {name} needs prompt = \"<the project's rules file>\"")
+        try:
+            every, minutes, setup_m = (int(e.get(k, d)) for k, d in (("every", 0), ("minutes", 60),
+                                                                      ("setup_minutes", 60)))
+        except (TypeError, ValueError):
+            raise SystemExit(f"windvane: [[periodic]] {name}: every, minutes and setup_minutes are whole numbers")
+        out[name] = {"name": name, "every": max(0, every), "minutes": max(1, minutes), "setup": e.get("setup", ""),
+                     "setup_minutes": max(1, setup_m),
+                     "prompt": e["prompt"], "then": e.get("then", "")}
+    for e in out.values():
+        if e["then"] and e["then"] not in out:
+            raise SystemExit(f"windvane: [[periodic]] {e['name']}: then = {e['then']!r} names no [[periodic]] entry")
+    return out
+
+
 def toplevel(start=None):
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=start or os.getcwd(), capture_output=True,
                        text=True)
@@ -98,6 +122,7 @@ class Project:
         self.models = c["models"]
         self.critic = c["critic"]
         self.ap = c["autopilot"]
+        self.periodic = periodic(c.get("periodic", []))
 
     def main_root(self):
         """The main checkout, also when `root` is one of its worktrees."""

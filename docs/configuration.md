@@ -81,6 +81,26 @@ See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 | `retry_minutes` | `3` | The first pause before such a rerun; each further one doubles it (3, 6, 12 minutes). |
 | `stale_days` | `3` | Days. An unfinished ticket branch with no commit for this long is no longer resumed before new work: it waits for its turn in the queue order. |
 
+## [[periodic]]
+
+Sessions of the project's own (a playtest, then a triage into tickets) run between tickets, when no ticket is
+running, in the `ci` worktree on current `main` (the checkout itself with `isolate = false`). None by default; see
+the [README](../README.md#periodic-sessions) for an example.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `name` | `periodic-<n>` | Its name in the log, the phone push and the ledger (`periodic:<name>`). |
+| `every` | unset | Run after this many merged tickets (counted over the run, restarts included). Unset: it runs only as another entry's `then`. |
+| `minutes` | `60` | The session's time limit. It is skipped when the deadline is nearer. |
+| `setup` | `""` | A shell command run first on current `main` (a build), with no input. A failure skips this round and is logged; so does a setup still running at `setup_minutes`, when the session would no longer fit before the deadline, or at any `windvane stop`. |
+| `setup_minutes` | `60` | The longest `setup` may run. |
+| `prompt` | required | The project's rules file for the session, a path in the repo. |
+| `then` | `""` | Another `[[periodic]]` entry run right after, given this one's final text and the files it names. |
+
+A session ends with one line `PERIODIC: <summary>`. Only new files under `.windvane/tickets/` and lines added to
+`QUEUE.md` are kept; they land on `main` as a plan does. A session cut off (deadline, stop, usage cap) or without the
+line leaves nothing.
+
 ## machine.toml
 
 Settings for this machine, shared by every project on it.

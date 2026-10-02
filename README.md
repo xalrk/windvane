@@ -106,6 +106,32 @@ your usage limit and stops at its deadline.
 
 Read more in [Concepts](docs/concepts.md).
 
+### Periodic sessions
+
+Some work isn't a ticket: every few merges, play the game, load-test the service or audit the UI on current `main`,
+and turn what it finds into tickets. Your project keeps the rules (and its build) in its own repo; windvane runs
+them between tickets, when no ticket is running:
+
+```toml
+[[periodic]]
+name = "playtest"
+every = 6                                 # merged tickets between runs
+minutes = 90                              # skipped when the deadline is nearer
+setup = "tools/build.sh"                  # failing skips this round
+prompt = "tools/autopilot/PLAYTEST.md"    # plays a build, writes a report, names its path
+then = "triage"
+
+[[periodic]]
+name = "triage"                           # no `every`: runs only after the playtest
+minutes = 30
+prompt = "tools/autopilot/TRIAGE.md"      # reads the report, writes tickets
+```
+
+Each session ends with `PERIODIC: <summary>`, which is logged and pushed to your phone; a `then` session gets the
+previous one's final text and the files it names. New tickets under `.windvane/tickets/` and lines added to
+`QUEUE.md` land on `main`, so the queue picks them up; any other change is discarded. Sessions show in
+`windvane stats` as `periodic:<name>`.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md): install, set up a project, the first run

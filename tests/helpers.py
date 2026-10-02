@@ -117,6 +117,19 @@ elif system.startswith("# windvane planner run"):
     if os.environ.get("FAKE_PLAN_OUTSIDE"):
         open("stray.txt", "w").write("x")
     text = "PLAN: new=1 noted=0 one ticket"
+elif system.startswith("# windvane periodic run"):  # the project's rules file says what to do
+    ids = re.search(r"## Ids for new tickets.*\n(.*)", prompt).group(1).split(", ")
+    if "WRITE_TICKET" in system:
+        open(f".windvane/tickets/{ids[0]}.md", "w").write(f"# {ids[0]}: found\nDepends on: nothing.\n")
+        q = open(".windvane/QUEUE.md").read()
+        open(".windvane/QUEUE.md", "w").write(q.replace("# Queue\n", "") + f"- {ids[0]} found\n")  # drops a line
+    if "WRITE_STRAY_ID" in system:  # a ticket under an id it wasn't given
+        open(".windvane/tickets/T-099.md", "w").write("# T-099: stray\nDepends on: nothing.\n")
+    if "WRITE_REPORT" in system:
+        open("report.txt", "w").write("the jump is broken\n")
+    open("README", "a").write("stray\n")
+    text = "played\n" + ("" if "NO_LINE" in system else "PERIODIC: " + (
+        "see report.txt" if "WRITE_REPORT" in system else "wrote a ticket"))
 elif system.startswith("# windvane preflight"):  # FAKE_PREFLIGHT: the questions it finds
     found = os.environ.get("FAKE_PREFLIGHT", "")
     text = found + "\nPREFLIGHT: " + ("1 questions" if found else "NONE")
