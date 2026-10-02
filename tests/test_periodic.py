@@ -132,6 +132,28 @@ class Periodic(unittest.TestCase):
         self.assertIn("1 other changed path will be dropped", self.log())
         self.assertEqual(self.s.git("status", "--porcelain", cwd=self.p.ci_dir), "")
 
+    def test_tickets_under_ids_it_was_not_given_are_dropped(self):
+        self.make(PLAYTEST.replace("PLAYTEST", "TRIAGE"), tickets=2)
+        self.s.write("tools/TRIAGE.md", "# Triage\nWRITE_TICKET\nWRITE_STRAY_ID\n")
+        self.s.publish("stray id")
+        self.run_pilot()
+        self.s.git("fetch", "-q", "origin")
+        names = self.s.git("ls-tree", "--name-only", "origin/main", ".windvane/tickets/")
+        self.assertIn("T-003.md", names)
+        self.assertNotIn("T-099.md", names)
+
+    def test_ids_on_an_unmerged_periodic_branch_stay_claimed(self):
+        self.make(PLAYTEST.replace("PLAYTEST", "TRIAGE"), tickets=2)
+        self.s.git("switch", "-q", "-c", "periodic-20260101-0000")  # a round whose merge was refused
+        self.s.ticket("T-003")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-qm", "periodic")
+        self.s.git("push", "-q", "origin", "HEAD")
+        self.s.git("switch", "-q", "main")
+        self.run_pilot()
+        runs = [v for k, v in self.sessions() if k == "periodic"]
+        self.assertIn("## Ids for new tickets, in order (at most 6)\nT-004, ", runs[0])
+
     def test_runs_in_the_checkout_without_isolate(self):
         self.make(PLAYTEST.replace("PLAYTEST", "TRIAGE"), tickets=2)
         cfg = self.s.root / ".windvane/config.toml"

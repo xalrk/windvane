@@ -123,6 +123,8 @@ elif system.startswith("# windvane periodic run"):  # the project's rules file s
         open(f".windvane/tickets/{ids[0]}.md", "w").write(f"# {ids[0]}: found\nDepends on: nothing.\n")
         q = open(".windvane/QUEUE.md").read()
         open(".windvane/QUEUE.md", "w").write(q.replace("# Queue\n", "") + f"- {ids[0]} found\n")  # drops a line
+    if "WRITE_STRAY_ID" in system:  # a ticket under an id it wasn't given
+        open(".windvane/tickets/T-099.md", "w").write("# T-099: stray\nDepends on: nothing.\n")
     if "WRITE_REPORT" in system:
         open("report.txt", "w").write("the jump is broken\n")
     open("README", "a").write("stray\n")

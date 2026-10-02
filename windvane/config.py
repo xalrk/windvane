@@ -89,7 +89,7 @@ def periodic(entries):
             every, minutes, setup_m = (int(e.get(k, d)) for k, d in (("every", 0), ("minutes", 60),
                                                                       ("setup_minutes", 60)))
         except (TypeError, ValueError):
-            raise SystemExit(f"windvane: [[periodic]] {name}: every and minutes are whole numbers")
+            raise SystemExit(f"windvane: [[periodic]] {name}: every, minutes and setup_minutes are whole numbers")
         out[name] = {"name": name, "every": max(0, every), "minutes": max(1, minutes), "setup": e.get("setup", ""),
                      "setup_minutes": max(1, setup_m),
                      "prompt": e["prompt"], "then": e.get("then", "")}

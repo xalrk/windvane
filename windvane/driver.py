@@ -38,8 +38,8 @@ RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)"
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
-CARRIED = ("periodic_at", "skip", "merged", "failed", "partials", "reviews", "scores", "plans", "fail_streak", "peak", "conflicts",
-           "spent", "update_said", "scale_said")  # the run's own memory, handed to the driver a self-update restarts
+CARRIED = ("periodic_at", "skip", "merged", "failed", "partials", "reviews", "scores", "plans", "fail_streak", "peak",
+           "conflicts", "spent", "update_said", "scale_said")  # the run's own memory, handed to the driver a self-update restarts
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
@@ -1027,6 +1027,7 @@ class Pilot:
         self.fetch()
         clean_detach(p, cd, p.upstream)
         kept = None  # what the last session that finished leaves to land; a cut-off one's changes are dropped
+        self.handed = set()  # the ticket ids the chain's sessions were given: only those land
         while e and e["name"] not in done and not (p.state / "STOP").exists():
             done.add(e["name"])
             self.periodic_at[e["name"]] = len(self.merged)
@@ -1094,6 +1095,7 @@ class Pilot:
         taken = {p.norm(Path(f).stem) for f in os.listdir(here)} - {None} if here.is_dir() else set()
         first = int(re.search(r"\d+", Queue(p).next_id(taken | pending_ids(p))).group())
         ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + 6)]
+        self.handed |= set(ids)
         limit = now() + timedelta(minutes=e["minutes"])
         prompt = "\n\n".join(filter(None, [
             f"Periodic session {name} on {p.upstream} at {gout(cd, 'rev-parse', '--short', 'HEAD')}, after "
@@ -1117,12 +1119,13 @@ class Pilot:
         return output(text, cd)
 
     def periodic_keep(self, cd, name):
-        """What may land from the tree as it is: new ticket files, and QUEUE.md with only the lines added to it.
-        Returns ({path: text}, how many new tickets)."""
+        """What may land from the tree as it is: new ticket files under the ids the sessions were given (any other id
+        could clash with a plan's), and QUEUE.md with only the lines added to it. Returns ({path: text}, how many new
+        tickets)."""
         p = self.p
         keep = {f: (cd / f).read_text(errors="replace") for f in changed_paths(cd)
                 if f.startswith(p.tickets_rel + "/") and f.endswith(".md") and (cd / f).is_file()
-                and git(cd, "cat-file", "-e", f"HEAD:{f}").returncode}
+                and p.norm(Path(f).stem) in self.handed and git(cd, "cat-file", "-e", f"HEAD:{f}").returncode}
         tickets = len(keep)
         old_q = gout(cd, "show", f"HEAD:{p.queue_rel}")
         queue = added_lines(old_q, (cd / p.queue_rel).read_text() if (cd / p.queue_rel).is_file() else old_q)
@@ -1339,6 +1342,7 @@ def output(text, cd):
         out.append(f"### {path} ({f})\n{body}")
     return "\n\n".join(out)
 
+
 def changed_paths(cwd):
     """Every path with uncommitted changes, both sides of a rename. -z: no quoting, no stripped leading spaces."""
     out = git(cwd, "status", "--porcelain", "-z", "--untracked-files=all").stdout.split("\0")
@@ -1403,11 +1407,12 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
 
 
 def pending_ids(p):
-    """Ticket ids on unmerged remote `plan-*` branches: a plan whose PR is still open has claimed them."""
+    """Ticket ids on unmerged remote `plan-*` and `periodic-*` branches: tickets whose PR is still open have claimed
+    them."""
     ids = set()
     branches = gout(p.main_root(), "branch", "-r", "--no-merged", p.upstream, "--format=%(refname:short)")
     for b in branches.split():
-        if b.startswith(f"{p.remote}/plan-"):
+        if b.startswith((f"{p.remote}/plan-", f"{p.remote}/periodic-")):
             names = gout(p.main_root(), "ls-tree", "--name-only", b, p.tickets_rel + "/").split()
             ids |= {p.norm(Path(n).stem) for n in names if n.endswith(".md")} - {None}
     return ids
