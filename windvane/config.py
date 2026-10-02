@@ -33,14 +33,18 @@ DEFAULTS = {
     "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
     "models": {"worker": "opus", "worker_effort": "high", "reviewer": "opus", "reviewer_effort": "high",
                "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high",
-               "preflight": "sonnet", "preflight_effort": "medium"},  # preflight: a light read of the next tickets
+               "preflight": "sonnet", "preflight_effort": "medium",  # preflight: a light read of the next tickets
+               "fix": "opus", "fix_effort": "high"},  # fix: makes a red or conflicting desk PR merge
     "critic": {"enabled": True, "pass": 8, "floor": 4, "revisions": 3},
     # parallel: "auto" starts another ticket whenever one fits beside the running ones (Touches) and in the usage
     # window, up to max_parallel; a number caps the slots at that
     "autopilot": {"parallel": "auto", "max_parallel": 4, "cap": 75, "week_cap": 95, "ticket_hours": 3,
                   "min_slot": 30, "answer_wait": 10, "review_rounds": 3, "partials": 3, "subagents": False, "inline_diff_lines": 1200,
                   "retries": 3, "retry_minutes": 3,  # a session that dies (API, network) reruns after 3, 6, 12 min
-                  "stale_days": 3},  # a ticket branch untouched this long resumes in its queue turn, not first
+                  "stale_days": 3,  # a ticket branch untouched this long resumes in its queue turn, not first
+                  # forge github: the owner's open PRs with this label are checked and merged between tickets ("":
+                  # off); a red or conflicting one gets up to desk_fixes fix sessions
+                  "desk_label": "windvane merge", "desk_fixes": 2},
 }
 
 
