@@ -562,7 +562,7 @@ class Pilot(Desk):
                 self.approve_bounce(tid, sha, "conflict")
                 self.conflicted(tid)
                 return self.bounce(tid)
-            merge, head = gout(cd, "rev-parse", "HEAD"), sha
+            merge = gout(cd, "rev-parse", "HEAD")
             if renumbered is not None:
                 self.log(f"{tid}: conflicted with {p.main} only in appended entries: {said(renumbered)}; resolved "
                          "without a worker run")
@@ -584,10 +584,10 @@ class Pilot(Desk):
                            f"{merge}:refs/heads/{branch}").returncode:
                         self.log(f"{tid}: couldn't push the resolution to {branch}; trying again")
                         continue
-                    head = merge
+                    sha = merge  # the head to merge now, and on a retry the one to merge main into
                     sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
                        f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}.")
-                res = subprocess.run(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", head, "--subject",
+                res = subprocess.run(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", sha, "--subject",
                                       msg], cwd=p.main_root(), capture_output=True, text=True)
                 merged = res.returncode == 0 or sh(p.main_root(), "gh", "pr", "view", pr, "--json", "state",
                                                    "-q", ".state") == "MERGED"
@@ -595,7 +595,7 @@ class Pilot(Desk):
                 res = git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
             if merged:
-                return self.merged_ok(tid, branch, head) if self.landed(tid, branch, head) else None
+                return self.merged_ok(tid, branch, sha) if self.landed(tid, branch, sha) else None
             self.log(f"{tid}: merge refused ({' '.join((res.stderr or res.stdout).split())[:200]}); trying again")
         self.fail(tid, "the merge was refused three times")
 

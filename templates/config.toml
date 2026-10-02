@@ -58,3 +58,11 @@ desk_fixes = 2            # fix sessions per red or conflicting desk PR before i
 # setup_minutes = 60        # a setup still running then is stopped and the round skipped
 # prompt = "tools/autopilot/PLAYTEST.md"   # your rules for the session, in your repo
 # then = "triage"           # another [[periodic]] run right after, given this one's output
+
+# An append-only numbered file (decisions, ADRs, migrations; none by default): two branches that each append an entry
+# conflict on the same next number. The driver resolves that itself: main's entries, then the branch's, renumbered
+# past main's, with the branch's own references to them updated. Any other conflict goes back to the worker.
+# [[append_only]]
+# file = "docs/DECISIONS.md"
+# entry = '^\| D-(\d+) \|'   # a line that starts an entry; group 1 is its number
+# ref = 'D-{n}'              # how other lines refer to entry n

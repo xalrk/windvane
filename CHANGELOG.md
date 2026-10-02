@@ -6,6 +6,10 @@ All notable changes to windvane are listed here. The format follows
 
 ## Unreleased
 
+### Added
+- `[[append_only]]`: a conflict only in entries appended to a numbered log (decisions, ADRs, migrations) is resolved
+  by the driver, renumbering the branch's colliding entries and its references to them, without another worker run.
+
 ### Fixed
 - `windvane init` picks `forge = "git"` for a remote that isn't on GitHub (or without `gh`), and says which it chose.
 - `windvane queue` names tickets that aren't pushed yet, instead of "no tickets yet".

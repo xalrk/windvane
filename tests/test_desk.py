@@ -30,7 +30,9 @@ def pr(n):
 if a[:2] == ["repo", "view"]:
     print(json.dumps({"owner": {"login": "me"}}))
 elif a[:2] == ["pr", "list"]:
-    print(json.dumps([{**x, "headRefOid": head(x["headRefName"])} for x in st["prs"] if x["state"] == "OPEN"]))
+    prs = [{**x, "headRefOid": head(x["headRefName"])} for x in st["prs"] if x["state"] == "OPEN"
+           and ("--head" not in a or x["headRefName"] == a[a.index("--head") + 1])]
+    print(prs[0]["number"] if prs and "-q" in a else "" if "-q" in a else json.dumps(prs))
 elif a[:2] == ["pr", "view"]:
     x = pr(a[2])
     print(json.dumps({"headRefOid": head(x["headRefName"]), "state": x["state"]}))
@@ -172,6 +174,45 @@ class DeskPRs(unittest.TestCase):
         self.step()
         self.assertEqual(self.state()["prs"][0]["state"], "MERGED")
         self.assertEqual(self.pushes, ["Fixed: desk PR #1 merged"])
+
+    def test_a_conflict_only_in_appended_entries_merges_renumbered_without_a_fix_run(self):
+        cfg = self.s.root / ".windvane/config.toml"
+        cfg.write_text(cfg.read_text() + "[[append_only]]\nfile = \"LOG.md\"\nentry = '^- L(\\d+):'\nref = 'L{n}'\n")
+        self.commit({"LOG.md": "- L1: start\n"})
+        self.s.git("push", "-q", "origin", "main")
+        self.p = Project(self.s.root)
+        self.pilot = self.new_pilot()
+        self.pr(1, {"LOG.md": "- L1: start\n- L2: desk, after L1\n", "desk.txt": "see L2\n"})
+        self.commit({"LOG.md": "- L1: start\n- L2: main\n"})
+        self.s.git("push", "-q", "origin", "main")
+        self.assertEqual(self.step(), [1])
+        self.assertEqual(self.fixes(), [])
+        self.assertEqual(self.state()["prs"][0]["state"], "MERGED")
+        self.s.git("pull", "-q", "origin", "main")
+        self.assertEqual((self.s.root / "LOG.md").read_text(), "- L1: start\n- L2: main\n- L3: desk, after L1\n")
+        self.assertEqual((self.s.root / "desk.txt").read_text(), "see L3\n")
+        self.assertIn("in appended entries: renumbered L2 → L3 (LOG.md)", self.comments()[0])
+        self.assertEqual(self.pushes, ["Desk PR #1 merged"])
+
+    def test_a_tickets_renumbering_is_pushed_to_its_branch_merged_there_and_named_on_its_pr(self):
+        cfg = self.s.root / ".windvane/config.toml"
+        cfg.write_text(cfg.read_text() + "[[append_only]]\nfile = \"LOG.md\"\nentry = '^- L(\\d+):'\nref = 'L{n}'\n")
+        self.commit({"LOG.md": "- L1: start\n"})
+        self.s.git("push", "-q", "origin", "main")
+        self.p = Project(self.s.root)
+        self.pilot = self.new_pilot()
+        self.assertTrue(self.pilot.prepare(0))
+        self.pr(7, {"LOG.md": "- L1: start\n- L2: ticket\n"}, label=False)
+        sha = self.s.git("rev-parse", "desk-7")
+        self.commit({"LOG.md": "- L1: start\n- L2: main\n"})
+        self.s.git("push", "-q", "origin", "main")
+        self.pilot.queue = driver.Queue(self.p)
+        self.pilot.integrate("T-001", "desk-7", sha)
+        self.assertEqual(self.pilot.merged, ["T-001"])
+        self.assertEqual(self.state()["prs"][0]["state"], "MERGED")
+        self.s.git("pull", "-q", "origin", "main")
+        self.assertEqual((self.s.root / "LOG.md").read_text(), "- L1: start\n- L2: main\n- L3: ticket\n")
+        self.assertIn("in appended entries: renumbered L2 → L3 (LOG.md)", self.comments()[0])
 
     def test_refused_merge_goes_to_a_fix_run(self):
         os.environ["FAKE_GH_REFUSE"] = "1"

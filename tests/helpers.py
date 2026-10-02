@@ -78,6 +78,11 @@ if system.startswith("# windvane worker run"):
     if not resolve_only:
         with open(f"{tid}.txt", "a") as f:
             f.write("built\n")
+    if os.environ.get("FAKE_DECISION") and not resolve_only:  # appends the next decision and refers to it
+        log_f = "docs/DECISIONS.md"
+        n = max(int(m) for m in re.findall(r"^\| D-(\d+) \|", open(log_f).read(), re.M)) + 1
+        open(log_f, "a").write(f"| D-{n} | {tid} |\n")
+        open(f"{tid}.txt", "a").write(f"see D-{n}\n")
     if os.environ.get("FAKE_CONFLICT"):  # every ticket rewrites one file: a merge after another's conflicts
         if "conflicts with" in prompt:
             sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
