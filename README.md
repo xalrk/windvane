@@ -49,6 +49,7 @@ windvane run --for 6h --detach                      # in tmux; `windvane watch` 
 | `stats --critic [--last N]` | whether the critic's calibration spreads its scores: first and final scores, revisions, scores on the pass mark, a collapsed scale |
 | `quiet`, `mode` | quiet times (`~/.local/state/windvane/<name>/quiet.txt`) and what they mean right now |
 | `heavy -- <cmd>` | run a machine-heavy command (engine, render, big build) one at a time on this machine |
+| `phone setup [--server URL] [--no-service]`, `phone off`, `phone rotate`, `phone listen` | pushes and questions on your phone through ntfy (see below) |
 | `doctor` | what this machine lacks for windvane (claude logged in, gh, tmux, the phone), with the fix for each |
 | `install [--yes]`, `uninstall [--yes]` | the skill and the mention hook into Claude Code, asking before each change; and out again |
 | `check`, `critic T-007`, `bg [--heavy] <name> <cmd>`, `await <name>` | used by the sessions themselves |
@@ -71,12 +72,23 @@ Config in `~/.config/windvane/` (`machine.toml`: `projects_dir` for new projects
 for the driver's checks and merges, `plan/` for the planner, which gets its own even with `isolate = false`).
 
 ## The phone (ntfy)
-With the user's `notify`, `notify-ask` and `ntfy-listen` set up, pushes go out for each merge, failure, pause,
-question and the final summary. `windvane init` adds `status`, `stop` and `overview` hooks to
-`~/.config/ntfy/*.d/`. A question shows buttons A and B and "Answer on computer". With no answer in `answer_wait`
-minutes the run builds its recommendation and marks it provisional; in quiet times nothing is asked. Questions
-marked `Waits for the user` (money, licences, undoing merged work) always wait. Without ntfy it all still works:
-questions wait for `windvane answer`.
+Off by default: without it everything works, and questions wait for `windvane answer`. `windvane phone setup`
+turns it on: two fully random topics on ntfy.sh (`--server` for your own), one for pushes and one for the phone's
+replies, kept in `~/.config/windvane/phone.toml` (mode 600). It sends a test push, shows the topic to subscribe to in
+the ntfy app (a QR code when `qrencode` is installed), and installs `windvane phone listen` as a systemd user
+service (`--no-service` skips it; a run reads the replies itself anyway). `windvane phone off` turns it off;
+`windvane phone rotate` makes new topics.
+
+Pushes go out for each merge, failure, pause, question and the final summary, censored first (emails, tokens, keys,
+passwords, your user and git names, the topics, the `redact` words in `phone.toml`; if the censor fails nothing is
+sent). A question shows buttons A and B and "Answer on computer"; C to E are typed as a letter. The phone can also
+send `status`, `overview`, `usage`, `stop` (after the current ticket) and `help`. Nothing else it sends does
+anything: it is never instructions. With no answer in `answer_wait` minutes the run builds its recommendation and
+marks it provisional; in quiet times nothing is asked. Questions marked `Waits for the user` (money, licences,
+undoing merged work) always wait.
+
+Your own `notify`, `notify-ask` and `ntfy-listen` scripts, when on PATH, are used instead; `windvane init` then
+adds `status`, `stop` and `overview` hooks to `~/.config/ntfy/*.d/`.
 
 ## Design
 What a ticket goes through:
@@ -131,7 +143,7 @@ Design choices, and why:
   sessions don't spend turns (each of which re-reads the whole context) fetching them.
 - **A token ledger** per run, role and ticket, to see where the tokens go and tune models and effort per role.
 - **Planning** from a goal plus the critic's follow-ups, optionally whenever the queue runs dry.
-- **Generic phone questions** through `notify-ask`, with no question PRs or branches to clean up.
+- **Generic phone questions** through ntfy, with no question PRs or branches to clean up.
 - **Preflight**: a light session reads the tickets likely to run before the deadline and lists the product calls they
   will need, asked at the terminal (or by a desk Claude session) before the user leaves. Answers go under
   `## Answered` on main and into that ticket's worker prompt; the phone is left for what nobody could predict.

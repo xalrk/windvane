@@ -23,7 +23,7 @@ from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import critic, selfupdate
+from . import critic, phone, selfupdate
 from .config import CHECKOUT, HOME, exe, slots
 from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
@@ -671,14 +671,19 @@ class Pilot:
         q["asked"] = time.time()
         wait = "" if q["must_wait"] or not q["rec"] else (
             f" No answer in {self.a.answer_wait:g} min: I go with {q['rec']} and mark it to revisit.")
-        if shutil.which("notify-ask"):
-            subprocess.run(["notify-ask", self.p.qid(tid), f"{self.name(tid)}: {q['q']}{wait}",
-                            *[q["opts"][k] for k in sorted(q["opts"])]], capture_output=True)
-        else:
-            self.log(f"{tid}: no notify-ask; answer at the desk with `windvane answer {tid} <letter>`")
+        opts = [q["opts"][k] for k in sorted(q["opts"])]
+        sent = phone.ask(self.p.qid(tid), f"{self.name(tid)}: {q['q']}{wait}", opts)
+        if sent is None:
+            self.log(f"{tid}: no phone; answer at the desk with `windvane answer {tid} <letter>`")
+        elif not sent:  # the next pass sends it again; the wait for an answer starts once it's out
+            q["asked"] = None
+            if not q.get("send_failed"):
+                self.log(f"{tid}: the phone push failed; trying again on the next pass")
+            q["send_failed"] = True
 
     def poll_questions(self):
         p = self.p
+        phone.pump()
         desk = desk_answers(p)
         for tid, q in list(self.questions.items()):
             if q["asked"] is None:
@@ -748,10 +753,14 @@ class Pilot:
         self.usage.probe(self.p)
         return True
 
-    def nap(self, until):
-        """Sleep until `until`, waking within seconds for a stop or the run's deadline, which may have moved."""
+    def nap(self, until, answers=False):
+        """Sleep until `until`, waking within seconds for a stop or the run's deadline (which may have moved).
+        Phone messages are handled throughout, but only a wait for `answers` ends early on one: a tap on Usage
+        during a usage pause must not cut the pause short."""
         while now() < min(until, self.end()) and not (self.p.state / "STOP").exists():
             time.sleep(NAP)
+            if phone.pump() and answers:
+                return
 
     def stop_check(self):
         """Why no new ticket may start (the run winds down), or None."""
@@ -960,7 +969,7 @@ class Pilot:
                     if not self.idle:
                         self.log(f"waiting for answers on {', '.join(self.questions)}")
                         self.idle = True
-                    self.nap(now() + timedelta(minutes=1))
+                    self.nap(now() + timedelta(minutes=1), answers=True)
                     continue
                 if self.a.replan and self.plans < self.a.replan:
                     self.plans += 1
@@ -1026,6 +1035,7 @@ class Pilot:
         """Works tickets until a stop; False when it couldn't start (a failed setup)."""
         p = self.p
         self.take_lock()
+        phone.start_run(p)
         (p.state / "STOP").unlink(missing_ok=True)
         (p.state / "DEADLINE").unlink(missing_ok=True)  # an earlier run's
         self.deadline = deadline

@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 
-from . import install
+from . import install, phone
 from .config import CHECKOUT
 
 
@@ -59,9 +59,8 @@ def checks(p=None):
         r = run_quiet(["gh", "auth", "status"])
         add(r and r.returncode == 0, github, "gh logged in", "gh auth login")
     add(shutil.which("tmux"), False, "tmux (for `windvane run --detach`)", "install tmux (e.g. sudo apt install tmux)")
-    add(shutil.which("notify") and shutil.which("notify-ask"), False,
-        "phone pushes and questions (ntfy's `notify` and `notify-ask` on PATH)",
-        "without them, questions wait for `windvane answer` at the desk")
+    add(shutil.which("notify") and shutil.which("notify-ask") or phone.on(phone.conf()), False,
+        "phone pushes and questions (ntfy)", "windvane phone setup; without it, questions wait for `windvane answer`")
     add(shutil.which("windvane"), True, "`windvane` on PATH",
         "windvane install" if CHECKOUT else "pipx ensurepath (or add ~/.local/bin to PATH)")
     skill = install.claude_dir() / "skills/windvane"

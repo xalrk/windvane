@@ -140,7 +140,8 @@ class Sandbox:
         fake.chmod(0o755)
         (self.bin / "windvane").symlink_to(REPO / "bin/windvane")
         self.env = {"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.tmp / "home"),
-                    "XDG_STATE_HOME": str(self.tmp / "state"), "WINDVANE_SELF_UPDATE": "0",
+                    "XDG_STATE_HOME": str(self.tmp / "state"), "XDG_CONFIG_HOME": str(self.tmp / "config"),
+                    "WINDVANE_SELF_UPDATE": "0",
                     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "FAKE_LOG": str(self.tmp / "calls.jsonl")}
         self.old_env = dict(os.environ)

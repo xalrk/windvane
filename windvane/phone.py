@@ -1,0 +1,517 @@
+"""The phone: pushes, questions and the phone's commands through ntfy (ntfy.sh, or a server of your own).
+
+Off by default: without it, questions wait for `windvane answer` at the desk. `windvane phone setup` turns it on with
+two fully random topics (pushes go to one; the phone's buttons and typed commands come back on the other), kept in
+~/.config/windvane/phone.toml (mode 600, outside every repo). On ntfy.sh a topic name is the only thing keeping
+strangers out, so topics are never written to logs, pushes, PRs or commits, and every push is censored first.
+
+Whoever learns the reply topic can send to it, so nothing from the phone is ever instructions: only one of a few
+fixed commands, or a letter choosing among the options windvane itself wrote for a question.
+
+The user's own `notify` / `notify-ask` scripts, when on PATH, are used instead (detection first, built-in second).
+"""
+import fcntl
+import functools
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import time
+import tomllib
+import urllib.request
+from pathlib import Path
+
+from .config import exe, user_dir
+
+SERVER = "https://ntfy.sh"
+PUMP_EVERY = 15  # seconds between a run's own looks at the reply topic (ntfy.sh allows a request per 5 s)
+RETRY = 10  # seconds before the listener reconnects after a dropped stream
+QID_RE = r"[a-z][a-z0-9-]{1,39}"
+HELP = ("status: each project's status\noverview: where each project stands\nusage: Claude usage\n"
+        "stop: stop the runs after their current ticket\nanswer <id> B: pick an option of a question\n"
+        "B: answer the newest open question with B\nlater <id>: answer at the computer instead")
+SERVICE = "windvane-phone.service"
+
+
+def conf_path():
+    return user_dir("XDG_CONFIG_HOME", ".config") / "phone.toml"
+
+
+def state_dir():
+    return user_dir("XDG_STATE_HOME", ".local/state") / "phone"
+
+
+def conf():
+    try:
+        return tomllib.loads(conf_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def on(c):
+    return bool(c.get("enabled") and c.get("topic") and c.get("reply_topic"))
+
+
+def save_conf(c):
+    """Written mode 600 from the start: the topics are the only lock on them."""
+    f = conf_path()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["# windvane phone (ntfy). Keep private: anyone with a topic can read your pushes or send commands.",
+             f'enabled = {"true" if c.get("enabled") else "false"}', f'server = {json.dumps(c["server"])}',
+             f'topic = {json.dumps(c["topic"])}', f'reply_topic = {json.dumps(c["reply_topic"])}',
+             f'redact = {json.dumps(c.get("redact", []))}  # extra words to censor: names, hosts, projects']
+    tmp = f.with_suffix(".tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as out:
+        out.write("\n".join(lines) + "\n")
+    tmp.replace(f)
+
+
+def new_topic():
+    """Random only: no prefix, name or word that would make it guessable."""
+    return secrets.token_urlsafe(24)
+
+
+# ---------- the censor (the same rules as the user's ntfy-redact)
+
+def mask(s):
+    return s[:2] + "***"
+
+
+RULES = [
+    (r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(-----END [A-Z ]*PRIVATE KEY-----|$)", lambda m: "[private key]"),
+    (r"(?<=://)[^/\s:@]+:[^/\s@]+@", lambda m: "***@"),
+    (r"\b(gh[pousr]_|github_pat_|sk-|xox[abprs]-|AKIA|AIza|glpat-|hf_)[A-Za-z0-9_\-]{10,}", lambda m: mask(m.group(0))),
+    (r"\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}", lambda m: mask(m.group(0))),
+    (r"(?i)\b((?:sudo[ _-]?)?pass(?:word|wd|phrase)?|pwd|secret|token|api[_-]?key|auth|credentials?|pin)"
+     r"(\s*(?:is|=|:)\s*)(\S+)", lambda m: m.group(1) + m.group(2) + "***"),
+    (r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", lambda m: mask(m.group(0)) + "@***"),
+    (r"\b(?=[A-Za-z0-9+/_-]*\d)(?=[A-Za-z0-9+/_-]*[A-Za-z])[A-Za-z0-9+/_-]{32,}={0,2}", lambda m: mask(m.group(0))),
+    (r"\b(\d{1,3})(?:\.\d{1,3}){3}\b", lambda m: m.group(1) + ".***"),
+    (r"\b\d(?:[ -]?\d){12,18}\b", lambda m: mask(m.group(0))),
+]
+
+
+@functools.cache
+def git_names():
+    """Git's user name and the local part of its email: read once per process, not twice on every push."""
+    out = []
+    for key in ("user.name", "user.email"):
+        r = subprocess.run(["git", "config", "--global", key], capture_output=True, text=True)
+        out.append(r.stdout.strip().split("@")[0])
+    return tuple(out)
+
+
+def words(c):
+    """Names that identify the user or open the phone: $USER, git's name and email, the topics, `redact`."""
+    found = {os.environ.get("USER", ""), c.get("topic", ""), c.get("reply_topic", ""), *c.get("redact", []),
+             *git_names()}
+    return sorted((w for w in found if len(w) >= 3), key=len, reverse=True)
+
+
+def censor(text, c):
+    for pattern, repl in RULES:
+        text = re.sub(pattern, repl, text, flags=re.S)
+    for w in words(c):
+        text = re.sub(re.escape(w), lambda m: mask(m.group(0)), text, flags=re.I)
+    return text
+
+
+# ---------- sending
+
+def send(c, title, msg, prio=3, tags="", buttons=()):
+    """One push to the push topic; each button ("Label=command") posts its command to the reply topic. Censored
+    first: if the censor fails, nothing is sent. Never raises: a push is never worth stopping a run for."""
+    try:
+        msg, title = censor(msg, c), censor(title, c)
+    except Exception:
+        return False
+    server = c.get("server", SERVER).rstrip("/")
+    body = {"topic": c["topic"], "message": msg, "priority": int(prio)}
+    if title:
+        body["title"] = title
+    if tags:
+        body["tags"] = tags.split(",")
+    acts = [{"action": "http", "label": b.split("=", 1)[0], "url": f"{server}/{c['reply_topic']}", "method": "POST",
+             "body": b.split("=", 1)[1], "clear": False} for b in buttons[:3] if "=" in b]
+    if acts:
+        body["actions"] = acts
+    req = urllib.request.Request(server, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            return True
+    except (OSError, ValueError):
+        return False
+
+
+def push(title, msg, prio=3, tags="", buttons=()):
+    """A push through the user's `notify` when it's on PATH, else the built-in one when the phone is on."""
+    if shutil.which("notify"):
+        args = ["notify", "-t", title, "-p", str(prio), "-g", tags]
+        for b in buttons[:3]:
+            args += ["-a", b]
+        subprocess.run(args + [msg], timeout=30, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    c = conf()
+    return on(c) and send(c, title, msg, prio, tags, buttons)
+
+
+# ---------- questions
+
+def ask(qid, question, options):
+    """Send a question with buttons for A and B and "Answer on computer" (C to E are typed). True when sent, False
+    when the push failed (worth another try), None when there's no phone: it then waits for `windvane answer`."""
+    if shutil.which("notify-ask"):
+        subprocess.run(["notify-ask", qid, question, *options], capture_output=True)
+        return True
+    c = conf()
+    if not on(c):
+        return None
+    opts = dict(zip("ABCDE", options))
+    d = state_dir()
+    for sub in ("questions", "answers"):
+        (d / sub).mkdir(parents=True, exist_ok=True)
+    (d / "answers" / f"{qid}.json").unlink(missing_ok=True)
+    (d / "questions" / f"{qid}.json").write_text(json.dumps({"options": opts, "asked": time.time()}))
+    lines = "\n".join(f"{k}: {v}" for k, v in opts.items())
+    more = [k for k in opts if k > "B"]
+    typed = f"\nFor {'/'.join(more)}, send the letter (or: answer {qid} {more[0]})" if more else ""
+    buttons = [f"{k}=answer {qid} {k}" for k in list(opts)[:2]] + [f"Answer on computer=later {qid}"]
+    return send(c, f"Question ({qid})", f"{question}\n{lines}{typed}", 4, "question", buttons)
+
+
+def answer(qid):
+    """"ANSWER <letter>\t<text>", "LATER" or "" (not answered yet)."""
+    if shutil.which("notify-ask"):
+        r = subprocess.run(["notify-ask", "--get", qid], capture_output=True, text=True)
+        out = r.stdout.strip()
+        return out if out.startswith(("ANSWER", "LATER")) else ""
+    try:
+        a = json.loads((state_dir() / "answers" / f"{qid}.json").read_text())
+    except (OSError, ValueError):
+        return ""
+    return "LATER" if a.get("later") else f"ANSWER {a['option']}\t{a['text']}"
+
+
+# ---------- projects the phone's commands reach
+
+def register(p):
+    """Remember a project's checkout, so the phone's status/overview/stop reach it."""
+    f = state_dir() / "projects.json"
+    try:
+        known = json.loads(f.read_text())
+    except (OSError, ValueError):
+        known = {}
+    if known.get(p.name) != str(p.main_root()):
+        known[p.name] = str(p.main_root())
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(known, indent=1))
+
+
+def projects():
+    try:
+        known = json.loads((state_dir() / "projects.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return {n: r for n, r in sorted(known.items()) if Path(r).is_dir()}
+
+
+def each(*args, timeout=90):
+    """One line (or a few) per project from `windvane -C <root> <args>`."""
+    out = []
+    for name, root in projects().items():
+        try:
+            r = subprocess.run([*exe(), "-C", root, *args], capture_output=True, text=True, timeout=timeout)
+            out.append(r.stdout.strip() or f"{name}: no answer")
+        except (OSError, subprocess.TimeoutExpired):
+            out.append(f"{name}: no answer")
+    return out or ["No windvane project has run here yet."]
+
+
+def usage_text():
+    from .config import Project
+    from .runner import Usage
+    roots = list(projects().values())
+    if not roots:
+        return "No windvane project has run here yet."
+    p = Project(roots[0])
+    u = Usage(p)
+    u.probe(p)
+    return u.text()
+
+
+# ---------- commands from the phone
+
+def reply(c, title, msg, *buttons):
+    send(c, title, msg, 3, "speech_balloon", buttons)
+
+
+def answer_question(c, qid, letter, note=""):
+    d = state_dir()
+    q = d / "questions" / f"{qid}.json"
+    try:
+        opts = json.loads(q.read_text())["options"]
+    except (OSError, ValueError):
+        return reply(c, "Answer not taken", f"No open question {qid}.")
+    if letter not in opts:
+        return reply(c, "Answer not taken", f"{qid} has options {', '.join(sorted(opts))}.")
+    (d / "answers").mkdir(parents=True, exist_ok=True)
+    (d / "answers" / f"{qid}.json").write_text(json.dumps({"option": letter, "text": opts[letter]}))
+    q.unlink()
+    reply(c, "Answer recorded", f"{qid}: {letter}, {opts[letter][:150]}{note}")
+
+
+def later(c, qid):
+    d = state_dir()
+    if not (d / "questions" / f"{qid}.json").exists():
+        return reply(c, "Nothing to postpone", f"No open question {qid}.")
+    (d / "answers").mkdir(parents=True, exist_ok=True)
+    (d / "answers" / f"{qid}.json").write_text(json.dumps({"later": True}))
+    reply(c, f"{qid} waits for you", "At the computer: windvane answer <ticket> <letter>.")
+
+
+def answer_newest(c, letter):
+    d = state_dir() / "questions"
+    qs = sorted(d.glob("*.json"), key=lambda f: f.stat().st_mtime) if d.exists() else []
+    if not qs:
+        return reply(c, "Answer not taken", f"No open question to answer with {letter}.")
+    older = f"\n({len(qs) - 1} older open: answer <id> {letter} for those.)" if len(qs) > 1 else ""
+    answer_question(c, qs[-1].stem, letter, older)
+
+
+def is_command(text):
+    """Exactly one command and nothing more (for the push topic, which also carries windvane's own pushes)."""
+    return bool(re.fullmatch(rf"(?i)\s*([a-e]\.?|status|overview|usage|stop|help|answer {QID_RE} [a-e]|later {QID_RE})"
+                             r"\s*", text))
+
+
+def handle(c, text, stale=False):
+    """Act on one message from the phone. Unknown text only gets the list of commands back. A `stale` message (sent
+    before this run or listener started) may still answer a question, but commands from then are dropped: a Stop
+    tapped after the last run ended must not end the next one."""
+    w = text.strip().lower().split()
+    if stale and not (w[:1] in (["answer"], ["later"]) or len(w) == 1 and re.fullmatch(r"[a-e]\.?", w[0])):
+        return
+    if len(w) == 1 and re.fullmatch(r"[a-e]\.?", w[0]):
+        return answer_newest(c, w[0][0].upper())
+    if w == ["status"]:
+        reply(c, "Status", "\n".join(each("status", "--line")), "Overview=overview", "Usage=usage")
+    elif w == ["overview"]:
+        reply(c, "Overview", "\n\n".join(each("overview")), "Status=status")
+    elif w == ["usage"]:
+        reply(c, "Claude usage", usage_text(), "Status=status")
+    elif w == ["stop"]:
+        reply(c, "Stop", "\n".join(each("stop", "--if-running")), "Status=status")
+    elif len(w) == 3 and w[0] == "answer" and re.fullmatch(QID_RE, w[1]) and re.fullmatch("[a-e]", w[2]):
+        answer_question(c, w[1], w[2].upper())
+    elif len(w) == 2 and w[0] == "later" and re.fullmatch(QID_RE, w[1]):
+        later(c, w[1])
+    elif w:
+        reply(c, "Commands", HELP)
+
+
+# ---------- the listener
+
+def listen(once=False, until=lambda: False, since=None):
+    """Read the reply topic (and exact commands typed on the push topic) and act on each message. `once`: what's
+    there now, then return (a run does this itself between tickets); otherwise hold a stream open until `until()`.
+    Commands sent before `since` (default: now) are stale. One reader at a time on this machine, so no command is
+    done twice."""
+    since = time.time() if since is None else since
+    d = state_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    lock = open(d / "listen.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock.close()
+        if once:
+            return False
+        raise SystemExit("windvane phone: already listening on this machine")
+    recent, handled = [], 0
+    try:
+        while not until():
+            c = conf()
+            if not on(c):
+                if once:
+                    return False
+                raise SystemExit("windvane phone: the phone is off (windvane phone setup)")
+            last = d / "last-id"
+            after = last.read_text().strip() if last.exists() else mark_now()
+            server = c.get("server", SERVER).rstrip("/")
+            url = f"{server}/{c['reply_topic']},{c['topic']}/json?since={after}" + ("&poll=1" if once else "")
+            try:
+                with urllib.request.urlopen(url, timeout=15 if once else 90) as stream:
+                    for raw in stream:
+                        ev = json.loads(raw)
+                        if ev.get("event") != "message":
+                            continue
+                        last.write_text(ev["id"])
+                        text = ev.get("message", "")
+                        if ev.get("topic") == c["topic"] and (ev.get("title") or not is_command(text)):
+                            continue  # windvane's own pushes, or chat typed on the push topic
+                        now = time.time()
+                        recent = [t for t in recent if now - t < 60] + [now]
+                        if len(recent) <= 10:  # a flood isn't the user
+                            handle(c, text[:200], ev.get("time", 0) < int(since))
+                            handled += 1
+                        if until():
+                            break
+            except (OSError, ValueError) as e:  # a dropped stream, a keepalive timeout, a server restart
+                if once:
+                    return False
+                print(f"windvane phone: {type(e).__name__}; reconnecting", file=sys.stderr, flush=True)
+                time.sleep(RETRY)
+            if once:
+                return handled
+    finally:
+        lock.close()
+
+
+_last_pump = 0.0
+_run_start = None
+
+
+def start_run(p):
+    """A run starts: its project becomes reachable from the phone, and only commands from now on reach it."""
+    global _run_start
+    register(p)
+    _run_start = time.time()
+
+
+def pump():
+    """A run's own look at the reply topic, at most every PUMP_EVERY seconds: answers and `stop` reach it even
+    without the listener service. Nothing when the listener (or the user's ntfy-listen) already reads it. How many
+    messages it acted on, so a waiting run wakes up for an answer."""
+    global _last_pump
+    if shutil.which("notify-ask") or time.time() - _last_pump < PUMP_EVERY or not on(conf()):
+        return 0
+    _last_pump = time.time()
+    try:
+        return listen(once=True, since=_run_start) or 0
+    except Exception:  # the phone must never stop a run
+        return 0
+
+
+# ---------- `windvane phone ...` at the desk
+
+def subscribe_help(c):
+    url = f"{c['server'].rstrip('/')}/{c['topic']}"
+    print("On the phone: install the ntfy app, tap +, and subscribe to this topic"
+          + ("" if c["server"].rstrip("/") == SERVER else f" on server {c['server']} (\"Use another server\")") + ":")
+    print(f"  {c['topic']}")
+    if shutil.which("qrencode"):
+        print("or scan this (it opens the topic):")
+        subprocess.run(["qrencode", "-t", "ANSIUTF8", url], check=False)
+    else:
+        print(f"or open {url} on the phone.")
+    print("Keep the topic private: anyone who has it can read your pushes. It's in", conf_path(), "(mode 600).")
+
+
+def unit_path():
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd/user" / SERVICE
+
+
+def systemctl(*args):
+    return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+
+
+def install_service():
+    """A systemd user service running `windvane phone listen`, so the phone's commands work with no run on."""
+    if not shutil.which("systemctl"):
+        print("No systemd here: keep `windvane phone listen` running (e.g. in tmux) for the phone's commands between "
+              "runs. During a run, answers and stop reach it anyway.")
+        return False
+    f = unit_path()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("[Unit]\nDescription=windvane phone: answers and commands from ntfy\nAfter=network-online.target\n\n"
+                 f"[Service]\nExecStart={' '.join(exe())} phone listen\nRestart=always\nRestartSec=30\n\n"
+                 "[Install]\nWantedBy=default.target\n")
+    systemctl("daemon-reload")
+    ok = systemctl("enable", "--now", SERVICE).returncode == 0
+    print(f"listener: {'running as' if ok else 'could not start'} the user service {SERVICE}")
+    return ok
+
+
+def remove_service():
+    if unit_path().exists():
+        systemctl("disable", "--now", SERVICE)
+        unit_path().unlink()
+        systemctl("daemon-reload")
+        print(f"listener: removed the user service {SERVICE}")
+
+
+def restart_service():
+    if unit_path().exists():
+        systemctl("restart", SERVICE)
+
+
+def mark_now():
+    """Only messages from now on count: an old `stop` must not stop a new run."""
+    d = state_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    since = str(int(time.time()))
+    (d / "last-id").write_text(since)
+    return since
+
+
+def setup(server=None, service=True, project=None):
+    c = conf()
+    c["server"] = (server or c.get("server") or SERVER).rstrip("/")
+    c.setdefault("topic", new_topic())
+    c.setdefault("reply_topic", new_topic())
+    c["enabled"] = True
+    save_conf(c)
+    mark_now()
+    if project:
+        register(project)
+    if shutil.which("notify"):
+        print("Your own `notify` / `notify-ask` are on PATH: windvane keeps using them; this setup is the fallback.")
+    ok = send(c, "windvane: phone works", "Pushes and questions from windvane come here. Tap Status to try a "
+              "command.", 3, "white_check_mark", ("Status=status",))
+    print(f"test push: {'sent' if ok else 'FAILED (check the server address and the network)'}")
+    subscribe_help(c)
+    if service:
+        install_service()
+    return 0 if ok else 1
+
+
+def off():
+    c = conf()
+    if not c:
+        return print("the phone is off (never set up)")
+    c["enabled"] = False
+    save_conf(c)
+    remove_service()
+    print("the phone is off: questions wait for `windvane answer`. `windvane phone setup` turns it on again "
+          "(same topics).")
+
+
+def rotate():
+    c = conf()
+    if not c.get("topic"):
+        raise SystemExit("windvane phone: not set up yet (windvane phone setup)")
+    c["topic"], c["reply_topic"] = new_topic(), new_topic()
+    save_conf(c)
+    mark_now()
+    restart_service()
+    print("New topics made: the old ones get nothing more. In the ntfy app, unsubscribe the old topic, then:")
+    subscribe_help(c)
+    if on(c):
+        ok = send(c, "windvane: new topic works", "Pushes come here from now on.", 3, "white_check_mark")
+        print(f"test push: {'sent' if ok else 'FAILED'}")
+
+
+def main(a, project=None):
+    if a.action == "setup":
+        return setup(a.server, not a.no_service, project)
+    if a.action == "off":
+        return off()
+    if a.action == "rotate":
+        return rotate()
+    if a.action == "listen":
+        return listen()

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import critic as critic_mod
-from . import doctor, driver, install, jobs, preflight, questions, watch
+from . import doctor, driver, install, jobs, phone, preflight, questions, watch
 from .config import DIR, HOME, Project, exe, find, toplevel
 from .queue import Queue
 from .runner import Usage, inherited_stop
@@ -394,6 +394,11 @@ def main(argv=None):
     s = sub.add_parser("uninstall", help="remove exactly what install added")
     s.add_argument("--yes", action="store_true", help="without asking")
     sub.add_parser("doctor", help="what this machine lacks for windvane, and how to fix it")
+    s = sub.add_parser("phone", help="pushes and questions on your phone (ntfy); off until `phone setup`")
+    s.add_argument("action", choices=("setup", "off", "rotate", "listen"),
+                   help="setup: turn it on and subscribe; off; rotate: new topics; listen: act on the phone's replies")
+    s.add_argument("--server", help=f"an ntfy server of your own (default {phone.SERVER})")
+    s.add_argument("--no-service", action="store_true", help="setup: don't install the background listener service")
     s = sub.add_parser("run", help="work the tickets until a deadline")
     g = s.add_mutually_exclusive_group()
     g.add_argument("--until", help="HH:MM or 'YYYY-MM-DD HH:MM'")
@@ -466,6 +471,9 @@ def main(argv=None):
     if a.cmd == "doctor":
         root = toplevel()
         return doctor.main(Project(root) if root else None)
+    if a.cmd == "phone":
+        root = toplevel()
+        return phone.main(a, Project(root) if root and (root / DIR / "config.toml").is_file() else None)
     if a.cmd == "heavy":
         from .heavy import run as heavy_run
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
