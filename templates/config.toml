@@ -22,6 +22,8 @@ planner = "opus"
 planner_effort = "high"
 preflight = "sonnet"       # reads the next tickets for questions at the start of a run
 preflight_effort = "medium"
+fix = "opus"               # makes a red or conflicting desk PR merge
+fix_effort = "high"
 
 [critic]
 enabled = true
@@ -42,6 +44,9 @@ review_rounds = 3         # reviews asking for changes before a ticket is set as
 partials = 3              # runs in a row that run out of time before a ticket is set aside
 subagents = false         # let worker runs spawn subagents (costly; one fresh session per ticket is the design)
 inline_diff_lines = 1200  # the reviewer gets diffs up to this size in its prompt
+desk_label = "windvane merge"  # forge github: your open PRs with this label are checked and merged between
+                          # tickets ("" turns it off)
+desk_fixes = 2            # fix sessions per red or conflicting desk PR before it is left for you
 
 # A session of your own between tickets, every few merges, on current main (none by default). It writes tickets
 # under .windvane/tickets/ and lines in QUEUE.md, which land on main; anything else it changes is discarded.
