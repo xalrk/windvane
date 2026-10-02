@@ -11,7 +11,7 @@ With `isolate = true` (the default), every session works in git worktrees the au
 | Worktree | Used by | For |
 |---|---|---|
 | `work/` (`work-1/`, ... per extra slot) | workers, and the critics they start | building tickets on their branches |
-| `ci/` (`ci-1/`, ...) | the driver and the reviewer | checks, reviews and merges, always on a detached head |
+| `ci/` (`ci-1/`, ...) | the driver, the reviewer and `[[periodic]]` sessions | checks, reviews and merges, always on a detached head |
 | `plan/` | the planner | writing tickets, even with `isolate = false` |
 
 Nothing the driver does changes your checkout's branch, index or files, so you can keep working at the desk during a
@@ -36,6 +36,7 @@ per role:
 | **Critic** | read files and the evidence pack | run any command, edit or write files, fetch from the web, spawn agents |
 | **Reviewer** | read files, run commands such as `git diff`, `git log`, `git show` | edit or write files, commit, push, switch branches, reset, merge, comment on or close pull requests |
 | **Planner** | write ticket files in its own worktree | commit, push, switch branches, spawn agents: the driver commits its tickets and opens the pull request (or merges, with `--merge`) |
+| **Periodic** | run commands and edit files on a detached `ci/` tree between tickets | commit, push, switch branches, reset, use `gh`, spawn agents: the driver keeps only new tickets and added `QUEUE.md` lines, lands them, and discards the rest |
 | **Preflight** | read the next tickets (in your checkout, read-only) | run any command, edit or write files, fetch from the web |
 
 Every session gets its rules (`prompts/*.md`) and the ticket in its prompt, and ends with a machine-readable result

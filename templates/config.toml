@@ -42,3 +42,13 @@ review_rounds = 3         # reviews asking for changes before a ticket is set as
 partials = 3              # runs in a row that run out of time before a ticket is set aside
 subagents = false         # let worker runs spawn subagents (costly; one fresh session per ticket is the design)
 inline_diff_lines = 1200  # the reviewer gets diffs up to this size in its prompt
+
+# A session of your own between tickets, every few merges, on current main (none by default). It writes tickets
+# under .windvane/tickets/ and lines in QUEUE.md, which land on main; anything else it changes is discarded.
+# [[periodic]]
+# name = "playtest"
+# every = 6                 # merged tickets between runs; unset: runs only as another entry's `then`
+# minutes = 90              # its time limit; skipped when the deadline is nearer
+# setup = "tools/build.sh"  # run first; failing skips this round
+# prompt = "tools/autopilot/PLAYTEST.md"   # your rules for the session, in your repo
+# then = "triage"           # another [[periodic]] run right after, given this one's output

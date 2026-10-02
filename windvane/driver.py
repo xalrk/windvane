@@ -11,6 +11,7 @@ Stops at the deadline, `windvane stop`, two failed tickets in a row, an empty qu
 keep dying (API errors, crashes; each is retried after a growing pause first). At the 5-hour cap it stops the running
 session and pauses until the window resets. A detached run's driver is itself restarted after a crash (`supervise`).
 """
+import difflib
 import fcntl
 import os
 import signal
@@ -26,7 +27,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import critic, phone, selfupdate
-from .config import CHECKOUT, HOME, exe, slots
+from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
 from .queue import Queue
@@ -36,7 +37,8 @@ from .util import git, gout, hhmm, last_match, load_json, log, now, push, read_j
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
-CARRIED = ("skip", "merged", "failed", "partials", "reviews", "scores", "plans", "fail_streak", "peak", "conflicts",
+PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
+CARRIED = ("periodic_at", "skip", "merged", "failed", "partials", "reviews", "scores", "plans", "fail_streak", "peak", "conflicts",
            "spent", "update_said", "scale_said")  # the run's own memory, handed to the driver a self-update restarts
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
@@ -183,6 +185,7 @@ class Pilot:
         self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, [], None
         self.pulled = (0, -1)  # (when, merges then): pull after each merge, else every PULL_EVERY seconds at most
         self.scale_said = False  # the collapsed-scale warning: logged and pushed once a run
+        self.periodic_at = {}  # [[periodic]] name -> len(merged) when it last ran (or was skipped)
 
     def slot_dirs(self, i):
         p = self.p
@@ -943,6 +946,14 @@ class Pilot:
                 return
             if not self.running:
                 self.self_update()
+            due = self.periodic_due()
+            if due and self.running:  # it runs on a quiet tree: no new ticket until the running ones finish
+                self.idle_note([f"{due['name']} is due: waiting for {', '.join(sorted(self.running))} to finish"])
+                self.pause()
+                continue
+            if due:
+                self.periodic(due)
+                continue
             free = [i for i in range(self.n) if i not in self.running.values()]
             if not free or len(self.running) >= self.limit:
                 self.pause()
@@ -994,6 +1005,129 @@ class Pilot:
             self.start(slot, tid, kind, branches)
             if self.n == 1:
                 self.threads[-1].join()
+
+    # ---------- periodic sessions
+
+    def periodic_due(self):
+        """The first [[periodic]] entry whose `every` merges have passed since it last ran this run (restarts carry
+        the count), or None."""
+        for e in self.p.periodic.values():
+            if e["every"] and len(self.merged) - self.periodic_at.get(e["name"], 0) >= e["every"]:
+                return e
+        return None
+
+    def periodic(self, e):
+        """Run `e` and the entries its `then` chains to, one after another in the ci tree on current main, then
+        land the tickets they wrote. Whatever else they changed is discarded with the tree."""
+        p, cd, done, prev = self.p, self.p.ci_dir, set(), None
+        if cd == p.work_dir and any(self.owner.values()):
+            self.periodic_at[e["name"]] = len(self.merged)
+            self.log(f"{e['name']}: skipped: the checkout holds a ticket's unfinished work")
+            return
+        self.fetch()
+        clean_detach(p, cd, p.upstream)
+        kept = None  # what the last session that finished leaves to land; a cut-off one's changes are dropped
+        while e and e["name"] not in done and not (p.state / "STOP").exists():
+            done.add(e["name"])
+            self.periodic_at[e["name"]] = len(self.merged)
+            prev = self.periodic_session(e, cd, prev)
+            if prev is None:
+                break
+            kept = self.periodic_keep(cd, e["name"])
+            e = p.periodic.get(e["then"])
+        self.save()
+        try:
+            if kept and kept[0]:
+                self.land_periodic(cd, *kept)
+        finally:
+            clean_detach(p, cd, p.upstream)
+
+    def periodic_fits(self, e):
+        left = self.end() - now()
+        if left < timedelta(minutes=e["minutes"]):
+            self.log(f"{e['name']}: skipped: {e['minutes']} min don't fit before the deadline")
+            return False
+        return True
+
+    def periodic_session(self, e, cd, prev):
+        """One periodic session; its final text, or None when it was skipped or didn't finish."""
+        name, p = e["name"], self.p
+        if not self.periodic_fits(e):
+            return None
+        if e["setup"]:
+            self.log(f"{name}: setup `{e['setup']}`")
+            try:
+                r = subprocess.run(e["setup"], shell=True, cwd=cd, capture_output=True, text=True, errors="replace",
+                                   timeout=max(1, (self.end() - now()).total_seconds() - 60 * e["minutes"]))
+                last = (r.stdout + r.stderr).strip().splitlines()[-1:] or ["no output"]
+                failed = f"exit {r.returncode}: {last[0][:200]}" if r.returncode else ""
+            except subprocess.TimeoutExpired:
+                failed = "still running when the session would no longer fit before the deadline"
+            if failed:
+                self.log(f"{name}: skipped this round: setup failed ({failed})")
+                return None
+            if not self.periodic_fits(e):
+                return None
+        rules_file = cd / e["prompt"]
+        if not rules_file.is_file():
+            self.log(f"{name}: skipped: its prompt {e['prompt']} isn't on {p.upstream}")
+            return None
+        here = cd / p.tickets_rel
+        taken = {p.norm(Path(f).stem) for f in os.listdir(here)} - {None} if here.is_dir() else set()
+        first = int(re.search(r"\d+", Queue(p).next_id(taken | pending_ids(p))).group())
+        ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + 6)]
+        limit = now() + timedelta(minutes=e["minutes"])
+        prompt = "\n\n".join(filter(None, [
+            f"Periodic session {name} on {p.upstream} at {gout(cd, 'rev-parse', '--short', 'HEAD')}, after "
+            f"{len(self.merged)} merged tickets this run. Today is {now():%Y-%m-%d}. End with the PERIODIC line.",
+            prev and f"## The previous session's output\n{prev}",
+            f"## Ids for new tickets, in order (at most 6)\n{', '.join(ids)}",
+            f"Time limit: {hhmm(limit)}; check with `date`.",
+        ]))
+        self.log(f"{name}: periodic session ({e['minutes']} min)")
+        deny = ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
+                "Bash(git reset *)", "Bash(gh *)"] + ([] if p.ap["subagents"] else ["Agent"])
+        system = rules(p, "PERIODIC.md") + "\n" + rules_file.read_text()
+        text, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}", prompt, system, cd, limit,
+                                          ["Bash(windvane *)"], deny)
+        m = last_match(PERIODIC_RE, text)
+        if killed or error or not m:
+            self.log(f"{name}: no result ({killed or error or 'no PERIODIC line'}); its changes are dropped")
+            return None
+        self.log(f"{name}: PERIODIC: {m.group(1)}")
+        push(f"{p.name}: {name}", m.group(1)[:300] or "done", 3, "mag")
+        return output(text, cd)
+
+    def periodic_keep(self, cd, name):
+        """What may land from the tree as it is: new ticket files, and QUEUE.md with only the lines added to it.
+        Returns ({path: text}, how many new tickets)."""
+        p = self.p
+        keep = {f: (cd / f).read_text(errors="replace") for f in changed_paths(cd)
+                if f.startswith(p.tickets_rel + "/") and f.endswith(".md") and (cd / f).is_file()
+                and git(cd, "cat-file", "-e", f"HEAD:{f}").returncode}
+        tickets = len(keep)
+        old_q = gout(cd, "show", f"HEAD:{p.queue_rel}")
+        queue = added_lines(old_q, (cd / p.queue_rel).read_text() if (cd / p.queue_rel).is_file() else old_q)
+        if queue != old_q:
+            keep[p.queue_rel] = queue + "\n"
+        other = len(changed_paths(cd)) - len(keep)
+        if other:
+            self.log(f"{name}: {other} other changed path{'s' * (other != 1)} will be dropped")
+        return keep, tickets
+
+    def land_periodic(self, cd, keep, tickets):
+        """Land the kept tickets and queue lines on main like a plan, so the queue picks them up."""
+        p = self.p
+        clean_detach(p, cd, p.upstream)
+        for f, text in keep.items():
+            (cd / f).parent.mkdir(parents=True, exist_ok=True)
+            (cd / f).write_text(text)
+        git(cd, "add", "-A", DIR)
+        title = f"Periodic: {tickets} new ticket{'s' * (tickets != 1)}"
+        ok, where = land(p, cd, f"periodic-{now():%Y%m%d-%H%M}", title, "Written by a [[periodic]] session.")
+        self.log(f"{title} on {where}" + ("" if ok else ", not merged; merge it by hand"))
+        if not ok:
+            push(f"{p.name}: tickets not merged", f"{title} wait on {where}: merge it by hand.", 4, "warning")
 
     def self_update(self):
         """Pulls the windvane install between tickets (nothing running) and, when the driver's own code changed,
@@ -1162,6 +1296,30 @@ def locked(p):
 
 
 # ---------- planning
+
+def added_lines(old, new):
+    """`new` with every line `old` had kept: a session may add queue lines, never drop or reorder existing ones."""
+    a, b, out = old.splitlines(), new.splitlines(), []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        out += a[i1:i2] if op in ("equal", "delete") else b[j1:j2] if op == "insert" else a[i1:i2] + b[j1:j2]
+    return "\n".join(out)
+
+
+def output(text, cd):
+    """A session's final text plus the files it names that exist in `cd` (paths relative to it, or absolute), so a
+    `then` session gets a report without being told where to look."""
+    out, seen = [text.strip()[-6000:]], set()
+    for path in re.findall(r"(?<![\w])((?:/|\.{0,2}/?)[\w.-]+(?:/[\w.-]+)*\.\w+)", text):
+        f = (cd / path).resolve() if not path.startswith("/") else Path(path)
+        if f in seen or not f.is_file() or len(seen) >= 5:
+            continue
+        seen.add(f)
+        try:
+            body = f.read_text()[:12000]
+        except (UnicodeDecodeError, OSError):
+            body = "(not text: open it yourself)"
+        out.append(f"### {path} ({f})\n{body}")
+    return "\n\n".join(out)
 
 def changed_paths(cwd):
     """Every path with uncommitted changes, both sides of a rename. -z: no quoting, no stripped leading spaces."""
