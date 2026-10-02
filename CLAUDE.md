@@ -15,6 +15,9 @@ windvane is an autopilot for Claude Code: a Python driver (`windvane/`) that run
   with tests; `python3 -m unittest discover -s tests` must pass.
 - **The user's checkout is sacred.** Nothing the driver does may change the main checkout's branch, index or files
   when `isolate` is on. Destructive git (`reset --hard`, `clean`) only ever runs in the driver's own `ci` worktree.
+- **windvane is for every project, not one.** A feature one project needs (a playtest, its build, its decision log)
+  comes in as a generic, optional extension point set in `.windvane/config.toml`, off by default; that project's
+  prompts, scripts and names stay in its own repo. Never name a user's project in code, prompts, tests or docs.
 - **Prompts are the product.** Every line of `prompts/*.md` is re-read on every turn of every session: keep them
   short, concrete and free of repetition. A rule worth adding should replace one, not just add up.
 - **Token efficiency is measured, not guessed.** Changes meant to save tokens say how they'd show in
