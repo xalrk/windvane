@@ -107,7 +107,7 @@ def added_lines(cd):
 def resolve(cd, rule_list):
     """Resolve the merge in progress in `cd` (HEAD main, MERGE_HEAD the branch) and stage it. Returns the renumbering
     as lines like "D-5 → D-6 (docs/DECISIONS.md)" ([] when no number collided), or None when it isn't only appended
-    entries: then nothing is staged and the caller aborts the merge."""
+    entries: then the caller aborts the merge, which also drops anything written here."""
     by_file = {r["file"]: r for r in rule_list}
     conflicted = gout(cd, "diff", "--name-only", "--diff-filter=U").splitlines()
     if not conflicted or any(f not in by_file for f in conflicted):
