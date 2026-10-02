@@ -133,6 +133,33 @@ def calibration(recs, bar, last=10):
     }
 
 
+def collapsed(recs, last=10, least=5):
+    """One line when the scale stopped measuring anything, else None. Over the last `last` tickets scored (at least
+    `least` of them): half or more of their first scores on one value, or every verdict's score but one in ten set by
+    its fix count alone. The first self-run did both: 8 of its last 10 first scores were 8, and 0 fixes always meant
+    8, 1 fix 7, so the score only repeated the fix list."""
+    c = calibration(recs, None, last)
+    if not c or len(c["tickets"]) < least:
+        return None
+    n = lambda x: f"{x:g}"
+    first = c["first"]
+    top = statistics.mode(first)
+    if 2 * first.count(top) >= len(first):
+        return (f"Critic scale collapsed: {first.count(top)} of {len(first)} first scores are {n(top)}; "
+                "recalibrate at the desk")
+    by = {}
+    for _, rs in c["tickets"]:
+        for r in rs:
+            by.setdefault(r.get("fixes", 0), []).append(r["score"])
+    guess = {f: statistics.mode(xs) for f, xs in by.items()}
+    hits = sum(xs.count(guess[f]) for f, xs in by.items())
+    if len(set(guess.values())) > 1 and c["verdicts"] - hits <= c["verdicts"] // 10:
+        rule = ", ".join(f"{f} fix{'es' * (f != 1)}: {n(guess[f])}" for f in sorted(guess))
+        return (f"Critic scale collapsed: the fix count sets the score ({rule}) in {hits} of {c['verdicts']} "
+                "verdicts; recalibrate at the desk")
+    return None
+
+
 def spread(xs):
     """"4-8 (median 6)": the range and middle of some scores."""
     n = lambda x: f"{x:g}"

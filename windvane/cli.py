@@ -213,7 +213,8 @@ def cmd_overview(a, p):
     work = next((m.group(1) for l in reversed(last_log(p, 200)) if (m := re.search(r" (\S+): worker run", l))), None)
     if running(p) and work:
         lines[-1] = f"Autopilot on, working on {work}: {q.titles.get(work, '')}."
-    c = critic_mod.calibration(read_jsonl(p.state / "critic.jsonl"), p.critic["pass"])
+    recs = read_jsonl(p.state / "critic.jsonl")
+    c = critic_mod.calibration(recs, p.critic["pass"])
     if c:
         n = len(c["tickets"])
         line = (f"Critic, last {n} tickets: first scores {critic_mod.spread(c['first'])}; {c['final_on_bar']} of {n} "
@@ -221,7 +222,8 @@ def cmd_overview(a, p):
         if c["accepted"]:
             line += f" {c['accepted']} passed only by running out of revisions."
         lines.append(line)
-    print("\n".join(lines))
+        lines.append(critic_mod.collapsed(recs) or "")
+    print("\n".join(filter(None, lines)))
 
 
 def cmd_queue(a, p):
@@ -338,7 +340,8 @@ def critic_stats(a, p):
     """Whether the critic's calibration spreads its scores out, over the last `--last` tickets it scored."""
     if a.last < 1:
         sys.exit("--last needs at least 1 ticket")
-    c = critic_mod.calibration(read_jsonl(p.state / "critic.jsonl"), p.critic["pass"], a.last)
+    recs = read_jsonl(p.state / "critic.jsonl")
+    c = critic_mod.calibration(recs, p.critic["pass"], a.last)
     if not c:
         print("no critic verdicts yet")
         return
@@ -349,6 +352,8 @@ def critic_stats(a, p):
     print(f"needed revisions: {c['revised']} of {n}")
     print(f"exactly on the pass mark: {c['final_on_bar']} of {n} final scores, {c['on_bar']} of {c['verdicts']} verdicts")
     print(f"passed only by running out of revisions (accept): {c['accepted']} of {n}")
+    if collapse := critic_mod.collapsed(recs):
+        print(collapse)
     for t, rs in c["tickets"]:
         print(f"  {t:8} {' → '.join(g(r['score']) for r in rs):14} {rs[-1].get('step', '')}")
 

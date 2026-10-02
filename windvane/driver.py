@@ -29,13 +29,13 @@ from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
 from .queue import Queue
 from .runner import Usage, over_caps, run_claude
-from .util import git, gout, hhmm, last_match, load_json, log, now, push, save_json, sh
+from .util import git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json, sh
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
 CARRIED = ("skip", "merged", "failed", "partials", "reviews", "scores", "plans", "fail_streak", "peak", "conflicts",
-           "spent", "update_said")  # the run's own memory, handed to the driver a self-update restarts
+           "spent", "update_said", "scale_said")  # the run's own memory, handed to the driver a self-update restarts
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 
@@ -177,6 +177,7 @@ class Pilot:
         self.home = HOME if CHECKOUT and os.environ.get("WINDVANE_SELF_UPDATE") != "0" else None
         self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, [], None
         self.pulled = (0, -1)  # (when, merges then): pull after each merge, else every PULL_EVERY seconds at most
+        self.scale_said = False  # the collapsed-scale warning: logged and pushed once a run
 
     def slot_dirs(self, i):
         p = self.p
@@ -437,6 +438,7 @@ class Pilot:
         dims = " ".join(f"{k}={v:g}" for k, v in last.get("dims", {}).items() if k != "score")
         self.log(f"{tid}: critic {'-' if score is None else f'{score:g}'}/10{f' ({dims})' if dims else ''} "
                  f"({last['step']}): {last.get('gist', '')}")
+        self.watch_scale()
         if last["step"] in ("revise", "rethink"):
             self.feedback[tid] = (f"The critic scored your head {score:g}/10 ({last['step']}). Fix its \"Fix in this "
                                   f"ticket\" points, refresh the pack and run `windvane critic {tid}` again:\n"
@@ -446,6 +448,15 @@ class Pilot:
         if score is not None:
             self.scores[tid] = score
         return True
+
+    def watch_scale(self):
+        """Say once a run when the critic's scale stopped measuring anything (`critic.collapsed`): in the first
+        self-run the user only saw it in a status report, after a dozen tickets had passed on it."""
+        line = None if self.scale_said else critic.collapsed(read_jsonl(self.p.state / "critic.jsonl"))
+        if line:
+            self.scale_said = True
+            self.log(line)
+            push(f"{self.p.name}: critic scale collapsed", line.split(": ", 1)[1], 3, "warning")
 
     def check_at(self, rev):
         cd = self.cd
