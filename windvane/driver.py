@@ -1103,10 +1103,11 @@ class Pilot:
 
 
 def supervise(p, argv, deadline, start=None, sleep=time.sleep):
-    """`run --detach`'s loop around the driver (`windvane <argv>`): a driver that dies unexpectedly (an exception, a
-    kill by the system) is restarted with the run's deadline as it now is and what it had done (`carry_over`), up to
-    RESTARTS times an hour; each restart is logged and pushed with the error. A stop, the deadline, an empty queue or
-    a failed setup end the run as they end the driver. Returns the driver's last exit code."""
+    """`run --detach`'s loop around the driver (`windvane <argv>`): a driver that dies of an exception is restarted
+    with the run's deadline as it now is and what it had done (`carry_over`), up to RESTARTS times an hour; each
+    restart is logged and pushed with the error. A stop, the deadline, an empty queue or a failed setup end the run
+    as they end the driver. A driver killed by the system (OOM) is only pushed: its sessions, in process groups of
+    their own, may still be at work in the worktrees a restart would resume. Returns the driver's last exit code."""
     start = start or (lambda args, env: subprocess.run([*exe(), *args], env=env).returncode)
     env = {**os.environ, SUPERVISED: "1"}
     env.pop("WINDVANE_RESTARTED", None)
@@ -1117,9 +1118,12 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
         rc = start(args, env)
         info = load_json(crash, None)
         if info is None:
-            if rc >= 0 or -rc in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # its own end, or someone's stop
-                return rc
-            info = {"error": f"killed by {signal.Signals(-rc).name}", "summary": ""}
+            if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
+                why = f"the driver was killed ({signal.Signals(-rc).name})"
+                log(p, f"{why}; not restarted: its sessions may still be running in the worktrees")
+                push(f"{p.name}: autopilot stopped", f"Why: {why}. Not restarted: its sessions may still be running "
+                     "in the worktrees.", 4, "rotating_light", ("Status=status",))
+            return rc  # its own end (a stop, the deadline, the queue, a failed setup), or a kill
         why = info["error"]
         try:
             deadline = datetime.fromisoformat((p.state / "DEADLINE").read_text().strip())  # moved meanwhile

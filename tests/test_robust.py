@@ -140,13 +140,18 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(self.titles(), ["autopilot started", "autopilot stopped"])
         self.assertIn("not restarted: asked to stop", self.pushes[-1][1])
 
-    def test_a_kill_by_the_system_restarts_and_a_kill_by_someone_does_not(self):
-        codes = [-signal.SIGKILL, -signal.SIGTERM]
-        rc = driver.supervise(self.p, ["run", "--for", "2h"], now() + timedelta(hours=2),
-                              start=lambda args, env: self.calls.append(args) or codes.pop(0), sleep=lambda s: None)
-        self.assertEqual((rc, len(self.calls)), (-signal.SIGTERM, 2))
-        self.assertEqual(self.titles(), ["autopilot restarted"])
-        self.assertIn("killed by SIGKILL", self.pushes[0][1])
+    def test_a_killed_driver_is_pushed_not_restarted(self):
+        """Its sessions may still be running: a restart would resume their worktrees beside them. Someone's own
+        stop (SIGTERM, Ctrl-C) says nothing."""
+        for sig, pushes in ((signal.SIGKILL, 1), (signal.SIGTERM, 0), (signal.SIGINT, 0)):
+            self.calls, self.pushes = [], []
+            rc = driver.supervise(self.p, ["run", "--for", "2h"], now() + timedelta(hours=2),
+                                  start=lambda args, env: self.calls.append(args) or -sig, sleep=lambda s: None)
+            self.assertEqual((rc, len(self.calls), len(self.pushes)), (-sig, 1, pushes))
+        self.p.state.mkdir(parents=True, exist_ok=True)
+        driver.supervise(self.p, ["run"], now() + timedelta(hours=2), start=lambda a, e: -signal.SIGKILL)
+        self.assertEqual(self.pushes, [("sandbox: autopilot stopped", "Why: the driver was killed (SIGKILL). Not "
+                                        "restarted: its sessions may still be running in the worktrees.")])
 
     def test_a_moved_deadline_is_the_restarts(self):
         moved = (now() + timedelta(hours=5)).replace(second=0, microsecond=0)
