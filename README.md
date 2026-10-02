@@ -46,7 +46,7 @@ windvane run --for 6h --detach                      # in tmux; `windvane watch` 
 | `new <title>` | a ticket file with the next id |
 | `answer T-007 B` / `answer T-007.1 "free text"` | answer a ticket's (or a preflight) question at the desk |
 | `stats [--by ticket]` | tokens, turns and minutes per role or ticket |
-| `stats --critic [--last N]` | whether the critic's calibration spreads its scores: first and final scores, revisions, scores on the pass mark |
+| `stats --critic [--last N]` | whether the critic's calibration spreads its scores: first and final scores, revisions, scores on the pass mark, a collapsed scale |
 | `quiet`, `mode` | quiet times (`~/.local/state/windvane/<name>/quiet.txt`) and what they mean right now |
 | `heavy -- <cmd>` | run a machine-heavy command (engine, render, big build) one at a time on this machine |
 | `doctor` | what this machine lacks for windvane (claude logged in, gh, tmux, the phone), with the fix for each |
@@ -84,6 +84,9 @@ What a ticket goes through:
    often, evidence pack, `windvane critic`, `windvane check`, PR. Ends with a `RESULT:` line.
 2. **Critic** (fresh, read-only, run by the worker): scores the outcome on the project's scale and splits its points
    into "Fix in this ticket" (up to 3 revisions) and "Beyond this ticket" (they feed `plan`).
+   Once 5 tickets are scored on the current scale, the driver watches it: when half the recent first scores share one
+   value, or the fix count alone predicts the score, the scale has collapsed. It logs and pushes that once a run, and
+   `overview` and `stats --critic` show it until the scale is recalibrated.
 3. **Check**: the driver runs the project's check on the exact pushed head. A clean pass is recorded per git tree, so
    the worker's own green check is reused and nothing runs twice.
 4. **Reviewer** (fresh, read-only, the diff inlined in its prompt): approves or lists changes.
