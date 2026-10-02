@@ -130,6 +130,20 @@ elif system.startswith("# windvane periodic run"):  # the project's rules file s
     open("README", "a").write("stray\n")
     text = "played\n" + ("" if "NO_LINE" in system else "PERIODIC: " + (
         "see report.txt" if "WRITE_REPORT" in system else "wrote a ticket"))
+elif system.startswith("# windvane fix run"):  # FAKE_FIX: push (fixes it), red (pushes, still red), giveup
+    n = re.search(r"Desk PR #(\d+)", prompt).group(1)
+    branch = re.search(r"HEAD:(\S+?)`", prompt).group(1)
+    how = os.environ.get("FAKE_FIX", "push")
+    if how == "giveup":
+        text = f"FIX: GAVE UP #{n} needs a product call"
+    else:
+        if "conflicts with" in prompt:
+            sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
+        if how == "push" and os.path.exists("BROKEN"):
+            sh("git", "rm", "-q", "BROKEN")
+        sh("git", "commit", "-q", "--allow-empty", "-m", "fix")
+        sh("git", "push", "-q", "origin", f"HEAD:{branch}")
+        text = f"FIX: PUSHED #{n} fixed it"
 elif system.startswith("# windvane preflight"):  # FAKE_PREFLIGHT: the questions it finds
     found = os.environ.get("FAKE_PREFLIGHT", "")
     text = found + "\nPREFLIGHT: " + ("1 questions" if found else "NONE")

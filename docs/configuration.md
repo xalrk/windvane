@@ -47,6 +47,8 @@ The Claude model and effort level for each kind of session. Models are anything 
 | `planner_effort` | `"high"` | |
 | `preflight` | `"sonnet"` | Reads the next tickets for predictable questions when a run starts: a light job. |
 | `preflight_effort` | `"medium"` | |
+| `fix` | `"opus"` | Makes a red or conflicting desk PR merge (`desk_label`). |
+| `fix_effort` | `"high"` | |
 
 `windvane stats` shows tokens and turns per role, which is what to look at before changing these. See
 [Token efficiency](tokens.md).
@@ -80,6 +82,8 @@ See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 | `retries` | `3` | How many times a session that dies outside its ticket's control (API error, network drop, crash) is rerun before the run stops with the error. |
 | `retry_minutes` | `3` | The first pause before such a rerun; each further one doubles it (3, 6, 12 minutes). |
 | `stale_days` | `3` | Days. An unfinished ticket branch with no commit for this long is no longer resumed before new work: it waits for its turn in the queue order. |
+| `desk_label` | `"windvane merge"` | Forge `github`: your own open PRs with this label are checked on their exact head and merged between tickets, so you needn't merge by hand while a run is on. A red, conflicting or refused one gets a fix session. `""` turns it off. |
+| `desk_fixes` | `2` | Fix sessions per desk PR before it is left for you (pushed once). A new head you push makes it a fresh candidate. |
 
 ## [[periodic]]
 

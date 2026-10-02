@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import critic, phone, selfupdate
+from .desk import Desk
 from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
@@ -39,7 +40,7 @@ REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
 CARRIED = ("periodic_at", "skip", "merged", "failed", "partials", "reviews", "scores", "plans", "fail_streak", "peak",
-           "conflicts", "spent", "update_said", "scale_said")  # the run's own memory, handed to the driver a self-update restarts
+           "conflicts", "spent", "update_said", "scale_said", "desk_merged")  # the run's own memory, handed to the driver a self-update restarts
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
@@ -146,7 +147,7 @@ def pr_for(p, branch):
               "-q", ".[0].number")
 
 
-class Pilot:
+class Pilot(Desk):
     def __init__(self, p, a):
         self.p, self.a = p, a
         self.usage = Usage(p)
@@ -186,6 +187,7 @@ class Pilot:
         self.pulled = (0, -1)  # (when, merges then): pull after each merge, else every PULL_EVERY seconds at most
         self.scale_said = False  # the collapsed-scale warning: logged and pushed once a run
         self.periodic_at = {}  # [[periodic]] name -> len(merged) when it last ran (or was skipped)
+        self.desk_init(s.get("desk", {}))  # the user's labelled PRs, merged between tickets (desk.py)
 
     def slot_dirs(self, i):
         p = self.p
@@ -206,7 +208,7 @@ class Pilot:
     def save(self):
         with self.lock:
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
-                                        "approved": dict(self.approved),
+                                        "approved": dict(self.approved), "desk": dict(self.desk),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
                                         "running": dict(self.running)})
 
@@ -964,6 +966,14 @@ class Pilot:
             if due:
                 self.periodic(due)
                 continue
+            desk = self.desk_due()
+            if desk and self.running:  # checked and merged between tickets, like a periodic session
+                self.idle_note([f"desk PR #{desk[0]['number']} waits for {', '.join(sorted(self.running))} to finish"])
+                self.pause()
+                continue
+            if desk:
+                self.desk_one(desk[0])
+                continue
             self.fetch()
             self.poll_questions()
             self.queue = Queue(p)
@@ -1241,6 +1251,8 @@ class Pilot:
             side = (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
                     f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else "")
             summary = (f"Why: {self.stop_reason}.\nMerged: {names(self.merged)}.\n"
+                       + (f"Desk PRs merged: {', '.join('#' + n for n in self.desk_merged)}.\n"
+                          if self.desk_merged else "")
                        + (f"Critic (/10): {crit}.\n" if crit else "") + side
                        + f"Waiting on you: {names(self.questions)}.\nFailed: {names(self.failed)}.\n"
                        + (f"{self.usage.text()}." if self.usage.five is not None else "")

@@ -132,6 +132,15 @@ previous one's final text and the files it names. New tickets under `.windvane/t
 `QUEUE.md` land on `main`, so the queue picks them up; any other change is discarded. Sessions show in
 `windvane stats` as `periodic:<name>`.
 
+### Your own PRs from the desk
+
+While a run is on, merging your own PRs by hand races its tickets. Label one `windvane merge` (forge `github`, your
+PRs only) and the autopilot merges it between tickets: it tests the merge with `main`, runs your check on the PR's
+exact head, comments the result and merges that head only. A red, conflicting or refused PR gets a short fix session
+(`prompts/FIX.md`: the smallest change, never a weaker test) pushed to its branch, up to `desk_fixes` times; then it
+is left for you with one push. Each head is checked once; push a new one to have it tried again. Fix sessions show
+in `windvane stats` as `fix`. Set `desk_label = ""` under `[autopilot]` to turn it off.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md): install, set up a project, the first run
