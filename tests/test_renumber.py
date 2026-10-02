@@ -98,6 +98,18 @@ class Resolve(unittest.TestCase):
         self.assertEqual(self.read("docs/adr.md"), base + "\n## ADR-002: main's\nbecause\n"
                          "\n## ADR-003: topic's\nsee ADR-001, ADR-003\n")
 
+    def test_crlf_files_keep_their_line_endings(self):
+        crlf = LOG.replace("\n", "\r\n")
+        self.commit({"docs/DECISIONS.md": crlf, "win notes.txt": "x\r\ny\r\n"}, on="main")
+        self.git("branch", "-f", "topic", "main")
+        self.commit({"docs/DECISIONS.md": crlf + "| D-3 | main's |\r\n"}, on="main")
+        self.commit({"docs/DECISIONS.md": crlf + "| D-3 | topic's\x0cpage |\r\n",
+                     "win notes.txt": "x\r\ny\r\nsee D-3\x0c and D-3\r\n"}, on="topic")
+        self.assertEqual(self.merge(), ["D-3 → D-4 (docs/DECISIONS.md)"])
+        self.assertEqual((self.dir / "win notes.txt").read_bytes(), b"x\r\ny\r\nsee D-4\x0c and D-4\r\n")
+        self.assertEqual((self.dir / "docs/DECISIONS.md").read_bytes(),
+                         (crlf + "| D-3 | main's |\r\n| D-4 | topic's\x0cpage |\r\n").encode())
+
     def test_a_changed_entry_is_refused(self):
         self.commit({"docs/DECISIONS.md": LOG.replace("two", "2") + "| D-3 | main's |\n"}, on="main")
         self.commit({"docs/DECISIONS.md": LOG.replace("two", "II") + "| D-3 | topic's |\n"}, on="topic")

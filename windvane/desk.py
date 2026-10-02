@@ -122,7 +122,7 @@ class Desk:
         p, cd = self.p, self.cd
         if not files or not set(files) <= {r["file"] for r in p.append_only} or not clean_detach(p, cd, p.upstream):
             return False
-        ok, renumbered = self.merge_main(head, f"Merge {p.main} into {branch}")
+        ok, renumbered = self.merge_main(head, f"Merge {branch} into {p.main}")
         if not ok or renumbered is None or git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{head}",
                                                p.remote, f"HEAD:refs/heads/{branch}").returncode:
             return False

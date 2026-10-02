@@ -35,9 +35,30 @@ def rules(entries):
     return out
 
 
+def lines(text):
+    """`text` split after each "\n" only, endings kept: str.splitlines() also splits on \f, \u2028 and the like, so
+    such a line would never match the branch's own added line."""
+    return [l for l in re.split(r"(?<=\n)", text) if l]
+
+
+def bare(line):
+    return line.rstrip("\r\n")
+
+
+def read(path):
+    """A file's text as stored: CRLF stays CRLF (read_text would turn it into LF, and write_text keep that)."""
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def write(path, text):
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
 def numbers(rule, text):
     out = []
-    for line in text.splitlines():
+    for line in lines(text):
         m = rule["entry"].search(line)
         if m and m.group(1) and m.group(1).isdigit():
             out.append(int(m.group(1)))
@@ -48,9 +69,8 @@ def hunks(text):
     """The file with diff3 conflict markers, as a list of plain lines and (ours, base, theirs) hunks; None when the
     markers don't parse (nested, or text that looks like one)."""
     out, cur, part = [], None, 0
-    for line in text.splitlines(keepends=True):
-        bare = line.rstrip("\n")
-        mark = next((i for i, m in enumerate(MARKS) if bare == m.strip() or m.endswith(" ") and line.startswith(m)),
+    for line in lines(text):
+        mark = next((i for i, m in enumerate(MARKS) if bare(line) == m.strip() or m.endswith(" ") and line.startswith(m)),
                     None)
         if cur is None:
             if mark == 0:
@@ -96,11 +116,11 @@ def added_lines(cd):
     """Per file, the lines the branch (MERGE_HEAD) added since it left main."""
     base = gout(cd, "merge-base", "HEAD", "MERGE_HEAD")
     out, f = {}, None
-    for line in gout(cd, "diff", "-U0", "--no-color", "--no-renames", base, "MERGE_HEAD").splitlines():
+    for line in gout(cd, "diff", "-U0", "--no-color", "--no-renames", base, "MERGE_HEAD").split("\n"):
         if line.startswith("+++ "):
-            f = line[6:] if line.startswith("+++ b/") else None
+            f = line[6:].rstrip("\t") if line.startswith("+++ b/") else None  # git ends a path with a space by a tab
         elif f and line.startswith("+"):
-            out.setdefault(f, set()).add(line[1:])
+            out.setdefault(f, set()).add(bare(line[1:]))
     return out
 
 
@@ -119,7 +139,7 @@ def resolve(cd, rule_list):
         if not {2, 3} <= stages or git(cd, "checkout", "--conflict=diff3", "--", f).returncode:
             return None
         try:
-            parts = hunks((Path(cd) / f).read_text())
+            parts = hunks(read(Path(cd) / f))
         except (OSError, UnicodeDecodeError):
             return None
         if parts is None:
@@ -148,11 +168,11 @@ def resolve(cd, rule_list):
     def rewrite(f, line, entry=False, theirs=False):
         """A merged line, renumbered when the branch added it (and main didn't have the same line)."""
         if not theirs:
-            if line.rstrip("\n") not in added.get(f, ()):
+            if bare(line) not in added.get(f, ()):
                 return line
             if f not in main_lines:
-                main_lines[f] = set(gout(cd, "show", f"HEAD:{f}").splitlines())
-            if line.rstrip("\n") in main_lines[f]:
+                main_lines[f] = {bare(l) for l in lines(gout(cd, "show", f"HEAD:{f}"))}
+            if bare(line) in main_lines[f]:
                 return line
         for rule, mapping, _ in maps:
             if mapping:
@@ -169,19 +189,19 @@ def resolve(cd, rule_list):
             if not ours[-1].endswith("\n"):
                 ours[-1] += "\n"
             out += ours + [rewrite(f, l, entry=True, theirs=True) for l in h[2]]
-        (Path(cd) / f).write_text("".join(out))
+        write(Path(cd) / f, "".join(out))
     if any(mapping for _, mapping, _ in maps):
         for f in added:
             path = Path(cd) / f
             if f in staged or not path.is_file():
                 continue
             try:
-                text = path.read_text()
+                text = read(path)
             except (OSError, UnicodeDecodeError):
                 continue
-            new_text = "".join(rewrite(f, l) for l in text.splitlines(keepends=True))
+            new_text = "".join(rewrite(f, l) for l in lines(text))
             if new_text != text:
-                path.write_text(new_text)
+                write(path, new_text)
                 git(cd, "add", "--", f)
     git(cd, "add", "--", *staged)
     if gout(cd, "diff", "--name-only", "--diff-filter=U"):
