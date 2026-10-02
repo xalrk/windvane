@@ -124,12 +124,14 @@ def cmd_run(a, p):
                 continue
             args.append(x)
         args += [] if "--no-preflight" in args else ["--no-preflight"]  # asked here already, if at all
-        cmd = " ".join(json.dumps(x) for x in [*exe(), "-C", str(p.main_root()), *args])
+        cmd = " ".join(json.dumps(x) for x in [*exe(), "-C", str(p.main_root()), *args, "--supervise"])
         subprocess.run(["tmux", "new-session", "-d", "-s", p.tmux, "-c", str(p.main_root()), cmd], check=True)
         print(f"autopilot running in tmux session {p.tmux} until {hhmm(deadline)}\n"
               f"  watch:  windvane watch      (or tmux attach -t {p.tmux}; leave with Ctrl-b d)\n"
               f"  status: windvane status     stop: windvane stop")
         return
+    if a.supervise:  # the detached run: the driver in a process of its own, restarted after a crash
+        sys.exit(driver.supervise(p, [x for x in sys.argv[1:] if x != "--supervise"], deadline))
     if not driver.Pilot(p, a).run(deadline):
         sys.exit(1)  # it couldn't start (a failed setup): scripts see it
 
@@ -414,7 +416,8 @@ def main(argv=None):
     g = s.add_mutually_exclusive_group()
     g.add_argument("--until", help="HH:MM or 'YYYY-MM-DD HH:MM'")
     g.add_argument("--for", dest="for_", help="e.g. 90m or 6h")
-    s.add_argument("--detach", action="store_true", help="run in a tmux session")
+    s.add_argument("--detach", action="store_true", help="run in a tmux session, restarted after a crash")
+    s.add_argument("--supervise", action="store_true", help=argparse.SUPPRESS)  # what --detach runs in tmux
     s.add_argument("--no-preflight", action="store_true", help="start without asking the next tickets' questions")
     s.add_argument("--parallel", type=parallel_arg,
                    help='most tickets at a time, or "auto" (default from config: auto, up to max_parallel 4)')

@@ -9,16 +9,18 @@ build their recommendation and record it instead.
 
 Stops at the deadline, `windvane stop`, two failed tickets in a row, an empty queue, the weekly cap, or sessions that
 keep dying (API errors, crashes; each is retried after a growing pause first). At the 5-hour cap it stops the running
-session and pauses until the window resets.
+session and pauses until the window resets. A detached run's driver is itself restarted after a crash (`supervise`).
 """
 import fcntl
 import os
+import signal
 import sys
 import threading
 import re
 import shutil
 import subprocess
 import time
+import traceback
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -38,6 +40,9 @@ CARRIED = ("skip", "merged", "failed", "partials", "reviews", "scores", "plans",
            "spent", "update_said", "scale_said")  # the run's own memory, handed to the driver a self-update restarts
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
+RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
+RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
+SUPERVISED = "WINDVANE_SUPERVISED"  # set for a driver under `supervise`: it hands a crash over instead of pushing it
 
 
 def rules(p, name):
@@ -1006,16 +1011,20 @@ class Pilot:
             names = lambda ids: ", ".join(ids) or "none"
             self.log(f"windvane restarting with its new code (so far merged: {names(self.merged)}; "
                      f"failed: {names(self.failed)})")
-            self.save()
-            save_json(self.p.state / "restart.json", {k: sorted(v) if isinstance(v, set) else v
-                                                      for k, v in vars(self).items() if k in CARRIED})
+            self.hand_over()
             self.lockfile.close()  # the restarted driver takes it again
             os.environ["WINDVANE_RESTARTED"] = "1"  # no second "autopilot started" push; it reads restart.json
             cmd = [*exe(), *selfupdate.restart_args(self.argv, self.end())]
             self.execv(cmd[0], cmd)
 
+    def hand_over(self):
+        """Leaves the run's memory for the driver that replaces this one (`carry_over`)."""
+        self.save()
+        save_json(self.p.state / "restart.json", {k: sorted(v) if isinstance(v, set) else v
+                                                  for k, v in vars(self).items() if k in CARRIED})
+
     def carry_over(self, restarted):
-        """A self-update restart goes on with the run it replaced: the same tickets set aside or failed, the same
+        """A restart (a self-update, or `supervise` after a crash) goes on with the run it replaced: the same tickets set aside or failed, the same
         replan budget, and the same merges in the final summary. Any other start begins afresh."""
         f = self.p.state / "restart.json"
         if restarted:
@@ -1039,29 +1048,33 @@ class Pilot:
         p = self.p
         self.take_lock()
         phone.start_run(p)
-        (p.state / "STOP").unlink(missing_ok=True)
+        restarted = os.environ.pop("WINDVANE_RESTARTED", None)
+        if not restarted:  # a stop asked for while the driver restarted still holds
+            (p.state / "STOP").unlink(missing_ok=True)
         (p.state / "DEADLINE").unlink(missing_ok=True)  # an earlier run's
         self.deadline = deadline
-        self.log(f"autopilot started, until {hhmm(deadline)} (5h cap {self.a.cap:g}%, week cap {self.a.week_cap:g}%"
+        self.log(f"autopilot {'restarted' if restarted else 'started'}, until {hhmm(deadline)} (5h cap "
+                 f"{self.a.cap:g}%, week cap {self.a.week_cap:g}%"
                  + (f", up to {self.n} tickets at a time" if self.n > 1 else "") + ")")
-        ready = self.prepare(0)  # before any session or push: a failed setup ends the run with a single push
-        restarted = os.environ.pop("WINDVANE_RESTARTED", None)
-        self.carry_over(restarted)
-        if not CHECKOUT:
-            self.newer = selfupdate.newer_release(selfupdate.version())
-            if self.newer:
-                self.log(f"windvane {self.newer} is out: pipx upgrade windvane")
-        if ready and not restarted:
-            self.usage.probe(p)
-            push(f"{p.name}: autopilot started", f"Until {hhmm(deadline)}. {self.usage.text()}.", 2, "rocket",
-                 ("Status=status", "Stop=stop"))
-        else:
-            self.stop_reason = self.halt
+        ready, crashed = False, None
         try:
+            ready = self.prepare(0)  # before any session or push: a failed setup ends the run with a single push
+            self.carry_over(restarted)
+            if not CHECKOUT:
+                self.newer = selfupdate.newer_release(selfupdate.version())
+                if self.newer:
+                    self.log(f"windvane {self.newer} is out: pipx upgrade windvane")
+            if ready and not restarted:
+                self.usage.probe(p)
+                push(f"{p.name}: autopilot started", f"Until {hhmm(deadline)}. {self.usage.text()}.", 2, "rocket",
+                     ("Status=status", "Stop=stop"))
+            else:
+                self.stop_reason = self.halt
             if ready:
                 self.loop()
         except Exception as e:
             self.stop_reason = f"driver error: {e}"
+            crashed = traceback.format_exception_only(e)[-1].strip()
             raise
         finally:
             for t in self.threads:  # the running tickets finish (their runs stop at the deadline at the latest)
@@ -1078,11 +1091,57 @@ class Pilot:
                        + (f"{self.usage.text()}." if self.usage.five is not None else "")
                        + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else ""))
             self.log(summary.replace("\n", " "))
-            push(f"{p.name}: autopilot stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
-                 "checkered_flag", ("Usage=usage",))
+            if crashed and os.environ.get(SUPERVISED):  # `supervise` restarts it, or pushes why it doesn't
+                self.hand_over()
+                save_json(p.state / "crash.json", {"error": crashed, "summary": summary.split("\n", 1)[1]})
+            else:
+                push(f"{p.name}: autopilot stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
+                     "checkered_flag", ("Usage=usage",))
             self.save()
             self.lockfile.close()
         return ready
+
+
+def supervise(p, argv, deadline, start=None, sleep=time.sleep):
+    """`run --detach`'s loop around the driver (`windvane <argv>`): a driver that dies unexpectedly (an exception, a
+    kill by the system) is restarted with the run's deadline as it now is and what it had done (`carry_over`), up to
+    RESTARTS times an hour; each restart is logged and pushed with the error. A stop, the deadline, an empty queue or
+    a failed setup end the run as they end the driver. Returns the driver's last exit code."""
+    start = start or (lambda args, env: subprocess.run([*exe(), *args], env=env).returncode)
+    env = {**os.environ, SUPERVISED: "1"}
+    env.pop("WINDVANE_RESTARTED", None)
+    crashes, args = [], list(argv)
+    while True:
+        crash = p.state / "crash.json"
+        crash.unlink(missing_ok=True)
+        rc = start(args, env)
+        info = load_json(crash, None)
+        if info is None:
+            if rc >= 0 or -rc in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # its own end, or someone's stop
+                return rc
+            info = {"error": f"killed by {signal.Signals(-rc).name}", "summary": ""}
+        why = info["error"]
+        try:
+            deadline = datetime.fromisoformat((p.state / "DEADLINE").read_text().strip())  # moved meanwhile
+        except (OSError, ValueError):
+            pass
+        crashes = [t for t in crashes if t > time.time() - 3600] + [time.time()]
+        asked = lambda: "asked to stop" if (p.state / "STOP").exists() else None
+        stop = (f"crashed {len(crashes)} times in an hour" if len(crashes) > RESTARTS
+                else asked() or ("deadline" if now() >= deadline else None))
+        if not stop:
+            log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour")
+            push(f"{p.name}: autopilot restarted", f"The driver crashed: {why}. Restart {len(crashes)} of "
+                 f"{RESTARTS} this hour; it goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
+            sleep(RESTART_PAUSE)
+            stop = asked()
+        if stop:
+            log(p, f"driver crashed ({why}); not restarted: {stop}")
+            push(f"{p.name}: autopilot stopped", f"Why: the driver crashed ({why}); not restarted: {stop}.\n"
+                 + info["summary"], 4, "rotating_light", ("Usage=usage",))
+            return rc
+        args = selfupdate.restart_args(args, deadline)
+        env["WINDVANE_RESTARTED"] = "1"
 
 
 def locked(p):

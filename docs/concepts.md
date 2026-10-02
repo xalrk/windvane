@@ -40,9 +40,10 @@ number. Two more kinds of line:
 - done: T-002 (folded into T-005)     counts as merged without a merge of its own
 - parked: T-003 (needs a design call)  never started
 ```
-Status is never kept by hand: it is derived from git. A ticket is **done** when its branch (`t-007-...`) is merged
-into `main`, **in progress** while such a branch exists unmerged (a new run resumes it first), and **open**
-otherwise. `windvane queue` shows all three.
+Status is never kept by hand: it is derived from git. A ticket is **done** when its branch (`t-007-...`, by the
+name's start: `q-t-007-...` is another branch) is merged into `main`, **in progress** while such a branch exists
+unmerged (a new run resumes it first, unless nobody committed to it for `stale_days`: then it waits for its turn in
+the order), and **open** otherwise. `windvane queue` shows all three.
 
 ## A ticket's way through
 

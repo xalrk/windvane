@@ -36,7 +36,7 @@ Options of `windvane run`:
 
 | Option | Meaning |
 |---|---|
-| `--detach` | Run in a tmux session (`windvane-<name>`). |
+| `--detach` | Run in a tmux session (`windvane-<name>`). A driver that crashes there is restarted with the same deadline and what it had done, pushing the error each time; a fourth crash within an hour ends the run. |
 | `--parallel N\|auto` | The most tickets at a time (default from config). |
 | `--cap`, `--week-cap`, `--ticket-hours`, `--min-slot`, `--answer-wait` | Override the matching [config keys](configuration.md#autopilot) for this run. |
 | `--replan N [--goal G]` | When the queue runs dry, plan new tickets, up to N times. |
