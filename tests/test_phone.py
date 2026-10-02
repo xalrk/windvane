@@ -181,6 +181,7 @@ class Pushes(PhoneTest):
 class Setup(PhoneTest):
     def test_setup_makes_private_random_topics_and_sends_a_test_push(self):
         phone.conf_path().unlink()
+        self.addCleanup(os.chdir, os.getcwd())  # -C moves into the sandbox, which goes away
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             cli.main(["-C", str(self.s.root), "phone", "setup", "--server", self.ntfy.url, "--no-service"])
