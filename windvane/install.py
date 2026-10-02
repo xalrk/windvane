@@ -46,7 +46,7 @@ def ask(question, yes):
         print(f"{question} yes (--yes)")
         return True
     if not sys.stdin.isatty():
-        print(f"{question} skipped: no terminal to ask in (--yes accepts every change)")
+        print(f"{question} skipped: no terminal to ask in (`windvane install --yes` makes every change)")
         return False
     return input(f"{question} [Y/n] ").strip().lower() in ("", "y", "yes")
 

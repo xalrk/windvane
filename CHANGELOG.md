@@ -6,6 +6,11 @@ All notable changes to windvane are listed here. The format follows
 
 ## Unreleased
 
+### Fixed
+- `windvane init` picks `forge = "git"` for a remote that isn't on GitHub (or without `gh`), and says which it chose.
+- `windvane queue` names tickets that aren't pushed yet, instead of "no tickets yet".
+- `windvane install` without a terminal names `--yes`; getting started explains letting Claude set windvane up.
+
 ## 0.1.0 - 2026-10-02
 
 The first release.

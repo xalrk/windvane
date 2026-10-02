@@ -75,7 +75,7 @@ git add .windvane && git commit -m "windvane" && git push
 windvane run --for 2h --detach                     # work the tickets for two hours, in tmux
 windvane watch                                     # follow it live
 ```
-Or ask Claude Code: after `windvane install`, a session that hears "let's build this with windvane" sets the project
+Or ask Claude Code: after `windvane install` (`--yes` when Claude runs it), a session that hears "let's build this with windvane" sets the project
 up, writes the first tickets and starts the run for you.
 
 The [getting started guide](docs/getting-started.md) walks through each step.

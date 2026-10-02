@@ -35,6 +35,12 @@ windvane install    # optional: the windvane skill and a mention hook for Claude
 windvane"): the session can then create the repository, set windvane up, write the first tickets and start the run
 for you. Everything below can also be done by hand.
 
+### Let your Claude set it up
+
+Point a Claude Code session at this repository and say "install windvane and set it up". It has no terminal to
+confirm in, so it should run `windvane install --yes`, then `windvane doctor`. While the repository is private, the
+install needs access to it first: `gh auth login` (and collaborator access), then `gh auth setup-git`.
+
 ## Set up a project
 
 In the project's checkout (it needs a remote to push to; GitHub, or any git server with forge `git`):
@@ -46,7 +52,7 @@ windvane init --check "pytest -q"
 
 | File | What to do with it |
 |---|---|
-| `config.toml` | Check the `check` command: it must run the project's tests and exit non-zero on failure. For a project not on GitHub, set `forge = "git"`. See the [configuration reference](configuration.md). |
+| `config.toml` | Check the `check` command: it must run the project's tests and exit non-zero on failure. `init` sets `forge = "github"` only for a GitHub remote with `gh` installed, and `git` otherwise (`--forge` to choose). See the [configuration reference](configuration.md). |
 | `CRITIC.md` | Describe what a 10/10 means for this project: who uses it, what to beat, and 2-4 dimensions with what a 2, a 5 and an 8 look like. See [the critic](concepts.md#the-critic-and-calibration). |
 | `QUEUE.md` | The order to work tickets in. Empty is fine: tickets are worked by number. |
 | `QUESTIONS.md` | Where design questions for you collect. Leave it as it is. |

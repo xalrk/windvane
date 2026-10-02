@@ -71,9 +71,10 @@ def cmd_init(a):
         text = text.replace('name = ""', f'name = "{a.name or root.name}"')
         if a.check:
             text = text.replace('check = ""', f"check = {json.dumps(a.check)}")
-        if a.forge:
-            text = text.replace('forge = "github"', f'forge = "{a.forge}"')
+        forge = a.forge or guess_forge(root)
+        text = text.replace('forge = "github"', f'forge = "{forge}"')
         cfg.write_text(text)
+        print(f"forge: {forge}" + ("" if a.forge else " (from the remote; --forge github|git to choose)"))
     for name in ("QUEUE.md", "QUESTIONS.md", "CRITIC.md"):
         if not (d / name).exists():
             (d / name).write_text((HOME / "templates" / name).read_text())
@@ -84,6 +85,12 @@ def cmd_init(a):
           f"  then commit {DIR}/ and push it to {p.upstream}: the autopilot reads tickets from there")
     if hooks:
         print(f"  phone: status/stop/overview hooks in {', '.join(hooks)}")
+
+
+def guess_forge(root):
+    """github only when origin is on github.com and `gh` can open the PRs; plain git for anything else."""
+    url = gout(root, "remote", "get-url", "origin") or ""
+    return "github" if "github.com" in url and shutil.which("gh") else "git"
 
 
 def need(p):
@@ -229,7 +236,11 @@ def cmd_overview(a, p):
 def cmd_queue(a, p):
     git(p.main_root(), "fetch", "-q", p.remote)
     st = load_json(p.state / "state.json", {})
-    print(Queue(p).listing(set(st.get("questions", {}))) or "no tickets yet")
+    q = Queue(p)
+    print(q.listing(set(st.get("questions", {}))) or f"no tickets on {p.upstream} yet")
+    local = sorted(t for t in (p.norm(f.stem) for f in (p.root / p.tickets_rel).glob("*.md")) if t and t not in q.files)
+    if local:
+        print(f"not on {p.upstream} yet (the autopilot can't see them): {' '.join(local)}; commit and push")
 
 
 def cmd_answer(a, p):
