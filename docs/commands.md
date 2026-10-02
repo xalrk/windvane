@@ -29,7 +29,7 @@ options. Commands that read state (`status`, `queue`, `watch`, `stats` and so on
 | Command | What it does |
 |---|---|
 | `windvane run --until HH:MM \| --for 6h [options]` | Work the tickets until the deadline (`--until` also takes `"YYYY-MM-DD HH:MM"`). Options below. |
-| `windvane stop [--now]` | Stop after the current ticket. `--now` kills every session of the run; their worktrees keep the work for the next run. |
+| `windvane stop [--now] [--if-running]` | Stop after the current ticket. `--now` kills every session of the run; their worktrees keep the work for the next run. `--if-running` (for scripts and phone hooks) does nothing when no run is going. |
 | `windvane deadline <when>` | Move a running autopilot's deadline: `14:00`, `"2026-10-02 09:30"`, or from now, `+90m`, `+2h`. |
 
 Options of `windvane run`:
