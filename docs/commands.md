@@ -20,6 +20,7 @@ options. Commands that read state (`status`, `queue`, `watch`, `stats` and so on
 |---|---|
 | `windvane new <title>` | Write a new ticket file with the next free id. |
 | `windvane plan [goal] [--merge] [--no-followups] [--max N]` | A planner session writes up to N tickets (default 6) for the goal (default: config's `goal`) and the critic's follow-up notes, and opens a pull request with them. `--merge` merges them at once; `--no-followups` leaves out the critic's notes. |
+| `windvane periodic <name>` | Run a `[[periodic]]` entry and its `then` chain now, as a run would between tickets; its tickets land where its `land` says. Refused while a run is on. |
 | `windvane queue` | The queue: done, in progress, open, parked. |
 | `windvane answer <ticket> <answer>` | Answer a ticket's question at the desk: a letter (`windvane answer T-007 B`) or free text in quotes. |
 | `windvane preflight [--for 4h] [--json]` | The product questions the next tickets will need, asked now. `--json` prints them for a Claude Code session to ask. |
@@ -51,6 +52,7 @@ Options of `windvane run`:
 | `windvane watch [-n 30] [-o 6]` | Follow the running sessions live: what each says, the commands it runs, their output (`-o` lines each, 0 hides output). |
 | `windvane stats [--days 7] [--by role\|ticket]` | Tokens, turns and minutes per role or ticket, from the ledger. See [Token efficiency](tokens.md). |
 | `windvane stats --critic [--last 10]` | How the critic's scores spread over the last N tickets. |
+| `windvane stats --periodic [--days 7]` | Each [[periodic]] entry's `score=<n>` over time, oldest first, with its last summary. |
 | `windvane mode` | How a design question is handled right now: asked, or built provisionally (quiet time). |
 | `windvane quiet` | Show the quiet times file and what it means now. See [Quiet times](configuration.md#quiet-times). |
 

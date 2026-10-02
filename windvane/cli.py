@@ -309,6 +309,9 @@ def cmd_stats(a, p):
     rows = read_jsonl(p.state / "ledger.jsonl")
     since = f"{now() - timedelta(days=a.days):%Y-%m-%d %H:%M}"
     rows = [r for r in rows if r.get("at", "") >= since]
+    if a.periodic:
+        return periodic_stats(rows, a.days)
+    rows = [r for r in rows if not r.get("event")]  # a periodic score, not a session
     if not rows:
         print("no runs yet")
         return
@@ -347,6 +350,22 @@ def cmd_stats(a, p):
     if est:
         print(f"(≥: {est} runs ended before their result; their tokens are counted from the stream, their API $ is not.)")
     print("(API $ is what the tokens would cost on the API: a relative meter on a subscription.)")
+
+
+def periodic_stats(rows, days):
+    """The trend of each [[periodic]] entry's `score=<n>`: the last dozen, oldest first, and its last summary."""
+    by = {}
+    for r in rows:
+        if r.get("event") == "score":
+            by.setdefault(r["role"].split(":", 1)[-1], []).append(r)
+    if not by:
+        print(f"no periodic scores in {days:g} days (a session's PERIODIC line may carry score=<n>)")
+        return
+    for name, rs in by.items():
+        s = [r["score"] for r in rs]
+        trend = f"{s[-1] - s[0]:+g} since {rs[0]['at']}" if len(s) > 1 else f"first, {rs[0]['at']}"
+        print(f"{name}: {' → '.join(f'{x:g}' for x in s[-12:])}  ({len(s)} run{'s' * (len(s) != 1)}, {trend})")
+        print(f"  last: {rs[-1].get('summary', '')[:110]}")
 
 
 def critic_stats(a, p):
@@ -391,6 +410,34 @@ def cmd_quiet(a, p):
     print(f"{f} (`daily 23:00-08:00` or `2026-10-02 13:00-15:00`, one per line)")
     print(f.read_text() if f.exists() else "(none)")
     print("now:", questions.mode(p))
+
+
+def cmd_periodic(a, p):
+    """A [[periodic]] entry and its `then` chain now, from the desk, as a run would between tickets. It takes the
+    run's lock, so it never runs beside one (nor one beside it)."""
+    need(p)
+    e = p.periodic.get(a.name)
+    if not e:
+        sys.exit(f"no [[periodic]] entry {a.name!r} in {DIR}/config.toml"
+                 + (f" (there is: {', '.join(p.periodic)})" if p.periodic else ""))
+    if running(p):
+        sys.exit("a run is busy: it runs periodic sessions itself between tickets; try again once it stops")
+    if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
+        sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
+    keys = ("cap", "week_cap", "ticket_hours", "min_slot", "answer_wait")
+    pilot = driver.Pilot(p, argparse.Namespace(**{k: p.ap[k] for k in keys}, replan=0, goal="", parallel=1))
+    pilot.take_lock()
+    try:
+        for f in ("STOP", "DEADLINE"):  # an earlier run's
+            (p.state / f).unlink(missing_ok=True)
+        pilot.deadline = now() + timedelta(days=1)  # each session keeps to its own `minutes`
+        if not pilot.prepare(0):
+            sys.exit(f"windvane: {pilot.halt}")
+        pilot.periodic(e)
+        if pilot.held:
+            print(f"Held for you (parked in QUEUE.md): {', '.join(pilot.held)}")
+    finally:
+        pilot.lockfile.close()
 
 
 def main(argv=None):
@@ -463,12 +510,15 @@ def main(argv=None):
     s.add_argument("--merge", action="store_true", help="merge the tickets at once (default: a PR to look at)")
     s.add_argument("--no-followups", action="store_true", help="leave out the critic's notes")
     s.add_argument("--max", type=int, default=6, help="at most this many new tickets (default 6)")
+    s = sub.add_parser("periodic", help="run a [[periodic]] session (and its `then` chain) now")
+    s.add_argument("name")
     s = sub.add_parser("new", help="write a new ticket file with the next id")
     s.add_argument("title", nargs="+")
     s = sub.add_parser("stats", help="tokens per role or ticket, from the ledger")
     s.add_argument("--days", type=float, default=7)
     s.add_argument("--by", choices=("role", "ticket"), default="role")
     s.add_argument("--critic", action="store_true", help="the spread of the critic's scores instead")
+    s.add_argument("--periodic", action="store_true", help="the scores [[periodic]] sessions gave, oldest first")
     s.add_argument("--last", type=int, default=10, help="with --critic: over the last N tickets (default 10)")
     sub.add_parser("mode", help="how a design question is handled right now")
     sub.add_parser("quiet", help="show the quiet times")
