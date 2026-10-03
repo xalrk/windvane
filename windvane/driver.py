@@ -43,7 +43,7 @@ CARRIED = ("periodic_at", "held", "skip", "merged", "failed", "partials", "revie
            "conflicts", "spent", "update_said", "scale_said", "desk_merged")  # the run's own memory, handed to the driver a self-update restarts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
-BUDGETS = {"review": ("the hand-in (no PR)", "autopilot", "review_rounds", 0, ""),
+BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
            "critic": ("the critic", "critic", "revisions", 1, "one more for a READY without the evidence pack"),
            "check": ("the check", "autopilot", "check_retries", 0, ""),
            "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0, "")}
