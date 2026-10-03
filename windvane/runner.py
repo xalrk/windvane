@@ -106,6 +106,37 @@ class Usage:
                 self.update(json.loads(line).get("rate_limit_info", {}))
 
 
+# The built-in tools each windvane role starts with (`--tools`). Every tool's description is re-read on every turn,
+# so the full set (25 tools, ~10k tokens) doubled a worker's first-turn context. A role not named here (a project's
+# [[periodic]] session) keeps the CLI's default set and the project's skills.
+TOOLS = {"worker": ["Bash", "Read", "Edit", "Write"], "fix": ["Bash", "Read", "Edit", "Write"],
+         "planner": ["Bash", "Read", "Edit", "Write"], "reviewer": ["Bash", "Read"],
+         "critic": ["Read", "Glob", "Grep"], "preflight": ["Read", "Glob", "Grep"]}
+NO_MCP = json.dumps({"mcpServers": {}})
+# The flags every session's command line uses that an older `claude` may not know: `windvane doctor` checks them,
+# since a CLI that lacks one fails every session at launch.
+CLI_FLAGS = ("--effort", "--setting-sources", "--strict-mcp-config", "--mcp-config", "--tools",
+             "--disable-slash-commands", "--append-system-prompt")
+
+
+def lean_flags(p, role):
+    """The command-line flags that keep a session's base context small: no MCP servers (none but the empty config),
+    and for windvane's own roles only the tools their rules use and no skills. The user's hooks stay out through
+    `--setting-sources project,local`. Subagents, when the config turns them on, come with the Agent tool."""
+    flags = ["--strict-mcp-config", "--mcp-config", NO_MCP]
+    if role in TOOLS:
+        tools = TOOLS[role] + (["Agent"] if p.ap.get("subagents") and "Edit" in TOOLS[role] else [])
+        flags += ["--tools", ",".join(tools), "--disable-slash-commands"]
+    return flags
+
+
+def first_turn(seen):
+    """A session's base context: everything its first API call read (system prompt, tools, CLAUDE.md files, the
+    prompt), cached or not. What the session reads per turn beyond this is its own growth."""
+    u = next(iter(seen.values()), {})
+    return sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+
+
 def settings_json(allow=(), deny=()):
     return json.dumps({"permissions": {"allow": list(allow), "deny": list(deny)}})
 
@@ -136,7 +167,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     raw.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["claude", "-p", prompt, "--model", model, "--effort", effort, "--permission-mode", "auto",
            "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local",
-           "--strict-mcp-config", "--settings", settings_json(allow, deny), "--append-system-prompt", system]
+           *lean_flags(p, role), "--settings", settings_json(allow, deny), "--append-system-prompt", system]
     started, parent = time.time(), os.environ.get(NEST)
     extra = {NEST: raw.stem}
     if limits:
@@ -196,6 +227,6 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         "minutes": round((time.time() - started) / 60, 1), "turns": turns, "estimated": estimated,
         "input": u.get("input_tokens", 0), "output": u.get("output_tokens", 0),
         "cache_read": u.get("cache_read_input_tokens", 0), "cache_write": u.get("cache_creation_input_tokens", 0),
-        "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error, "exit": code,
-        "stream": raw.name})
+        "base": first_turn(seen), "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error,
+        "exit": code, "stream": raw.name})
     return result, killed, error

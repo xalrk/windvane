@@ -53,6 +53,15 @@ class Doctor(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertRegex(out, r"MISSING +Claude Code logged in +-> claude auth login")
 
+    def test_a_claude_without_the_session_flags_says_to_update_it(self):
+        old = ('#!/bin/sh\n[ "$1" = "--help" ] && echo "--effort --allowedTools --disallowed-tools"\n'
+               'echo \'{"loggedIn": true}\'\n')
+        out, code = self.run_doctor(claude=old)
+        self.assertEqual(code, 1)
+        self.assertRegex(out, r"MISSING +Claude Code new enough \(.* lacks --setting-sources, .*--tools, "
+                              r"--disable-slash-commands.*\) +-> claude update")
+        self.assertNotIn("lacks --effort", out)
+
     def test_no_claude_says_how_to_install_it(self):
         out, code = self.run_doctor(claude=None)
         self.assertEqual(code, 1)

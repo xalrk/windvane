@@ -315,7 +315,8 @@ def cmd_stats(a, p):
     agg = {}
     key = (lambda r: r.get("ticket") or r["role"]) if a.by == "ticket" else (lambda r: r["role"])
     for r in rows:
-        g = agg.setdefault(key(r), {"runs": 0, "turns": 0, "in": 0, "out": 0, "cache": 0, "usd": 0.0, "min": 0.0, "est": 0})
+        g = agg.setdefault(key(r), {"runs": 0, "turns": 0, "in": 0, "out": 0, "cache": 0, "usd": 0.0, "min": 0.0,
+                                    "est": 0, "base": 0, "based": 0})
         g["runs"] += 1
         g["turns"] += r.get("turns") or 0
         g["in"] += (r.get("input") or 0) + (r.get("cache_write") or 0)
@@ -324,15 +325,20 @@ def cmd_stats(a, p):
         g["usd"] += r.get("usd") or 0
         g["min"] += r.get("minutes") or 0
         g["est"] += bool(r.get("estimated"))
+        g["base"] += r.get("base") or 0
+        g["based"] += bool(r.get("base"))  # runs from before the ledger kept it don't count
     k = lambda n: f"{n / 1000:,.0f}k"
+    k1 = lambda n, d: f"{n / d / 1000:,.1f}k" if d else "-"
     usd = lambda v, est: ("≥" if est else "") + f"{v:.2f}"  # a run killed before its result has no $: a floor
     outcome = ticket_outcomes(p, agg) if a.by == "ticket" else {}
     col = f" {'outcome':7}" if outcome else ""
-    print(f"{a.by:12}{col} {'runs':>4} {'turns':>5} {'fresh in':>9} {'cached in':>10} {'out':>7} {'API $':>7} {'min':>5}")
+    print(f"{a.by:12}{col} {'runs':>4} {'turns':>5} {'fresh in':>9} {'cached in':>10} {'out':>7} {'API $':>7} {'min':>5}"
+          f" {'base':>6} {'cached/turn':>11}")
     for name, g in sorted(agg.items(), key=lambda kv: -kv[1]["usd"]):
         o = f" {outcome.get(name, '-'):7}" if outcome else ""
         print(f"{name[:12]:12}{o} {g['runs']:4} {g['turns']:5} {k(g['in']):>9} {k(g['cache']):>10} {k(g['out']):>7} "
-              f"{usd(g['usd'], g['est']):>7} {g['min']:5.0f}")
+              f"{usd(g['usd'], g['est']):>7} {g['min']:5.0f} {k1(g['base'], g['based']):>6} "
+              f"{k1(g['cache'], g['turns']):>11}")
     if outcome:
         merged = [g for n, g in agg.items() if outcome.get(n) == "merged"]
         tok = lambda gs: sum(g["in"] + g["out"] for g in gs)
@@ -347,6 +353,8 @@ def cmd_stats(a, p):
     if est:
         print(f"(≥: {est} runs ended before their result; their tokens are counted from the stream, their API $ is not.)")
     print("(API $ is what the tokens would cost on the API: a relative meter on a subscription.)")
+    print("(base: a run's first-turn context, \"-\" for runs logged before windvane kept it; cached/turn: what each "
+          "turn re-reads, base plus what the run has added.)")
 
 
 def critic_stats(a, p):
