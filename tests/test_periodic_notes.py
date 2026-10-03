@@ -57,6 +57,13 @@ class Notes(Base):
         self.assertEqual(len(reply), 80)
         self.assertEqual(reply[-2:], ["… (125 lines cut)", "PERIODIC: wrote a ticket"])
 
+    def test_a_notes_only_round_that_does_not_merge_says_so(self):
+        with mock.patch.object(driver, "land", return_value=(False, "periodic-x")), \
+                mock.patch("windvane.periodic.push") as push:
+            self.round("APPEND_NOTE=T-001")
+        self.assertEqual(push.call_args[0][:2], ("sandbox: periodic change not merged",
+                                                 "Periodic: notes on T-001: waits on periodic-x; merge it by hand."))
+
     def test_an_edit_in_the_middle_is_dropped_and_logged(self):
         self.round("EDIT_NOTE=T-001")
         self.assertEqual(self.head(), self.before)  # nothing else to land

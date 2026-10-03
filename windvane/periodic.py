@@ -259,7 +259,7 @@ class Periodic:
         if land == "hold":
             self.held += tickets
         if not ok:
-            push(f"{p.name}: tickets not merged", f"{title} wait on {where}: merge it by hand.", 4, "warning")
+            push(f"{p.name}: periodic change not merged", f"{title}: waits on {where}; merge it by hand.", 4, "warning")
 
     def ask_land(self, name, tickets, titles):
         """`land = "ask"`: one phone question, near / end / hold; waits up to `answer_wait` minutes (and never past
