@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import critic, net, phone, renumber, selfupdate
+from .renumber import OLD_NUMBERS, said
 from .desk import Desk
 from .periodic import Periodic
 from .config import CHECKOUT, DIR, HOME, exe, slots
@@ -49,6 +50,7 @@ BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
            "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0, "")}
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
+STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
 SUPERVISED = "WINDVANE_SUPERVISED"  # set for a driver under `supervise`: it hands a crash over instead of pushing it
@@ -197,7 +199,7 @@ class Pilot(Desk, Periodic):
         self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, [], None
         self.pulled = (0, -1)  # (when, merges then): pull after each merge, else every PULL_EVERY seconds at most
         self.scale_said = False  # the collapsed-scale warning: logged and pushed once a run
-        self.stash_failed = False  # a failed stash of the checkout's own changes: pushed once a run
+        self.stash_failed = set()  # what waited, or was skipped, on a failed stash of the checkout: pushed once a run
         self.periodic_at, self.held = {}, []  # [[periodic]] (periodic.py): name -> merges when it last ran; tickets held
         self.groups_seen, self.groups_read = {}, (None, None)  # name -> groups finished then; (main's sha, its queue)
         self.groups_wait = {}  # name -> merges when a round was skipped: its finished groups wait for the next merge
@@ -426,6 +428,8 @@ class Pilot(Desk, Periodic):
                      f"({len(res[1])} file{'s' * (len(res[1]) != 1)}); the critic's verdict stands")
         elif not self.critic_gate(tid, sha, stale=ap and ap["sha"], branch=branch) or self.stopping_now():
             return
+        if not self.clean_wait(tid, f"checking {tid}"):
+            return
         ok, summary, logf = self.check_at(sha)
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
         if not ok:
@@ -511,26 +515,44 @@ class Pilot(Desk, Periodic):
             push("critic scale collapsed", line.split(": ", 1)[1] + ". The run goes on.", 3,
                  "warning")
 
-    def keep_changes(self, why):
-        """With isolate off the clean before a periodic round or a desk PR runs in the checkout itself: whatever is
-        uncommitted there (no ticket owns it, so someone at the desk made it) is stashed first, never thrown away.
-        False when the stash failed: the caller skips its round instead of cleaning."""
+    def clean_wait(self, tid, why):
+        """keep_changes() before an approved ticket's check or merge, tried again every STASH_WAIT seconds while it
+        fails: a stale index.lock or a merge left half-done at the desk is brief, and failing the ticket would drop
+        its approval (and two such in a row stop the run). False when a stop or the deadline ends the wait: the next
+        run's worker finds the head pushed and finishes READY again."""
+        then = f"{tid} waits (its approval stands) and is tried again every {STASH_WAIT} s"
+        while not self.keep_changes(why, then):
+            self.nap(now() + timedelta(seconds=STASH_WAIT))
+            if (self.p.state / "STOP").exists() or now() >= self.end():
+                return False
+        return True
+
+    def keep_changes(self, why, then=""):
+        """With isolate off the clean before a ticket's check or merge, a periodic round or a desk PR runs in the
+        checkout itself: whatever is uncommitted there (a ticket's work is pushed by then, so someone at the desk made it) is
+        stashed first, never thrown away. False when the stash failed: the caller skips its step (or, `then`, says
+        what it does instead) rather than clean."""
         p, cd = self.p, self.cd
         if cd != p.main_root() or not gout(cd, "status", "--porcelain"):
+            self.stash_failed.discard(why)  # cleared: a later failure for it is news again
             return True
         msg = f"windvane kept: {now():%Y-%m-%d %H:%M} ({why})"
         r = git(cd, "stash", "push", "-u", "-m", msg)
         if r.returncode == 0 and not gout(cd, "status", "--porcelain"):
+            self.stash_failed.discard(why)
             self.log(f"{why}: stashed the checkout's uncommitted changes as \"{msg}\"")
             push("your changes were stashed", f"Uncommitted changes in your checkout were stashed before "
                  f"{why}: git stash list\n{msg}", 3, "package")
             return True
         err = (r.stderr.strip() or "?").splitlines()[0][:200] if r.returncode else "changes were left after it"
-        self.log(f"{why}: skipped: couldn't stash the checkout's uncommitted changes ({err})")
-        if not self.stash_failed:
-            self.stash_failed = True
+        first = why not in self.stash_failed
+        if first or not then:  # a wait tries again every STASH_WAIT seconds: logged once
+            self.log(f"{why}: {'waits' if then else 'skipped'}: couldn't stash the checkout's changes ({err})")
+        if first:
+            self.stash_failed.add(why)
             push("checkout not cleaned", f"Couldn't stash the uncommitted changes in your checkout, so "
-                 f"{why} was skipped and nothing was deleted: commit or stash them. git said: {err}", 4, "warning")
+                 f"{then or why + ' was skipped'}. Nothing was deleted: commit or stash them. git said: {err}", 4,
+                 "warning")
         return False
 
     def check_at(self, rev):
@@ -619,6 +641,8 @@ class Pilot(Desk, Periodic):
         p, cd = self.p, self.cd
         title = self.queue.titles.get(tid, tid)
         for _ in range(tries):
+            if not self.clean_wait(tid, f"merging {tid}"):  # isolate off: the checkout was edited during the review
+                return None
             self.fetch()
             clean_detach(p, cd, p.upstream)
             msg = f"Merge {tid}: {title} (branch {branch})"
@@ -655,7 +679,8 @@ class Pilot(Desk, Periodic):
                         continue
                     sha = merge  # the head to merge now, and on a retry the one to merge main into
                     net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
-                           f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}.")
+                           f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}."
+                           + OLD_NUMBERS * bool(renumbered))
                 res = net.call(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", sha, "--subject", msg],
                                p.main_root())
                 merged = res.returncode == 0 or net.sh(p.main_root(), "gh", "pr", "view", pr, "--json", "state",
@@ -664,7 +689,7 @@ class Pilot(Desk, Periodic):
                 res = net.git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
             if merged:
-                return self.merged_ok(tid, branch, sha) if self.landed(tid, branch, sha) else None
+                return self.merged_ok(tid, branch, sha, renumbered) if self.landed(tid, branch, sha) else None
             self.log(f"{tid}: merge refused ({' '.join((res.stderr or res.stdout).split())[:200]}); trying again")
         self.fail(tid, "the merge was refused three times")
 
@@ -703,7 +728,8 @@ class Pilot(Desk, Periodic):
                        f"at {sha[:12]}")
         return False
 
-    def merged_ok(self, tid, branch, sha):
+    def merged_ok(self, tid, branch, sha, renumbered=None):
+        """`renumbered`: the merge's renumbering, said in the push: on forge git it's the only place but the log."""
         p = self.p
         if branch:  # only while it still points at the merged head: a later push there is unmerged work
             if net.git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{sha}", p.remote, "--delete",
@@ -726,7 +752,8 @@ class Pilot(Desk, Periodic):
         score = self.scores.get(tid)
         self.log(f"{tid}: merged {sha[:7]} · {self.usage.text()}")
         push(f"Done: {self.name(tid)}", "Built, checked, reviewed and merged."
-             + (f" Critic {score:g}/10." if score is not None else "") + f" {self.usage.text()}", 2, "white_check_mark")
+             + (f" Critic {score:g}/10." if score is not None else "") + f" {self.usage.text()}"
+             + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else ""), 2, "white_check_mark")
         picks = [q for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
                  if p.norm(q["ticket"]) == tid]
         if picks:
@@ -1324,11 +1351,6 @@ def changed_paths(cwd):
                 paths.append(out[i])
         i += 1
     return paths
-
-
-def said(renumbered):
-    """The renumbering for a merge message, log line or PR comment."""
-    return "renumbered " + ", ".join(renumbered) if renumbered else "no number collided"
 
 
 def author_ident(p):

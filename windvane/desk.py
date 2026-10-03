@@ -2,10 +2,10 @@
 
 Merging them by hand while a run is on races its tickets, and their CI has to run somewhere. So an open PR labelled
 `desk_label` by the repo's owner is a candidate: between tickets, with no slot busy, the driver tests its merge with
-main locally (GitHub's own answer lags), runs the project's check on its exact head, and merges a green one by that
-head only. A conflict, a red check or a refused merge gets a short fix session (prompts/FIX.md) that pushes to the
-PR's branch, up to `desk_fixes` per PR; the next pass checks the new head. Each head is handled once, and state.json
-keeps which, so a restart doesn't check it again.
+main locally (GitHub's own answer lags), runs the project's check on that merge (its bare head when it already holds
+main), and merges a green one by its head only. A conflict, a red check or a refused merge gets a short fix session
+(prompts/FIX.md) that pushes to the PR's branch, up to `desk_fixes` per PR; the next pass checks the new head. Each
+head is handled once, and state.json keeps which, so a restart doesn't check it again.
 """
 import json
 import re
@@ -13,7 +13,8 @@ import time
 from datetime import timedelta
 
 from . import net
-from .jobs import tail
+from .jobs import check, tail
+from .renumber import OLD_NUMBERS, said
 from .util import git, gout, hhmm, last_match, now, push
 
 FIX_RE = re.compile(r"FIX: (PUSHED|GAVE UP) #(\d+)[ \t]*(.*)")
@@ -86,15 +87,17 @@ class Desk:
             return self.desk_done(d)
         self.log(f"desk PR #{n}: {pr['title'][:60]} at {head[:7]}")
         files = self.desk_conflicts(cd, head)
-        if files is not None and self.desk_renumber(n, branch, head, files):
+        renumbered = None if files is None else self.desk_renumber(n, branch, head, files)
+        if renumbered is not None:
             files, head = None, gout(cd, "rev-parse", "HEAD")
         if files is not None:
             return self.desk_problem(pr, d, head, f"conflicts with {p.main}",
                                      f"`git merge-tree` finds conflicts in: {', '.join(files) or '(unnamed)'}")
-        ok, summary, logf = self.check_at(head)
+        ok, summary, logf, where = self.desk_check(head)
         if not ok:
-            return self.desk_problem(pr, d, head, "check fails", f"{summary}\n```\n{tail(logf, 40)}\n```")
-        self.desk_comment(n, f"**windvane check: PASSED** at {head[:7]}: {summary}. Merging.")
+            return self.desk_problem(pr, d, head, "check fails", f"The check ran on {where}: {summary}\n```\n"
+                                                                 f"{tail(logf, 40)}\n```")
+        self.desk_comment(n, f"**windvane check: PASSED** on {where}: {summary}. Merging.")
         r = net.call(["gh", "pr", "merge", n, "--merge", "--match-head-commit", head], p.main_root())
         if r.returncode:
             now_head = self.desk_head(n)
@@ -114,24 +117,39 @@ class Desk:
         self.desk_done(d, head)
         self.desk_merged.append(n)
         self.log(f"desk PR #{n}: merged {head[:7]}")
-        push(f"{'Fixed: d' if d.get('fixed') else 'D'}esk PR #{n} merged", f"{pr['title'][:150]}\n{summary}", 2,
-             "white_check_mark")
+        push(f"{'Fixed: d' if d.get('fixed') else 'D'}esk PR #{n} merged", f"{pr['title'][:150]}\n{summary}"
+             + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else ""), 2, "white_check_mark")
+
+    def desk_check(self, head):
+        """The check on the tree main will hold: `head` merged with main when main moved past its base (a PR green on
+        its own can still break main with what landed since), else `head` itself. (ok, summary, log, what ran)."""
+        from .driver import author_ident, clean_detach
+        p, cd = self.p, self.cd
+        if git(cd, "merge-base", "--is-ancestor", p.upstream, head).returncode == 0:
+            return (*self.check_at(head), head[:7])
+        where = f"{head[:7]} merged with {p.main} at {gout(cd, 'rev-parse', '--short=7', p.upstream)}"
+        if not clean_detach(p, cd, p.upstream) or git(cd, *author_ident(p), "merge", "-q", "--no-ff", "-m",
+                                                      f"Check {head[:7]} merged with {p.main}", head).returncode:
+            git(cd, "merge", "--abort")
+            return False, f"couldn't merge it with {p.main}", "", where
+        return (*check(p, cd), where)
 
     def desk_renumber(self, n, branch, head, files):
         """A conflict only in appended entries of `[[append_only]]` files: resolved like a ticket's and pushed to the
-        PR's branch, so the PR merges at that head. False when it isn't one, or the push is refused."""
-        from .driver import clean_detach, said
+        PR's branch, so the PR merges at that head. The renumbering, or None when it isn't one, or the push is
+        refused."""
+        from .driver import clean_detach
         p, cd = self.p, self.cd
         if not files or not set(files) <= {r["file"] for r in p.append_only} or not clean_detach(p, cd, p.upstream):
-            return False
+            return None
         ok, renumbered = self.merge_main(head, f"Merge {branch} into {p.main}")
         if not ok or renumbered is None or net.git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{head}",
                                                    p.remote, f"HEAD:refs/heads/{branch}").returncode:
-            return False
+            return None
         self.log(f"desk PR #{n}: conflicted with {p.main} only in appended entries: {said(renumbered)}")
         self.desk_comment(n, f"**windvane: resolved the conflict with {p.main}** in appended entries: "
-                             f"{said(renumbered)}.")
-        return True
+                             f"{said(renumbered)}." + OLD_NUMBERS * bool(renumbered))
+        return renumbered
 
     def desk_conflicts(self, cd, head):
         """The files `head` conflicts in when merged with main ([] if git names none), or None for a clean merge

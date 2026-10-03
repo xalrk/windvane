@@ -127,7 +127,8 @@ minutes = 30
 prompt = "tools/autopilot/TRIAGE.md"      # reads the report, writes tickets
 ```
 
-Each session ends with `PERIODIC: <summary>`, which is logged and pushed to your phone; a `then` session gets the
+Each session ends with `PERIODIC: <summary>`, which is logged and pushed to your phone (a round that doesn't finish,
+a failed setup, a session cut off or without that line, gets one push saying why); a `then` session gets the
 previous one's final text and the files it names, plus, like `windvane plan`, the queue and the critic's "Beyond
 this ticket" notes no plan or triage has used yet. Each session reads its prompt file from current `main`. New
 tickets under `.windvane/tickets/`, lines added at the end of an open ticket, and lines added to `QUEUE.md` land on
@@ -143,8 +144,8 @@ scores over time. Sessions show in `windvane stats` as `periodic:<name>`.
 ### Your own PRs from the desk
 
 While a run is on, merging your own PRs by hand races its tickets. Label one `windvane merge` (forge `github`, your
-PRs only) and the autopilot merges it between tickets: it tests the merge with `main`, runs your check on the PR's
-exact head, comments the result and merges that head only. A red, conflicting or refused PR gets a short fix session
+PRs only) and the autopilot merges it between tickets: it tests the merge with `main`, runs your check on that merge
+(on the PR's head itself when it already holds `main`), comments the result and merges that head only. A red, conflicting or refused PR gets a short fix session
 (`prompts/FIX.md`: the smallest change, never a weaker test) pushed to its branch, up to `desk_fixes` times; then it
 is left for you with one push. Each head is checked once; push a new one to have it tried again. Fix sessions show
 in `windvane stats` as `fix`. Set `desk_label = ""` under `[autopilot]` to turn it off.
@@ -154,7 +155,7 @@ in `windvane stats` as `fix`. Set `desk_label = ""` under `[autopilot]` to turn 
 A decision log, ADRs or migrations: two tickets that each append an entry take the same next number and conflict.
 Name the file and the driver resolves such a conflict itself, without another worker run: main's entries stay, the
 branch's follow, renumbered where they collide, and the branch's own references to them follow (`D-5 → D-6`, named in
-the merge commit, the log and the PR). Any other conflict goes back to the worker as before.
+the merge commit, the log, the PR and the merged push). Any other conflict goes back to the worker as before.
 
 ```toml
 [[append_only]]

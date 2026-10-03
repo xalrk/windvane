@@ -19,9 +19,10 @@ run. Destructive git commands (`reset --hard`, `clean`) only ever run in the dri
 
 `isolate = false` runs workers in your checkout instead, for projects whose builds can't be duplicated (a large game
 engine project, for example). It also limits the run to one ticket at a time. Don't edit the checkout while such a
-run is going. Changes you leave uncommitted there between tickets are never deleted: before a periodic round or a desk
-PR cleans the checkout, they're stashed (`git stash list`: `windvane kept: <time> (<why>)`, with a push); if the stash
-fails, that round is skipped.
+run is going. Changes you leave uncommitted there are never deleted: before a ticket's check or merge, a periodic
+round or a desk PR cleans the checkout, they're stashed (`git stash list`: `windvane kept: <time> (<why>)`, with a
+push); if the stash fails, nothing is cleaned: the round or desk PR is skipped, and an approved ticket waits,
+its approval kept, trying again every 30 seconds.
 
 One exception: when windvane works on its own repository, the driver fast-forwards the windvane checkout it runs
 from between tickets, so what it merges takes effect from the next ticket. It only does so for a clean checkout on
