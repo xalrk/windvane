@@ -39,7 +39,7 @@ from .util import git, gout, hhmm, last_match, load_json, log, now, push, read_j
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
-CARRIED = ("periodic_at", "held", "skip", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
+CARRIED = ("periodic_at", "groups_seen", "held", "skip", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "scale_said", "desk_merged")  # the run's own memory, handed to the driver a self-update restarts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
@@ -198,6 +198,8 @@ class Pilot(Desk, Periodic):
         self.scale_said = False  # the collapsed-scale warning: logged and pushed once a run
         self.stash_failed = False  # a failed stash of the checkout's own changes: pushed once a run
         self.periodic_at, self.held = {}, []  # [[periodic]] (periodic.py): name -> merges when it last ran; tickets held
+        self.groups_seen, self.groups_read = {}, (None, None)  # name -> groups finished then; (main's sha, its queue)
+        self.groups_wait = {}  # name -> merges when a round was skipped: its finished groups wait for the next merge
         self.desk_init(s.get("desk", {}))  # the user's labelled PRs, merged between tickets (desk.py)
 
     def slot_dirs(self, i):

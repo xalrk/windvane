@@ -7,6 +7,8 @@ All notable changes to windvane are listed here. The format follows
 ## Unreleased
 
 ### Added
+- `[[periodic]]` `after_group`: run the session when a group of tickets (a milestone) is finished, its prompt
+  naming the group and its tickets; `windvane queue` shows the groups closest to finishing.
 - `[[append_only]]`: a conflict only in entries appended to a numbered log (decisions, ADRs, migrations) is resolved
   by the driver, renumbering the branch's colliding entries and its references to them, without another worker run.
 
