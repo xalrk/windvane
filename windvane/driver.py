@@ -186,6 +186,7 @@ class Pilot(Desk, Periodic):
         self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, [], None
         self.pulled = (0, -1)  # (when, merges then): pull after each merge, else every PULL_EVERY seconds at most
         self.scale_said = False  # the collapsed-scale warning: logged and pushed once a run
+        self.stash_failed = False  # a failed stash of the checkout's own changes: pushed once a run
         self.periodic_at, self.held = {}, []  # [[periodic]] (periodic.py): name -> merges when it last ran; tickets held
         self.desk_init(s.get("desk", {}))  # the user's labelled PRs, merged between tickets (desk.py)
 
@@ -485,6 +486,28 @@ class Pilot(Desk, Periodic):
             self.log(line)
             push(f"{self.p.name}: critic scale collapsed", line.split(": ", 1)[1] + ". The run goes on.", 3,
                  "warning")
+
+    def keep_changes(self, why):
+        """With isolate off the clean before a periodic round or a desk PR runs in the checkout itself: whatever is
+        uncommitted there (no ticket owns it, so someone at the desk made it) is stashed first, never thrown away.
+        False when the stash failed: the caller skips its round instead of cleaning."""
+        p, cd = self.p, self.cd
+        if cd != p.main_root() or not gout(cd, "status", "--porcelain"):
+            return True
+        msg = f"windvane kept: {now():%Y-%m-%d %H:%M} ({why})"
+        r = git(cd, "stash", "push", "-u", "-m", msg)
+        if r.returncode == 0 and not gout(cd, "status", "--porcelain"):
+            self.log(f"{why}: stashed the checkout's uncommitted changes as \"{msg}\"")
+            push(f"{p.name}: your changes were stashed", f"Uncommitted changes in your checkout were stashed before "
+                 f"{why}: git stash list\n{msg}", 3, "package")
+            return True
+        err = (r.stderr.strip() or "?").splitlines()[0][:200] if r.returncode else "changes were left after it"
+        self.log(f"{why}: skipped: couldn't stash the checkout's uncommitted changes ({err})")
+        if not self.stash_failed:
+            self.stash_failed = True
+            push(f"{p.name}: checkout not cleaned", f"Couldn't stash the uncommitted changes in your checkout, so "
+                 f"{why} was skipped and nothing was deleted: commit or stash them. git said: {err}", 4, "warning")
+        return False
 
     def check_at(self, rev):
         cd = self.cd
