@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import critic as critic_mod
 from . import doctor, driver, install, jobs, phone, preflight, questions, watch
+from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, exe, find, toplevel
 from .queue import Queue
 from .runner import Usage, inherited_stop
@@ -264,6 +265,9 @@ def cmd_queue(a, p):
     local = sorted(t for t in (p.norm(f.stem) for f in (p.root / p.tickets_rel).glob("*.md")) if t and t not in q.files)
     if local:
         print(f"not on {p.upstream} yet (the autopilot can't see them): {' '.join(local)}; commit and push")
+    for e in p.periodic.values():
+        if e["after_group"]:
+            print(periodic_mod.group_line(e, q))
 
 
 def cmd_answer(a, p):

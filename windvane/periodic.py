@@ -1,5 +1,6 @@
-"""[[periodic]] sessions: a project's own session (a playtest, an audit) between tickets every `every` merges, or by
-hand with `windvane periodic <name>`, on a detached copy of current main.
+"""[[periodic]] sessions: a project's own session (a playtest, an audit) between tickets every `every` merges, when a
+group of tickets is finished (`after_group`), or by hand with `windvane periodic <name>`, on a detached copy of current
+main.
 
 An entry's `then` runs another right after, given the first one's output; an entry some other names in `then` (a
 triage) also gets the critic's "Beyond this ticket" notes no plan or triage has used yet, and the queue, the way
@@ -34,16 +35,45 @@ ASK_LAND = (("near", "queue them right after the ticket in progress"), ("end", "
 
 
 class Periodic:
-    """The Pilot's [[periodic]] part. `periodic_at` (carried across restarts) is each entry's merge count when it last
-    ran; `held` the tickets parked for the desk this run, for the final summary."""
+    """The Pilot's [[periodic]] part. `periodic_at` and `groups_seen` (both carried across restarts) are each entry's
+    merge count and its finished groups when it last ran; `held` the tickets parked for the desk this run, for the
+    final summary."""
 
     def periodic_due(self):
         """The first [[periodic]] entry whose `every` merges have passed since it last ran this run (restarts carry
-        the count), or None."""
+        the count), or with a group finished since then, or None."""
         for e in self.p.periodic.values():
             if e["every"] and len(self.merged) - self.periodic_at.get(e["name"], 0) >= e["every"]:
                 return e
+            if e["after_group"] and self.groups_finished(e):
+                return e
         return None
+
+    def group_queue(self):
+        """The queue on main as last fetched, read again only when main moved: `periodic_due` looks between tickets,
+        often, and a big project's queue costs a git call per ticket."""
+        head = gout(self.p.main_root(), "rev-parse", self.p.upstream)
+        if self.groups_read[0] != head:
+            self.groups_read = (head, Queue(self.p))
+        return self.groups_read[1]
+
+    def groups_finished(self, e):
+        """`e`'s groups finished since the run started or `e` last ran, as {group: its tickets}. The first look (a
+        fresh run, a run by hand) only notes the groups finished already; a group that opens again (a new ticket in
+        it) leaves the seen set, so it counts when it finishes again."""
+        q = self.group_queue()
+        found = groups(q, e["after_group"])
+        done = {g for g, (_, left) in found.items() if not left}
+        seen = [g for g in self.groups_seen.setdefault(e["name"], sorted(done, key=natural)) if g in done]
+        self.groups_seen[e["name"]] = seen
+        return {g: [t + " (parked)" * (t in q.parked) for t in found[g][0]] for g in sorted(done - set(seen), key=natural)}
+
+    def periodic_ran(self, e):
+        """`e` ran (or its round was skipped): its count starts again, and the groups finished now are seen."""
+        self.periodic_at[e["name"]] = len(self.merged)
+        if e["after_group"]:
+            found = groups(self.group_queue(), e["after_group"])
+            self.groups_seen[e["name"]] = sorted((g for g, (_, left) in found.items() if not left), key=natural)
 
     def periodic(self, e):
         """Run `e` and the entries its `then` chains to, one after another in the ci tree on current main, then
@@ -51,11 +81,11 @@ class Periodic:
         from .driver import clean_detach
         p, cd, done, prev = self.p, self.p.ci_dir, set(), None
         if cd == p.work_dir and any(self.owner.values()):
-            self.periodic_at[e["name"]] = len(self.merged)
+            self.periodic_ran(e)
             self.log(f"{e['name']}: skipped: the checkout holds a ticket's unfinished work")
             return
         if not self.keep_changes(f"the {e['name']} round"):
-            self.periodic_at[e["name"]] = len(self.merged)
+            self.periodic_ran(e)
             return
         self.fetch()
         clean_detach(p, cd, p.upstream)
@@ -64,9 +94,10 @@ class Periodic:
         self.handed = set()  # the ticket ids the chain's sessions were given: only those land
         while e and e["name"] not in done and not (p.state / "STOP").exists():
             done.add(e["name"])
-            self.periodic_at[e["name"]] = len(self.merged)
+            finished = self.groups_finished(e) if e["after_group"] else {}
+            self.periodic_ran(e)
             land = e["land"] or land
-            got = self.periodic_session(e, cd, prev)
+            got = self.periodic_session(e, cd, prev, finished)
             if got is None:
                 break
             reply, prev = got
@@ -110,9 +141,9 @@ class Periodic:
         last = lines[0].decode(errors="replace").strip()[:200] if lines else "no output"
         return why or (f"exit {proc.returncode}: {last}" if proc.returncode else "")
 
-    def periodic_session(self, e, cd, prev):
+    def periodic_session(self, e, cd, prev, finished=None):
         """One periodic session: (its final reply, that plus the files it names), or None when it was skipped or
-        didn't finish."""
+        didn't finish. `finished`: the groups that made it due, {group: its tickets}, named in its prompt."""
         from .driver import pending_ids, rules
         name, p = e["name"], self.p
         if not self.periodic_fits(e):
@@ -139,6 +170,8 @@ class Periodic:
         prompt = "\n\n".join(filter(None, [
             f"Periodic session {name} on {p.upstream} at {gout(cd, 'rev-parse', '--short', 'HEAD')}, after "
             f"{len(self.merged)} merged tickets this run. Today is {now():%Y-%m-%d}. End with the PERIODIC line.",
+            finished and "## Finished since the last run: " + "; ".join(
+                f"{g} ({len(ts)} ticket{'s' * (len(ts) != 1)}: {', '.join(ts)})" for g, ts in finished.items()),
             prev and f"## The previous session's output\n{prev}",
             notes and "## The critic's follow-up notes since the last plan (ticket, point)\n"
             + "\n".join(f"- ({t}) {b}" for t, b in notes[:60]),
@@ -290,6 +323,34 @@ class Periodic:
             self.sleep(min(5, max(0.0, (until - now()).total_seconds())))
         self.log(f"{name}: no answer; the tickets are held")
         return "hold"
+
+
+def natural(text):
+    """A sort key that puts M9 before M10."""
+    return [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", text)]
+
+
+def groups(q, pattern):
+    """{group: (its tickets by id, how many are still open)} for `after_group` = `pattern`, searched in each ticket's
+    header (its first 8 lines); group 1 of the match names the ticket's group. Open means neither merged nor `done:`
+    nor `parked:`: a parked ticket waits for the desk and shouldn't hold a finished group back."""
+    out = {}
+    for t in sorted(q.files, key=natural):
+        m = re.search(pattern, "\n".join(q.text[t].splitlines()[:8]), re.M)
+        g = m and (m.group(1) or "").strip()
+        if g:
+            ts, left = out.get(g, ([], 0))
+            out[g] = (ts + [t], left + (not q.is_done(t) and t not in q.parked))
+    return out
+
+
+def group_line(e, q, most=5):
+    """`windvane queue`'s line for an `after_group` entry: its open groups, the closest to finishing first."""
+    left = sorted(((n, g) for g, (_, n) in groups(q, e["after_group"]).items() if n),
+                  key=lambda x: (x[0], natural(x[1])))
+    shown = ", ".join(f"{g} ({n} left)" for n, g in left[:most]) or "no group open"
+    more = f", and {len(left) - most} more" if len(left) > most else ""
+    return f"{e['name']} runs when a group finishes: {shown}{more}"
 
 
 def place(queue, tickets, land, anchor, titles, name, p):

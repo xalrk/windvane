@@ -131,8 +131,9 @@ LANDS = ("near", "next", "end", "hold", "ask")  # where a [[periodic]] chain's n
 
 
 def periodic(entries):
-    """`[[periodic]]` sessions by name: a project's own session (a playtest, an audit) run every `every` merges, or
-    only as another entry's `then` when `every` is unset. Mistakes stop the run at once rather than at the Nth merge."""
+    """`[[periodic]]` sessions by name: a project's own session (a playtest, an audit) run every `every` merges, when a
+    group of tickets (`after_group`: a regex on their headers, group 1 the group's name) is finished, or only as
+    another entry's `then` when neither is set. Mistakes stop the run at once rather than at the Nth merge."""
     out = {}
     for i, e in enumerate(entries if isinstance(entries, list) else [entries]):
         name = str(e.get("name") or f"periodic-{i + 1}")
@@ -148,7 +149,13 @@ def periodic(entries):
         land = str(e.get("land", ""))
         if land and land not in LANDS:
             raise SystemExit(f"windvane: [[periodic]] {name}: land = {land!r}: use one of {', '.join(LANDS)}")
-        out[name] = {"name": name, "land": land, "every": max(0, every), "minutes": max(1, minutes),
+        group = str(e.get("after_group", ""))
+        try:
+            if group and re.compile(group).groups < 1:
+                raise re.error("no (group) to name the ticket's group")
+        except re.error as err:
+            raise SystemExit(f"windvane: [[periodic]] {name}: after_group = {group!r}: {err}")
+        out[name] = {"name": name, "land": land, "every": max(0, every), "after_group": group, "minutes": max(1, minutes),
                      "setup": e.get("setup", ""), "setup_minutes": max(1, setup_m),
                      "prompt": e["prompt"], "then": e.get("then", ""),
                      "allow": e.get("allow", []), "deny": e.get("deny", [])}
