@@ -61,7 +61,7 @@ class Notes(Base):
         with mock.patch.object(driver, "land", return_value=(False, "periodic-x")), \
                 mock.patch("windvane.periodic.push") as push:
             self.round("APPEND_NOTE=T-001")
-        self.assertEqual(push.call_args[0][:2], ("sandbox: periodic change not merged",
+        self.assertEqual(push.call_args[0][:2], ("periodic change not merged",
                                                  "Periodic: notes on T-001: waits on periodic-x; merge it by hand."))
 
     def test_an_edit_in_the_middle_is_dropped_and_logged(self):

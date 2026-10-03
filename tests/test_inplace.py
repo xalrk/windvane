@@ -54,7 +54,7 @@ class InPlace(unittest.TestCase):
         self.s.git("stash", "apply", "-q")
         self.assertEqual((self.s.root / "notes.txt").read_text(), "my notes\n")
         self.assertEqual((self.s.root / "README").read_text(), "hi, edited at the desk\n")
-        self.assertIn("sandbox: your changes were stashed", self.pushes)
+        self.assertIn("your changes were stashed", self.pushes)
 
     def periodic_sessions(self):
         f = self.s.tmp / "calls.jsonl"
@@ -110,7 +110,7 @@ class InPlace(unittest.TestCase):
         self.assertEqual(self.stashes(), [])
         self.assertEqual((self.s.root / "notes.txt").read_text(), "my notes\n")
         self.assertEqual((self.s.root / "README").read_text(), "hi, edited at the desk\n")
-        self.assertEqual(self.pushes, ["sandbox: checkout not cleaned"])  # pushed once, logged each time
+        self.assertEqual(self.pushes, ["checkout not cleaned"])  # pushed once, logged each time
         self.assertEqual((self.p.state / "autopilot.log").read_text().count("couldn't stash"), 2)
 
     def test_with_isolate_on_the_ci_worktree_is_cleaned_and_the_checkout_left_alone(self):

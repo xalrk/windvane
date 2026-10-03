@@ -241,8 +241,9 @@ class Sandbox:
         self.git("push", "-q", "origin", "main")
 
     def close(self):
-        from windvane import net
+        from windvane import net, phone
         net.probe, net.waiter = None, None
+        phone.use(None)  # the next test's pushes name its own project
         os.environ.clear()
         os.environ.update(self.old_env)
         subprocess.run(["rm", "-rf", str(self.tmp)])

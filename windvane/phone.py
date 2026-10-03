@@ -148,8 +148,29 @@ def send(c, title, msg, prio=3, tags="", buttons=()):
         return False
 
 
+_project = ""  # the display name of the project this process works for (see use)
+
+
+def use(p):
+    """Name project `p` in every push and question this process sends: with two projects running, the phone must
+    tell them apart at a glance. Set once where a process takes up its project (the CLI, a run)."""
+    global _project
+    _project = p.display if p else ""
+
+
+def titled(text):
+    """The project in front, once: `Acme: Done: T-007 ...`; a run's own `windvane started` reads `Acme windvane
+    started` (just `windvane started` for windvane itself)."""
+    if not _project:
+        return text
+    if text.startswith("windvane "):
+        return text if _project == "windvane" else f"{_project} {text}"
+    return f"{_project}: {text}"
+
+
 def push(title, msg, prio=3, tags="", buttons=()):
     """A push through the user's `notify` when it's on PATH, else the built-in one when the phone is on."""
+    title = titled(title)
     if shutil.which("notify"):
         args = ["notify", "-t", title, "-p", str(prio), "-g", tags]
         for b in buttons[:3]:
@@ -165,6 +186,7 @@ def push(title, msg, prio=3, tags="", buttons=()):
 def ask(qid, question, options):
     """Send a question with buttons for A and B and "Answer on computer" (C to E are typed). True when sent, False
     when the push failed (worth another try), None when there's no phone: it then waits for `windvane answer`."""
+    question = titled(question)
     if shutil.which("notify-ask"):
         subprocess.run(["notify-ask", qid, question, *options], capture_output=True)
         return True
@@ -220,15 +242,24 @@ def projects():
     return {n: r for n, r in sorted(known.items()) if Path(r).is_dir()}
 
 
+def display(name, root):
+    """A known project's display name, for a reply that names it; its state name when its config won't load."""
+    from .config import Project
+    try:
+        return Project(root).display
+    except (SystemExit, OSError, ValueError):
+        return name
+
+
 def each(*args, timeout=90):
     """One line (or a few) per project from `windvane -C <root> <args>`."""
     out = []
     for name, root in projects().items():
         try:
             r = subprocess.run([*exe(), "-C", root, *args], capture_output=True, text=True, timeout=timeout)
-            out.append(r.stdout.strip() or f"{name}: no answer")
+            out.append(r.stdout.strip() or f"{display(name, root)}: no answer")
         except (OSError, subprocess.TimeoutExpired):
-            out.append(f"{name}: no answer")
+            out.append(f"{display(name, root)}: no answer")
     return out or ["No windvane project has run here yet."]
 
 

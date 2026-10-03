@@ -161,22 +161,22 @@ def cmd_preflight(a, p):
 
 def cmd_stop(a, p):
     if a.if_running and not running(p):
-        print(f"{p.name}: autopilot isn't running")
+        print(f"{p.display}: autopilot isn't running")
         return
     p.state.mkdir(parents=True, exist_ok=True)
     stop_now = getattr(a, "now", False)  # callers that predate --now pass a Namespace without it
     if stop_now and not running(p):
-        return print(f"{p.name}: autopilot isn't running")
+        return print(f"{p.display}: autopilot isn't running")
     if not stop_now:
         (p.state / "STOP").touch()
-        return print(f"{p.name}: autopilot stops after the current ticket")
+        return print(f"{p.display}: autopilot stops after the current ticket")
     (p.state / "STOP").write_text("now")
-    print(f"{p.name}: stopping now: killing the running sessions...", flush=True)
+    print(f"{p.display}: stopping now: killing the running sessions...", flush=True)
     for _ in range(STOP_WAIT):  # each session's next poll kills it (SIGTERM, then SIGKILL a minute later)
         if not driver.locked(p):
-            return print(f"{p.name}: stopped; the worktrees keep their work for the next run")
+            return print(f"{p.display}: stopped; the worktrees keep their work for the next run")
         time.sleep(1)
-    print(f"{p.name}: still stopping; `windvane status` shows when it's done")
+    print(f"{p.display}: still stopping; `windvane status` shows when it's done")
 
 
 def cmd_deadline(a, p):
@@ -184,9 +184,9 @@ def cmd_deadline(a, p):
     usage = "windvane deadline takes HH:MM, 'YYYY-MM-DD HH:MM' or +90m / +2h"
     t = parse_deadline(None, when[1:], usage) if when.startswith("+") else parse_deadline(when, None, usage)
     if not running(p):
-        sys.exit(f"{p.name}: autopilot isn't running; start one with windvane run --until {t:%H:%M}")
+        sys.exit(f"{p.display}: autopilot isn't running; start one with windvane run --until {t:%H:%M}")
     (p.state / "DEADLINE").write_text(t.isoformat(timespec="seconds"))
-    print(f"{p.name}: the run now ends at {t:%Y-%m-%d %H:%M}. New tickets keep to it at once; running sessions are "
+    print(f"{p.display}: the run now ends at {t:%Y-%m-%d %H:%M}. New tickets keep to it at once; running sessions are "
           "stopped by then")
 
 
@@ -202,7 +202,7 @@ def cmd_status(a, p):
     on = running(p)
     if a.line:
         last = (last_log(p) or [""])[0][11:]
-        print(f"{p.name}: autopilot {'running' if on else 'off'}" + (f". Last: {last}" if last else ""))
+        print(f"{p.display}: autopilot {'running' if on else 'off'}" + (f". Last: {last}" if last else ""))
         return
     print(f"autopilot: {('running in tmux ' + p.tmux if in_tmux(p) else 'running') if on else 'not running'}")
     print(f"questions now: {questions.mode(p)}")
@@ -219,7 +219,7 @@ def cmd_overview(a, p):
     q = Queue(p)
     st = [q.status(t) for t in q.order]
     done = st.count("done")
-    lines = [f"{p.name}: {done} of {len(st)} tickets done; {st.count('wip')} in progress, {st.count('todo')} to do."]
+    lines = [f"{p.display}: {done} of {len(st)} tickets done; {st.count('wip')} in progress, {st.count('todo')} to do."]
     lines.append(f"Autopilot {'on' if running(p) else 'off'}.")
     work = next((m.group(1) for l in reversed(last_log(p, 200)) if (m := re.search(r" (\S+): worker run", l))), None)
     if running(p) and work:
@@ -579,6 +579,7 @@ def main(argv=None):
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
         sys.exit(heavy_run(cmd, a.wait * 60) if cmd else "heavy: give a command")
     p = find()
+    phone.use(p)
     if a.cmd == "run":
         for k in ("cap", "week_cap", "ticket_hours", "min_slot", "answer_wait"):
             if getattr(a, k) is None:

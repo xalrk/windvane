@@ -280,7 +280,7 @@ class Replies(PhoneTest):
                 break
             time.sleep(0.1)
         status = next(m for m in self.pushes() if m.get("title") == "Status")
-        self.assertIn("sandbox: autopilot off", status["message"])
+        self.assertIn("Sandbox: autopilot off", status["message"])
 
 
 class WithTheDriver(PhoneTest):
@@ -384,7 +384,7 @@ class WithTheDriver(PhoneTest):
         self.assertEqual(len(self.worker_prompts()), 1)
         self.assertIn("Why: asked to stop", (self.p.state / "autopilot.log").read_text())
         stop = next(m for m in self.pushes() if m.get("title") == "Stop")
-        self.assertIn("sandbox: autopilot stops after the current ticket", stop["message"])
+        self.assertIn("Sandbox: autopilot stops after the current ticket", stop["message"])
 
 
 if __name__ == "__main__":

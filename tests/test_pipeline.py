@@ -149,7 +149,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(pilot.stop_reason, "4 sessions in a row died (API Error: 529 Overloaded)")
         self.assertEqual((pilot.merged, pilot.failed), ([], []))
         self.assertEqual(self.roles(), ["worker"] * 4)
-        self.assertEqual(self.pushes, ["sandbox: autopilot started", "sandbox: autopilot stopped"])
+        self.assertEqual(self.pushes, ["windvane started", "windvane stopped"])
 
     def test_no_retry_past_the_deadline(self):
         pilot = self.pilot("crash*")
@@ -239,7 +239,7 @@ class Pipeline(unittest.TestCase):
         self.config(forge='"github"')
         pushes = self.pushes()
         self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
-        self.assertEqual(pushes, ["sandbox: plan not merged"])
+        self.assertEqual(pushes, ["plan not merged"])
         self.s.git("fetch", "-q", "origin")
         self.assertNotIn("T-003", Queue(self.p).files)
         self.assertIn("plan-", self.s.git("ls-remote", "--heads", "origin", "plan-*"))  # kept for its PR
@@ -265,7 +265,7 @@ class Pipeline(unittest.TestCase):
         hook.chmod(0o755)
         pushes = self.pushes()
         self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
-        self.assertEqual(pushes, ["sandbox: plan not merged"])
+        self.assertEqual(pushes, ["plan not merged"])
         self.s.git("fetch", "-q", "origin")
         self.assertNotIn("T-003", Queue(self.p).files)
         branch = self.s.git("ls-remote", "--heads", "origin", "plan-*").split("refs/heads/")[1]
@@ -326,7 +326,7 @@ class PhoneSync(unittest.TestCase):
         driver.time.sleep = lambda s: (self.p.state / "STOP").touch()  # the idle wait for an answer ends the run
         self.addCleanup(setattr, driver.time, "sleep", orig)
         pilot.run(now() + timedelta(hours=1))
-        self.assertIn(f"{self.p.qid('T-001')} T-001: Red or blue?", record.read_text())
+        self.assertIn(f"{self.p.qid('T-001')} Sandbox: T-001: Red or blue?", record.read_text())
         self.assertEqual(record.read_text().count("Red or blue?"), 1)
         self.assertIsNotNone(json.loads((self.p.state / "state.json").read_text())["questions"]["T-001"]["asked"])
 
@@ -386,7 +386,7 @@ class Setup(unittest.TestCase):
         self.assertIn("npm ERR! no lockfile", pilot.stop_reason)
         self.assertFalse(p.work_dir.exists())
         self.assertNotIn(str(p.work_dir), self.s.git("worktree", "list"))
-        self.assertEqual([t for t, _ in self.pushes], ["sandbox: autopilot stopped"])  # the one push says why
+        self.assertEqual([t for t, _ in self.pushes], ["windvane stopped"])  # the one push says why
         self.assertIn("Why: setup `echo installing;", self.pushes[0][1])
         log = (p.state / "autopilot.log").read_text()
         self.assertIn("installing\nnpm ERR! no lockfile", log)  # the command's last lines

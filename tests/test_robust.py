@@ -69,7 +69,7 @@ class Supervisor(unittest.TestCase):
             return driver.supervise(self.p, argv, deadline, start=self.start, sleep=lambda s: None), deadline
 
     def titles(self):
-        return [t.split(": ", 1)[1] for t, _ in self.pushes if t.startswith("sandbox: autopilot")]
+        return [t for t, _ in self.pushes if t.startswith("windvane ")]
 
     def log(self):
         return (self.p.state / "autopilot.log").read_text()
@@ -81,8 +81,8 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(self.calls[1][-3:], ["--until", f"{deadline:%Y-%m-%d %H:%M}", "--no-preflight"])
-        self.assertEqual(self.titles(), ["autopilot started", "autopilot restarted", "autopilot stopped"])
-        self.assertIn("KeyError: 'slot 7'", dict(self.pushes)["sandbox: autopilot restarted"])
+        self.assertEqual(self.titles(), ["windvane started", "windvane restarted", "windvane stopped"])
+        self.assertIn("KeyError: 'slot 7'", dict(self.pushes)["windvane restarted"])
         self.assertIn("driver crashed (KeyError: 'slot 7'); restart 1 of 3 this hour", self.log())
         # the restarted driver knew T-001 was merged before the crash: the final summary has both
         self.assertIn("Merged: do T-001 (T-001); do T-002 (T-002)", self.pushes[-1][1])
@@ -112,7 +112,7 @@ class Supervisor(unittest.TestCase):
         rc, _ = self.supervise("--for", "2h")
         self.assertEqual(rc, 1)
         self.assertEqual(len(self.calls), 4)
-        self.assertEqual(self.titles(), ["autopilot started"] + ["autopilot restarted"] * 3 + ["autopilot stopped"])
+        self.assertEqual(self.titles(), ["windvane started"] + ["windvane restarted"] * 3 + ["windvane stopped"])
         why = self.pushes[-1][1]
         self.assertIn("Why: the driver crashed (KeyError: 'slot 7'); not restarted: crashed 4 times in an hour.", why)
         self.assertIn("Merged: none.", why)  # the driver's own summary rides along: no second push from it
@@ -137,7 +137,7 @@ class Supervisor(unittest.TestCase):
         self.crash_when(crash_after_stop)
         self.supervise("--for", "2h")
         self.assertEqual(len(self.calls), 1)
-        self.assertEqual(self.titles(), ["autopilot started", "autopilot stopped"])
+        self.assertEqual(self.titles(), ["windvane started", "windvane stopped"])
         self.assertIn("not restarted: asked to stop", self.pushes[-1][1])
 
     def test_a_killed_driver_is_pushed_not_restarted(self):
@@ -150,7 +150,7 @@ class Supervisor(unittest.TestCase):
             self.assertEqual((rc, len(self.calls), len(self.pushes)), (-sig, 1, pushes))
         self.p.state.mkdir(parents=True, exist_ok=True)
         driver.supervise(self.p, ["run"], now() + timedelta(hours=2), start=lambda a, e: -signal.SIGKILL)
-        self.assertEqual(self.pushes, [("sandbox: autopilot stopped", "Why: the driver was killed (SIGKILL). Not "
+        self.assertEqual(self.pushes, [("windvane stopped", "Why: the driver was killed (SIGKILL). Not "
                                         "restarted: its sessions may still be running in the worktrees.")])
 
     def test_a_moved_deadline_is_the_restarts(self):

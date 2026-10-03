@@ -19,6 +19,7 @@ matching keys for one run.
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | the repository's directory name | The project's short name: its state directory (`~/.local/state/windvane/<name>/`), the tmux session (`windvane-<name>`), and the prefix of phone question ids. Lower case letters, digits and dashes. |
+| `display_name` | `name`, first letter upper case (`acme` -> `Acme`) | How phone pushes, questions and the phone's `status` / `overview` replies name the project: `Acme: Done: T-007 ...`, `Acme windvane started`. |
 | `prefix` | `"T"` | Ticket id prefix: `T-001`, `T-002`, and `T-002a` for a ticket split off another. Ticket branches start with the id in lower case (`t-001-...`). |
 | `remote` | `"origin"` | The git remote sessions push to and the driver merges into. |
 | `main` | `"main"` | The branch work is merged into. Sessions may never push to it or check it out. |

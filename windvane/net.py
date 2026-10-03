@@ -97,7 +97,7 @@ def wait(p, until, stopped, sleep=time.sleep):
                 break
         log(p, f"network back after {waited} min; carrying on")
         if waited >= LONG:
-            push(f"{p.name}: network back", f"It was down from {since:%H:%M} for {waited} min. The run waited and "
+            push("network back", f"It was down from {since:%H:%M} for {waited} min. The run waited and "
                  "carried on; nothing was failed for it.", 3, "signal_strength")
         return True
 

@@ -1,5 +1,6 @@
 # windvane settings for this project. Every key is optional.
 name = ""                 # state dir, phone question ids, tmux session
+display_name = ""         # how pushes name the project (default: name, first letter upper: acme -> Acme)
 prefix = "T"              # ticket ids: T-001, T-002a
 remote = "origin"
 main = "main"
