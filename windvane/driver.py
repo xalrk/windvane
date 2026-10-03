@@ -39,8 +39,15 @@ from .util import git, gout, hhmm, last_match, load_json, log, now, push, read_j
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
-CARRIED = ("periodic_at", "held", "skip", "merged", "failed", "partials", "reviews", "scores", "plans", "fail_streak", "peak",
+CARRIED = ("periodic_at", "held", "skip", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "scale_said", "desk_merged")  # the run's own memory, handed to the driver a self-update restarts
+# Each kind of send-back spends its own budget: (who sent it back, config table, key, sends allowed over the key).
+# The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a critic pack.
+# A missing PR spends the reviewer's rounds, one over as before, since review CHANGES fail at the key itself.
+BUDGETS = {"review": ("the hand-in (no PR)", "autopilot", "review_rounds", 0),
+           "critic": ("the critic", "critic", "revisions", 1),
+           "check": ("the check", "autopilot", "check_retries", 0),
+           "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0)}
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
@@ -158,7 +165,7 @@ class Pilot(Desk, Periodic):
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.skip, self.merged, self.failed = set(), [], []
-        self.partials, self.reviews, self.scores = {}, {}, {}
+        self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
         self.sleep = time.sleep  # the retry backoff's; tests make it instant
@@ -417,7 +424,7 @@ class Pilot(Desk, Periodic):
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
         if not ok:
             self.feedback[tid] = f"The check fails on {sha[:12]}: {summary}\n```\n{tail(logf, 40)}\n```"
-            return self.bounce(tid)
+            return self.bounce(tid, "check")
         if res and not res[0]:  # git merged it cleanly: like any approved head that merges, nothing new to review
             self.log(f"{tid}: a clean merge of {p.main}; no review needed")
             return self.integrate(tid, branch, sha)
@@ -432,11 +439,18 @@ class Pilot(Desk, Periodic):
             return
         self.integrate(tid, branch, sha)
 
-    def bounce(self, tid):
-        """A stage sent the ticket back: count it like a review round, so a ticket can't loop forever."""
-        self.reviews[tid] = self.reviews.get(tid, 0) + 1
-        if self.reviews[tid] >= self.p.ap["review_rounds"] + 1:
-            self.fail(tid, f"sent back {self.reviews[tid]} times: {self.feedback.get(tid, '')[:200]}")
+    def bounce(self, tid, kind="review"):
+        """A stage sent the ticket back: count it against that stage's own budget (BUDGETS), so a ticket can't loop
+        forever and a slow or flaky check can't spend the reviewer's rounds."""
+        what, table, key, spare = BUDGETS[kind]
+        if kind == "review":  # shares the count review CHANGES make
+            n = self.reviews[tid] = self.reviews.get(tid, 0) + 1
+        else:
+            n = self.bounces.setdefault(tid, {})[kind] = self.bounces.get(tid, {}).get(kind, 0) + 1
+        limit = (self.p.critic if table == "critic" else self.p.ap)[key]
+        if n > limit + spare:
+            self.fail(tid, f"{what} sent it back {n} times, out of its budget (`[{table}] {key}` = {limit}): "
+                           f"{self.feedback.get(tid, '')[:200]}")
 
     def critic_gate(self, tid, sha, stale=None):
         """`stale`: an approved head whose verdict no longer covers this one (it changed more than a resolution)."""
@@ -452,7 +466,7 @@ class Pilot(Desk, Periodic):
                 self.feedback[tid] = ("You finished READY without the critic: write the evidence pack and run "
                                       f"`windvane critic {tid}` (rules step 6) before the check.")
                 self.log(f"{tid}: READY without a critic pack; back to the worker")
-                self.bounce(tid)
+                self.bounce(tid, "critic")
                 return False
             self.log(f"{tid}: critic run (the worker didn't finish it)")
             entry, text = critic.judge(p, tid, self.wd, sha, self.usage,
@@ -471,7 +485,7 @@ class Pilot(Desk, Periodic):
             self.feedback[tid] = (f"The critic scored your head {score:g}/10 ({last['step']}). Fix its \"Fix in this "
                                   f"ticket\" points, refresh the pack and run `windvane critic {tid}` again:\n"
                                   f"{last.get('critique', '')}")
-            self.bounce(tid)
+            self.bounce(tid, "critic")
             return False
         if score is not None:
             self.scores[tid] = score
@@ -606,7 +620,7 @@ class Pilot(Desk, Periodic):
                 self.log(f"{tid}: conflicts with {p.main}; back to the worker")
                 self.approve_bounce(tid, sha, "conflict")
                 self.conflicted(tid)
-                return self.bounce(tid)
+                return self.bounce(tid, "conflict")
             merge = gout(cd, "rev-parse", "HEAD")
             if renumbered is not None:
                 self.log(f"{tid}: conflicted with {p.main} only in appended entries: {said(renumbered)}; resolved "
@@ -618,7 +632,7 @@ class Pilot(Desk, Periodic):
                                       "and fix it.")
                 self.log(f"{tid}: the merged tree fails the check; back to the worker")
                 self.approve_bounce(tid, sha, "red")
-                return self.bounce(tid)
+                return self.bounce(tid, "check")
             if p.cfg["forge"] == "github":
                 pr = pr_for(p, branch)
                 if not pr:
