@@ -41,7 +41,9 @@ DEFAULTS = {
     # parallel: "auto" starts another ticket whenever one fits beside the running ones (Touches) and in the usage
     # window, up to max_parallel; a number caps the slots at that
     "autopilot": {"parallel": "auto", "max_parallel": 4, "cap": 75, "week_cap": 95, "ticket_hours": 3,
-                  "min_slot": 30, "answer_wait": 10, "review_rounds": 3, "partials": 3, "subagents": False, "inline_diff_lines": 1200,
+                  "min_slot": 30, "answer_wait": 10, "review_rounds": 3,
+                  "check_retries": 2, "conflict_retries": 2,  # red checks and merge conflicts a ticket may go back for
+                  "partials": 3, "subagents": False, "inline_diff_lines": 1200,
                   "retries": 3, "retry_minutes": 3,  # a session that dies (API, network) reruns after 3, 6, 12 min
                   "stale_days": 3,  # a ticket branch untouched this long resumes in its queue turn, not first
                   # forge github: the owner's open PRs with this label are checked and merged between tickets ("":

@@ -77,9 +77,11 @@ the order), and **open** otherwise. `windvane queue` shows all three.
    moved meanwhile, then merges the pull request (forge `github`) or pushes `main` (forge `git`).
 
 Anything sent back (critic points, review changes, a red check, a merge conflict) reaches the ticket's next worker
-run as written feedback. A ticket that keeps bouncing is **set aside** for the rest of the run: after
-`review_rounds` reviews asking for changes, `partials` runs in a row out of time, or a run longer than
-`ticket_hours`. The run's summary and the phone say which and why.
+run as written feedback. Each kind of send-back spends its own budget, so a flaky check can't use up the reviewer's
+rounds. A ticket that keeps bouncing is **set aside** for the rest of the run: after `review_rounds` reviews asking
+for changes, more than `check_retries` red checks, `conflict_retries` merge conflicts or `[critic] revisions` critic
+send-backs, `partials` runs in a row out of time, or a run longer than `ticket_hours`. The run's summary and the
+phone say which budget ran out and why.
 
 ## Touches and parallel slots
 

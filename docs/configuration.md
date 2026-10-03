@@ -60,7 +60,7 @@ The Claude model and effort level for each kind of session. Models are anything 
 | `enabled` | `true` | Run the critic. `false` skips it: tickets go straight from the worker to the check and the review. |
 | `pass` | `8` | The pass mark out of 10. A ticket whose lowest dimension scores this or more goes on. The critic never sees it: it scores blind, and the driver applies the mark. |
 | `floor` | `4` | Under this on the first dimension (does it work at all), the worker is told to rethink the approach instead of patching it. |
-| `revisions` | `3` | How many times the worker may revise for the critic. After the last one the ticket goes on with its score recorded (`accept`). |
+| `revisions` | `3` | How many times the worker may revise for the critic. After the last one the ticket goes on with its score recorded (`accept`). The driver sets a ticket aside after one send-back more (a READY without the evidence pack counts). |
 
 See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 
@@ -75,7 +75,9 @@ See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 | `ticket_hours` | `3` | The longest one worker run may take. A run that hits it is stopped and the ticket is set aside. |
 | `min_slot` | `30` | Minutes. No new ticket (or retry) starts with less than this left before the deadline. |
 | `answer_wait` | `10` | Minutes a question sent to the phone waits for an answer. After that the run builds the recommended option and records it as provisional, so you can change it later. |
-| `review_rounds` | `3` | Reviews in a row asking for changes before the ticket is set aside for you. |
+| `review_rounds` | `3` | Reviews in a row asking for changes before the ticket is set aside for you. A head sent back for a missing PR spends these too. |
+| `check_retries` | `2` | Red checks (on the head, or on it merged with main) a ticket may go back to its worker for. One more sets it aside. A slow or flaky check spends only this, never the reviewer's rounds. |
+| `conflict_retries` | `2` | Merge conflicts with main a ticket may go back to its worker for. One more sets it aside. Conflicts windvane resolves itself (`[[append_only]]` entries) don't count. |
 | `partials` | `3` | Worker runs in a row that run out of time before the ticket is set aside (it is probably too big: split it). |
 | `subagents` | `false` | Let worker sessions spawn subagents. Off by default: one fresh session per ticket is the design, and subagents multiply token use. |
 | `inline_diff_lines` | `1200` | Diffs up to this many lines are put straight into the reviewer's prompt, saving it the tool calls to fetch them; larger ones it reads itself. |
