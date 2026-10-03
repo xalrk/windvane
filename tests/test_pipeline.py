@@ -496,6 +496,24 @@ class Sessions(unittest.TestCase):
         self.assertEqual(row["turns"], 2)
         self.assertTrue(row["estimated"])
 
+    def test_a_driver_error_mid_session_kills_the_session(self):
+        """A crash in the driver while it reads a session (once: two slots' usage saves collided) must not leave the
+        session working unwatched in a slot the driver now thinks is free."""
+        marker = self.s.tmp / "streamed"
+        os.environ["FAKE_HANG"] = str(marker)
+
+        def broken():
+            if marker.exists():
+                raise FileNotFoundError("usage.json.tmp")
+
+        started = time.time()
+        with self.assertRaises(FileNotFoundError):
+            runner.run_claude(self.p, "worker", "T-001", "hi", "", self.s.root, ticket="T-001", stop_if=broken)
+        pid = int(Path(str(marker) + ".pid").read_text())
+        self.assertFalse(Path(f"/proc/{pid}").exists() and
+                         not Path(f"/proc/{pid}/stat").read_text().split(") ")[-1].startswith("Z"))
+        self.assertLess(time.time() - started, 30)
+
     def test_killing_a_worker_kills_the_critic_it_started(self):
         pack = critic.pack_dir(self.p, "T-001")
         pack.mkdir(parents=True)

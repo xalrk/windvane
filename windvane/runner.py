@@ -187,35 +187,46 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
     result, killed, final, noise, seen = "", None, {}, [], {}
-    with raw.open("w") as out:
-        while True:
-            if sel.select(timeout=POLL):
-                line = proc.stdout.readline()
-                if not line:
-                    break
-                out.write(line)
-                out.flush()
-                try:
-                    ev = json.loads(line)
-                except ValueError:
-                    noise = (noise + [line.strip()])[-5:] if line.strip() else noise
-                    continue
-                if ev.get("type") == "rate_limit_event" and usage:
-                    usage.update(ev.get("rate_limit_info", {}))
-                elif ev.get("type") == "assistant":
-                    msg = ev.get("message") or {}
-                    seen[msg.get("id") or len(seen)] = msg.get("usage") or {}
-                elif ev.get("type") == "result":
-                    result, final = ev.get("result") or "", ev
-            if killed is None and stop_if:
-                killed = stop_if()
-                if killed:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                    kill_nested(p, raw.stem)
+    try:
+        with raw.open("w") as out:
+            while True:
+                if sel.select(timeout=POLL):
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+                    out.write(line)
+                    out.flush()
                     try:
-                        proc.wait(60)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(proc.pid, signal.SIGKILL)
+                        ev = json.loads(line)
+                    except ValueError:
+                        noise = (noise + [line.strip()])[-5:] if line.strip() else noise
+                        continue
+                    if ev.get("type") == "rate_limit_event" and usage:
+                        usage.update(ev.get("rate_limit_info", {}))
+                    elif ev.get("type") == "assistant":
+                        msg = ev.get("message") or {}
+                        seen[msg.get("id") or len(seen)] = msg.get("usage") or {}
+                    elif ev.get("type") == "result":
+                        result, final = ev.get("result") or "", ev
+                if killed is None and stop_if:
+                    killed = stop_if()
+                    if killed:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                        kill_nested(p, raw.stem)
+                        try:
+                            proc.wait(60)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(proc.pid, signal.SIGKILL)
+    except BaseException:  # the driver failed reading it: never leave it working unwatched in the slot's tree
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        kill_nested(p, raw.stem)
+        proc.wait()
+        if mark:
+            mark.unlink(missing_ok=True)
+        raise
     code = proc.wait()
     kill_nested(p, raw.stem)  # killed with it, or left running by a Bash call that timed out
     if mark:
