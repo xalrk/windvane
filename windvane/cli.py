@@ -305,7 +305,9 @@ def cmd_critic(a, p):
     if entry is None:
         print("\nCRITIC STEP: none. Fix the pack and run it again; if the critic itself keeps failing, go on.")
         sys.exit(1)
-    critic_mod.comment(p, entry, driver.pr_for(p, gout(os.getcwd(), "branch", "--show-current")))
+    pr = driver.pr_for(p, gout(os.getcwd(), "branch", "--show-current"))
+    if not critic_mod.comment(p, entry, pr):
+        print(f"\n(couldn't post the critique on PR #{pr})")
     print("\n" + critic_mod.next_step(p, tid, entry))
 
 

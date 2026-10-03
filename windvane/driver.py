@@ -489,7 +489,9 @@ class Pilot(Desk, Periodic):
             self.feedback[tid] = (f"The critic scored your head {score:g}/10 ({last['step']}). Fix its \"Fix in this "
                                   f"ticket\" points, refresh the pack and run `windvane critic {tid}` again:\n"
                                   f"{last.get('critique', '')}")
-            critic.comment(p, last, pr_for(p, branch))
+            pr = pr_for(p, branch)
+            if not critic.comment(p, last, pr):
+                self.log(f"{tid}: couldn't post the critique on PR #{pr}")
             self.bounce(tid, "critic")
             return False
         if score is not None:

@@ -111,7 +111,8 @@ elif system.startswith("# windvane critic"):
         open(os.environ["FAKE_CRITIC_PID"], "w").write(str(os.getpid()))
         time.sleep(60)
     score, fixes = os.environ.get("FAKE_CRITIC", "9 0").split()  # FAKE_CRITIC: "<score> <fixes>"
-    text = (f"Score: {score}/10\nGood.\n{f'Fix in this ticket:\\n- {tid} x\\n' * (fixes != '0')}Beyond this ticket:\n- make it faster\n"
+    fix = f"Fix in this ticket:\n- {tid} x\n" if fixes != "0" else ""
+    text = (f"Score: {score}/10\nGood.\n{fix}Beyond this ticket:\n- make it faster\n"
             f"CRITIC: {score}/10 {tid} fixes={fixes} good")
 elif system.startswith("# windvane planner run"):
     ids = re.search(r"## Ids for new tickets.*\n(.*)", prompt).group(1).split(", ")

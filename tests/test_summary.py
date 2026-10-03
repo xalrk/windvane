@@ -21,7 +21,8 @@ PROVISIONAL = ("# Q\n\n## Open\n\n## Provisional\n\n### T-002: Which colour?\nct
                "Recommendation: A, because it's louder\nBuilt: A; to change it: COLOUR in theme.py\n\n## Answered\n")
 # Records every call; `pr list` finds PR 7 unless NO_PR is set.
 FAKE_GH = ('#!/bin/sh\necho "$@" >> "$GH_LOG"\n'
-           'if [ "$2" = list ] && [ -z "$NO_PR" ]; then echo 7; fi\n')
+           'if [ "$2" = list ] && [ -z "$NO_PR" ]; then echo 7; fi\n'
+           'if [ "$2" = comment ] && [ -n "$FAIL_COMMENT" ]; then exit 1; fi\n')
 
 
 class Base(unittest.TestCase):
@@ -139,8 +140,8 @@ class CritiqueOnPR(Base):
     def test_a_revise_posts_the_critique(self):
         self.assertFalse(self.gate())
         sha = self.s.git("rev-parse", "--short", "HEAD")
-        self.assertEqual(self.comments(), [f"pr comment 7 --body **windvane critic: score=6, revise** at {sha}"])
-        self.assertIn("- T-001 x", self.log.read_text())  # the critique follows on the body's next lines
+        self.assertEqual(self.comments(), [f"pr comment 7 --body **windvane critic: 6/10, revise** at {sha}"])
+        self.assertIn("Score: 6/10\nGood.\nFix in this ticket:\n- T-001 x\nBeyond", self.log.read_text())
 
     def test_the_workers_own_revise_too(self):
         out = io.StringIO()
@@ -152,6 +153,14 @@ class CritiqueOnPR(Base):
         self.assertIn("CRITIC STEP: revise", out.getvalue())
         self.assertEqual(len(self.comments()), 1)
         self.assertIn("pr list --head t-001-x", self.log.read_text())
+
+    def test_a_failed_comment_is_logged(self):
+        os.environ["FAIL_COMMENT"] = "1"
+        logged = []
+        orig, driver.Pilot.log = driver.Pilot.log, lambda pilot, msg: logged.append(msg)
+        self.addCleanup(setattr, driver.Pilot, "log", orig)
+        self.assertFalse(self.gate())
+        self.assertIn("T-001: couldn't post the critique on PR #7", logged)
 
     def test_a_pass_posts_nothing(self):
         os.environ["FAKE_CRITIC"] = "9 0"

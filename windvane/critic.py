@@ -225,12 +225,15 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None):
 
 def comment(p, entry, pr):
     """A verdict that sends the work back, as a comment on the ticket's PR: someone reading GitHub sees why it
-    waits (the PR body only gets the critique the worker copies there at the end)."""
+    waits (the PR body only gets the critique the worker copies there at the end). False when posting it failed."""
     if pr and entry and entry["step"] in ("revise", "rethink"):
         s = entry.get("score")
-        score = " ".join(f"{k}={v:g}" for k, v in entry.get("dims", {}).items()) or f"{'-' if s is None else f'{s:g}'}/10"
-        net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body", f"**windvane critic: {score}, {entry['step']}** "
-               f"at {entry['sha']}\n\n{entry.get('critique', '').strip()[-6000:]}")
+        dims = " ".join(f"{k}={v:g}" for k, v in entry.get("dims", {}).items() if k != "score")
+        score = f"{'-' if s is None else f'{s:g}'}/10{f' ({dims})' if dims else ''}"
+        r = net.call(["gh", "pr", "comment", pr, "--body", f"**windvane critic: {score}, {entry['step']}** "
+                      f"at {entry['sha']}\n\n{entry.get('critique', '').strip()[-6000:]}"], p.main_root())
+        return r.returncode == 0
+    return True
 
 
 def resolution(cwd, approved, head, upstream, why="conflict"):
