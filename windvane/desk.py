@@ -71,6 +71,9 @@ class Desk:
         """Check, merge or fix one desk PR at its current head."""
         p, cd = self.p, self.cd
         n, branch = str(pr["number"]), pr["headRefName"]
+        if not self.keep_changes(f"checking desk PR #{n}"):
+            self.desk_prs, self.desk_looked = [], time.time()  # tried again at the next listing, not in a busy loop
+            return
         d = self.desk.setdefault(n, {"fixes": 0})
         if d.get("stuck"):  # a head the user pushed after a give-up or the last try: a fresh candidate
             d.update(fixes=0, fixed=False, stuck=False)

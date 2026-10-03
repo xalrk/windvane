@@ -53,6 +53,9 @@ class Periodic:
             self.periodic_at[e["name"]] = len(self.merged)
             self.log(f"{e['name']}: skipped: the checkout holds a ticket's unfinished work")
             return
+        if not self.keep_changes(f"the {e['name']} round"):
+            self.periodic_at[e["name"]] = len(self.merged)
+            return
         self.fetch()
         clean_detach(p, cd, p.upstream)
         kept = None  # what the last session that finished leaves to land; a cut-off one's changes are dropped
