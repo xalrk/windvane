@@ -4,6 +4,7 @@ parse stops the run at its start instead of being dropped by every session."""
 import contextlib
 import io
 import json
+import os
 import sys
 import unittest
 from datetime import timedelta
@@ -123,8 +124,8 @@ class Permissions(unittest.TestCase):
         self.make('[[periodic]]\nname = "playtest"\nprompt = "tools/P.md"\nallow = ["Write(out/**"]\n')
         self.s.write("tools/P.md", "# P\nPLAY\n")
         self.s.publish()
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as e:
+        self.addCleanup(os.chdir, os.getcwd())  # `-C` moves into the sandbox, which goes at the end
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as e:
             cli.main(["-C", str(self.s.root), "periodic", "playtest"])
         self.assertIn("1 bad permission rule in config.toml: [[periodic]] playtest allow: 'Write(out/**'",
                       str(e.exception.code))  # before its setup, not at the session
