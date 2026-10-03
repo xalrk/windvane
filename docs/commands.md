@@ -48,7 +48,7 @@ Options of `windvane run`:
 | Command | What it does |
 |---|---|
 | `windvane status [--line]` | Running or not, the slots, questions waiting for you, the log's tail. `--line`: one line. |
-| `windvane overview` | Where the project stands: tickets merged, underway, not started; critic scale health. |
+| `windvane overview` | Where the project stands: tickets merged, underway, not started; critic scale health; then `overview_extra`'s output. |
 | `windvane watch [-n 30] [-o 6]` | Follow the running sessions live: what each says, the commands it runs, their output (`-o` lines each, 0 hides output). |
 | `windvane stats [--days 7] [--by role\|ticket]` | Tokens, turns and minutes per role or ticket, from the ledger. See [Token efficiency](tokens.md). |
 | `windvane stats --critic [--last 10]` | How the critic's scores spread over the last N tickets. |

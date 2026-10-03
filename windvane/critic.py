@@ -13,6 +13,7 @@ import re
 import statistics
 from pathlib import Path
 
+from . import net
 from .config import HOME
 from .runner import run_claude
 from .util import append_jsonl, git, gout, load_json, read_jsonl
@@ -220,6 +221,19 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None):
              "critique": critique, "scale": scale(p, cwd)}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
+
+
+def comment(p, entry, pr):
+    """A verdict that sends the work back, as a comment on the ticket's PR: someone reading GitHub sees why it
+    waits (the PR body only gets the critique the worker copies there at the end). False when posting it failed."""
+    if pr and entry and entry["step"] in ("revise", "rethink"):
+        s = entry.get("score")
+        dims = " ".join(f"{k}={v:g}" for k, v in entry.get("dims", {}).items() if k != "score")
+        score = f"{'-' if s is None else f'{s:g}'}/10{f' ({dims})' if dims else ''}"
+        r = net.call(["gh", "pr", "comment", pr, "--body", f"**windvane critic: {score}, {entry['step']}** "
+                      f"at {entry['sha']}\n\n{entry.get('critique', '').strip()[-6000:]}"], p.main_root())
+        return r.returncode == 0
+    return True
 
 
 def resolution(cwd, approved, head, upstream, why="conflict"):

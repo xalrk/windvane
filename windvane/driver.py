@@ -421,7 +421,7 @@ class Pilot(Desk, Periodic):
         if res:
             self.log(f"{tid}: only merges {p.main} into the approved {ap['sha'][:7]} and resolves it "
                      f"({len(res[1])} file{'s' * (len(res[1]) != 1)}); the critic's verdict stands")
-        elif not self.critic_gate(tid, sha, stale=ap and ap["sha"]) or self.stopping_now():
+        elif not self.critic_gate(tid, sha, stale=ap and ap["sha"], branch=branch) or self.stopping_now():
             return
         ok, summary, logf = self.check_at(sha)
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
@@ -456,7 +456,7 @@ class Pilot(Desk, Periodic):
             self.fail(tid, f"{what} sent it back {said_times(n)}; `[{table}] {key}` = {limit} allows {limit + spare}"
                            f"{f' ({why})' if why else ''}: {self.feedback.get(tid, '')[:200]}")
 
-    def critic_gate(self, tid, sha, stale=None):
+    def critic_gate(self, tid, sha, stale=None, branch=""):
         """`stale`: an approved head whose verdict no longer covers this one (it changed more than a resolution)."""
         p = self.p
         if not p.critic["enabled"]:
@@ -489,6 +489,9 @@ class Pilot(Desk, Periodic):
             self.feedback[tid] = (f"The critic scored your head {score:g}/10 ({last['step']}). Fix its \"Fix in this "
                                   f"ticket\" points, refresh the pack and run `windvane critic {tid}` again:\n"
                                   f"{last.get('critique', '')}")
+            pr = pr_for(p, branch)
+            if not critic.comment(p, last, pr):
+                self.log(f"{tid}: couldn't post the critique on PR #{pr}")
             self.bounce(tid, "critic")
             return False
         if score is not None:
@@ -819,9 +822,11 @@ class Pilot(Desk, Periodic):
 
     def quiet_check(self):
         end, err = quiet_now(self.p)
-        if err and not getattr(self, "quiet_err_sent", False):
-            self.quiet_err_sent = True
-            self.log(f"quiet times: {err}; asking as usual")
+        if err and getattr(self, "quiet_err_sent", None) != err:  # once, not on every pass; again after a fix
+            self.log(f"quiet times ignored: {err}; asking as usual")
+            push(f"{self.p.name}: quiet times ignored", f"{err}. Questions come to the phone as usual until it's "
+                 "fixed (`windvane quiet` shows the format).", 3, "warning")
+        self.quiet_err_sent = err
         if not end:  # only money, licence and merged-work questions ask in a quiet time
             self.send_unsent()
         if self.was_quiet and not end:
@@ -1204,18 +1209,7 @@ class Pilot(Desk, Periodic):
                 t.join()
             if not quiet_now(p)[0]:
                 self.send_unsent()  # a question from a ticket that finished after the loop's last pass
-            names = lambda ids: "; ".join(map(self.name, ids)) or "none"
-            crit = ", ".join(f"{t} {s:g}" for t, s in self.scores.items())
-            side = (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
-                    f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else "")
-            summary = (f"Why: {self.stop_reason}.\nMerged: {names(self.merged)}.\n"
-                       + (f"Desk PRs merged: {', '.join('#' + n for n in self.desk_merged)}.\n"
-                          if self.desk_merged else "")
-                       + (f"Critic (/10): {crit}.\n" if crit else "") + side
-                       + (f"Held for you (parked in QUEUE.md): {names(self.held)}.\n" if self.held else "")
-                       + f"Waiting on you: {names(self.questions)}.\nFailed: {names(self.failed)}.\n"
-                       + (f"{self.usage.text()}." if self.usage.five is not None else "")
-                       + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else ""))
+            summary = self.summary()
             self.log(summary.replace("\n", " "))
             if crashed and os.environ.get(SUPERVISED):  # `supervise` restarts it, or pushes why it doesn't
                 self.hand_over()
@@ -1226,6 +1220,31 @@ class Pilot(Desk, Periodic):
             self.save()
             self.lockfile.close()
         return ready
+
+
+    def summary(self):
+        """The run's last push: what merged and what still needs the user (questions, provisional answers, merges
+        the critic only let through because its revisions ran out)."""
+        p = self.p
+        names = lambda ids: "; ".join(map(self.name, ids)) or "none"
+        crit = ", ".join(f"{t} {s:g}" for t, s in self.scores.items())
+        under = [t for t in self.merged if (h := critic.history(p, t)) and h[-1].get("step") == "accept"]
+        picks = [(q["ticket"], q["question"], f"{q['built'] or '?'}: {q['option'][:60]}" if q["option"] else q["built"] or "?")
+                 for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))]
+        side = (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
+                f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else "")
+        return (f"Why: {self.stop_reason}.\nMerged: {names(self.merged)}.\n"
+                + (f"Merged under the critic's bar (out of revisions): {names(under)}.\n" if under else "")
+                + (f"Desk PRs merged: {', '.join('#' + n for n in self.desk_merged)}.\n" if self.desk_merged else "")
+                + (f"Critic (/10): {crit}.\n" if crit else "") + side
+                + (f"Held for you (parked in QUEUE.md): {names(self.held)}.\n" if self.held else "")
+                + f"Waiting on you: {names(self.questions)}.\n"
+                + (f"Provisional answers to check: {'; '.join(f'{q[0]} {q[1]} (built {q[2]})' for q in picks[:6])}"
+                   + (f" and {len(picks) - 6} more" if len(picks) > 6 else "") + ". "
+                   "To change one: windvane answer <ID> <letter>.\n" if picks else "")
+                + f"Failed: {names(self.failed)}.\n"
+                + (f"{self.usage.text()}." if self.usage.five is not None else "")
+                + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else ""))
 
 
 def supervise(p, argv, deadline, start=None, sleep=time.sleep):

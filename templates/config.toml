@@ -10,6 +10,7 @@ isolate = true            # work in the autopilot's own worktrees; false: in thi
 goal = ""                 # what `windvane plan` and `run --replan` aim at when given no goal
 author = ""               # "Name <email>" for the driver's own commits (merges, plans); default: git's
 heavy_check = false       # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
+overview_extra = ""       # a command whose output (15 lines, 30 s) `windvane overview` and the phone's add
 
 [models]                  # model and effort per role
 worker = "opus"

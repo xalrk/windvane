@@ -33,6 +33,7 @@ DEFAULTS = {
     "goal": "",  # what `windvane plan` aims at when given no goal
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
     "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
+    "overview_extra": "",  # a command whose output `windvane overview` adds (the project's own milestones)
     "models": {"worker": "opus", "worker_effort": "high", "reviewer": "opus", "reviewer_effort": "high",
                "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high",
                "preflight": "sonnet", "preflight_effort": "medium",  # preflight: a light read of the next tickets
