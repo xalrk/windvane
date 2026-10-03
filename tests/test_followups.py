@@ -125,6 +125,7 @@ class InPlaceMerge(Base):
         self.assertTrue(warn.startswith("Couldn't stash the uncommitted changes in your checkout, so T-001 waits (its "
                                         "approval stands) and is tried again every 0.3 s. Nothing was deleted"), warn)
         self.assertEqual(self.log().count("checking T-001: waits: couldn't stash"), 1)
+        self.assertNotIn("checking T-001", self.pilot.stash_failed)  # a later wait is pushed again
 
     def test_a_stop_ends_the_wait_without_failing_the_ticket(self):
         self.make(isolate=False)
