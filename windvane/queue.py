@@ -36,8 +36,9 @@ def bullets(text, files, p):
 
 
 def header_line(head, key):
-    """The text of a header's `<key>:` line, up to its full stop, a blank line or the next `Key:` line."""
-    m = re.search(rf"{key}:(.*?)(?:\.\s|\n\s*\n|\n(?=[\w ]+:)|\Z)", head, re.S | re.I)
+    """The text of a header's `<key>:` line, up to its full stop, a blank line, the next `Key:` line or a ` · `
+    (headers that put several keys on one line: `Milestone: M9 · Depends on: nothing · Can start now`)."""
+    m = re.search(rf"{key}:(.*?)(?:\.\s|\n\s*\n|\n(?=[\w ]+:)|\s·\s|\Z)", head, re.S | re.I)
     return m.group(1) if m else ""
 
 
@@ -47,10 +48,11 @@ def depends_on(head, p, key="Depends on"):
 
 def outside(head, p):
     """The `Depends on:` items that aren't ticket ids (`the user`, `M9`, free text), without notes in
-    brackets. An item naming a ticket (`T-004 (the parser)`) is a ticket dependency, and `nothing` is none."""
+    brackets. An item naming a ticket (`T-004 (the parser)`) is a ticket dependency, and `nothing` (`nothing open`)
+    is none."""
     items = re.split(r",|;|\band\b", re.sub(r"\([^)]*\)", "", header_line(head, "Depends on")))
     items = (" ".join(x.split()).strip(" .`*") for x in items)
-    return [x for x in items if x and x.lower() not in ("nothing", "none") and not re.search(p.id_re, x, re.I)]
+    return [x for x in items if x and x.lower().split()[0] not in ("nothing", "none") and not re.search(p.id_re, x, re.I)]
 
 
 def touches(head):

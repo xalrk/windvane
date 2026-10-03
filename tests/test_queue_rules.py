@@ -88,6 +88,15 @@ class QueueRules(unittest.TestCase):
         q = self.queue("- done: T-001 (folded)\n")
         self.assertEqual(q.status("T-002"), "todo")
 
+    def test_nothing_with_a_note_and_a_dot_separated_header_is_no_dependency(self):
+        self.s.write(".windvane/tickets/T-001.md", "# T-001: x\nMilestone: M9 · Depends on: nothing open (the tapes are "
+                     "merged) · **Can start now** (pure code)\nTouches: a.py.\n")
+        self.s.write(".windvane/tickets/T-002.md", "# T-002: y\nMilestone: M9 · Depends on: T-003 · Waits for review\n"
+                     "Touches: b.py.\n")
+        q = self.queue()
+        self.assertEqual(q.status("T-001"), "todo")
+        self.assertEqual(q.waits_on("T-002"), ["T-003"])
+
     def test_an_open_question_written_by_hand_blocks_its_ticket(self):
         q = self.queue(questions=OPEN_QUESTION)
         self.assertEqual(q.status("T-002"), "blocked")
