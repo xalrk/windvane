@@ -14,6 +14,12 @@ from pathlib import Path
 from .util import git, gout
 
 MARKS = ("<<<<<<< ", "||||||| ", "=======", ">>>>>>> ")
+OLD_NUMBERS = " The PR's title, body and commit messages still use the old numbers."  # only files are renumbered
+
+
+def said(renumbered):
+    """The renumbering for a merge message, log line, PR comment or push."""
+    return "renumbered " + ", ".join(renumbered) if renumbered else "no number collided"
 
 
 def rules(entries):

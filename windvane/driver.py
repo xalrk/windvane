@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import critic, net, phone, renumber, selfupdate
+from .renumber import OLD_NUMBERS, said
 from .desk import Desk
 from .periodic import Periodic
 from .config import CHECKOUT, DIR, HOME, exe, slots
@@ -426,6 +427,8 @@ class Pilot(Desk, Periodic):
                      f"({len(res[1])} file{'s' * (len(res[1]) != 1)}); the critic's verdict stands")
         elif not self.critic_gate(tid, sha, stale=ap and ap["sha"], branch=branch) or self.stopping_now():
             return
+        if not self.keep_changes(f"checking {tid}"):
+            return self.fail(tid, "couldn't stash the uncommitted changes in your checkout before its check")
         ok, summary, logf = self.check_at(sha)
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
         if not ok:
@@ -512,9 +515,9 @@ class Pilot(Desk, Periodic):
                  "warning")
 
     def keep_changes(self, why):
-        """With isolate off the clean before a periodic round or a desk PR runs in the checkout itself: whatever is
-        uncommitted there (no ticket owns it, so someone at the desk made it) is stashed first, never thrown away.
-        False when the stash failed: the caller skips its round instead of cleaning."""
+        """With isolate off the clean before a ticket's check or merge, a periodic round or a desk PR runs in the checkout
+        itself: whatever is uncommitted there (a ticket's work is pushed by then, so someone at the desk made it) is
+        stashed first, never thrown away. False when the stash failed: the caller skips its step instead of cleaning."""
         p, cd = self.p, self.cd
         if cd != p.main_root() or not gout(cd, "status", "--porcelain"):
             return True
@@ -619,6 +622,8 @@ class Pilot(Desk, Periodic):
         p, cd = self.p, self.cd
         title = self.queue.titles.get(tid, tid)
         for _ in range(tries):
+            if not self.keep_changes(f"merging {tid}"):  # isolate off: someone edited the checkout during the review
+                return self.fail(tid, "couldn't stash the uncommitted changes in your checkout before its merge")
             self.fetch()
             clean_detach(p, cd, p.upstream)
             msg = f"Merge {tid}: {title} (branch {branch})"
@@ -655,7 +660,8 @@ class Pilot(Desk, Periodic):
                         continue
                     sha = merge  # the head to merge now, and on a retry the one to merge main into
                     net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
-                           f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}.")
+                           f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}."
+                           + OLD_NUMBERS * bool(renumbered))
                 res = net.call(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", sha, "--subject", msg],
                                p.main_root())
                 merged = res.returncode == 0 or net.sh(p.main_root(), "gh", "pr", "view", pr, "--json", "state",
@@ -664,7 +670,7 @@ class Pilot(Desk, Periodic):
                 res = net.git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
             if merged:
-                return self.merged_ok(tid, branch, sha) if self.landed(tid, branch, sha) else None
+                return self.merged_ok(tid, branch, sha, renumbered) if self.landed(tid, branch, sha) else None
             self.log(f"{tid}: merge refused ({' '.join((res.stderr or res.stdout).split())[:200]}); trying again")
         self.fail(tid, "the merge was refused three times")
 
@@ -703,7 +709,8 @@ class Pilot(Desk, Periodic):
                        f"at {sha[:12]}")
         return False
 
-    def merged_ok(self, tid, branch, sha):
+    def merged_ok(self, tid, branch, sha, renumbered=None):
+        """`renumbered`: the merge's renumbering, said in the push: on forge git it's the only place but the log."""
         p = self.p
         if branch:  # only while it still points at the merged head: a later push there is unmerged work
             if net.git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{sha}", p.remote, "--delete",
@@ -726,7 +733,8 @@ class Pilot(Desk, Periodic):
         score = self.scores.get(tid)
         self.log(f"{tid}: merged {sha[:7]} · {self.usage.text()}")
         push(f"Done: {self.name(tid)}", "Built, checked, reviewed and merged."
-             + (f" Critic {score:g}/10." if score is not None else "") + f" {self.usage.text()}", 2, "white_check_mark")
+             + (f" Critic {score:g}/10." if score is not None else "") + f" {self.usage.text()}"
+             + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else ""), 2, "white_check_mark")
         picks = [q for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
                  if p.norm(q["ticket"]) == tid]
         if picks:
@@ -1324,11 +1332,6 @@ def changed_paths(cwd):
                 paths.append(out[i])
         i += 1
     return paths
-
-
-def said(renumbered):
-    """The renumbering for a merge message, log line or PR comment."""
-    return "renumbered " + ", ".join(renumbered) if renumbered else "no number collided"
 
 
 def author_ident(p):

@@ -165,6 +165,8 @@ class Periodic:
             failed = self.periodic_setup(e, cd)
             if failed:
                 self.log(f"{name}: skipped this round: setup failed ({failed})")
+                if failed != "stopped":
+                    self.periodic_failed(name, f"its setup `{e['setup']}` failed ({failed}).")
                 return False
             if not self.periodic_fits(e):
                 return False
@@ -172,6 +174,7 @@ class Periodic:
         own_rules = gout(cd, "show", f"{p.upstream}:{e['prompt']}")
         if not own_rules:
             self.log(f"{name}: skipped: its prompt {e['prompt']} isn't on {p.upstream}")
+            self.periodic_failed(name, f"its prompt {e['prompt']} isn't on {p.upstream}.")
             return False
         first = int(re.search(r"\d+", Queue(p).next_id(taken_ids(p, cd) | pending_ids(p))).group())
         ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + 6)]
@@ -201,7 +204,12 @@ class Periodic:
                                           ["Bash(windvane *)"], deny)
         m = last_match(PERIODIC_RE, text)
         if killed or error or not m:
-            self.log(f"{name}: no result ({killed or error or 'no PERIODIC line'}); its changes are dropped")
+            why = killed or error or "no PERIODIC line"
+            self.log(f"{name}: no result ({why}); its changes are dropped")
+            if killed != "stop now":  # the user stopped it: nothing to tell
+                what = f"it was cut off ({killed})" if killed else f"the session failed ({error[:150]})" if error \
+                    else "it ended without its PERIODIC line"
+                self.periodic_failed(name, f"{what}; its changes were dropped.")
             return None
         self.log(f"{name}: PERIODIC: {m.group(1)}")
         push(name, m.group(1)[:300] or "done", 3, "mag")
@@ -212,6 +220,10 @@ class Periodic:
             append_jsonl(p.state / "ledger.jsonl", {"role": f"periodic:{name}", "event": "score",
                                                     "score": float(score.group(1)), "summary": m.group(1)[:200]})
         return text.strip(), output(text, cd)
+
+    def periodic_failed(self, name, why):
+        """One push for a round that didn't finish: overnight, a playtest that stopped working was only in the log."""
+        push(f"{name} round failed", f"The {name} round didn't finish: {why}", 3, "warning")
 
     def periodic_keep(self, cd, name):
         """What may land from the tree as it is: new ticket files under the ids the sessions were given (any other id
