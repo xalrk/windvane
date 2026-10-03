@@ -99,6 +99,8 @@ def quiet_now(p, at=None):
         return quiet_until(f.read_text().splitlines() if f.exists() else [], at or datetime.now()), None
     except ValueError as e:
         return None, str(e)
+    except OSError as e:
+        return None, f"can't read {f}: {e.strerror or e}"
 
 
 def mode(p):

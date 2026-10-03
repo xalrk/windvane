@@ -28,6 +28,7 @@ matching keys for one run.
 | `isolate` | `true` | Work in the autopilot's own worktrees. `false` runs sessions in your checkout instead, for projects whose builds can't be duplicated; it also limits the run to one ticket at a time. |
 | `goal` | `""` | What `windvane plan` and `windvane run --replan` aim at when no goal is given. |
 | `author` | git's identity | `"Name <email>"` for the driver's own commits (merges, planned tickets). |
+| `overview_extra` | `""` | A shell command, run in the checkout, whose output `windvane overview` (and so the phone's `overview`) adds below its own lines: the project's own milestones. First 15 lines, 30 s at most; a failure shows as one line. |
 | `heavy_check` | `false` | The check itself is machine-heavy (a game engine, a render): run it under `windvane heavy`, one at a time on this machine. |
 
 ## [models]

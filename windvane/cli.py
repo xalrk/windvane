@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -232,7 +233,27 @@ def cmd_overview(a, p):
             line += f" {c['accepted']} passed only by running out of revisions."
         lines.append(line)
         lines.append(critic_mod.collapsed(recs) or "")
-    print("\n".join(filter(None, lines)))
+    print("\n".join(filter(None, lines + overview_extra(p))))
+
+
+def overview_extra(p, limit=30, most=15):
+    """The project's own overview lines (`overview_extra`). Bounded, so the phone's `overview` (90 s for every
+    project) still answers; a failure is one line, never the command's whole error output."""
+    cmd = p.cfg["overview_extra"]
+    if not cmd:
+        return []
+    r = subprocess.Popen(cmd, shell=True, cwd=p.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         start_new_session=True)  # its own group: a timeout kills the children holding the pipes too
+    try:
+        out, err = r.communicate(timeout=limit)
+    except subprocess.TimeoutExpired:
+        os.killpg(r.pid, signal.SIGKILL)
+        r.communicate()
+        return [f"overview_extra: no answer in {limit:g} s"]
+    if r.returncode:
+        why = (err.strip().splitlines() or [""])[-1][:160]
+        return [f"overview_extra failed (exit {r.returncode}){f': {why}' if why else ''}"]
+    return out.rstrip().splitlines()[:most]
 
 
 def cmd_queue(a, p):
@@ -284,6 +305,7 @@ def cmd_critic(a, p):
     if entry is None:
         print("\nCRITIC STEP: none. Fix the pack and run it again; if the critic itself keeps failing, go on.")
         sys.exit(1)
+    critic_mod.comment(p, entry, driver.pr_for(p, gout(os.getcwd(), "branch", "--show-current")))
     print("\n" + critic_mod.next_step(p, tid, entry))
 
 
