@@ -55,6 +55,10 @@ RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at on
 SUPERVISED = "WINDVANE_SUPERVISED"  # set for a driver under `supervise`: it hands a crash over instead of pushing it
 
 
+def said_times(n):
+    return f"{n} time{'s' * (n != 1)}"
+
+
 def rules(p, name):
     text = (HOME / "prompts" / name).read_text()
     for k, v in {"{upstream}": p.upstream, "{remote}": p.remote, "{main}": p.main}.items():
@@ -435,7 +439,8 @@ class Pilot(Desk, Periodic):
             self.feedback[tid] = f"The reviewer asks for changes on {sha[:12]}:\n{review[-4000:]}"
             self.reviews[tid] = self.reviews.get(tid, 0) + 1
             if self.reviews[tid] >= p.ap["review_rounds"]:
-                return self.fail(tid, f"still not through review after {self.reviews[tid]} rounds")
+                return self.fail(tid, f"the reviewer asked for changes {said_times(self.reviews[tid])}, out of its budget "
+                                      f"(`[autopilot] review_rounds` = {p.ap['review_rounds']})")
             return
         self.integrate(tid, branch, sha)
 
@@ -449,7 +454,7 @@ class Pilot(Desk, Periodic):
             n = self.bounces.setdefault(tid, {})[kind] = self.bounces.get(tid, {}).get(kind, 0) + 1
         limit = (self.p.critic if table == "critic" else self.p.ap)[key]
         if n > limit + spare:
-            self.fail(tid, f"{what} sent it back {n} times, out of its budget (`[{table}] {key}` = {limit}): "
+            self.fail(tid, f"{what} sent it back {said_times(n)}, out of its budget (`[{table}] {key}` = {limit}): "
                            f"{self.feedback.get(tid, '')[:200]}")
 
     def critic_gate(self, tid, sha, stale=None):
