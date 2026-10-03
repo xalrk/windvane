@@ -227,8 +227,9 @@ def comment(p, entry, pr):
     """A verdict that sends the work back, as a comment on the ticket's PR: someone reading GitHub sees why it
     waits (the PR body only gets the critique the worker copies there at the end)."""
     if pr and entry and entry["step"] in ("revise", "rethink"):
-        score = "-" if entry.get("score") is None else f"{entry['score']:g}"
-        net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body", f"**windvane critic: {score}/10, {entry['step']}** "
+        s = entry.get("score")
+        score = " ".join(f"{k}={v:g}" for k, v in entry.get("dims", {}).items()) or f"{'-' if s is None else f'{s:g}'}/10"
+        net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body", f"**windvane critic: {score}, {entry['step']}** "
                f"at {entry['sha']}\n\n{entry.get('critique', '').strip()[-6000:]}")
 
 

@@ -820,11 +820,11 @@ class Pilot(Desk, Periodic):
 
     def quiet_check(self):
         end, err = quiet_now(self.p)
-        if err and not getattr(self, "quiet_err_sent", False):  # once a run: the file is read on every pass
-            self.quiet_err_sent = True
+        if err and getattr(self, "quiet_err_sent", None) != err:  # once, not on every pass; again after a fix
             self.log(f"quiet times ignored: {err}; asking as usual")
             push(f"{self.p.name}: quiet times ignored", f"{err}. Questions come to the phone as usual until it's "
                  "fixed (`windvane quiet` shows the format).", 3, "warning")
+        self.quiet_err_sent = err
         if not end:  # only money, licence and merged-work questions ask in a quiet time
             self.send_unsent()
         if self.was_quiet and not end:
@@ -1227,7 +1227,7 @@ class Pilot(Desk, Periodic):
         names = lambda ids: "; ".join(map(self.name, ids)) or "none"
         crit = ", ".join(f"{t} {s:g}" for t, s in self.scores.items())
         under = [t for t in self.merged if (h := critic.history(p, t)) and h[-1].get("step") == "accept"]
-        picks = [(q["ticket"], q["question"], q["built"] or "?")
+        picks = [(q["ticket"], q["question"], f"{q['built'] or '?'}: {q['option'][:60]}" if q["option"] else q["built"] or "?")
                  for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))]
         side = (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
                 f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else "")

@@ -63,7 +63,7 @@ class Summary(Base):
         pilot.merged = ["T-001", "T-002"]
         text = pilot.summary()
         self.assertIn("Merged under the critic's bar (out of revisions): T-001.\n", text)
-        self.assertIn("Provisional answers to check: T-002 Which colour? (built A).", text)
+        self.assertIn("Provisional answers to check: T-002 Which colour? (built A: red).", text)
 
     def test_neither_list_without_cause(self):
         self.verdict("T-001", "accept", 7)  # accepted but never merged: nothing to read on main
@@ -88,6 +88,12 @@ class Quiet(Base):
         title, msg = self.pushes[0]
         self.assertEqual(title, "sandbox: quiet times ignored")
         self.assertIn("'weekends'", msg)
+        with redirect_stdout(io.StringIO()):  # fixed, then broken again: a new push
+            (self.p.state / "quiet.txt").write_text("")
+            pilot.quiet_check()
+            (self.p.state / "quiet.txt").write_text("weekends\n")
+            pilot.quiet_check()
+        self.assertEqual(len(self.pushes), 2)
 
     def test_an_unreadable_quiet_file_pushes_too(self):
         (self.p.state / "quiet.txt").mkdir(parents=True)  # read_text raises IsADirectoryError
@@ -133,7 +139,7 @@ class CritiqueOnPR(Base):
     def test_a_revise_posts_the_critique(self):
         self.assertFalse(self.gate())
         sha = self.s.git("rev-parse", "--short", "HEAD")
-        self.assertEqual(self.comments(), [f"pr comment 7 --body **windvane critic: 6/10, revise** at {sha}"])
+        self.assertEqual(self.comments(), [f"pr comment 7 --body **windvane critic: score=6, revise** at {sha}"])
         self.assertIn("- T-001 x", self.log.read_text())  # the critique follows on the body's next lines
 
     def test_the_workers_own_revise_too(self):
