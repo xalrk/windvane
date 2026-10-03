@@ -141,6 +141,20 @@ exact head, comments the result and merges that head only. A red, conflicting or
 is left for you with one push. Each head is checked once; push a new one to have it tried again. Fix sessions show
 in `windvane stats` as `fix`. Set `desk_label = ""` under `[autopilot]` to turn it off.
 
+### Append-only numbered files
+
+A decision log, ADRs or migrations: two tickets that each append an entry take the same next number and conflict.
+Name the file and the driver resolves such a conflict itself, without another worker run: main's entries stay, the
+branch's follow, renumbered where they collide, and the branch's own references to them follow (`D-5 → D-6`, named in
+the merge commit, the log and the PR). Any other conflict goes back to the worker as before.
+
+```toml
+[[append_only]]
+file = "docs/DECISIONS.md"
+entry = '^\| D-(\d+) \|'   # a line that starts an entry; group 1 is its number
+ref = 'D-{n}'              # how other lines refer to entry n
+```
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md): install, set up a project, the first run
