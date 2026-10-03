@@ -86,7 +86,7 @@ See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 | `retries` | `3` | How many times a session that dies outside its ticket's control (API error, network drop, crash) is rerun before the run stops with the error. |
 | `retry_minutes` | `3` | The first pause before such a rerun; each further one doubles it (3, 6, 12 minutes). |
 | `stale_days` | `3` | Days. An unfinished ticket branch with no commit for this long is no longer resumed before new work: it waits for its turn in the queue order. |
-| `desk_label` | `"windvane merge"` | Forge `github`: your own open PRs with this label are checked on their exact head and merged between tickets, so you needn't merge by hand while a run is on. A red, conflicting or refused one gets a fix session. `""` turns it off. |
+| `desk_label` | `"windvane merge"` | Forge `github`: your own open PRs with this label are checked merged with `main` and merged between tickets, so you needn't merge by hand while a run is on. A red, conflicting or refused one gets a fix session. `""` turns it off. |
 | `desk_fixes` | `2` | Fix sessions per desk PR before it is left for you (pushed once). A new head you push makes it a fresh candidate. |
 
 ## [[periodic]]
@@ -143,7 +143,7 @@ An append-only numbered file (a decision log, ADRs, migrations). Two branches th
 both took the next number. When a merge (a ticket's, or a desk PR's) conflicts only in such files, and both sides of
 every conflict hunk only add whole entries, the driver resolves it without a session: main's entries first, then the
 branch's, renumbered past main's where they collide, with the branch's references to them renumbered only on lines the
-branch added (in any file). The merge commit, the log and the PR comment name the mapping (`D-5 → D-6`); the merged
+branch added (in any file). The merge commit, the log, the PR comment and the merged push name the mapping (`D-5 → D-6`); the merged
 tree is checked as usual. Anything else conflicting goes back to the worker (or a fix session) as before. None by
 default.
 
