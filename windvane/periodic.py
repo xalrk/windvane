@@ -61,15 +61,14 @@ class Periodic:
     def groups_finished(self, e):
         """`e`'s groups finished since the run started or `e` last ran, as {group: its tickets}. The first look (a
         fresh run, a run by hand) only notes the groups finished already, on main as it is now: a group finished
-        between runs (a PR merged on the forge) is no news. A group that opens again (a new ticket in it) leaves the
-        seen set, so it counts when it finishes again."""
+        between runs (a PR merged on the forge) is no news. A seen group stays seen: one that opens again (a fix
+        ticket filed under it) doesn't start the entry again when it finishes, or a playtest would chain to the next."""
         if e["name"] not in self.groups_seen:
             self.fetch()
         q = self.group_queue()
         found = groups(q, e["after_group"])
         done = {g for g, (_, left) in found.items() if not left}
-        seen = [g for g in self.groups_seen.setdefault(e["name"], sorted(done, key=natural)) if g in done]
-        self.groups_seen[e["name"]] = seen
+        seen = self.groups_seen.setdefault(e["name"], sorted(done, key=natural))
         return {g: [t + " (parked)" * (t in q.parked) for t in found[g][0]] for g in sorted(done - set(seen), key=natural)}
 
     def periodic_ran(self, e, skipped=False):
@@ -79,8 +78,9 @@ class Periodic:
         if skipped:
             self.groups_wait[e["name"]] = len(self.merged)
         elif e["after_group"]:
-            found = groups(self.group_queue(), e["after_group"])
-            self.groups_seen[e["name"]] = sorted((g for g, (_, left) in found.items() if not left), key=natural)
+            self.groups_wait.pop(e["name"], None)
+            done = {g for g, (_, left) in groups(self.group_queue(), e["after_group"]).items() if not left}
+            self.groups_seen[e["name"]] = sorted(done | set(self.groups_seen.get(e["name"], [])), key=natural)
 
     def periodic(self, e):
         """Run `e` and the entries its `then` chains to, one after another in the ci tree on current main, then
@@ -154,7 +154,8 @@ class Periodic:
 
     def periodic_session(self, e, cd, prev, finished=None):
         """One periodic session: (its final reply, that plus the files it names), False when it was skipped before it
-        started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made it due, {group: its tickets}, named in its prompt."""
+        started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
+        it due, {group: its tickets}, named in its prompt."""
         from .driver import pending_ids, rules
         name, p = e["name"], self.p
         if not self.periodic_fits(e):

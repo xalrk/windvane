@@ -131,6 +131,25 @@ class Groups(unittest.TestCase):
         fresh.carry_over(False)
         self.assertIsNone(fresh.periodic_due())  # a new run: M1 was finished at its start
 
+    def test_a_group_that_reopens_after_its_session_doesnt_run_it_again(self):
+        self.make([("T-001", "M1", ""), ("T-002", "M2", "")])
+        pilot = driver.Pilot(self.p, args())
+        self.assertIsNone(pilot.periodic_due())
+        self.s.write(".windvane/QUEUE.md", "# Queue\n- done: T-001 (by hand)\n")
+        self.s.publish("done")
+        e = pilot.periodic_due()
+        pilot.periodic_ran(e)  # M1's playtest ran, and filed a fix under M1
+        self.s.write(".windvane/tickets/T-003.md", "# T-003: fix\nDepends on: nothing.\nMilestone: M1\n")
+        self.s.publish("fix")
+        self.assertIsNone(pilot.periodic_due())
+        self.s.write(".windvane/QUEUE.md", "# Queue\n- done: T-001 (by hand)\n- done: T-003 (fixed)\n")
+        self.s.publish("fixed")
+        self.assertIsNone(pilot.periodic_due())  # M1 finished again: no second playtest
+        self.s.write(".windvane/QUEUE.md", "# Queue\n- done: T-001 (by hand)\n- done: T-003 (fixed)\n"
+                     "- done: T-002 (by hand)\n")
+        self.s.publish("m2")
+        self.assertEqual(pilot.groups_finished(e), {"M2": ["T-002"]})
+
     def test_a_skipped_round_keeps_the_group_owed_until_the_next_merge(self):
         self.make([("T-001", "M1", ""), ("T-002", "M2", "")])
         pilot = driver.Pilot(self.p, args())

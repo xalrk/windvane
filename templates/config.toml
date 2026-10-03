@@ -57,7 +57,7 @@ desk_fixes = 2            # fix sessions per red or conflicting desk PR before i
 # name = "playtest"
 # every = 6                 # merged tickets between runs
 # after_group = 'Milestone:\s*(M\d+)'   # or (and) when a group of tickets is finished: group 1 of this regex on a
-                          # ticket's header names its group. Neither set: runs only as another entry's `then`
+#                           # ticket's header names its group. Neither set: runs only as another entry's `then`
 # minutes = 90              # its time limit; skipped when the deadline is nearer
 # setup = "tools/build.sh"  # run first; failing skips this round
 # setup_minutes = 60        # a setup still running then is stopped and the round skipped
