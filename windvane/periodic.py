@@ -204,7 +204,7 @@ class Periodic:
             self.log(f"{name}: no result ({killed or error or 'no PERIODIC line'}); its changes are dropped")
             return None
         self.log(f"{name}: PERIODIC: {m.group(1)}")
-        push(f"{p.name}: {name}", m.group(1)[:300] or "done", 3, "mag")
+        push(name, m.group(1)[:300] or "done", 3, "mag")
         if notes:  # used: the next plan (or triage) starts after them
             append_jsonl(p.state / "critic.jsonl", {"ticket": "PLAN", "step": f"periodic:{name}", "notes": len(notes)})
         score = SCORE_RE.search(m.group(1))
@@ -305,7 +305,7 @@ class Periodic:
         if land == "hold":
             self.held += tickets
         if not ok:
-            push(f"{p.name}: periodic change not merged", f"{title}: waits on {where}; merge it by hand.", 4, "warning")
+            push("periodic change not merged", f"{title}: waits on {where}; merge it by hand.", 4, "warning")
 
     def ask_land(self, name, tickets, titles):
         """`land = "ask"`: one phone question, near / end / hold; waits up to `answer_wait` minutes (and never past
@@ -318,7 +318,7 @@ class Periodic:
             return "hold"
         which = "; ".join(f"{t} {titles.get(t, '')[:60]}".strip() for t in tickets)
         which = which if len(which) <= 400 else which[:399] + "…"
-        sent = phone.ask(qid, f"{p.name}: {name} wrote {n} ticket{'s' * (n != 1)}: {which}. Queue them? "
+        sent = phone.ask(qid, f"{name} wrote {n} ticket{'s' * (n != 1)}: {which}. Queue them? "
                          f"No answer in {self.a.answer_wait:g} min: hold.", [o for _, o in ASK_LAND])
         if not sent:
             self.log(f"{name}: {'no phone' if sent is None else 'the question did not send'}; the tickets are held")

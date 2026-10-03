@@ -81,7 +81,7 @@ class Sessions(Base):
         self.assertIn("no retry spent", self.log())
         self.assertNotIn("retry 1/", self.log())
         self.assertIn("network down since", self.log())
-        self.assertNotIn("sandbox: network back", self.pushes)  # a short outage pushes nothing
+        self.assertNotIn("network back", self.pushes)  # a short outage pushes nothing
 
     def test_a_run_cut_off_without_a_result_line_is_resumed_and_not_counted(self):
         # "API Error: No response from API" as the run's last words, twice: neither counts toward failing it
@@ -99,7 +99,7 @@ class Sessions(Base):
         self.run_pilot(pilot)
         self.assertEqual(pilot.merged, ["T-001", "T-002"])
         self.assertEqual(sum(self.waits) // 60, 22)
-        self.assertEqual(self.pushes.count("sandbox: network back"), 1)
+        self.assertEqual(self.pushes.count("network back"), 1)
         self.assertIn("network back after 22 min", self.log())
 
     def test_a_stop_ends_the_wait_and_fails_nothing(self):

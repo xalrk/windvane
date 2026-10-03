@@ -23,6 +23,7 @@ DIR = ".windvane"
 
 DEFAULTS = {
     "name": "",  # state dir, phone ids, tmux session; default: the repo's directory name
+    "display_name": "",  # how pushes and the phone's replies name the project; default: `name`, first letter upper
     "prefix": "T",  # ticket ids: T-001, T-002a
     "remote": "origin",
     "main": "main",
@@ -179,6 +180,7 @@ class Project:
         self.cfg = _merge(DEFAULTS, tomllib.loads(f.read_text()) if self.exists else {})
         c = self.cfg
         self.name = re.sub(r"[^a-z0-9-]+", "-", (c["name"] or self.main_root().name).lower()).strip("-") or "project"
+        self.display = c["display_name"] or self.name[0].upper() + self.name[1:]
         self.prefix = c["prefix"].upper()
         self.id_re = rf"{re.escape(self.prefix)}-\d+[a-z]?"
         self.remote, self.main = c["remote"], c["main"]

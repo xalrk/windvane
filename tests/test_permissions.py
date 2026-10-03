@@ -114,7 +114,7 @@ class Permissions(unittest.TestCase):
         self.assertEqual(pilot.merged, [])
         self.assertEqual(len(pushes), 1)  # a single push, saying why
         title, msg = pushes[0]
-        self.assertIn("autopilot stopped", title)
+        self.assertIn("windvane stopped", title)
         for part in ("3 bad permission rules", "wroker_allow: no such key", "'bash(tools/*)'",
                      "and 1 more (windvane doctor lists them)"):  # the first two fit a push
             self.assertIn(part, msg)

@@ -30,17 +30,21 @@ read your pushes. windvane never writes the topics into logs, pushes, commits or
 
 ## What you get
 
-A push for each merge, failure, pause and question, and a summary when the run stops:
+A push for each merge, failure, pause and question, and a summary when the run stops. Every title and question
+starts with the project's `display_name` (default: its `name` with a capital, `acme` -> `Acme`), so two projects on
+one phone stay apart:
 
 ```
-windvane: autopilot started
+Acme windvane started
 Until 04:10. 5h 5% · week 9%.
 
-Done: T-015 Phone notifications and answers that work for anyone
+Acme: Done: Phone notifications that work for anyone (T-015)
 Built, checked, reviewed and merged. Critic 7/10. 5h 5% · week 9%
 
-windvane: paused
+Acme: paused
 5h 75% · week 40%. Resuming at 14:00.
+
+Acme windvane stopped
 ```
 
 A **question** push carries buttons for options A and B and **Answer on computer**. Tap a letter to answer; options
@@ -54,7 +58,7 @@ Type one of these into the topic in the ntfy app:
 
 | Command | Reply |
 |---|---|
-| `status` | each project's state in one line |
+| `status` | each project's state in one line (`Acme: autopilot running. Last: ...`) |
 | `overview` | where each project stands: tickets merged, underway, not started |
 | `usage` | Claude usage: the 5-hour window and the week |
 | `stop` | stop the runs after their current ticket |

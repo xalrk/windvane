@@ -160,6 +160,7 @@ def pr_for(p, branch):
 class Pilot(Desk, Periodic):
     def __init__(self, p, a):
         self.p, self.a = p, a
+        phone.use(p)
         self.usage = Usage(p)
         self.state_file = p.state / "state.json"
         s = load_json(self.state_file, {})
@@ -507,7 +508,7 @@ class Pilot(Desk, Periodic):
         if line:
             self.scale_said = True
             self.log(line)
-            push(f"{self.p.name}: critic scale collapsed", line.split(": ", 1)[1] + ". The run goes on.", 3,
+            push("critic scale collapsed", line.split(": ", 1)[1] + ". The run goes on.", 3,
                  "warning")
 
     def keep_changes(self, why):
@@ -521,14 +522,14 @@ class Pilot(Desk, Periodic):
         r = git(cd, "stash", "push", "-u", "-m", msg)
         if r.returncode == 0 and not gout(cd, "status", "--porcelain"):
             self.log(f"{why}: stashed the checkout's uncommitted changes as \"{msg}\"")
-            push(f"{p.name}: your changes were stashed", f"Uncommitted changes in your checkout were stashed before "
+            push("your changes were stashed", f"Uncommitted changes in your checkout were stashed before "
                  f"{why}: git stash list\n{msg}", 3, "package")
             return True
         err = (r.stderr.strip() or "?").splitlines()[0][:200] if r.returncode else "changes were left after it"
         self.log(f"{why}: skipped: couldn't stash the checkout's uncommitted changes ({err})")
         if not self.stash_failed:
             self.stash_failed = True
-            push(f"{p.name}: checkout not cleaned", f"Couldn't stash the uncommitted changes in your checkout, so "
+            push("checkout not cleaned", f"Couldn't stash the uncommitted changes in your checkout, so "
                  f"{why} was skipped and nothing was deleted: commit or stash them. git said: {err}", 4, "warning")
         return False
 
@@ -826,7 +827,7 @@ class Pilot(Desk, Periodic):
         end, err = quiet_now(self.p)
         if err and getattr(self, "quiet_err_sent", None) != err:  # once, not on every pass; again after a fix
             self.log(f"quiet times ignored: {err}; asking as usual")
-            push(f"{self.p.name}: quiet times ignored", f"{err}. Questions come to the phone as usual until it's "
+            push("quiet times ignored", f"{err}. Questions come to the phone as usual until it's "
                  "fixed (`windvane quiet` shows the format).", 3, "warning")
         self.quiet_err_sent = err
         if not end:  # only money, licence and merged-work questions ask in a quiet time
@@ -851,7 +852,7 @@ class Pilot(Desk, Periodic):
             self.stop_reason = f"5-hour window at {self.usage.five:g}%, and it resets too close to the deadline"
             return False
         self.log(f"pausing at {self.usage.text()} until the window resets at {hhmm(until)}")
-        push(f"{self.p.name}: paused", f"{self.usage.text()}. Resuming at {hhmm(until)}.", 2, "pause_button",
+        push("paused", f"{self.usage.text()}. Resuming at {hhmm(until)}.", 2, "pause_button",
              ("Usage=usage", "Stop=stop"))
         self.nap(until)
         self.usage.probe(self.p)
@@ -1138,7 +1139,7 @@ class Pilot(Desk, Periodic):
                      f"failed: {names(self.failed)})")
             self.hand_over()
             self.lockfile.close()  # the restarted driver takes it again
-            os.environ["WINDVANE_RESTARTED"] = "1"  # no second "autopilot started" push; it reads restart.json
+            os.environ["WINDVANE_RESTARTED"] = "1"  # no second "windvane started" push; it reads restart.json
             cmd = [*exe(), *selfupdate.restart_args(self.argv, self.end())]
             self.execv(cmd[0], cmd)
 
@@ -1196,7 +1197,7 @@ class Pilot(Desk, Periodic):
                     self.log(f"windvane {self.newer} is out: pipx upgrade windvane")
             if ready and not restarted:
                 self.usage.probe(p)
-                push(f"{p.name}: autopilot started", f"Until {hhmm(deadline)}. {self.usage.text()}.", 2, "rocket",
+                push("windvane started", f"Until {hhmm(deadline)}. {self.usage.text()}.", 2, "rocket",
                      ("Status=status", "Stop=stop"))
             else:
                 self.stop_reason = self.halt
@@ -1217,7 +1218,7 @@ class Pilot(Desk, Periodic):
                 self.hand_over()
                 save_json(p.state / "crash.json", {"error": crashed, "summary": summary.split("\n", 1)[1]})
             else:
-                push(f"{p.name}: autopilot stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
+                push("windvane stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                      "checkered_flag", ("Usage=usage",))
             self.save()
             self.lockfile.close()
@@ -1268,7 +1269,7 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
                 why = f"the driver was killed ({signal.Signals(-rc).name})"
                 log(p, f"{why}; not restarted: its sessions may still be running in the worktrees")
-                push(f"{p.name}: autopilot stopped", f"Why: {why}. Not restarted: its sessions may still be running "
+                push("windvane stopped", f"Why: {why}. Not restarted: its sessions may still be running "
                      "in the worktrees.", 4, "rotating_light", ("Status=status",))
             return rc  # its own end (a stop, the deadline, the queue, a failed setup), or a kill
         why = info["error"]
@@ -1282,13 +1283,13 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
                 else asked() or ("deadline" if now() >= deadline else None))
         if not stop:
             log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour")
-            push(f"{p.name}: autopilot restarted", f"The driver crashed: {why}. Restart {len(crashes)} of "
+            push("windvane restarted", f"The driver crashed: {why}. Restart {len(crashes)} of "
                  f"{RESTARTS} this hour; it goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
             sleep(RESTART_PAUSE)
             stop = asked()
         if stop:
             log(p, f"driver crashed ({why}); not restarted: {stop}")
-            push(f"{p.name}: autopilot stopped", f"Why: the driver crashed ({why}); not restarted: {stop}.\n"
+            push("windvane stopped", f"Why: the driver crashed ({why}); not restarted: {stop}.\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             return rc
         args = selfupdate.restart_args(args, deadline)
@@ -1395,7 +1396,7 @@ def unmerged(p, n, where):
     hears where it waits: it was a paid planner session."""
     clean_detach(p, p.plan_dir, p.upstream)
     log(p, f"plan: {n} tickets on {where}, not merged; merge it by hand")
-    push(f"{p.name}: plan not merged", f"{n} tickets wait on {where}: merge it by hand.", 4, "warning")
+    push("plan not merged", f"{n} tickets wait on {where}: merge it by hand.", 4, "warning")
     return 0
 
 
@@ -1468,6 +1469,6 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
             log(p, f"plan: push to {branch} refused ({' '.join(res.stderr.split())[:200]}); plan dropped")
             return 0
         log(p, f"plan: {n} tickets pushed to {branch}")
-    push(f"{p.name}: planned {n} tickets", m.group(3)[:200] or "See the queue.", 3, "memo")
+    push(f"planned {n} tickets", m.group(3)[:200] or "See the queue.", 3, "memo")
     clean_detach(p, cd, p.upstream)
     return n

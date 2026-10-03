@@ -87,7 +87,7 @@ class Quiet(Base):
                 pilot.quiet_check()
         self.assertEqual(len(self.pushes), 1)
         title, msg = self.pushes[0]
-        self.assertEqual(title, "sandbox: quiet times ignored")
+        self.assertEqual(title, "quiet times ignored")
         self.assertIn("'weekends'", msg)
         with redirect_stdout(io.StringIO()):  # fixed, then broken again: a new push
             (self.p.state / "quiet.txt").write_text("")
@@ -102,7 +102,7 @@ class Quiet(Base):
         with redirect_stdout(io.StringIO()):
             pilot.quiet_check()
             pilot.quiet_check()
-        self.assertEqual([t for t, _ in self.pushes], ["sandbox: quiet times ignored"])
+        self.assertEqual([t for t, _ in self.pushes], ["quiet times ignored"])
         self.assertIn("can't read", self.pushes[0][1])
 
     def test_a_good_quiet_file_pushes_nothing(self):
@@ -185,7 +185,7 @@ class Overview(Base):
     def test_its_output_follows_the_overview(self):
         out = self.overview().splitlines()
         self.assertEqual(out[-2:], ["Milestone 1: done", "Milestone 2: underway"])
-        self.assertTrue(out[0].startswith("sandbox: "))
+        self.assertTrue(out[0].startswith("Sandbox: "))
 
     def test_a_failing_command_is_one_line(self):
         self.p.cfg["overview_extra"] = "echo noise; echo first >&2; echo boom >&2; exit 3"
