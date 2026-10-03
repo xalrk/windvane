@@ -939,6 +939,15 @@ class Pilot(Desk, Periodic):
             log(self.p, "\n".join(["its last lines:", *e.lines]), echo=False)  # the terminal showed them already
             return False
 
+    def rules_ok(self):
+        """The project's `[permissions]` rules all parse. The CLI drops a rule it can't read without a word, so a
+        session would run without the tool its project granted: the run stops at its start instead."""
+        bad = self.p.perm_problems
+        if bad:
+            self.halt = f"{len(bad)} bad permission rule{'s' * (len(bad) > 1)} in config.toml: {'; '.join(bad)}"[:400]
+            self.log(self.halt)
+        return not bad
+
     def idle_note(self, notes):
         """Log why a slot sits idle, once per change rather than every pass of the loop."""
         for n in notes:
@@ -1129,7 +1138,8 @@ class Pilot(Desk, Periodic):
                  + (f", up to {self.n} tickets at a time" if self.n > 1 else "") + ")")
         ready, crashed = False, None
         try:
-            ready = self.prepare(0)  # before any session or push: a failed setup ends the run with a single push
+            ready = self.rules_ok() and self.prepare(0)  # before any session or push: a bad rule or a failed setup
+            # ends the run with a single push
             self.carry_over(restarted)
             if not CHECKOUT:
                 self.newer = selfupdate.newer_release(selfupdate.version())

@@ -138,6 +138,8 @@ def first_turn(seen):
 
 
 def settings_json(allow=(), deny=()):
+    """The session's permission rules. A project's `[permissions]` rules come after windvane's own; deny wins over
+    allow in Claude Code, so a project's allow can't lift a deny that keeps a session off `main`."""
     return json.dumps({"permissions": {"allow": list(allow), "deny": list(deny)}})
 
 
@@ -162,6 +164,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     `limits` (kill time, 5-hour cap, weekly cap) passes the same rule on to sessions started inside this one.
     Returns (final text, why it was stopped or None, why it failed or None): a failure is the session's own
     (API error, crash), never the ticket's, so callers can retry it."""
+    own = p.perms.get(role, {})
+    allow, deny = [*allow, *own.get("allow", ())], [*deny, *own.get("deny", ())]
     model, effort = p.models.get(role, "opus"), p.models.get(f"{role}_effort", "high")
     raw = p.state / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}-{label}.jsonl"
     raw.parent.mkdir(parents=True, exist_ok=True)
