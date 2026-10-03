@@ -1268,6 +1268,7 @@ class Pilot(Desk):
         # Network calls wait out an outage (net.py) with this run's stop rule; the probe tries the remote's host too.
         net.hosts = list(filter(None, [net.remote_host(gout(p.main_root(), "remote", "get-url", p.remote))]))
         net.waiter = self.wait_online
+        net.learn()
         self.log(f"autopilot {'restarted' if restarted else 'started'}, until {hhmm(deadline)} (5h cap "
                  f"{self.a.cap:g}%, week cap {self.a.week_cap:g}%"
                  + (f", up to {self.n} tickets at a time" if self.n > 1 else "") + ")")
@@ -1520,9 +1521,14 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
     log(p, f"plan run ({len(notes)} critic notes)")
     deny = ["Agent", "Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
             "Bash(gh *)", "NotebookEdit"]
-    text, killed, error = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd,
-                                     ["Bash(git ls-files *)"], deny, usage, stop_if)
-    m = last_match(PLAN_RE, text)
+    while True:
+        text, killed, error = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd,
+                                         ["Bash(git ls-files *)"], deny, usage, stop_if)
+        m = last_match(PLAN_RE, text)
+        if killed or m or not net.down_wait():  # cut off by an outage: once it's back, plan again from scratch
+            break
+        log(p, "plan: the run was cut off with the network down; running it again")
+        clean_detach(p, cd, p.upstream)
     changed = changed_paths(cd)
     if killed or not m or not changed:
         clean_detach(p, cd, p.upstream)

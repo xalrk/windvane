@@ -124,6 +124,14 @@ class Sessions(Base):
         self.assertIn("retry 1/", self.log())
         self.assertNotIn("network", self.log())
 
+    def test_a_planner_cut_off_by_an_outage_plans_again(self):
+        os.environ["FAKE_FAIL"] = "crash"
+        net.probe, net.waiter = Probe(1), lambda: self.waits.append(60) or True
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(driver.plan(self.p, "make it great", merge=True), 1)
+        self.assertEqual((self.roles(), self.waits), (["planner"] * 2, [60]))
+        self.assertIn("plan: the run was cut off with the network down; running it again", self.log())
+
     def test_failures_during_an_outage_dont_stop_the_run(self):
         pilot = self.pilot(down=2)
         pilot.fail("T-001", "x")
@@ -133,6 +141,43 @@ class Sessions(Base):
         net.probe = Probe(0)
         pilot.fail("T-003", "z")
         self.assertEqual(pilot.fail_streak, 1)
+
+
+class Trust(Base):
+    """The real probe believes only hosts that answered once: a setup it can't see (Bedrock, a proxy in Claude's
+    settings, an ssh ProxyCommand) never reads as an outage, so failures there behave as before instead of waiting
+    for the deadline."""
+
+    def reach(self, *answers):
+        net.probe, seq = None, list(answers)
+        orig, net.reach = net.reach, lambda host, port: seq.pop(0) if seq else answers[-1]
+        self.addCleanup(setattr, net, "reach", orig)
+        self.addCleanup(net.answered.clear)
+
+    def test_a_host_that_never_answered_is_not_believed(self):
+        self.reach(False)
+        self.assertTrue(net.online())
+
+    def test_a_host_that_answered_once_is(self):
+        self.reach(True, False)
+        self.assertTrue(net.online())
+        self.assertFalse(net.online())
+
+    def test_a_probe_that_never_answers_leaves_failures_as_before(self):
+        self.reach(False)
+        os.environ["FAKE_FAIL"] = "crash"
+        pilot = driver.Pilot(self.p, args())
+        pilot.sleep = self.waits.append
+        self.run_pilot(pilot)
+        self.assertEqual(pilot.merged, ["T-001", "T-002"])
+        self.assertEqual(self.waits, [60] * 3)  # the crash backoff, not a wait to the deadline
+        self.assertIn("retry 1/", self.log())
+        self.assertNotIn("network down", self.log())
+
+    def test_a_failing_git_call_with_an_unbelieved_probe_returns_at_once(self):
+        self.reach(False)
+        net.waiter = lambda: self.fail("waited")
+        self.assertEqual(net.git(None, "push", "/no/such/remote", "HEAD").returncode, 128)
 
 
 class Wait(Base):

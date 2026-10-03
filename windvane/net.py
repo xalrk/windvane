@@ -19,6 +19,7 @@ LONG = 10  # minutes of outage after which its end is pushed (nothing can be pus
 probe = None  # tests: a function standing in for the real probe
 waiter = None  # set by the driver: waits for the network, False when a stop or the deadline ended the wait
 hosts = []  # (host, port) of the git remote, set by the driver; the API host is always probed
+answered = set()  # the hosts that answered a probe in this process: only these are believed when they don't
 lock = threading.Lock()  # parallel slots wait one at a time: the outage is logged and pushed once
 
 
@@ -54,10 +55,25 @@ def reach(host, port):
 
 
 def online():
-    """Whether the API and the git remote resolve and answer, a few seconds each."""
+    """Whether the API and the git remote resolve and answer, a few seconds each. A host that never answered in this
+    process is left out: on a setup the probe can't see (Bedrock or Vertex, a proxy set only in Claude's settings, an
+    ssh ProxyCommand) it would say "down" forever, and every failure would wait for the deadline. The driver probes
+    once at its start, so it knows which hosts to believe."""
     if probe:
         return probe()
-    return all(reach(h, port) for h, port in [api_host(), *hosts])
+    up = True
+    for host in [api_host(), *hosts]:
+        if reach(*host):
+            answered.add(host)
+        elif host in answered:
+            up = False
+    return up
+
+
+def learn():
+    """At a run's start: the hosts that answer now are the ones a later probe believes (a fake probe needs none)."""
+    if not probe:
+        online()
 
 
 def wait(p, until, stopped, sleep=time.sleep):
