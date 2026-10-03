@@ -3,6 +3,7 @@ used from the next ticket on, instead of after someone pulls and restarts the dr
 import os
 import re
 
+from . import net
 from .util import gout, run
 
 CODE = ("windvane/", "bin/", "prompts/")  # read once by the driver: a change here needs a restart
@@ -18,8 +19,9 @@ def pull(home, said):
         return skip(said, f"on branch {branch or '?'}, not main")
     if gout(home, "status", "--porcelain", "--untracked-files=no"):
         return skip(said, "it has local changes")
-    if run(["git", "fetch", "-q", "origin", "main"], home, timeout=60).returncode:
-        return skip(said, "git fetch failed")
+    r = net.call(["git", "fetch", "-q", "origin", "main"], home, timeout=60)  # waits out an outage in a run
+    if r.returncode:
+        return skip(said, "git fetch timed out" if r.returncode == 124 else "git fetch failed")
     old, new = gout(home, "rev-parse", "HEAD"), gout(home, "rev-parse", "FETCH_HEAD")
     if old == new or not new:
         return None
@@ -43,7 +45,7 @@ def newer_release(current, tags=None):
     if current == "0":  # not installed as a package: nothing to compare with
         return None
     if tags is None:
-        r = run(["git", "ls-remote", "--tags", SOURCE], None, timeout=15,
+        r = net.call(["git", "ls-remote", "--tags", SOURCE], None, timeout=15,
                 env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})  # never a password prompt in an unattended run
         tags = r.stdout if r.returncode == 0 else ""
     key = lambda v: tuple(int(x) for x in v.split("."))

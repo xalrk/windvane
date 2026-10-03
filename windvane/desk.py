@@ -9,12 +9,12 @@ keeps which, so a restart doesn't check it again.
 """
 import json
 import re
-import subprocess
 import time
 from datetime import timedelta
 
+from . import net
 from .jobs import tail
-from .util import git, gout, hhmm, last_match, now, push, sh
+from .util import git, gout, hhmm, last_match, now, push
 
 FIX_RE = re.compile(r"FIX: (PUSHED|GAVE UP) #(\d+)[ \t]*(.*)")
 DESK_EVERY = 120  # seconds between looks at the open PRs while none needs the driver
@@ -51,11 +51,11 @@ class Desk:
         p, root = self.p, self.p.main_root()
         if self.desk_owner is None:
             try:
-                self.desk_owner = json.loads(sh(root, "gh", "repo", "view", "--json", "owner"))["owner"]["login"]
+                self.desk_owner = json.loads(net.sh(root, "gh", "repo", "view", "--json", "owner"))["owner"]["login"]
             except (ValueError, KeyError, TypeError):
                 return []  # no gh, or not logged in: looked at again after DESK_EVERY
         try:
-            prs = json.loads(sh(root, "gh", "pr", "list", "--state", "open", "--limit", "100", "--json",
+            prs = json.loads(net.sh(root, "gh", "pr", "list", "--state", "open", "--limit", "100", "--json",
                                 "number,title,author,headRefName,headRefOid,isCrossRepository,isDraft,labels"))
         except ValueError:
             return []
@@ -92,8 +92,7 @@ class Desk:
         if not ok:
             return self.desk_problem(pr, d, head, "check fails", f"{summary}\n```\n{tail(logf, 40)}\n```")
         self.desk_comment(n, f"**windvane check: PASSED** at {head[:7]}: {summary}. Merging.")
-        r = subprocess.run(["gh", "pr", "merge", n, "--merge", "--match-head-commit", head], cwd=p.main_root(),
-                           capture_output=True, text=True)
+        r = net.call(["gh", "pr", "merge", n, "--merge", "--match-head-commit", head], p.main_root())
         if r.returncode:
             now_head = self.desk_head(n)
             if now_head and now_head != head:
@@ -106,8 +105,8 @@ class Desk:
             self.desk_done(d, head)
             return self.desk_leave(n, d, "merge didn't land", f"`gh pr merge` succeeded, but {p.upstream} doesn't "
                                    f"contain {head[:7]}.")
-        if git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{head}", p.remote, "--delete",
-               branch).returncode and gout(p.main_root(), "ls-remote", "--heads", p.remote, branch):
+        if net.git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{head}", p.remote, "--delete",
+                   branch).returncode and net.sh(p.main_root(), "git", "ls-remote", "--heads", p.remote, branch):
             self.log(f"desk PR #{n}: kept {p.remote}/{branch}: it moved past the merged head")
         self.desk_done(d, head)
         self.desk_merged.append(n)
@@ -123,8 +122,8 @@ class Desk:
         if not files or not set(files) <= {r["file"] for r in p.append_only} or not clean_detach(p, cd, p.upstream):
             return False
         ok, renumbered = self.merge_main(head, f"Merge {branch} into {p.main}")
-        if not ok or renumbered is None or git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{head}",
-                                               p.remote, f"HEAD:refs/heads/{branch}").returncode:
+        if not ok or renumbered is None or net.git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{head}",
+                                                   p.remote, f"HEAD:refs/heads/{branch}").returncode:
             return False
         self.log(f"desk PR #{n}: conflicted with {p.main} only in appended entries: {said(renumbered)}")
         self.desk_comment(n, f"**windvane: resolved the conflict with {p.main}** in appended entries: "
@@ -141,12 +140,12 @@ class Desk:
 
     def desk_head(self, n):
         try:
-            return json.loads(sh(self.p.main_root(), "gh", "pr", "view", n, "--json", "headRefOid"))["headRefOid"]
+            return json.loads(net.sh(self.p.main_root(), "gh", "pr", "view", n, "--json", "headRefOid"))["headRefOid"]
         except (ValueError, KeyError, TypeError):
             return ""
 
     def desk_comment(self, n, body):
-        sh(self.p.main_root(), "gh", "pr", "comment", n, "--body", body)
+        net.sh(self.p.main_root(), "gh", "pr", "comment", n, "--body", body)
 
     def desk_problem(self, pr, d, head, problem, details):
         """Comment the problem, then a fix session while the PR has tries left; else leave it for the desk."""
