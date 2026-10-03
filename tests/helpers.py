@@ -133,9 +133,12 @@ elif system.startswith("# windvane periodic run"):  # the project's rules file s
         open(".windvane/tickets/T-099.md", "w").write("# T-099: stray\nDepends on: nothing.\n")
     if "WRITE_REPORT" in system:
         open("report.txt", "w").write("the jump is broken\n")
+    if "EDIT_RULES" in system:  # edits the next session's rules in its tree: they must still come from main
+        open("tools/TRIAGE.md", "w").write("# Triage\nNO_LINE\n")
     open("README", "a").write("stray\n")
+    score = re.search(r"SCORE=(\d+)", system)
     text = "played\n" + ("" if "NO_LINE" in system else "PERIODIC: " + (
-        "see report.txt" if "WRITE_REPORT" in system else "wrote a ticket"))
+        "see report.txt" if "WRITE_REPORT" in system else "wrote a ticket") + (f" score={score.group(1)}" if score else ""))
 elif system.startswith("# windvane fix run"):  # FAKE_FIX: push (fixes it), red (pushes, still red), giveup
     n = re.search(r"Desk PR #(\d+)", prompt).group(1)
     branch = re.search(r"HEAD:(\S+?)`", prompt).group(1)

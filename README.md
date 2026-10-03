@@ -128,9 +128,16 @@ prompt = "tools/autopilot/TRIAGE.md"      # reads the report, writes tickets
 ```
 
 Each session ends with `PERIODIC: <summary>`, which is logged and pushed to your phone; a `then` session gets the
-previous one's final text and the files it names. New tickets under `.windvane/tickets/` and lines added to
-`QUEUE.md` land on `main`, so the queue picks them up; any other change is discarded. Sessions show in
-`windvane stats` as `periodic:<name>`.
+previous one's final text and the files it names, plus, like `windvane plan`, the queue and the critic's "Beyond
+this ticket" notes no plan or triage has used yet. Each session reads its prompt file from current `main`. New
+tickets under `.windvane/tickets/` and lines added to `QUEUE.md` land on `main`; any other change is discarded.
+`land` says where the new tickets go in the queue: `near` (default: right after the ticket in progress), `next` (the
+top), `end`, `hold` (parked in `QUEUE.md`, listed in the run's summary for you) or `ask` (one phone question: near,
+end or hold; no answer in `answer_wait` minutes: hold). A `then` entry without its own `land` takes the one before.
+
+`windvane periodic playtest` runs an entry (and its `then` chain) now, from the desk; it refuses while a run is on.
+A `score=<n>` at the end of the `PERIODIC:` line goes to the ledger: `windvane stats --periodic` shows each entry's
+scores over time. Sessions show in `windvane stats` as `periodic:<name>`.
 
 ### Your own PRs from the desk
 

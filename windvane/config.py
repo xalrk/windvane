@@ -81,6 +81,9 @@ def _merge(base, over):
     return out
 
 
+LANDS = ("near", "next", "end", "hold", "ask")  # where a [[periodic]] chain's new tickets go in the queue
+
+
 def periodic(entries):
     """`[[periodic]]` sessions by name: a project's own session (a playtest, an audit) run every `every` merges, or
     only as another entry's `then` when `every` is unset. Mistakes stop the run at once rather than at the Nth merge."""
@@ -96,8 +99,11 @@ def periodic(entries):
                                                                       ("setup_minutes", 60)))
         except (TypeError, ValueError):
             raise SystemExit(f"windvane: [[periodic]] {name}: every, minutes and setup_minutes are whole numbers")
-        out[name] = {"name": name, "every": max(0, every), "minutes": max(1, minutes), "setup": e.get("setup", ""),
-                     "setup_minutes": max(1, setup_m),
+        land = str(e.get("land", ""))
+        if land and land not in LANDS:
+            raise SystemExit(f"windvane: [[periodic]] {name}: land = {land!r}: use one of {', '.join(LANDS)}")
+        out[name] = {"name": name, "land": land, "every": max(0, every), "minutes": max(1, minutes),
+                     "setup": e.get("setup", ""), "setup_minutes": max(1, setup_m),
                      "prompt": e["prompt"], "then": e.get("then", "")}
     for e in out.values():
         if e["then"] and e["then"] not in out:

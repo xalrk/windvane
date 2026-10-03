@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver  # noqa: E402
 from windvane.config import Project  # noqa: E402
+from windvane.periodic import added_lines  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -201,7 +202,9 @@ class Config(unittest.TestCase):
         self.assertEqual(periodic([{"prompt": "x.md"}])["periodic-1"]["every"], 0)
 
     def test_queue_lines_are_only_added(self):
-        self.assertEqual(driver.added_lines("a\nb\nc", "b\nX\nc\nY"), "a\nb\nX\nc\nY")
+        self.assertEqual(added_lines("a\nb\nc", "b\nX\nc\nY"), "a\nb\nX\nc\nY")
+        # replayed onto a main that moved: its reorder and new line stay, the added lines follow old ones it kept
+        self.assertEqual(added_lines("a\nb\nc", "a\nX\nb\nc\nY", onto="c\nb\nZ\na"), "c\nb\nZ\na\nX\nY")
 
 
 if __name__ == "__main__":

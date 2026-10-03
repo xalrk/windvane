@@ -57,7 +57,11 @@ desk_fixes = 2            # fix sessions per red or conflicting desk PR before i
 # setup = "tools/build.sh"  # run first; failing skips this round
 # setup_minutes = 60        # a setup still running then is stopped and the round skipped
 # prompt = "tools/autopilot/PLAYTEST.md"   # your rules for the session, in your repo
-# then = "triage"           # another [[periodic]] run right after, given this one's output
+# then = "triage"           # another [[periodic]] run right after, given this one's output (a `then` entry also
+                          # gets the critic's unused "Beyond this ticket" notes and the queue, as `windvane plan`)
+# land = "near"             # where its new tickets go: near (right after the ticket in progress), next (top of the
+                          # queue), end, hold (parked for you), ask (a phone question; no answer: hold). A `then`
+                          # entry without its own `land` takes this one's.
 
 # An append-only numbered file (decisions, ADRs, migrations; none by default): two branches that each append an entry
 # conflict on the same next number. The driver resolves that itself: main's entries, then the branch's, renumbered
