@@ -47,6 +47,7 @@ DEFAULTS = {
                   # forge github: the owner's open PRs with this label are checked and merged between tickets ("":
                   # off); a red or conflicting one gets up to desk_fixes fix sessions
                   "desk_label": "windvane merge", "desk_fixes": 2},
+    "permissions": {},  # <role>_allow / <role>_deny: rules added to that role's sessions (none by default)
 }
 
 
@@ -81,6 +82,48 @@ def _merge(base, over):
     return out
 
 
+# The roles a project may grant or deny tools in `[permissions]`, by the key's name: the session's role in runner.py.
+PERM_ROLES = {"worker": "worker", "critic": "critic", "review": "reviewer", "plan": "planner", "fix": "fix",
+              "periodic": "periodic"}
+# A permission rule as Claude Code reads it: a tool (capitalised, or an MCP server or tool), optionally with a
+# non-empty specifier in parentheses. The CLI drops a rule it can't parse without a word, so windvane checks first.
+RULE_RE = re.compile(r"(?:[A-Z]\w*(?:\((?!\s*\))[^()]*(?:\([^()]*\)[^()]*)*\))?|mcp__[\w-]+(?:__(?:[\w-]+|\*))?)")
+
+
+def rule_lists(where, table, keys):
+    """{key: [rules]} for the lists in `table` named by `keys`, plus what is wrong with them: not a list of strings, or
+    a rule the CLI couldn't parse. Reported at a run's start (the log and the phone) and by `windvane doctor`."""
+    lists, bad = {}, []
+    for k in keys:
+        v = table.get(k, [])
+        if not (isinstance(v, list) and all(isinstance(r, str) for r in v)):
+            bad.append(f"{where} {k} = {v!r}: use a list of rules, e.g. [\"Bash(tools/*)\"]")
+            continue
+        lists[k] = v
+        bad += [f"{where} {k}: {r!r} isn't a permission rule (Tool or Tool(specifier))"
+                for r in v if not RULE_RE.fullmatch(r)]
+    return lists, bad
+
+
+def permissions(table, entries):
+    """`[permissions]` and the `[[periodic]]` entries' own `allow` / `deny`, as {role: {"allow", "deny"}} for
+    runner.py, and the problems with them. An unknown key is one: a typo would otherwise grant nothing, silently."""
+    keys = [f"{r}_{k}" for r in PERM_ROLES for k in ("allow", "deny")]
+    table = table if isinstance(table, dict) else {}
+    bad = [f"[permissions] {k}: no such key; use <role>_allow or <role>_deny for {', '.join(PERM_ROLES)}"
+           for k in table if k not in keys]
+    lists, wrong = rule_lists("[permissions]", table, keys)
+    out = {PERM_ROLES[k.rsplit("_", 1)[0]]: {"allow": [], "deny": []} for k in keys}
+    for k, v in lists.items():
+        role, kind = k.rsplit("_", 1)
+        out[PERM_ROLES[role]][kind] = v
+    for e in entries.values():
+        own, more = rule_lists(f"[[periodic]] {e['name']}", e, ("allow", "deny"))
+        wrong += more
+        out[f"periodic:{e['name']}"] = {k: out["periodic"][k] + own.get(k, []) for k in ("allow", "deny")}
+    return out, bad + wrong
+
+
 LANDS = ("near", "next", "end", "hold", "ask")  # where a [[periodic]] chain's new tickets go in the queue
 
 
@@ -104,7 +147,8 @@ def periodic(entries):
             raise SystemExit(f"windvane: [[periodic]] {name}: land = {land!r}: use one of {', '.join(LANDS)}")
         out[name] = {"name": name, "land": land, "every": max(0, every), "minutes": max(1, minutes),
                      "setup": e.get("setup", ""), "setup_minutes": max(1, setup_m),
-                     "prompt": e["prompt"], "then": e.get("then", "")}
+                     "prompt": e["prompt"], "then": e.get("then", ""),
+                     "allow": e.get("allow", []), "deny": e.get("deny", [])}
     for e in out.values():
         if e["then"] and e["then"] not in out:
             raise SystemExit(f"windvane: [[periodic]] {e['name']}: then = {e['then']!r} names no [[periodic]] entry")
@@ -135,6 +179,7 @@ class Project:
         self.critic = c["critic"]
         self.ap = c["autopilot"]
         self.periodic = periodic(c.get("periodic", []))
+        self.perms, self.perm_problems = permissions(c["permissions"], self.periodic)
         self.append_only = rules(c.get("append_only", []))
 
     def main_root(self):

@@ -100,10 +100,35 @@ the [README](../README.md#periodic-sessions) for an example.
 | `setup_minutes` | `60` | The longest `setup` may run. |
 | `prompt` | required | The project's rules file for the session, a path in the repo. |
 | `then` | `""` | Another `[[periodic]]` entry run right after, given this one's final text and the files it names. |
+| `allow`, `deny` | `[]` | This session's own permission rules, after `[permissions]`' `periodic_allow` / `periodic_deny`; see [`[permissions]`](#permissions). |
 
 A session ends with one line `PERIODIC: <summary>`. Only new files under `.windvane/tickets/` and lines added to
 `QUEUE.md` are kept; they land on `main` as a plan does. A session cut off (deadline, stop, usage cap) or without the
 line leaves nothing.
+
+## [permissions]
+
+Tools a project grants or denies per session role, on top of windvane's own rules (none by default). Sessions run in
+auto mode, whose check may refuse a project's own scripts mid-ticket; an allow rule lets them through. A deny rule
+narrows a role (a critic that must not edit, a triage that only writes docs). Rules use Claude Code's permission rule
+syntax: `Tool` or `Tool(specifier)`, e.g. `Bash(tools/*)`, `Edit(docs/**)`, `WebFetch(domain:example.com)`.
+
+```toml
+[permissions]
+worker_allow = ["Bash(tools/*)"]
+critic_deny = ["Edit", "Write"]
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `<role>_allow` | `[]` | Rules added to that role's allow list. Roles: `worker`, `critic`, `review`, `plan`, `fix`, and `periodic` (every `[[periodic]]` session; an entry adds its own `allow` / `deny`). |
+| `<role>_deny` | `[]` | Rules added to that role's deny list. |
+
+Deny wins over allow in Claude Code, so a project's allow can't lift windvane's own denies (pushing to `main`, say).
+Claude Code silently drops a rule it can't parse. windvane checks every rule and key itself, so a bad one
+(`bash(x)`, `Bash()`, a misspelt key) stops `windvane run` at its start, with a line in the log and the phone push.
+`windvane periodic` stops before its setup, and a desk `plan` or `critic` before its session. `windvane doctor`
+lists them all.
 
 ## [[append_only]]
 

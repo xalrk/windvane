@@ -62,6 +62,14 @@ desk_fixes = 2            # fix sessions per red or conflicting desk PR before i
 # land = "near"             # where its new tickets go: near (right after the ticket in progress), next (top of the
                           # queue), end, hold (parked for you), ask (a phone question; no answer: hold). A `then`
                           # entry without its own `land` takes this one's.
+# allow = ["Bash(tools/record.sh *)"]  # this session's own permission rules (see [permissions])
+# deny = ["Edit"]
+
+# Tools your project grants or denies per session role, in Claude Code's rule syntax (none by default). Roles: worker,
+# critic, review, plan, fix, periodic. A rule windvane can't parse stops the run at its start.
+# [permissions]
+# worker_allow = ["Bash(tools/*)"]   # your own scripts, which auto mode might refuse
+# critic_deny = ["Edit", "Write"]
 
 # An append-only numbered file (decisions, ADRs, migrations; none by default): two branches that each append an entry
 # conflict on the same next number. The driver resolves that itself: main's entries, then the branch's, renumbered

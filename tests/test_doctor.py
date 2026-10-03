@@ -16,7 +16,7 @@ sys.path.insert(0, str(REPO))
 from windvane import doctor, heavy  # noqa: E402
 
 LOGGED_OUT = '#!/bin/sh\necho \'{"loggedIn": false}\'\nexit 1\n'
-GITHUB = SimpleNamespace(exists=True, cfg={"forge": "github"})
+GITHUB = SimpleNamespace(exists=True, cfg={"forge": "github"}, perm_problems=[])
 
 
 class Doctor(unittest.TestCase):

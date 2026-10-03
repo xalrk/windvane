@@ -62,6 +62,10 @@ def checks(p=None):
         lacks = claude_lacks()
         add(not lacks, True, f"Claude Code new enough ({version('claude') or '?'}"
             + (f" lacks {', '.join(lacks)})" if lacks else ")"), "claude update")
+    if p and p.exists:
+        bad = p.perm_problems
+        add(not bad, True, "[permissions] rules in config.toml" + (f": {'; '.join(bad)}" if bad else ""),
+            "fix them: Tool or Tool(specifier), in lists under <role>_allow / <role>_deny")
     github = bool(p and p.exists and p.cfg["forge"] == "github")
     why = "this project's forge is github" if github else "for projects with forge = github"
     has_gh = bool(shutil.which("gh"))
