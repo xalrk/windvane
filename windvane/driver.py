@@ -41,13 +41,12 @@ REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
 CARRIED = ("periodic_at", "held", "skip", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "scale_said", "desk_merged")  # the run's own memory, handed to the driver a self-update restarts
-# Each kind of send-back spends its own budget: (who sent it back, config table, key, sends allowed over the key).
-# The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a critic pack.
-# A missing PR spends the reviewer's rounds, one over as before, since review CHANGES fail at the key itself.
-BUDGETS = {"review": ("the hand-in (no PR)", "autopilot", "review_rounds", 0),
-           "critic": ("the critic", "critic", "revisions", 1),
-           "check": ("the check", "autopilot", "check_retries", 0),
-           "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0)}
+# Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
+# and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
+BUDGETS = {"review": ("the hand-in (no PR)", "autopilot", "review_rounds", 0, ""),
+           "critic": ("the critic", "critic", "revisions", 1, "one more for a READY without the evidence pack"),
+           "check": ("the check", "autopilot", "check_retries", 0, ""),
+           "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0, "")}
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
@@ -439,23 +438,23 @@ class Pilot(Desk, Periodic):
             self.feedback[tid] = f"The reviewer asks for changes on {sha[:12]}:\n{review[-4000:]}"
             self.reviews[tid] = self.reviews.get(tid, 0) + 1
             if self.reviews[tid] >= p.ap["review_rounds"]:
-                return self.fail(tid, f"the reviewer asked for changes {said_times(self.reviews[tid])}, out of its budget "
-                                      f"(`[autopilot] review_rounds` = {p.ap['review_rounds']})")
+                return self.fail(tid, f"the reviewer asked for changes {said_times(self.reviews[tid])}, the most "
+                                      f"`[autopilot] review_rounds` = {p.ap['review_rounds']} allows")
             return
         self.integrate(tid, branch, sha)
 
     def bounce(self, tid, kind="review"):
         """A stage sent the ticket back: count it against that stage's own budget (BUDGETS), so a ticket can't loop
         forever and a slow or flaky check can't spend the reviewer's rounds."""
-        what, table, key, spare = BUDGETS[kind]
+        what, table, key, spare, why = BUDGETS[kind]
         if kind == "review":  # shares the count review CHANGES make
             n = self.reviews[tid] = self.reviews.get(tid, 0) + 1
         else:
             n = self.bounces.setdefault(tid, {})[kind] = self.bounces.get(tid, {}).get(kind, 0) + 1
         limit = (self.p.critic if table == "critic" else self.p.ap)[key]
         if n > limit + spare:
-            self.fail(tid, f"{what} sent it back {said_times(n)}, out of its budget (`[{table}] {key}` = {limit}): "
-                           f"{self.feedback.get(tid, '')[:200]}")
+            self.fail(tid, f"{what} sent it back {said_times(n)}; `[{table}] {key}` = {limit} allows {limit + spare}"
+                           f"{f' ({why})' if why else ''}: {self.feedback.get(tid, '')[:200]}")
 
     def critic_gate(self, tid, sha, stale=None):
         """`stale`: an approved head whose verdict no longer covers this one (it changed more than a resolution)."""

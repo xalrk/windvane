@@ -59,7 +59,7 @@ class Budgets(unittest.TestCase):
         self.config(check=RED_TWICE, check_retries=1)
         pilot = self.run_pilot()
         self.assertEqual(pilot.failed, ["T-001"])
-        self.assertIn("`[autopilot] check_retries` = 1", self.failure())
+        self.assertIn("the check sent it back 2 times; `[autopilot] check_retries` = 1 allows 1:", self.failure())
 
     def test_a_third_conflict_sets_it_aside_naming_conflict_retries(self):
         os.environ["FAKE_CONFLICT"] = "1"  # the worker rewrites shared.txt, and merges main when told it conflicts
@@ -74,22 +74,23 @@ class Budgets(unittest.TestCase):
             return wrapped
         pilot = self.run_pilot(desk_lands)
         self.assertEqual(pilot.failed, ["T-001"])
-        self.assertIn("a merge conflict sent it back 3 times", self.failure())
-        self.assertIn("`[autopilot] conflict_retries` = 2", self.failure())
+        self.assertIn("a merge conflict sent it back 3 times; `[autopilot] conflict_retries` = 2 allows 2:",
+                      self.failure())
 
     def test_a_missing_critic_pack_spends_the_critics_budget(self):
         self.config(critic=0, review_rounds=5, check_retries=5)
         pilot = self.run_pilot()
         self.assertEqual(pilot.failed, ["T-001"])
-        self.assertIn("the critic sent it back 2 times", self.failure())
-        self.assertIn("`[critic] revisions` = 0", self.failure())
+        self.assertIn("the critic sent it back 2 times; `[critic] revisions` = 0 allows 1 (one more for a READY "
+                      "without the evidence pack):", self.failure())
 
     def test_review_changes_name_review_rounds(self):
         os.environ["FAKE_REVIEW"] = "CHANGES"
         self.config(review_rounds=1)
         pilot = self.run_pilot()
         self.assertEqual(pilot.failed, ["T-001"])
-        self.assertIn("`[autopilot] review_rounds` = 1", self.failure())
+        self.assertIn("the reviewer asked for changes 1 time, the most `[autopilot] review_rounds` = 1 allows",
+                      self.failure())
 
 
 if __name__ == "__main__":
