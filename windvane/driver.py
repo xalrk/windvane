@@ -944,7 +944,8 @@ class Pilot(Desk, Periodic):
         session would run without the tool its project granted: the run stops at its start instead."""
         bad = self.p.perm_problems
         if bad:
-            self.halt = f"{len(bad)} bad permission rule{'s' * (len(bad) > 1)} in config.toml: {'; '.join(bad)}"[:400]
+            more = f"; and {len(bad) - 2} more (windvane doctor lists them)" if len(bad) > 2 else ""
+            self.halt = f"{len(bad)} bad permission rule{'s' * (len(bad) > 1)} in config.toml: {'; '.join(bad[:2])}{more}"
             self.log(self.halt)
         return not bad
 

@@ -164,6 +164,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     `limits` (kill time, 5-hour cap, weekly cap) passes the same rule on to sessions started inside this one.
     Returns (final text, why it was stopped or None, why it failed or None): a failure is the session's own
     (API error, crash), never the ticket's, so callers can retry it."""
+    if p.perm_problems:  # the run and `windvane periodic` stop before this; a desk `plan` or `critic` stops here
+        raise SystemExit(f"windvane: bad permission rules in config.toml: {'; '.join(p.perm_problems)}")
     own = p.perms.get(role, {})
     allow, deny = [*allow, *own.get("allow", ())], [*deny, *own.get("deny", ())]
     model, effort = p.models.get(role, "opus"), p.models.get(f"{role}_effort", "high")

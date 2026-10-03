@@ -439,7 +439,7 @@ def cmd_periodic(a, p):
         for f in ("STOP", "DEADLINE"):  # an earlier run's
             (p.state / f).unlink(missing_ok=True)
         pilot.deadline = now() + timedelta(days=1)  # each session keeps to its own `minutes`
-        if not pilot.prepare(0):
+        if not (pilot.rules_ok() and pilot.prepare(0)):
             sys.exit(f"windvane: {pilot.halt}")
         pilot.periodic(e)
         if pilot.held:

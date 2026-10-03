@@ -127,7 +127,8 @@ critic_deny = ["Edit", "Write"]
 Deny wins over allow in Claude Code, so a project's allow can't lift windvane's own denies (pushing to `main`, say).
 Claude Code silently drops a rule it can't parse. windvane checks every rule and key itself, so a bad one
 (`bash(x)`, `Bash()`, a misspelt key) stops `windvane run` at its start, with a line in the log and the phone push.
-`windvane doctor` names it too.
+`windvane periodic` stops before its setup, and a desk `plan` or `critic` before its session. `windvane doctor`
+lists them all.
 
 ## [[append_only]]
 

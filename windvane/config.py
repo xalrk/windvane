@@ -87,7 +87,7 @@ PERM_ROLES = {"worker": "worker", "critic": "critic", "review": "reviewer", "pla
               "periodic": "periodic"}
 # A permission rule as Claude Code reads it: a tool (capitalised, or an MCP server or tool), optionally with a
 # non-empty specifier in parentheses. The CLI drops a rule it can't parse without a word, so windvane checks first.
-RULE_RE = re.compile(r"(?:[A-Z]\w*(?:\((?!\s*\))[^()]*(?:\([^()]*\)[^()]*)*\))?|mcp__[\w-]+(?:__[\w-]+)?)")
+RULE_RE = re.compile(r"(?:[A-Z]\w*(?:\((?!\s*\))[^()]*(?:\([^()]*\)[^()]*)*\))?|mcp__[\w-]+(?:__(?:[\w-]+|\*))?)")
 
 
 def rule_lists(where, table, keys):

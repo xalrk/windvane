@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import doctor, driver, runner  # noqa: E402
+from windvane import cli, doctor, driver, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -114,16 +114,32 @@ class Permissions(unittest.TestCase):
         self.assertEqual(len(pushes), 1)  # a single push, saying why
         title, msg = pushes[0]
         self.assertIn("autopilot stopped", title)
-        for part in ("3 bad permission rules", "'bash(tools/*)'", "critic_deny", "wroker_allow"):
+        for part in ("3 bad permission rules", "wroker_allow: no such key", "'bash(tools/*)'",
+                     "and 1 more (windvane doctor lists them)"):  # the first two fit a push
             self.assertIn(part, msg)
             self.assertIn(part, (self.p.state / "autopilot.log").read_text())
+
+    def test_a_periodic_session_by_hand_or_a_desk_session_stops_on_a_bad_rule(self):
+        self.make('[[periodic]]\nname = "playtest"\nprompt = "tools/P.md"\nallow = ["Write(out/**"]\n')
+        self.s.write("tools/P.md", "# P\nPLAY\n")
+        self.s.publish()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as e:
+            cli.main(["-C", str(self.s.root), "periodic", "playtest"])
+        self.assertIn("1 bad permission rule in config.toml: [[periodic]] playtest allow: 'Write(out/**'",
+                      str(e.exception.code))  # before its setup, not at the session
+        self.assertFalse(driver.locked(self.p))
+        with self.assertRaises(SystemExit) as e:  # `windvane plan` or `windvane critic` at the desk
+            runner.run_claude(self.p, "planner", "plan", "hi", "# windvane plan", self.s.root)
+        self.assertIn("'Write(out/**'", str(e.exception.code))
+        self.assertEqual(self.calls(), [])  # no session ran without its rules
 
     def test_doctor_names_a_bad_rule(self):
         self.make('[[periodic]]\nname = "pt"\nprompt = "x.md"\ndeny = ["Bash()"]\n')
         rows = [r for r in doctor.checks(self.p) if "[permissions]" in r[1]]
         self.assertEqual(rows[0][0], "need")
         self.assertIn("[[periodic]] pt deny: 'Bash()'", rows[0][1])
-        self.make('[permissions]\nworker_allow = ["Bash(tools/*)", "mcp__files__read", "WebFetch(domain:x.org)"]\n')
+        self.make('[permissions]\nworker_allow = ["Bash(tools/*)", "mcp__files__read", "mcp__my-db__*", "WebFetch(domain:x.org)"]\n')
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual([r[0] for r in doctor.checks(self.p) if "[permissions]" in r[1]], ["ok"])
 
