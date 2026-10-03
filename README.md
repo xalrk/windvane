@@ -43,12 +43,12 @@ Built, checked, reviewed and merged. Critic 7/10. 5h 5% · week 9%
 
 `windvane stats` shows where the tokens went:
 ```
-role         runs turns  fresh in  cached in     out   API $   min
-worker         24   791    1,349k    41,878k    597k   31.10   215
-reviewer       24   119      711k     3,594k    126k    8.93    24
-critic         29   144      443k     2,433k     77k    5.57    16
-planner         1    11       74k       376k     16k    0.99     3
-preflight       1     1       12k         9k      0k    0.05     0
+role         runs turns  fresh in  cached in     out   API $   min   base cached/turn
+worker         34  1166    2,016k    66,032k    877k   46.87   353  20.8k       56.6k
+reviewer       34   183    1,062k     5,881k    194k   13.55    37  29.5k       32.1k
+critic         42   199      632k     3,368k    108k    7.89    23  21.2k       16.9k
+planner         1    11       74k       376k     16k    0.99     3  17.4k       34.2k
+preflight       2     2       26k        18k      1k    0.11     0      -        9.1k
 ```
 
 ## Install
@@ -147,6 +147,20 @@ exact head, comments the result and merges that head only. A red, conflicting or
 (`prompts/FIX.md`: the smallest change, never a weaker test) pushed to its branch, up to `desk_fixes` times; then it
 is left for you with one push. Each head is checked once; push a new one to have it tried again. Fix sessions show
 in `windvane stats` as `fix`. Set `desk_label = ""` under `[autopilot]` to turn it off.
+
+### Append-only numbered files
+
+A decision log, ADRs or migrations: two tickets that each append an entry take the same next number and conflict.
+Name the file and the driver resolves such a conflict itself, without another worker run: main's entries stay, the
+branch's follow, renumbered where they collide, and the branch's own references to them follow (`D-5 → D-6`, named in
+the merge commit, the log and the PR). Any other conflict goes back to the worker as before.
+
+```toml
+[[append_only]]
+file = "docs/DECISIONS.md"
+entry = '^\| D-(\d+) \|'   # a line that starts an entry; group 1 is its number
+ref = 'D-{n}'              # how other lines refer to entry n
+```
 
 ## Documentation
 

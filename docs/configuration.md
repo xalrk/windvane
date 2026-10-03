@@ -105,6 +105,22 @@ A session ends with one line `PERIODIC: <summary>`. Only new files under `.windv
 `QUEUE.md` are kept; they land on `main` as a plan does. A session cut off (deadline, stop, usage cap) or without the
 line leaves nothing.
 
+## [[append_only]]
+
+An append-only numbered file (a decision log, ADRs, migrations). Two branches that each append an entry conflict, and
+both took the next number. When a merge (a ticket's, or a desk PR's) conflicts only in such files, and both sides of
+every conflict hunk only add whole entries, the driver resolves it without a session: main's entries first, then the
+branch's, renumbered past main's where they collide, with the branch's references to them renumbered only on lines the
+branch added (in any file). The merge commit, the log and the PR comment name the mapping (`D-5 → D-6`); the merged
+tree is checked as usual. Anything else conflicting goes back to the worker (or a fix session) as before. None by
+default.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `file` | required | The file, a path in the repo. |
+| `entry` | required | A regex for the line that starts an entry; group 1 is its number. An entry runs to the next such line. |
+| `ref` | required | How other lines refer to entry n, with `{n}` for the number (e.g. `D-{n}`). Zero padding is kept. |
+
 ## machine.toml
 
 Settings for this machine, shared by every project on it.

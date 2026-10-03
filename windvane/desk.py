@@ -83,6 +83,8 @@ class Desk:
             return self.desk_done(d)
         self.log(f"desk PR #{n}: {pr['title'][:60]} at {head[:7]}")
         files = self.desk_conflicts(cd, head)
+        if files is not None and self.desk_renumber(n, branch, head, files):
+            files, head = None, gout(cd, "rev-parse", "HEAD")
         if files is not None:
             return self.desk_problem(pr, d, head, f"conflicts with {p.main}",
                                      f"`git merge-tree` finds conflicts in: {', '.join(files) or '(unnamed)'}")
@@ -112,6 +114,22 @@ class Desk:
         self.log(f"desk PR #{n}: merged {head[:7]}")
         push(f"{'Fixed: d' if d.get('fixed') else 'D'}esk PR #{n} merged", f"{pr['title'][:150]}\n{summary}", 2,
              "white_check_mark")
+
+    def desk_renumber(self, n, branch, head, files):
+        """A conflict only in appended entries of `[[append_only]]` files: resolved like a ticket's and pushed to the
+        PR's branch, so the PR merges at that head. False when it isn't one, or the push is refused."""
+        from .driver import clean_detach, said
+        p, cd = self.p, self.cd
+        if not files or not set(files) <= {r["file"] for r in p.append_only} or not clean_detach(p, cd, p.upstream):
+            return False
+        ok, renumbered = self.merge_main(head, f"Merge {branch} into {p.main}")
+        if not ok or renumbered is None or git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{head}",
+                                               p.remote, f"HEAD:refs/heads/{branch}").returncode:
+            return False
+        self.log(f"desk PR #{n}: conflicted with {p.main} only in appended entries: {said(renumbered)}")
+        self.desk_comment(n, f"**windvane: resolved the conflict with {p.main}** in appended entries: "
+                             f"{said(renumbered)}.")
+        return True
 
     def desk_conflicts(self, cd, head):
         """The files `head` conflicts in when merged with main ([] if git names none), or None for a clean merge

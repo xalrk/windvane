@@ -74,9 +74,10 @@ heavy job on this machine. Other tickets may be running beside yours in their ow
   branch, open the PR, and finish `READY` as usual.
 
 ## Tokens
-The user's usage limit is shared with their other work, and every tool call re-reads your whole context: read file
-ranges, keep command output short (`| tail -20`, `grep`, `--stat`), don't re-read what you've read, don't rerun the
-check without a change, prefer one contact sheet to many images. No subagents.
+The user's usage limit is shared with their other work, and every turn re-reads all your context so far, so what a
+tool prints is paid for again on each later turn. Cut output to what you need: tests to the failures and the
+summary line (`2>&1 | tail -15`), diffs by file (`--stat`, then one file). Make independent calls in one turn. Don't re-read what you've read, don't rerun the check without a change, prefer one contact sheet
+to many images. No subagents.
 
 ## Deadline
 Your prompt gives a wrap-up time. After it, start nothing new: commit, push, and finish `PARTIAL`.

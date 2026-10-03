@@ -22,7 +22,8 @@ log = os.environ.get("FAKE_LOG")
 if log:
     with open(log, "a") as f:
         deny = json.loads(args[args.index("--settings") + 1])["permissions"]["deny"] if "--settings" in args else []
-        f.write(json.dumps({"system": system[:40], "prompt": prompt, "deny": deny,
+        flags = [a for a in args if a not in (prompt, system)]
+        f.write(json.dumps({"system": system[:40], "prompt": prompt, "deny": deny, "flags": flags,
                             "tool_ms": os.environ.get("BASH_DEFAULT_TIMEOUT_MS")}) + "\n")
 sh = lambda *c: subprocess.run(c, capture_output=True, text=True).stdout.strip()
 # FAKE_FAIL: what each session does in turn (ok, error, crash, quiet = no RESULT line); a trailing * repeats the last
@@ -78,6 +79,11 @@ if system.startswith("# windvane worker run"):
     if not resolve_only:
         with open(f"{tid}.txt", "a") as f:
             f.write("built\n")
+    if os.environ.get("FAKE_DECISION") and not resolve_only:  # appends the next decision and refers to it
+        log_f = "docs/DECISIONS.md"
+        n = max(int(m) for m in re.findall(r"^\| D-(\d+) \|", open(log_f).read(), re.M)) + 1
+        open(log_f, "a").write(f"| D-{n} | {tid} |\n")
+        open(f"{tid}.txt", "a").write(f"see D-{n}\n")
     if os.environ.get("FAKE_CONFLICT"):  # every ticket rewrites one file: a merge after another's conflicts
         if "conflicts with" in prompt:
             sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
@@ -150,7 +156,8 @@ elif system.startswith("# windvane fix run"):  # FAKE_FIX: push (fixes it), red 
 elif system.startswith("# windvane preflight"):  # FAKE_PREFLIGHT: the questions it finds
     found = os.environ.get("FAKE_PREFLIGHT", "")
     text = found + "\nPREFLIGHT: " + ("1 questions" if found else "NONE")
-emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+emit({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", "text": text}], "usage": {
+    "input_tokens": 3, "cache_creation_input_tokens": 4000, "cache_read_input_tokens": 6000}}})  # the first turn
 emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01,
       "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100}})
 '''

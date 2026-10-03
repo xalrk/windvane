@@ -12,6 +12,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+from .renumber import rules
+
 PKG = Path(__file__).resolve().parent
 # Where prompts/, templates/, skills/ and hooks/ are: inside the package when installed (pipx, uv, pip), at the top of
 # a git checkout run through bin/windvane or an editable install.
@@ -133,6 +135,7 @@ class Project:
         self.critic = c["critic"]
         self.ap = c["autopilot"]
         self.periodic = periodic(c.get("periodic", []))
+        self.append_only = rules(c.get("append_only", []))
 
     def main_root(self):
         """The main checkout, also when `root` is one of its worktrees."""
