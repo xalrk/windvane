@@ -1,6 +1,8 @@
 """Small shared helpers: git, the log, phone pushes, JSON state files."""
 import json
+import os
 import subprocess
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -54,9 +56,11 @@ def load_json(path, default):
 
 
 def save_json(path, data):
+    """Atomic, and safe beside other writers: each process and thread has its own temp file, since parallel slots
+    save usage.json from their own streams (a shared one was renamed away by the first, failing the second)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(data, indent=1))
     tmp.replace(path)
 

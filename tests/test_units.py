@@ -1,6 +1,8 @@
 import argparse
 import io
 import sys
+import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime
@@ -10,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from windvane import cli, critic, questions  # noqa: E402
-from windvane.util import append_jsonl  # noqa: E402
+from windvane.util import append_jsonl, load_json, save_json  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -156,6 +158,32 @@ class Stats(unittest.TestCase):
         self.assertIn("per merged ticket (1): 2.0 runs, 20k tokens, ≥1.00 API $", out.getvalue())
         self.assertIn("not merged: 20k tokens, 50%", out.getvalue())
         self.assertIn("(≥: 2 runs ended before their result", out.getvalue())
+
+
+class SaveJson(unittest.TestCase):
+    def test_parallel_writers_never_collide(self):
+        """Parallel slots save usage.json at once: every write lands whole, none fails, no temp file is left."""
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        f = Path(d.name) / "state" / "usage.json"
+        errors, start = [], threading.Barrier(8)
+
+        def write(i):
+            start.wait()
+            for n in range(50):
+                try:
+                    save_json(f, {"slot": i, "n": n})
+                except OSError as e:
+                    errors.append(e)
+
+        threads = [threading.Thread(target=write, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(load_json(f, {}).get("n"), 49)
+        self.assertEqual([x.name for x in f.parent.iterdir()], ["usage.json"])
 
 
 if __name__ == "__main__":
