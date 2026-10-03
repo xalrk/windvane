@@ -1237,7 +1237,8 @@ class Pilot(Desk, Periodic):
                 + (f"Critic (/10): {crit}.\n" if crit else "") + side
                 + (f"Held for you (parked in QUEUE.md): {names(self.held)}.\n" if self.held else "")
                 + f"Waiting on you: {names(self.questions)}.\n"
-                + (f"Provisional answers to check: {'; '.join(f'{q[0]} {q[1]} (built {q[2]})' for q in picks)}. "
+                + (f"Provisional answers to check: {'; '.join(f'{q[0]} {q[1]} (built {q[2]})' for q in picks[:6])}"
+                   + (f" and {len(picks) - 6} more" if len(picks) > 6 else "") + ". "
                    "To change one: windvane answer <ID> <letter>.\n" if picks else "")
                 + f"Failed: {names(self.failed)}.\n"
                 + (f"{self.usage.text()}." if self.usage.five is not None else "")
