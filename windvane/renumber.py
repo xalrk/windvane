@@ -121,10 +121,14 @@ def raw(cd, *args):
 
 
 def added_lines(cd):
-    """Per file, the lines the branch (MERGE_HEAD) added since it left main."""
+    """Per file, the lines the branch (MERGE_HEAD) added since it left main; None when a path still comes quoted
+    (a `"`, `\\` or control character in it), as its lines' references couldn't be followed."""
     base = gout(cd, "merge-base", "HEAD", "MERGE_HEAD")
     out, f = {}, None
-    for line in raw(cd, "diff", "-U0", "--no-color", "--no-renames", base, "MERGE_HEAD").split("\n"):
+    for line in raw(cd, "-c", "core.quotePath=false", "diff", "-U0", "--no-color", "--no-renames", base,
+                    "MERGE_HEAD").split("\n"):
+        if line.startswith('+++ "'):
+            return None
         if line.startswith("+++ "):
             f = line[6:].rstrip("\t") if line.startswith("+++ b/") else None  # git ends a path with a space by a tab
         elif f and line.startswith("+"):
@@ -146,7 +150,7 @@ def resolve(cd, rule_list):
 def merge(cd, rule_list):
     """resolve() itself; a file it can't read or decode raises."""
     by_file = {r["file"]: r for r in rule_list}
-    conflicted = gout(cd, "diff", "--name-only", "--diff-filter=U").splitlines()
+    conflicted = gout(cd, "-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=U").splitlines()
     if not conflicted or any(f not in by_file for f in conflicted):
         return None
     staged, maps = {}, []  # maps: (rule, {old: new}, file)
@@ -177,6 +181,8 @@ def merge(cd, rule_list):
         staged[f] = parts
         maps.append((rule, mapping, f))
     added = added_lines(cd)
+    if added is None:
+        return None
     main_lines = {}
 
     def rewrite(f, line, entry=False, theirs=False):
@@ -194,14 +200,14 @@ def merge(cd, rule_list):
         return line
 
     for f, parts in staged.items():
-        out = []
+        out, eol = [], "\r\n" if "\r\n" in read(Path(cd) / f) else "\n"
         for h in parts:
             if not isinstance(h, tuple):
                 out.append(rewrite(f, h))
                 continue
             ours = list(h[0])
             if not ours[-1].endswith("\n"):
-                ours[-1] += "\n"
+                ours[-1] += eol
             out += ours + [rewrite(f, l, entry=True, theirs=True) for l in h[2]]
         write(Path(cd) / f, "".join(out))
     if any(mapping for _, mapping, _ in maps):
@@ -215,7 +221,7 @@ def merge(cd, rule_list):
                 write(path, new_text)
                 git(cd, "add", "--", f)
     git(cd, "add", "--", *staged)
-    if gout(cd, "diff", "--name-only", "--diff-filter=U"):
+    if gout(cd, "-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=U"):
         return None
     return [f"{rule['ref'].replace('{n}', str(a))} → {rule['ref'].replace('{n}', str(b))} ({f})"
             for rule, mapping, f in maps for a, b in mapping.items()]

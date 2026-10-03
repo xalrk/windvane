@@ -116,6 +116,30 @@ class Resolve(unittest.TestCase):
         self.assertEqual(self.merge(), ["D-3 → D-4 (docs/DECISIONS.md)"])
         self.assertEqual(self.read("zz.md"), "  see D-4  \n")  # the diff's last line, spaces and all
 
+    def test_non_ascii_paths_are_followed(self):
+        rule = {**RULE, "file": "docs/décisions.md"}
+        self.commit({"docs/décisions.md": LOG}, on="main")
+        self.git("branch", "-f", "topic", "main")
+        self.commit({"docs/décisions.md": LOG + "| D-3 | main's |\n"}, on="main")
+        self.commit({"docs/décisions.md": LOG + "| D-3 | topic's |\n", "notes é.md": "see D-3\n"}, on="topic")
+        self.assertEqual(self.merge(rule), ["D-3 → D-4 (docs/décisions.md)"])
+        self.assertEqual(self.read("notes é.md"), "see D-4\n")
+
+    def test_a_path_git_still_quotes_is_refused(self):
+        self.commit({"docs/DECISIONS.md": LOG + "| D-3 | main's |\n"}, on="main")
+        self.commit({"docs/DECISIONS.md": LOG + "| D-3 | topic's |\n", 'say "D-3".md': "see D-3\n"}, on="topic")
+        self.assertIsNone(self.merge())
+
+    def test_mains_last_line_without_a_newline_gets_the_files_own(self):
+        crlf = LOG.replace("\n", "\r\n")
+        self.commit({"docs/DECISIONS.md": crlf}, on="main")
+        self.git("branch", "-f", "topic", "main")
+        self.commit({"docs/DECISIONS.md": crlf + "| D-3 | main's |"}, on="main")
+        self.commit({"docs/DECISIONS.md": crlf + "| D-3 | topic's |\r\n"}, on="topic")
+        self.assertEqual(self.merge(), ["D-3 → D-4 (docs/DECISIONS.md)"])
+        self.assertEqual((self.dir / "docs/DECISIONS.md").read_bytes(),
+                         (crlf + "| D-3 | main's |\r\n| D-4 | topic's |\r\n").encode())
+
     def test_a_file_that_isnt_utf8_is_refused_not_raised(self):
         self.commit({"docs/DECISIONS.md": LOG + "| D-3 | main's |\n"}, on="main")
         self.commit({"docs/DECISIONS.md": LOG + "| D-3 | topic's |\n", "x.txt": "caf\xe9 D-3\n".encode("latin-1")},
