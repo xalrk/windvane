@@ -186,6 +186,8 @@ class Sandbox:
         os.environ.update({**self.old_env, **self.env})
         for k in ("WINDVANE_SESSION", "WINDVANE_STOP_AT", "WINDVANE_CAPS"):  # when the tests run inside a session
             os.environ.pop(k, None)
+        from windvane import net
+        net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage
         import shutil
         assert shutil.which("claude") == str(fake) and not shutil.which("notify"), "tests must not reach the real tools"
         self.git("init", "-q", "--bare", "-b", "main", str(self.remote), cwd=self.tmp)
@@ -225,6 +227,8 @@ class Sandbox:
         self.git("push", "-q", "origin", "main")
 
     def close(self):
+        from windvane import net
+        net.probe, net.waiter = None, None
         os.environ.clear()
         os.environ.update(self.old_env)
         subprocess.run(["rm", "-rf", str(self.tmp)])

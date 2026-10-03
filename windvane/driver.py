@@ -8,7 +8,8 @@ ticket's next worker run as written feedback. Design questions go to the user's 
 build their recommendation and record it instead.
 
 Stops at the deadline, `windvane stop`, two failed tickets in a row, an empty queue, the weekly cap, or sessions that
-keep dying (API errors, crashes; each is retried after a growing pause first). At the 5-hour cap it stops the running
+keep dying (API errors, crashes; each is retried after a growing pause first). A network outage stops nothing: it is
+waited out (net.py), and what it broke is resumed with no retry spent. At the 5-hour cap it stops the running
 session and pauses until the window resets. A detached run's driver is itself restarted after a crash (`supervise`).
 """
 import fcntl
@@ -25,7 +26,7 @@ from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import critic, phone, renumber, selfupdate
+from . import critic, net, phone, renumber, selfupdate
 from .desk import Desk
 from .periodic import Periodic
 from .config import CHECKOUT, DIR, HOME, exe, slots
@@ -33,7 +34,7 @@ from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
 from .queue import Queue
 from .runner import Usage, over_caps, run_claude
-from .util import git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json, sh
+from .util import git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
@@ -103,7 +104,7 @@ def ensure_worktree(p, path, setup=True):
     if path == p.main_root() or (path / ".git").exists():
         return
     root = p.main_root()
-    git(root, "fetch", "-q", p.remote)
+    net.git(root, "fetch", "-q", p.remote)
     git(root, "worktree", "prune")
     r = git(root, "worktree", "add", "--detach", str(path), p.upstream)
     if r.returncode:
@@ -142,8 +143,8 @@ def clean_detach(p, cwd, rev):
 def pr_for(p, branch):
     if p.cfg["forge"] != "github" or not branch:
         return ""
-    return sh(p.main_root(), "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number",
-              "-q", ".[0].number")
+    return net.sh(p.main_root(), "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number",
+                  "-q", ".[0].number")
 
 
 class Pilot(Desk, Periodic):
@@ -202,7 +203,7 @@ class Pilot(Desk, Periodic):
 
     def fetch(self):
         with self.git_lock:
-            git(self.p.main_root(), "fetch", "-q", "--prune", self.p.remote)
+            net.git(self.p.main_root(), "fetch", "-q", "--prune", self.p.remote)
 
     def save(self):
         with self.lock:
@@ -258,10 +259,18 @@ class Pilot(Desk, Periodic):
             self.crashes = 0
         return text, killed, error
 
+    def wait_online(self):
+        """Wait out a network outage; False when a stop or the deadline ended the wait."""
+        return net.wait(self.p, self.end, lambda: (self.p.state / "STOP").exists(), self.sleep)
+
     def crashed(self, label, error):
         """A session died for a reason outside its ticket (API overload, network, not logged in): pause, longer each
         time, and return True to run it again. Too many in a row stop the run instead of failing ticket after ticket
-        on a broken API; nothing is pushed until then."""
+        on a broken API; nothing is pushed until then. With the network down it waits for it instead, and the rerun
+        spends no retry."""
+        if not net.online():
+            self.log(f"  {label} died ({error}) with the network down; rerun when it's back, no retry spent")
+            return self.wait_online()
         self.crashes += 1
         n, wait = self.p.ap["retries"], self.p.ap["retry_minutes"] * 2 ** (self.crashes - 1)
         if self.crashes > n:
@@ -361,18 +370,27 @@ class Pilot(Desk, Periodic):
 
     def unfinished_run(self, tid, branch):
         """A run that ended normally but without its RESULT line may have done all the work: one more run, told
-        where its branch is, can finish it. Twice in a row fails the ticket."""
-        if tid in self.unfinished:
+        where its branch is, can finish it. Twice in a row fails the ticket. A run the network cut off ("API Error:
+        No response from API") is resumed when it's back, and doesn't count."""
+        cut = not net.online()
+        if cut:
+            self.log(f"{tid}: the run ended without a result line with the network down")
+            if not self.wait_online():
+                return  # a stop or the deadline: the ticket stays as it is, for the next run
+        elif tid in self.unfinished:
             return self.fail(tid, "the run ended without a result line, twice")
-        self.unfinished.add(tid)
+        else:
+            self.unfinished.add(tid)
         head = gout(self.wd, "rev-parse", "--short=12", "HEAD")
         old = self.feedback.get(tid, "")
-        self.feedback[tid] = (f"Your last run ended without the RESULT line for {tid}. The worktree is on "
+        why = "was cut off by a network outage" if cut else f"ended without the RESULT line for {tid}"
+        self.feedback[tid] = (f"Your last run {why}. The worktree is on "
                               f"`{branch or 'a detached HEAD'}` at {head}: finish the rules' steps still left from "
                               "there, then end with the RESULT line."
                               + (f"\n\nWhat that run had to act on:\n{old}" if old and "RESULT line" not in old[:80]
                                  else ""))
-        self.log(f"{tid}: the run ended without a result line; one more run to finish it")
+        self.log(f"{tid}: " + ("the network is back; resuming the run" if cut else
+                               "the run ended without a result line; one more run to finish it"))
 
     def after(self, tid, branch, sha):
         """A READY head: critic gate, check, review, merge. Each failed stage writes the next run's feedback."""
@@ -481,7 +499,7 @@ class Pilot(Desk, Periodic):
         pr = pr_for(p, branch)
         if res:
             return self.verdict(tid, branch, sha, pr, self.resolution_prompt(tid, branch, sha, pr, *res))
-        body = sh(p.main_root(), "gh", "pr", "view", pr, "--json", "body", "-q", ".body") if pr else \
+        body = net.sh(p.main_root(), "gh", "pr", "view", pr, "--json", "body", "-q", ".body") if pr else \
             gout(cd, "log", "--format=%B", f"{p.upstream}..{sha}")
         stat = gout(cd, "diff", "--stat", f"{p.upstream}...{sha}")
         diff = gout(cd, "diff", f"{p.upstream}...{sha}")
@@ -526,18 +544,23 @@ class Pilot(Desk, Periodic):
                                               now() + timedelta(hours=1),
                                               ["Bash(git diff *)", "Bash(git show *)", "Bash(git log *)"],
                                               REVIEW_DENY, tid)
-            if not error or not self.crashed(f"{tid}-review", error):
+            if error and self.crashed(f"{tid}-review", error):
+                continue
+            m = None if killed or error else last_match(REVIEW_RE, text)
+            if m or killed or error or net.online():
                 break
+            self.log(f"{tid}: the review run ended without a verdict with the network down")
+            if not self.wait_online():
+                return None, ""
         if killed or error:
             return None, ""
-        m = last_match(REVIEW_RE, text)
         if not m:
             self.fail(tid, "the review run ended without a verdict")
             return None, ""
         self.log(f"{tid}: review {m.group(1).lower()}: {m.group(3)}")
         if pr:
-            sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
-               f"**windvane review: {m.group(1)}** at {sha[:7]}\n\n{text.strip()[-6000:]}")
+            net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
+                   f"**windvane review: {m.group(1)}** at {sha[:7]}\n\n{text.strip()[-6000:]}")
         return m.group(1), text
 
     def integrate(self, tid, branch, sha):
@@ -579,19 +602,19 @@ class Pilot(Desk, Periodic):
                     self.feedback[tid] = "No open PR for your branch: open it (`gh pr create`) and finish READY."
                     return self.bounce(tid)
                 if renumbered is not None:  # GitHub merges the branch: it has to hold the resolution
-                    if git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{sha}", p.remote,
-                           f"{merge}:refs/heads/{branch}").returncode:
+                    if net.git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{sha}", p.remote,
+                               f"{merge}:refs/heads/{branch}").returncode:
                         self.log(f"{tid}: couldn't push the resolution to {branch}; trying again")
                         continue
                     sha = merge  # the head to merge now, and on a retry the one to merge main into
-                    sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
-                       f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}.")
-                res = subprocess.run(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", sha, "--subject",
-                                      msg], cwd=p.main_root(), capture_output=True, text=True)
-                merged = res.returncode == 0 or sh(p.main_root(), "gh", "pr", "view", pr, "--json", "state",
-                                                   "-q", ".state") == "MERGED"
+                    net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
+                           f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}.")
+                res = net.call(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", sha, "--subject", msg],
+                               p.main_root())
+                merged = res.returncode == 0 or net.sh(p.main_root(), "gh", "pr", "view", pr, "--json", "state",
+                                                       "-q", ".state") == "MERGED"
             else:  # by sha, so nothing that moves the ci worktree's HEAD meanwhile can turn it into a no-op
-                res = git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
+                res = net.git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
             if merged:
                 return self.merged_ok(tid, branch, sha) if self.landed(tid, branch, sha) else None
@@ -625,7 +648,7 @@ class Pilot(Desk, Periodic):
         (a no-op push, a hook that rejects late), and the branches about to be deleted may be the only copies."""
         p = self.p
         with self.git_lock:  # parallel slots fetch too: one at a time, or one fails on a locked ref
-            fetched = any(git(p.main_root(), "fetch", "-q", p.remote).returncode == 0 for _ in range(2))
+            fetched = any(net.git(p.main_root(), "fetch", "-q", p.remote).returncode == 0 for _ in range(2))
         if git(p.main_root(), "merge-base", "--is-ancestor", sha, p.upstream).returncode == 0:
             return True
         why = f"{p.upstream} doesn't contain {sha[:12]}" if fetched else f"couldn't fetch {p.remote} to confirm it"
@@ -636,8 +659,8 @@ class Pilot(Desk, Periodic):
     def merged_ok(self, tid, branch, sha):
         p = self.p
         if branch:  # only while it still points at the merged head: a later push there is unmerged work
-            if git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{sha}", p.remote, "--delete",
-                   branch).returncode and gout(p.main_root(), "ls-remote", "--heads", p.remote, branch):
+            if net.git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{sha}", p.remote, "--delete",
+                       branch).returncode and net.sh(p.main_root(), "git", "ls-remote", "--heads", p.remote, branch):
                 self.log(f"{tid}: kept {p.remote}/{branch}: it moved past the merged head {sha[:7]}")
         self.fetch()
         wd = self.wd
@@ -668,8 +691,11 @@ class Pilot(Desk, Periodic):
         self.skip.add(tid)
         self.failed.append(tid)
         self.approved.pop(tid, None)
-        self.fail_streak += 1
         self.log(f"{tid}: FAILED: {why}")
+        if net.online():
+            self.fail_streak += 1
+        else:  # the outage's fault, not the tickets': it mustn't stop the run
+            self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
         push(f"Failed: {self.name(tid)}", f"{why}. The work so far is on its branch; autopilot moved on.", 4, "x")
 
     # ---------- questions
@@ -1094,6 +1120,10 @@ class Pilot(Desk, Periodic):
             (p.state / "STOP").unlink(missing_ok=True)
         (p.state / "DEADLINE").unlink(missing_ok=True)  # an earlier run's
         self.deadline = deadline
+        # Network calls wait out an outage (net.py) with this run's stop rule; the probe tries the remote's host too.
+        net.hosts = list(filter(None, [net.remote_host(gout(p.main_root(), "remote", "get-url", p.remote))]))
+        net.waiter = self.wait_online
+        net.learn()
         self.log(f"autopilot {'restarted' if restarted else 'started'}, until {hhmm(deadline)} (5h cap "
                  f"{self.a.cap:g}%, week cap {self.a.week_cap:g}%"
                  + (f", up to {self.n} tickets at a time" if self.n > 1 else "") + ")")
@@ -1240,24 +1270,24 @@ def land(p, cd, branch, title, body, commit=True):
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:3000])
     if p.cfg["forge"] == "github":
-        git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
-        pr = sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title, "--body", body)
+        net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+        pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title, "--body", body)
         pr_n = pr.rstrip("/").rsplit("/", 1)[-1]
         merged = pr_n.isdigit() and (
-            subprocess.run(["gh", "pr", "merge", pr_n, "--merge"], cwd=p.main_root(), capture_output=True).returncode
-            == 0 or sh(p.main_root(), "gh", "pr", "view", pr_n, "--json", "state", "-q", ".state") == "MERGED")
+            net.call(["gh", "pr", "merge", pr_n, "--merge"], p.main_root()).returncode
+            == 0 or net.sh(p.main_root(), "gh", "pr", "view", pr_n, "--json", "state", "-q", ".state") == "MERGED")
         if merged:
-            git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
+            net.git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
         return merged, pr or branch
-    res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
+    res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
     if res.returncode:  # main moved meanwhile: the change only adds to .windvane/, so replay it
-        git(p.main_root(), "fetch", "-q", p.remote)
+        net.git(p.main_root(), "fetch", "-q", p.remote)
         if git(cd, *author_ident(p), "rebase", "-q", p.upstream).returncode == 0:
-            res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
+            res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
         else:
             git(cd, "rebase", "--abort")
         if res.returncode:  # keep the paid-for work on its branch rather than drop it
-            git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+            net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
             return False, branch
     return True, p.main
 
@@ -1298,7 +1328,7 @@ def unmerged(p, n, where):
 
 def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
     cd = p.plan_dir
-    git(p.main_root(), "fetch", "-q", "--prune", p.remote)
+    net.git(p.main_root(), "fetch", "-q", "--prune", p.remote)
     ensure_worktree(p, cd, setup=False)
     if not clean_detach(p, cd, p.upstream):
         log(p, "plan: can't check out main")
@@ -1322,9 +1352,14 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
     log(p, f"plan run ({len(notes)} critic notes)")
     deny = ["Agent", "Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
             "Bash(gh *)", "NotebookEdit"]
-    text, killed, error = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd,
-                                     ["Bash(git ls-files *)"], deny, usage, stop_if)
-    m = last_match(PLAN_RE, text)
+    while True:
+        text, killed, error = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd,
+                                         ["Bash(git ls-files *)"], deny, usage, stop_if)
+        m = last_match(PLAN_RE, text)
+        if killed or m or not net.down_wait():  # cut off by an outage: once it's back, plan again from scratch
+            break
+        log(p, "plan: the run was cut off with the network down; running it again")
+        clean_detach(p, cd, p.upstream)
     changed = changed_paths(cd)
     if killed or not m or not changed:
         clean_detach(p, cd, p.upstream)
@@ -1349,12 +1384,12 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
             return unmerged(p, n, where)
         log(p, f"plan: {n} tickets on {where} (merged)")
     elif p.cfg["forge"] == "github":
-        git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
-        pr = sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title",
-                f"Plan: {n} new tickets", "--body", text.strip()[-6000:])
+        net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+        pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title",
+                    f"Plan: {n} new tickets", "--body", text.strip()[-6000:])
         log(p, f"plan: {n} tickets on {pr or branch}")
     else:
-        res = git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+        res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
         if res.returncode:
             clean_detach(p, cd, p.upstream)
             log(p, f"plan: push to {branch} refused ({' '.join(res.stderr.split())[:200]}); plan dropped")
