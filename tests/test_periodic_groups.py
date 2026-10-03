@@ -73,6 +73,27 @@ class Groups(unittest.TestCase):
         self.run_pilot()
         self.assertEqual(self.sessions(), ["T-002"])
 
+    def test_a_group_finished_on_the_remote_before_the_run_never_triggers(self):
+        self.make([("T-001", "M1", ""), ("T-002", "", "")])
+        other = self.s.tmp / "other"  # another machine: the project's origin/main doesn't know yet
+        self.s.git("clone", "-q", str(self.s.remote), str(other), cwd=self.s.tmp)
+        (other / ".windvane/QUEUE.md").write_text("# Queue\n- done: T-001 (by hand)\n")
+        for cmd in (("commit", "-qam", "done"), ("push", "-q", "origin", "main")):
+            self.s.git(*cmd, cwd=other)
+        pilot = driver.Pilot(self.p, args())  # no run yet: nothing has fetched before the first look
+        self.assertIsNone(pilot.periodic_due())
+        pilot.fetch()
+        self.assertIsNone(pilot.periodic_due())  # M1 was finished before the run began
+
+    def test_a_failed_setup_keeps_the_group_owed_until_the_next_merge(self):
+        once = """setup = 'test -e "$FAKE_LOG.setup" || { touch "$FAKE_LOG.setup"; exit 1; }'\n"""
+        self.make([("T-001", "M1", ""), ("T-002", "", "")], config=GROUPS + once)
+        self.run_pilot()
+        got = self.sessions()
+        self.assertEqual([x if x.startswith("T-") else "periodic" for x in got], ["T-001", "T-002", "periodic"])
+        self.assertEqual(self.finished_line(got[2]), FINISHED + "M1 (1 ticket: T-001)")
+        self.assertIn("playtest: skipped this round: setup failed", (self.p.state / "autopilot.log").read_text())
+
     def test_parked_tickets_dont_hold_a_group_open(self):
         self.make([("T-001", "M1", ""), ("T-002", "M1", ""), ("T-003", "", "")],
                   queue="- parked: T-002 (for the desk)\n")
@@ -154,12 +175,12 @@ class Groups(unittest.TestCase):
 
     def test_the_queue_line_shows_the_closest_groups(self):
         tickets = [(f"T-{n:03d}", f"M{g}", "") for n, g in enumerate([1, 1, 1, 2, 3, 3, 4, 5, 6, 7, 7, 10, 8], 1)]
-        self.make(tickets, queue="- done: T-007 (by hand)\n- parked: T-012 (later)\n")
+        self.make(tickets, queue="- done: T-007 (by hand)\n- parked: T-012 (later)\n- parked: T-005 (later)\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             cli.cmd_queue(argparse.Namespace(), self.p)
         self.assertEqual(out.getvalue().splitlines()[-1], "playtest runs when a group finishes: M2 (1 left), "
-                         "M5 (1 left), M6 (1 left), M8 (1 left), M3 (2 left), and 2 more")
+                         "M3 (1 left, 1 parked), M5 (1 left), M6 (1 left), M8 (1 left), and 2 more")
 
 
 class Config(unittest.TestCase):
