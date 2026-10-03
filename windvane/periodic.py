@@ -45,7 +45,7 @@ class Periodic:
         for e in self.p.periodic.values():
             if e["every"] and len(self.merged) - self.periodic_at.get(e["name"], 0) >= e["every"]:
                 return e
-            if e["after_group"] and self.groups_finished(e):
+            if e["after_group"] and len(self.merged) > self.groups_wait.get(e["name"], -1) and self.groups_finished(e):
                 return e
         return None
 
@@ -68,10 +68,13 @@ class Periodic:
         self.groups_seen[e["name"]] = seen
         return {g: [t + " (parked)" * (t in q.parked) for t in found[g][0]] for g in sorted(done - set(seen), key=natural)}
 
-    def periodic_ran(self, e):
-        """`e` ran (or its round was skipped): its count starts again, and the groups finished now are seen."""
+    def periodic_ran(self, e, skipped=False):
+        """`e` ran: its count starts again, and the groups finished now are seen. A round skipped before its session
+        keeps them owed, due again after the next merge rather than at once (which would only skip it again)."""
         self.periodic_at[e["name"]] = len(self.merged)
-        if e["after_group"]:
+        if skipped:
+            self.groups_wait[e["name"]] = len(self.merged)
+        elif e["after_group"]:
             found = groups(self.group_queue(), e["after_group"])
             self.groups_seen[e["name"]] = sorted((g for g, (_, left) in found.items() if not left), key=natural)
 
@@ -81,11 +84,11 @@ class Periodic:
         from .driver import clean_detach
         p, cd, done, prev = self.p, self.p.ci_dir, set(), None
         if cd == p.work_dir and any(self.owner.values()):
-            self.periodic_ran(e)
+            self.periodic_ran(e, skipped=True)
             self.log(f"{e['name']}: skipped: the checkout holds a ticket's unfinished work")
             return
         if not self.keep_changes(f"the {e['name']} round"):
-            self.periodic_ran(e)
+            self.periodic_ran(e, skipped=True)
             return
         self.fetch()
         clean_detach(p, cd, p.upstream)
@@ -180,6 +183,7 @@ class Periodic:
             f"Time limit: {hhmm(limit)}; check with `date`.",
         ]))
         said = f", {len(notes)} critic note{'s' * (len(notes) != 1)}" if triage else ""
+        said += f", {', '.join(finished)} finished" if finished else ""
         self.log(f"{name}: periodic session ({e['minutes']} min{said})")
         deny = ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
                 "Bash(git reset *)", "Bash(gh *)"] + ([] if p.ap["subagents"] else ["Agent"])

@@ -65,6 +65,8 @@ class Groups(unittest.TestCase):
                          ["T-003", "periodic", "T-001", "T-002", "periodic", "T-004"])
         self.assertEqual(self.finished_line(got[1]), FINISHED + "M2 (1 ticket: T-003)")
         self.assertEqual(self.finished_line(got[4]), FINISHED + "M1 (2 tickets: T-001, T-002)")
+        log = (self.p.state / "autopilot.log").read_text()
+        self.assertIn("playtest: periodic session (30 min, M2 finished)", log)  # why a long session started
 
     def test_a_group_finished_at_the_start_never_triggers(self):
         self.make([("T-001", "M1", ""), ("T-002", "", "")], queue="- done: T-001 (by hand)\n")
@@ -107,6 +109,21 @@ class Groups(unittest.TestCase):
         fresh = driver.Pilot(self.p, args())
         fresh.carry_over(False)
         self.assertIsNone(fresh.periodic_due())  # a new run: M1 was finished at its start
+
+    def test_a_skipped_round_keeps_the_group_owed_until_the_next_merge(self):
+        self.make([("T-001", "M1", ""), ("T-002", "M2", "")])
+        pilot = driver.Pilot(self.p, args())
+        self.assertIsNone(pilot.periodic_due())
+        self.s.write(".windvane/QUEUE.md", "# Queue\n- done: T-001 (by hand)\n")
+        self.s.publish("done")
+        e = pilot.periodic_due()
+        pilot.keep_changes = lambda why: False  # the round is skipped before its session
+        pilot.periodic(e)
+        self.assertEqual(self.sessions(), [])
+        self.assertIsNone(pilot.periodic_due())  # not at once: it would only be skipped again
+        pilot.merged.append("T-002")
+        self.assertEqual(pilot.periodic_due(), e)
+        self.assertEqual(pilot.groups_finished(e), {"M1": ["T-001"]})
 
     def test_a_run_restarted_after_the_session_doesnt_run_it_again(self):
         self.make([("T-001", "M1", "")])

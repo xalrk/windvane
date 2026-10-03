@@ -199,6 +199,7 @@ class Pilot(Desk, Periodic):
         self.stash_failed = False  # a failed stash of the checkout's own changes: pushed once a run
         self.periodic_at, self.held = {}, []  # [[periodic]] (periodic.py): name -> merges when it last ran; tickets held
         self.groups_seen, self.groups_read = {}, (None, None)  # name -> groups finished then; (main's sha, its queue)
+        self.groups_wait = {}  # name -> merges when a round was skipped: its finished groups wait for the next merge
         self.desk_init(s.get("desk", {}))  # the user's labelled PRs, merged between tickets (desk.py)
 
     def slot_dirs(self, i):
