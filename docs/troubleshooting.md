@@ -40,6 +40,13 @@ meanwhile; without an answer the recommendation is built after `answer_wait` min
 Each is rerun after a growing pause (`retries`, `retry_minutes`) without failing its ticket. If they keep dying, the
 run stops and the log shows the error. Check that `claude` works by hand (`claude -p "hi"`).
 
+**The network went down.**
+The run waits it out: when a session dies or a git or `gh` call fails, it checks that the API and the git remote
+answer, and if not it logs "network down since HH:MM" and looks again after 1, 2, 4, then every 5 minutes. When it's
+back the session is resumed and the call tried again; no retry is spent, no ticket is failed, and failures meanwhile
+don't count toward "two failed tickets in a row". An outage over 10 minutes is pushed once it ends. The deadline and
+`windvane stop` still end the wait. Behind an HTTPS proxy, the proxy is what it checks for the API.
+
 **A run was killed (reboot, `stop --now`, closed terminal).**
 Start it again. Unfinished tickets are resumed from their branches and worktrees; nothing pushed is lost.
 
