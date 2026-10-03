@@ -112,6 +112,30 @@ class Land(Base):
         self.assertEqual(q.order[-1], "T-004")
         self.assertEqual(q.status("T-004"), "todo")
 
+    def meanwhile(self, rel, text):
+        """A phone question during which the user pushes `text` to `rel` on main."""
+        def ask(*_):
+            self.s.write(rel, text)
+            self.s.publish("meanwhile")
+            return True
+        return mock.patch.object(driver.phone, "ask", side_effect=ask)
+
+    def test_queue_edits_pushed_on_main_meanwhile_stay(self):
+        with self.meanwhile(".windvane/QUEUE.md", "# Queue\n- T-003 three\n- T-001 one\n- parked: T-002 later\n"), \
+                mock.patch.object(driver.phone, "answer", return_value=""):
+            self.landed("ask", answer_wait=0.01)
+        self.assertEqual(self.main_queue(), "# Queue\n- T-003 three\n- T-001 one\n- parked: T-002 later\n"
+                         "- parked: T-004 (held by periodic triage: delete this line to queue it)")
+
+    def test_an_id_taken_on_main_meanwhile_is_not_overwritten(self):
+        with self.meanwhile(".windvane/tickets/T-004.md", "# T-004: the plan's\n"), \
+                mock.patch.object(driver.phone, "answer", return_value="ANSWER B"):
+            self.landed("ask")
+        self.s.git("fetch", "-q", "origin")
+        self.assertEqual(self.s.git("show", "origin/main:.windvane/tickets/T-004.md"), "# T-004: the plan's")
+        self.assertIn("triage: T-004 taken on origin/main meanwhile", self.log())
+        self.assertIn("not merged; merge it by hand", self.log())
+
     def test_ask_with_no_phone_holds_at_once(self):
         _, q = self.landed("ask")  # the Sandbox has no phone
         self.assertEqual(q.status("T-004"), "parked")

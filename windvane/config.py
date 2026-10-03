@@ -102,8 +102,8 @@ def periodic(entries):
         land = str(e.get("land", ""))
         if land and land not in LANDS:
             raise SystemExit(f"windvane: [[periodic]] {name}: land = {land!r}: use one of {', '.join(LANDS)}")
-        out[name] = {"name": name, "land": land, "every": max(0, every), "minutes": max(1, minutes), "setup": e.get("setup", ""),
-                     "setup_minutes": max(1, setup_m),
+        out[name] = {"name": name, "land": land, "every": max(0, every), "minutes": max(1, minutes),
+                     "setup": e.get("setup", ""), "setup_minutes": max(1, setup_m),
                      "prompt": e["prompt"], "then": e.get("then", "")}
     for e in out.values():
         if e["then"] and e["then"] not in out:

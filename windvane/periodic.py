@@ -69,7 +69,7 @@ class Periodic:
             e = p.periodic.get(e["then"])
         self.save()
         try:
-            if kept and kept[0]:
+            if kept and (kept[0] or kept[2][0] != kept[2][1]):
                 self.land_periodic(cd, *kept, land or "near", last)
         finally:
             clean_detach(p, cd, p.upstream)
@@ -124,9 +124,7 @@ class Periodic:
         if not own_rules:
             self.log(f"{name}: skipped: its prompt {e['prompt']} isn't on {p.upstream}")
             return None
-        here = cd / p.tickets_rel
-        taken = {p.norm(Path(f).stem) for f in os.listdir(here)} - {None} if here.is_dir() else set()
-        first = int(re.search(r"\d+", Queue(p).next_id(taken | pending_ids(p))).group())
+        first = int(re.search(r"\d+", Queue(p).next_id(taken_ids(p, cd) | pending_ids(p))).group())
         ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + 6)]
         self.handed |= set(ids)
         triage = any(x["then"] == name for x in p.periodic.values())
@@ -165,8 +163,8 @@ class Periodic:
 
     def periodic_keep(self, cd, name):
         """What may land from the tree as it is: new ticket files under the ids the sessions were given (any other id
-        could clash with a plan's), and QUEUE.md with only the lines added to it. Returns ({path: text}, the new
-        ticket ids)."""
+        could clash with a plan's), and the lines added to QUEUE.md. Returns ({path: text}, the new ticket ids,
+        (QUEUE.md as the chain found it, with only the lines added to it)): the land replays those lines on main."""
         from .driver import changed_paths
         p = self.p
         keep = {f: (cd / f).read_text(errors="replace") for f in changed_paths(cd)
@@ -175,29 +173,38 @@ class Periodic:
         tickets = sorted(p.norm(Path(f).stem) for f in keep)
         old_q = gout(cd, "show", f"HEAD:{p.queue_rel}")
         queue = added_lines(old_q, (cd / p.queue_rel).read_text() if (cd / p.queue_rel).is_file() else old_q)
-        if queue != old_q:
-            keep[p.queue_rel] = queue + "\n"
-        other = len(changed_paths(cd)) - len(keep)
+        other = len(changed_paths(cd)) - len(keep) - (queue != old_q)
         if other:
             self.log(f"{name}: {other} other changed path{'s' * (other != 1)} will be dropped")
-        return keep, tickets
+        return keep, tickets, (old_q, queue)
 
-    def land_periodic(self, cd, keep, tickets, land, name):
+    def land_periodic(self, cd, keep, tickets, queues, land, name):
         """Land the kept tickets on main like a plan, placed in QUEUE.md where `land` says, so the queue picks them up
-        (or, held, doesn't)."""
+        (or, held, doesn't). Main may have moved since the chain began (a long session, the phone question): the
+        queue lines it added are replayed onto main's QUEUE.md, so nothing pushed meanwhile is undone. If a plan took
+        one of the ids meanwhile, the change is made on the commit the chain began on, so the land clashes and keeps
+        it on a branch rather than overwrite that ticket."""
         from .driver import DIR, clean_detach, land as land_on_main
         p = self.p
+        base = gout(cd, "rev-parse", "HEAD")
         titles = {t: title_of(keep[f], t) for f in keep for t in [p.norm(Path(f).stem)] if t in tickets}
         if land == "ask" and tickets:
             land = self.ask_land(name, tickets, titles)
         self.fetch()
         clean_detach(p, cd, p.upstream)
-        q, anchor = Queue(p), None
+        taken = sorted(set(tickets) & taken_ids(p, cd))
+        if taken:
+            self.log(f"{name}: {', '.join(taken)} taken on {p.upstream} meanwhile; landing from where the chain began")
+            clean_detach(p, cd, base)
+        q, anchor, main_q = Queue(p), None, gout(cd, "show", f"HEAD:{p.queue_rel}")
+        queue = added_lines(*queues, onto=main_q)
         if tickets:
             anchor = q.pick(self.skip)[0] if land == "near" else None
-            titles[anchor] = q.titles.get(anchor, "")
-            queue = keep.get(p.queue_rel) or gout(cd, "show", f"HEAD:{p.queue_rel}") + "\n"
-            keep[p.queue_rel] = place(queue, tickets, land, anchor, titles, name, p)
+            if anchor:
+                titles[anchor] = q.titles.get(anchor, "")
+            queue = place(queue, tickets, land, anchor, titles, name, p).rstrip("\n")
+        if queue != main_q:
+            keep[p.queue_rel] = queue + "\n"
         for f, text in keep.items():
             (cd / f).parent.mkdir(parents=True, exist_ok=True)
             (cd / f).write_text(text)
@@ -276,12 +283,30 @@ def place(queue, tickets, land, anchor, titles, name, p):
     return "\n".join(rest) + "\n"
 
 
-def added_lines(old, new):
-    """`new` with every line `old` had kept: a session may add queue lines, never drop or reorder existing ones."""
-    a, b, out = old.splitlines(), new.splitlines(), []
+def added_lines(old, new, onto=None):
+    """`onto` (default `old`) plus the lines `new` added to `old`, each run of them after the last line of `old` before
+    it that `onto` still has: a session may add queue lines, never drop or reorder existing ones, nor undo what main
+    gained since it began."""
+    a, b = old.splitlines(), new.splitlines()
+    out = a if onto is None else onto.splitlines()
+    kept = {}  # `old`'s line index -> its index in `out`
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, out, autojunk=False).get_opcodes():
+        if op == "equal":
+            kept.update(zip(range(i1, i2), range(j1, j2)))
+    adds = []
     for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
-        out += a[i1:i2] if op in ("equal", "delete") else b[j1:j2] if op == "insert" else a[i1:i2] + b[j1:j2]
+        if op in ("insert", "replace"):
+            adds.append((next((kept[i] + 1 for i in range(i2 - 1, -1, -1) if i in kept), 0), b[j1:j2]))
+    out = list(out)
+    for at, lines in reversed(adds):  # from the bottom, so the places above stay right
+        out[at:at] = [line for line in lines if not line.strip() or line not in out]
     return "\n".join(out)
+
+
+def taken_ids(p, cd):
+    """The ticket ids with a file in `cd`'s tickets folder."""
+    here = cd / p.tickets_rel
+    return {p.norm(Path(f).stem) for f in os.listdir(here)} - {None} if here.is_dir() else set()
 
 
 def output(text, cd):

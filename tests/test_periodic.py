@@ -203,6 +203,8 @@ class Config(unittest.TestCase):
 
     def test_queue_lines_are_only_added(self):
         self.assertEqual(added_lines("a\nb\nc", "b\nX\nc\nY"), "a\nb\nX\nc\nY")
+        # replayed onto a main that moved: its reorder and new line stay, the added lines follow old ones it kept
+        self.assertEqual(added_lines("a\nb\nc", "a\nX\nb\nc\nY", onto="c\nb\nZ\na"), "c\nb\nZ\na\nX\nY")
 
 
 if __name__ == "__main__":
