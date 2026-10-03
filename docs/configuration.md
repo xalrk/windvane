@@ -105,8 +105,10 @@ the [README](../README.md#periodic-sessions) for an example.
 | `then` | `""` | Another `[[periodic]]` entry run right after, given this one's final text and the files it names. |
 | `allow`, `deny` | `[]` | This session's own permission rules, after `[permissions]`' `periodic_allow` / `periodic_deny`; see [`[permissions]`](#permissions). |
 
-A session ends with one line `PERIODIC: <summary>`. Only new files under `.windvane/tickets/` and lines added to
-`QUEUE.md` are kept; they land on `main` as a plan does. A session cut off (deadline, stop, usage cap) or without the
+A session ends with one line `PERIODIC: <summary>`. Only new files under `.windvane/tickets/`, lines added at the end
+of a ticket that isn't merged or `done:` (a finding it already covers: any other change to a ticket is dropped and
+logged) and lines added to `QUEUE.md` are kept; they land on `main` as a plan does, with the last session's final reply
+(cut to 80 lines) in the commit and the PR, so what it found covered or chose not to ticket stays on record. A session cut off (deadline, stop, usage cap) or without the
 line leaves nothing.
 
 ## [permissions]

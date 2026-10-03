@@ -1339,7 +1339,7 @@ def land(p, cd, branch, title, body, commit=True):
     """Put the driver's own change in `cd` (staged, or committed when `commit` is off) on main: through a merged PR on
     github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is)."""
     if commit:
-        git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:3000])
+        git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
     if p.cfg["forge"] == "github":
         net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
         pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title, "--body", body)

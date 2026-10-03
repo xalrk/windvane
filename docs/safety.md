@@ -38,7 +38,7 @@ per role:
 | **Critic** | read files and the evidence pack | run any command, edit or write files, fetch from the web, spawn agents |
 | **Reviewer** | read files, run commands such as `git diff`, `git log`, `git show` | edit or write files, commit, push, switch branches, reset, merge, comment on or close pull requests |
 | **Planner** | write ticket files in its own worktree | commit, push, switch branches, spawn agents: the driver commits its tickets and opens the pull request (or merges, with `--merge`) |
-| **Periodic** | run commands and edit files on a detached `ci/` tree between tickets | commit, push, switch branches, reset, use `gh`, spawn agents: the driver keeps only new tickets and added `QUEUE.md` lines, lands them, and discards the rest |
+| **Periodic** | run commands and edit files on a detached `ci/` tree between tickets | commit, push, switch branches, reset, use `gh`, spawn agents: the driver keeps only new tickets, lines added at the end of open tickets and added `QUEUE.md` lines, lands them, and discards the rest |
 | **Preflight** | read the next tickets (in your checkout, read-only) | run any command, edit or write files, fetch from the web |
 
 Every session gets its rules (`prompts/*.md`) and the ticket in its prompt, and ends with a machine-readable result
