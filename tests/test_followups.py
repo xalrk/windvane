@@ -101,20 +101,41 @@ class InPlaceMerge(Base):
         [msg] = self.stashes()
         self.assertTrue(msg.endswith("(merging T-001)"), msg)
 
-    def test_a_failed_stash_fails_the_ticket_and_deletes_nothing(self):
+    def test_a_failed_stash_waits_with_the_approval_kept_and_merges_once_it_clears(self):
+        self.make(isolate=False)
+        self.addCleanup(setattr, driver, "STASH_WAIT", driver.STASH_WAIT)
+        self.addCleanup(setattr, driver, "NAP", driver.NAP)
+        driver.STASH_WAIT, driver.NAP = 0.3, 0.1
+        sha = self.branch({"a.py": "built\n"})
+        self.desk_edits()
+        lock = self.s.root / ".git/index.lock"  # a git left running at the desk, say
+        lock.write_text("")
+        seen = []
+
+        def nap(until):
+            seen.append(((self.s.root / "notes.txt").read_text(), self.stashes()))
+            if len(seen) == 3:
+                lock.unlink()
+        self.pilot.nap = nap
+        self.pilot.after("T-001", "t-001-x", sha)
+        self.assertEqual(seen, [("my notes\n", [])] * 3)  # nothing deleted, nothing stashed while it waited
+        self.assertEqual((self.pilot.merged, self.pilot.failed), (["T-001"], []))
+        self.assertEqual(len(self.stashes()), 1)
+        [warn] = [m for t, m in self.pushes if t == "checkout not cleaned"]  # one push for the whole wait
+        self.assertTrue(warn.startswith("Couldn't stash the uncommitted changes in your checkout, so T-001 waits (its "
+                                        "approval stands) and is tried again every 0.3 s. Nothing was deleted"), warn)
+        self.assertEqual(self.log().count("checking T-001: waits: couldn't stash"), 1)
+
+    def test_a_stop_ends_the_wait_without_failing_the_ticket(self):
         self.make(isolate=False)
         sha = self.branch({"a.py": "built\n"})
         self.desk_edits()
-        lock = self.s.root / ".git/index.lock"
-        lock.write_text("")
+        (self.s.root / ".git/index.lock").write_text("")
+        self.pilot.nap = lambda until: (self.p.state / "STOP").write_text("")
         self.pilot.after("T-001", "t-001-x", sha)
-        lock.unlink()
-        self.assertEqual((self.pilot.merged, self.pilot.failed), ([], ["T-001"]))
-        self.assertEqual(self.stashes(), [])
+        (self.s.root / ".git/index.lock").unlink()
+        self.assertEqual((self.pilot.merged, self.pilot.failed), ([], []))
         self.assertEqual((self.s.root / "notes.txt").read_text(), "my notes\n")
-        self.assertEqual((self.s.root / "README").read_text(), "hi, edited at the desk\n")
-        self.assertIn("T-001: FAILED: couldn't stash the uncommitted changes in your checkout before its check",
-                      self.log())
 
     def test_unchanged_isolated_the_checkout_is_left_alone(self):
         self.make()

@@ -50,6 +50,7 @@ BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
            "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0, "")}
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
+STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
 SUPERVISED = "WINDVANE_SUPERVISED"  # set for a driver under `supervise`: it hands a crash over instead of pushing it
@@ -198,7 +199,7 @@ class Pilot(Desk, Periodic):
         self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, [], None
         self.pulled = (0, -1)  # (when, merges then): pull after each merge, else every PULL_EVERY seconds at most
         self.scale_said = False  # the collapsed-scale warning: logged and pushed once a run
-        self.stash_failed = False  # a failed stash of the checkout's own changes: pushed once a run
+        self.stash_failed = set()  # what waited, or was skipped, on a failed stash of the checkout: pushed once a run
         self.periodic_at, self.held = {}, []  # [[periodic]] (periodic.py): name -> merges when it last ran; tickets held
         self.groups_seen, self.groups_read = {}, (None, None)  # name -> groups finished then; (main's sha, its queue)
         self.groups_wait = {}  # name -> merges when a round was skipped: its finished groups wait for the next merge
@@ -427,8 +428,8 @@ class Pilot(Desk, Periodic):
                      f"({len(res[1])} file{'s' * (len(res[1]) != 1)}); the critic's verdict stands")
         elif not self.critic_gate(tid, sha, stale=ap and ap["sha"], branch=branch) or self.stopping_now():
             return
-        if not self.keep_changes(f"checking {tid}"):
-            return self.fail(tid, "couldn't stash the uncommitted changes in your checkout before its check")
+        if not self.clean_wait(tid, f"checking {tid}"):
+            return
         ok, summary, logf = self.check_at(sha)
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
         if not ok:
@@ -514,10 +515,23 @@ class Pilot(Desk, Periodic):
             push("critic scale collapsed", line.split(": ", 1)[1] + ". The run goes on.", 3,
                  "warning")
 
-    def keep_changes(self, why):
-        """With isolate off the clean before a ticket's check or merge, a periodic round or a desk PR runs in the checkout
-        itself: whatever is uncommitted there (a ticket's work is pushed by then, so someone at the desk made it) is
-        stashed first, never thrown away. False when the stash failed: the caller skips its step instead of cleaning."""
+    def clean_wait(self, tid, why):
+        """keep_changes() before an approved ticket's check or merge, tried again every STASH_WAIT seconds while it
+        fails: a stale index.lock or a merge left half-done at the desk is brief, and failing the ticket would drop
+        its approval (and two such in a row stop the run). False when a stop or the deadline ends the wait: the next
+        run's worker finds the head pushed and finishes READY again."""
+        then = f"{tid} waits (its approval stands) and is tried again every {STASH_WAIT} s"
+        while not self.keep_changes(why, then):
+            self.nap(now() + timedelta(seconds=STASH_WAIT))
+            if (self.p.state / "STOP").exists() or now() >= self.end():
+                return False
+        return True
+
+    def keep_changes(self, why, then=""):
+        """With isolate off the clean before a ticket's check or merge, a periodic round or a desk PR runs in the
+        checkout itself: whatever is uncommitted there (a ticket's work is pushed by then, so someone at the desk made it) is
+        stashed first, never thrown away. False when the stash failed: the caller skips its step (or, `then`, says
+        what it does instead) rather than clean."""
         p, cd = self.p, self.cd
         if cd != p.main_root() or not gout(cd, "status", "--porcelain"):
             return True
@@ -529,11 +543,14 @@ class Pilot(Desk, Periodic):
                  f"{why}: git stash list\n{msg}", 3, "package")
             return True
         err = (r.stderr.strip() or "?").splitlines()[0][:200] if r.returncode else "changes were left after it"
-        self.log(f"{why}: skipped: couldn't stash the checkout's uncommitted changes ({err})")
-        if not self.stash_failed:
-            self.stash_failed = True
+        first = why not in self.stash_failed
+        if first or not then:  # a wait tries again every STASH_WAIT seconds: logged once
+            self.log(f"{why}: {'waits' if then else 'skipped'}: couldn't stash the checkout's changes ({err})")
+        if first:
+            self.stash_failed.add(why)
             push("checkout not cleaned", f"Couldn't stash the uncommitted changes in your checkout, so "
-                 f"{why} was skipped and nothing was deleted: commit or stash them. git said: {err}", 4, "warning")
+                 f"{then or why + ' was skipped'}. Nothing was deleted: commit or stash them. git said: {err}", 4,
+                 "warning")
         return False
 
     def check_at(self, rev):
@@ -622,8 +639,8 @@ class Pilot(Desk, Periodic):
         p, cd = self.p, self.cd
         title = self.queue.titles.get(tid, tid)
         for _ in range(tries):
-            if not self.keep_changes(f"merging {tid}"):  # isolate off: someone edited the checkout during the review
-                return self.fail(tid, "couldn't stash the uncommitted changes in your checkout before its merge")
+            if not self.clean_wait(tid, f"merging {tid}"):  # isolate off: the checkout was edited during the review
+                return None
             self.fetch()
             clean_detach(p, cd, p.upstream)
             msg = f"Merge {tid}: {title} (branch {branch})"
