@@ -3,8 +3,9 @@ hand with `windvane periodic <name>`, on a detached copy of current main.
 
 An entry's `then` runs another right after, given the first one's output; an entry some other names in `then` (a
 triage) also gets the critic's "Beyond this ticket" notes no plan or triage has used yet, and the queue, the way
-`windvane plan` does. New ticket files under the ids the chain was given, and the lines it added to QUEUE.md, land on
-main; every other change is dropped with the tree. Where the new tickets go in the queue is the entry's `land`
+`windvane plan` does. New ticket files under the ids the chain was given, lines added at the end of an open ticket (a
+finding it already covers), and the lines it added to QUEUE.md land on main, with the last session's final reply in
+the commit; every other change is dropped with the tree. Where the new tickets go in the queue is the entry's `land`
 (inherited along the chain): `near` right after the ticket in progress, `next` at the top, `end` after everything,
 `hold` parked for the desk, `ask` one phone question (no answer in `answer_wait` minutes: hold).
 
@@ -58,22 +59,23 @@ class Periodic:
             return
         self.fetch()
         clean_detach(p, cd, p.upstream)
-        kept = None  # what the last session that finished leaves to land; a cut-off one's changes are dropped
+        kept, reply = None, ""  # what the last session that finished leaves; a cut-off one's changes are dropped
         land, last = "", e["name"]  # `land` is inherited along the chain: an entry's own setting wins
         self.handed = set()  # the ticket ids the chain's sessions were given: only those land
         while e and e["name"] not in done and not (p.state / "STOP").exists():
             done.add(e["name"])
             self.periodic_at[e["name"]] = len(self.merged)
             land = e["land"] or land
-            prev = self.periodic_session(e, cd, prev)
-            if prev is None:
+            got = self.periodic_session(e, cd, prev)
+            if got is None:
                 break
+            reply, prev = got
             kept, last = self.periodic_keep(cd, e["name"]), e["name"]
             e = p.periodic.get(e["then"])
         self.save()
         try:
-            if kept and (kept[0] or kept[2][0] != kept[2][1]):
-                self.land_periodic(cd, *kept, land or "near", last)
+            if kept and (kept[0] or kept[3] or kept[2][0] != kept[2][1]):
+                self.land_periodic(cd, *kept, land or "near", last, reply)
         finally:
             clean_detach(p, cd, p.upstream)
 
@@ -109,7 +111,8 @@ class Periodic:
         return why or (f"exit {proc.returncode}: {last}" if proc.returncode else "")
 
     def periodic_session(self, e, cd, prev):
-        """One periodic session; its final text, or None when it was skipped or didn't finish."""
+        """One periodic session: (its final reply, that plus the files it names), or None when it was skipped or
+        didn't finish."""
         from .driver import pending_ids, rules
         name, p = e["name"], self.p
         if not self.periodic_fits(e):
@@ -162,31 +165,48 @@ class Periodic:
         if score:
             append_jsonl(p.state / "ledger.jsonl", {"role": f"periodic:{name}", "event": "score",
                                                     "score": float(score.group(1)), "summary": m.group(1)[:200]})
-        return output(text, cd)
+        return text.strip(), output(text, cd)
 
     def periodic_keep(self, cd, name):
         """What may land from the tree as it is: new ticket files under the ids the sessions were given (any other id
-        could clash with a plan's), and the lines added to QUEUE.md. Returns ({path: text}, the new ticket ids,
-        (QUEUE.md as the chain found it, with only the lines added to it)): the land replays those lines on main."""
+        could clash with a plan's), the lines added at the end of existing tickets, and the lines added to QUEUE.md.
+        Returns ({path: text}, the new ticket ids, (QUEUE.md as the chain found it, with only the lines added to it),
+        {path: the lines added at its end}): the land replays the queue lines and the notes on main."""
         from .driver import changed_paths
-        p = self.p
+        p, notes, logged = self.p, {}, 0
         keep = {f: (cd / f).read_text(errors="replace") for f in changed_paths(cd)
                 if f.startswith(p.tickets_rel + "/") and f.endswith(".md") and (cd / f).is_file()
                 and p.norm(Path(f).stem) in self.handed and git(cd, "cat-file", "-e", f"HEAD:{f}").returncode}
+        for f in changed_paths(cd):
+            tid = p.norm(Path(f).stem)
+            if f in keep or not (f.startswith(p.tickets_rel + "/") and f.endswith(".md") and tid):
+                continue
+            if git(cd, "cat-file", "-e", f"HEAD:{f}").returncode:
+                continue  # a new file under an id it wasn't given: one of the other paths
+            old = gout(cd, "show", f"HEAD:{f}").splitlines()
+            new = (cd / f).read_text(errors="replace").splitlines() if (cd / f).is_file() else None
+            if new is not None and new[:len(old)] == old and new[len(old):]:
+                notes[f] = new[len(old):]
+            else:
+                logged += 1
+                why = "deleted" if new is None else "changed, not only lines added at its end"
+                self.log(f"{name}: {tid} {why}: that change is dropped")
         tickets = sorted(p.norm(Path(f).stem) for f in keep)
         old_q = gout(cd, "show", f"HEAD:{p.queue_rel}")
         queue = added_lines(old_q, (cd / p.queue_rel).read_text() if (cd / p.queue_rel).is_file() else old_q)
-        other = len(changed_paths(cd)) - len(keep) - (queue != old_q)
+        other = len(changed_paths(cd)) - len(keep) - len(notes) - logged - (queue != old_q)
         if other:
             self.log(f"{name}: {other} other changed path{'s' * (other != 1)} will be dropped")
-        return keep, tickets, (old_q, queue)
+        return keep, tickets, (old_q, queue), notes
 
-    def land_periodic(self, cd, keep, tickets, queues, land, name):
+    def land_periodic(self, cd, keep, tickets, queues, notes, land, name, reply=""):
         """Land the kept tickets on main like a plan, placed in QUEUE.md where `land` says, so the queue picks them up
         (or, held, doesn't). Main may have moved since the chain began (a long session, the phone question): the
         queue lines it added are replayed onto main's QUEUE.md, so nothing pushed meanwhile is undone. If a plan took
         one of the ids meanwhile, the change is made on the commit the chain began on, so the land clashes and keeps
-        it on a branch rather than overwrite that ticket."""
+        it on a branch rather than overwrite that ticket. Notes go at the end of each ticket as main has it, unless it
+        is done there (merged, or `done:`) or gone. The commit carries `reply` (the last session's, cut to 80 lines),
+        so what it found already covered or chose not to ticket stays on record."""
         from .driver import DIR, clean_detach, land as land_on_main
         p = self.p
         base = gout(cd, "rev-parse", "HEAD")
@@ -208,17 +228,33 @@ class Periodic:
             queue = place(queue, tickets, land, anchor, titles, name, p).rstrip("\n")
         if queue != main_q:
             keep[p.queue_rel] = queue + "\n"
+        noted = []
+        for f, lines in notes.items():
+            tid, now_text = p.norm(Path(f).stem), (cd / f).read_text() if (cd / f).is_file() else None
+            if now_text is None or tid in q.done:
+                self.log(f"{name}: {tid} is {'gone' if now_text is None else 'done'} on {p.upstream}: "
+                         f"its notes are dropped")
+                continue
+            keep[f] = now_text.rstrip("\n") + "\n" + "\n".join(lines) + "\n"
+            noted.append(tid)
+        if not (tickets or noted or queue != main_q):
+            self.log(f"{name}: nothing left to land")
+            return
         for f, text in keep.items():
             (cd / f).parent.mkdir(parents=True, exist_ok=True)
             (cd / f).write_text(text)
         git(cd, "add", "-A", DIR)
         n = len(tickets)
-        title = f"Periodic: {n} new ticket{'s' * (n != 1)}"
-        ok, where = land_on_main(p, cd, f"periodic-{now():%Y%m%d-%H%M}", title,
-                                 f"Written by the [[periodic]] session {name}; land = {land}.")
+        title = ", ".join(filter(None, [n and f"{n} new ticket{'s' * (n != 1)}",
+                                        noted and f"notes on {', '.join(noted)}"])) or "queue lines"
+        title = f"Periodic: {title}"
+        body = f"Written by the [[periodic]] session {name}; land = {land}."
+        if reply:
+            body += f"\n\n## Its final reply\n{cut_lines(reply, 80)}"
+        ok, where = land_on_main(p, cd, f"periodic-{now():%Y%m%d-%H%M}", title, body)
         how = {"near": f"right after {anchor}" if anchor else "at the top", "next": "at the top",
                "end": "at the end", "hold": "held for the desk"}.get(land, "")
-        what = f"{', '.join(tickets)}, {how}" if tickets else "queue lines only"
+        what = f"{', '.join(tickets)}, {how}" if tickets else "no new tickets"
         self.log(f"{title} ({what}) on {where}" + ("" if ok else ", not merged; merge it by hand"))
         if land == "hold":
             self.held += tickets
@@ -304,6 +340,14 @@ def added_lines(old, new, onto=None):
     for at, lines in reversed(adds):  # from the bottom, so the places above stay right
         out[at:at] = [line for line in lines if not line.strip() or line not in out]
     return "\n".join(out)
+
+
+def cut_lines(text, n):
+    """`text` in at most `n` lines: the head, and the last line (a session's summary), with a marker for the cut."""
+    lines = text.splitlines()
+    if len(lines) <= n:
+        return text
+    return "\n".join(lines[:n - 2] + [f"… ({len(lines) - n + 1} lines cut)", lines[-1]])
 
 
 def taken_ids(p, cd):

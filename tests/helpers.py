@@ -136,11 +136,22 @@ elif system.startswith("# windvane periodic run"):  # the project's rules file s
         open(".windvane/tickets/T-099.md", "w").write("# T-099: stray\nDepends on: nothing.\n")
     if "WRITE_REPORT" in system:
         open("report.txt", "w").write("the jump is broken\n")
+    for how, tid in re.findall(r"(APPEND_NOTE|EDIT_NOTE|DELETE_NOTE)=(\S+)", system):  # on an existing ticket
+        path = f".windvane/tickets/{tid}.md"
+        lines = open(path).read().splitlines()
+        if how == "DELETE_NOTE":
+            os.remove(path)
+            continue
+        at = 1 if how == "EDIT_NOTE" else len(lines)
+        open(path, "w").write("\n".join(lines[:at] + ["", "## From the playtest", "jump fails at x=3"] + lines[at:]))
     if "EDIT_RULES" in system:  # edits the next session's rules in its tree: they must still come from main
         open("tools/TRIAGE.md", "w").write("# Triage\nNO_LINE\n")
     open("README", "a").write("stray\n")
     score = re.search(r"SCORE=(\d+)", system)
-    text = "played\n" + ("" if "NO_LINE" in system else "PERIODIC: " + (
+    extra = int((re.findall(r"REPLY_LINES=(\d+)", system) or [0])[0])  # a long reply
+    text = "played\n" + "".join(f"note {i}\n" for i in range(extra))
+    text += "covered: the jump by T-001\nnot ticketed: the fog (by design)\n" if "NOTE=" in system else ""
+    text += ("" if "NO_LINE" in system else "PERIODIC: " + (
         "see report.txt" if "WRITE_REPORT" in system else "wrote a ticket") + (f" score={score.group(1)}" if score else ""))
 elif system.startswith("# windvane fix run"):  # FAKE_FIX: push (fixes it), red (pushes, still red), giveup
     n = re.search(r"Desk PR #(\d+)", prompt).group(1)

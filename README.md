@@ -130,7 +130,8 @@ prompt = "tools/autopilot/TRIAGE.md"      # reads the report, writes tickets
 Each session ends with `PERIODIC: <summary>`, which is logged and pushed to your phone; a `then` session gets the
 previous one's final text and the files it names, plus, like `windvane plan`, the queue and the critic's "Beyond
 this ticket" notes no plan or triage has used yet. Each session reads its prompt file from current `main`. New
-tickets under `.windvane/tickets/` and lines added to `QUEUE.md` land on `main`; any other change is discarded.
+tickets under `.windvane/tickets/`, lines added at the end of an open ticket, and lines added to `QUEUE.md` land on
+`main` with the last session's final reply in the commit; any other change is discarded.
 `land` says where the new tickets go in the queue: `near` (default: right after the ticket in progress), `next` (the
 top), `end`, `hold` (parked in `QUEUE.md`, listed in the run's summary for you) or `ask` (one phone question: near,
 end or hold; no answer in `answer_wait` minutes: hold). A `then` entry without its own `land` takes the one before.
