@@ -1505,12 +1505,15 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
 
 def pending_ids(p):
     """Ticket ids on unmerged remote `plan-*` and `periodic-*` branches: tickets whose PR is still open have claimed
-    them. A branch whose PR was closed unmerged frees its ids (its branch is left alone)."""
+    them, and so do local ones (a plan whose push was refused, waiting to be pushed by hand). A branch whose PR was
+    closed unmerged frees its ids (its branch is left alone)."""
     ids = set()
-    branches = gout(p.main_root(), "branch", "-r", "--no-merged", p.upstream, "--format=%(refname:short)")
+    remote = gout(p.main_root(), "branch", "-r", "--no-merged", p.upstream, "--format=%(refname:short)").split()
+    local = gout(p.main_root(), "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split()
     closed = closed_prs(p)
-    for b in branches.split():
-        if b.startswith((f"{p.remote}/plan-", f"{p.remote}/periodic-")) and b.split("/", 1)[1] not in closed:
+    for b in remote + local:
+        name = b.removeprefix(f"{p.remote}/") if b in remote else b
+        if name.startswith(("plan-", "periodic-")) and name not in closed:
             names = gout(p.main_root(), "ls-tree", "--name-only", b, p.tickets_rel + "/").split()
             ids |= {p.norm(Path(n).stem) for n in names if n.endswith(".md")} - {None}
     return ids

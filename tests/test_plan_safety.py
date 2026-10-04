@@ -64,8 +64,12 @@ class PlanSafety(unittest.TestCase):
         self.assertIn(f"kept only locally on {branch}: push it by hand", self.log())
         self.assertEqual(self.pushes[-1][0], "plan not pushed")
         self.assertIn(f"kept only locally on {branch}", self.pushes[-1][1])
-        driver.plan(self.p, "more")  # the next plan resets the plan tree; the kept branch stays
+        driver.plan(self.p, "more")  # the next plan resets the plan tree; the kept branch stays and holds its id
         self.assertIn(".windvane/tickets/T-003.md", self.s.git("ls-tree", "-r", "--name-only", branch).split())
+        second = [b for b in self.s.git("branch", "--list", "plan-*", "--format=%(refname:short)").split()
+                  if b != branch]
+        self.assertEqual(self.s.git("ls-tree", "--name-only", second[0], ".windvane/tickets/").split()[-1],
+                         ".windvane/tickets/T-004.md")
 
     def test_refused_push_on_github_opens_no_pr_and_never_claims_a_remote_branch(self):
         self.forge("github", "#!/bin/sh\necho \"$@\" >> \"$FAKE_LOG.gh\"\n")
