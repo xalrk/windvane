@@ -106,7 +106,8 @@ class SetupLimits(unittest.TestCase):
         self.s.publish("setup")
         pilot = driver.Pilot(Project(self.s.root), args())
         pilot.run(now() + timedelta(minutes=15))
-        self.assertEqual(self.pushes, [("windvane couldn't start", "Setup `echo nope; exit 3` failed (exit 3) in work: nope.")])
+        self.assertEqual(self.pushes, [("windvane couldn't start",
+                                        "Setup `echo nope; exit 3` failed (exit 3) in work: nope.")])
 
     def test_short_path(self):
         p = Project(self.s.root)
