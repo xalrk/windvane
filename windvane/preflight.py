@@ -28,7 +28,7 @@ def minutes_per_ticket(p, default=60.0):
     since = f"{now() - timedelta(days=14):%Y-%m-%d %H:%M}"
     per = {}
     for r in read_jsonl(p.state / "ledger.jsonl"):
-        if r.get("ticket") and r.get("at", "") >= since:
+        if r.get("ticket") and not r.get("event") and r.get("at", "") >= since:  # a session, not an outcome
             per[r["ticket"]] = per.get(r["ticket"], 0) + (r.get("minutes") or 0)
     return max(10.0, sum(per.values()) / len(per)) if per else default
 

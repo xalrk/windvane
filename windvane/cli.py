@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -367,6 +368,20 @@ def weighted(r):
     return sum(w * (r.get(kind) or 0) for kind, w in WEIGHTS.items())
 
 
+# The runner's `killed` reasons that lose the run's spend: its time box or the run's deadline (where a hung session
+# ends too), and the ticket runs again. "stop now", the caps and its own budget ("max turns") are deliberate stops.
+LOST_KILLS = ("time",)
+
+
+def plural(n, word):
+    return f"{n} {word}{'s' * (n != 1)}"
+
+
+def note(text):
+    """A footnote, wrapped to the table's 100 columns."""
+    print(textwrap.fill(text, 100, subsequent_indent=" "))
+
+
 def cmd_stats(a, p):
     if a.critic:
         return critic_stats(a, p)
@@ -375,46 +390,60 @@ def cmd_stats(a, p):
     rows = [r for r in rows if r.get("at", "") >= since]
     if getattr(a, "periodic", False):
         return periodic_stats(rows, a.days)
-    rows = [r for r in rows if not r.get("event")]  # a periodic score, not a session
+    swept = sum(r.get("groups") or 0 for r in rows if r.get("event") == "swept")
+    rows = [r for r in rows if not r.get("event")]  # a periodic score, an outcome, a sweep: not a session
     if not rows:
         print("no runs yet")
-        return
+    else:
+        session_stats(a, p, rows)
+    if swept:  # a dead driver's sessions, killed by the next run: its log says when
+        print(f"orphaned process groups killed: {swept}")
+
+
+def session_stats(a, p, rows):
     agg = {}
     key = (lambda r: r.get("ticket") or r["role"]) if a.by == "ticket" else (lambda r: r["role"])
     for r in rows:
-        g = agg.setdefault(key(r), {"runs": 0, "died": 0, "turns": 0, "in": 0, "out": 0, "cache": 0, "w": 0.0,
-                                    "died_w": 0.0, "usd": 0.0, "no_usd": 0, "min": 0.0, "base": 0, "based": 0})
+        g = agg.setdefault(key(r), {"runs": 0, "died": 0, "killed": 0, "turns": 0, "in": 0, "out": 0, "cache": 0,
+                                    "w": 0.0, "lost_w": 0.0, "usd": 0.0, "no_usd": 0, "min": 0.0, "base": 0,
+                                    "based": 0, "ticket": a.by == "ticket" and bool(r.get("ticket"))})
         g["runs"] += 1
         g["turns"] += r.get("turns") or 0
         g["in"] += (r.get("input") or 0) + (r.get("cache_write") or 0)
         g["cache"] += r.get("cache_read") or 0
         g["out"] += r.get("output") or 0
         g["w"] += weighted(r)
-        if r.get("error"):  # died on the API or crashed: the driver retries it, so it's pure loss
-            g["died"] += 1
-            g["died_w"] += weighted(r)
+        # died on the API or crashed, or killed for time: the ticket runs again, so it's pure loss
+        lost = "died" if r.get("error") else "killed" if r.get("killed") in LOST_KILLS else None
+        if lost:
+            g[lost] += 1
+            g["lost_w"] += weighted(r)
         g["usd"] += r.get("usd") or 0
         g["no_usd"] += r.get("usd") is None
         g["min"] += r.get("minutes") or 0
         g["base"] += r.get("base") or 0
         g["based"] += bool(r.get("base"))  # runs from before the ledger kept it don't count
     outcome = ticket_outcomes(p, agg) if a.by == "ticket" else {}
-    stats_table(a.by, agg, outcome)
+    wide = getattr(a, "wide", False)
+    stats_table(a.by, agg, outcome, wide)
     if outcome:
         stats_per_merged(agg, outcome)
-    died = [g for g in agg.values() if g["died"]]
-    if died:
-        lost, total = sum(g["died_w"] for g in died), sum(g["w"] for g in agg.values())
-        print(f"died or retried: {sum(g['died'] for g in died)} runs, {k(lost)} weighted tokens, "
-              f"{100 * lost / max(1, total):.0f}% of all")
+    died, killed = (sum(g[f] for g in agg.values()) for f in ("died", "killed"))
+    if died or killed:
+        lost, total = sum(g["lost_w"] for g in agg.values()), sum(g["w"] for g in agg.values())
+        print(f"died or killed: {plural(died + killed, 'run')} ({died} died, {killed} killed for time), "
+              f"{k(lost)} weighted tokens, {100 * lost / max(1, total):.0f}% of all")
     est = sum(g["no_usd"] for g in agg.values())
     if est:
-        print(f"(≥: {est} runs ended before their result, so their API $ is missing: a floor; ?: none of the row's "
-              "runs has one.)")
-    print("(weighted: tokens in fresh-input equivalents, cache write 1.25, cached in 0.1, out 5: the same for every model. "
-          "API $ prices them by model: a relative meter on a subscription.)")
-    print("(base: a run's first-turn context, \"-\" for runs logged before windvane kept it; cached/turn: what each "
-          "turn re-reads, base plus what the run has added.)")
+        note(f"(≥: {plural(est, 'run')} ended before {'its' if est == 1 else 'their'} result, so the API $ is "
+             "missing: a floor; ?: none of the row's runs has one.)")
+    note("(weighted: tokens in fresh-input equivalents, cache write 1.25, cached in 0.1, out 5: the same for every "
+         "model. API $ prices them by model: a relative meter on a subscription.)")
+    if wide:
+        note("(base: a run's first-turn context, \"-\" for runs logged before windvane kept it; cached/turn: what "
+             "each turn re-reads, base plus what the run has added.)")
+    else:
+        note("(--wide adds base and cached/turn: the context each run starts with and each turn re-reads.)")
 
 
 def k(n):
@@ -428,32 +457,42 @@ def usd(g):
     return ("≥" if g["no_usd"] else "") + f"{g['usd']:.2f}"
 
 
-def stats_table(by, agg, outcome):
-    """One line per role or ticket, the costliest (weighted) first."""
+def stats_table(by, agg, outcome, wide=False):
+    """One line per role or ticket, the costliest (weighted) first. 100 columns at most by default; `wide` adds the
+    context columns, for tuning prompts."""
     k1 = lambda n, d: f"{n / d / 1000:,.1f}k" if d else "-"
     col = f" {'outcome':7}" if outcome else ""
-    print(f"{by:12}{col} {'runs':>4} {'died':>4} {'turns':>5} {'fresh in':>9} {'cached in':>10} {'out':>7} "
-          f"{'weighted':>9} {'API $':>7} {'min':>5} {'base':>6} {'cached/turn':>11}")
+    more = f" {'base':>6} {'cached/turn':>11}" if wide else ""
+    print(f"{by:12}{col} {'runs':>4} {'died/killed':>11} {'turns':>5} {'fresh in':>9} {'cached in':>10} {'out':>7} "
+          f"{'weighted':>9} {'API $':>7} {'min':>5}{more}")
     for name, g in sorted(agg.items(), key=lambda kv: -kv[1]["w"]):
         o = f" {outcome.get(name, '-'):7}" if outcome else ""
-        print(f"{name[:12]:12}{o} {g['runs']:4} {g['died']:4} {g['turns']:5} {k(g['in']):>9} {k(g['cache']):>10} "
-              f"{k(g['out']):>7} {k(g['w']):>9} {usd(g):>7} {g['min']:5.0f} {k1(g['base'], g['based']):>6} "
-              f"{k1(g['cache'], g['turns']):>11}")
+        more = f" {k1(g['base'], g['based']):>6} {k1(g['cache'], g['turns']):>11}" if wide else ""
+        print(f"{name[:12]:12}{o} {g['runs']:4} {g['died'] + g['killed']:11} {g['turns']:5} {k(g['in']):>9} "
+              f"{k(g['cache']):>10} {k(g['out']):>7} {k(g['w']):>9} {usd(g):>7} {g['min']:5.0f}{more}")
 
 
 def stats_per_merged(agg, outcome):
-    """What a merged ticket costs on its own and with the runs that serve every ticket (planner, preflight,
-    periodic) spread over them, and the share spent on tickets that didn't merge."""
+    """What a merged ticket costs on its own and with the rest spread over them: the runs with no ticket (planner,
+    preflight, periodic), named, and tickets no longer in the queue (renumbered, folded, deleted), counted apart;
+    and the share spent on tickets that didn't merge."""
     merged = [g for n, g in agg.items() if outcome.get(n) == "merged"]
     w = lambda gs: sum(g["w"] for g in gs)
     other = w(g for n, g in agg.items() if outcome.get(n) in ("open", "parked", "failed"))
-    overhead = w(g for n, g in agg.items() if n not in outcome)  # no ticket: grouped by role, or the plan's critic
+    loose = sorted((n for n in agg if n not in outcome), key=lambda n: -agg[n]["w"])  # grouped by role: no ticket
+    gone = sorted((n for n in agg if outcome.get(n) == "gone"), key=lambda n: -agg[n]["w"])
     if merged:
         m = len(merged)
         t = {f: sum(g[f] for g in merged) for f in ("runs", "usd", "no_usd")}
         print(f"per merged ticket ({m}): {t['runs'] / m:.1f} runs, {k(w(merged) / m)} weighted tokens, "
               f"{usd({**t, 'usd': t['usd'] / m})} API $")
-        print(f"with overhead (planner, preflight, periodic): {k((w(merged) + overhead) / m)} per merged ticket")
+        names = lambda ns: ", ".join(ns[:3]) + (f" and {len(ns) - 3} more" if len(ns) > 3 else "")
+        parts = [f"{names(loose)}: {k(w(agg[n] for n in loose))}"] if loose else []
+        parts += [f"{plural(len(gone), 'ticket')} no longer in the queue ({names(gone)}): "
+                  f"{k(w(agg[n] for n in gone))}"] if gone else []
+        over = w(agg[n] for n in loose + gone)
+        note(f"with overhead ({'; '.join(parts) or 'none'}): {k((w(merged) + over) / m)} weighted tokens per "
+             "merged ticket")
     print(f"spent on tickets not merged (open, parked, failed): {k(other)} weighted tokens, "
           f"{100 * other / max(1, other + w(merged)):.0f}% of ticket tokens")
 
@@ -486,8 +525,8 @@ def critic_stats(a, p):
         print(f"no critic verdicts since {since}" if since else "no critic verdicts yet")
         return
     n, g = len(c["tickets"]), lambda x: f"{x:g}"
-    print(f"critic: last {n} tickets, {c['verdicts']} verdicts" + (f" since {since}" if since else "")
-          + f", pass mark {g(c['bar'])}/10")
+    print(f"critic: last {plural(n, 'ticket')}, {plural(c['verdicts'], 'verdict')}"
+          + (f" since {since}" if since else "") + f", pass mark {g(c['bar'])}/10")
     print(f"first scores: {critic_mod.spread(c['first'])}")
     print(f"final scores: {critic_mod.spread(c['final'])}")
     print(f"needed revisions: {c['revised']} of {n}")
@@ -503,32 +542,44 @@ def critic_stats(a, p):
 
 def critic_since(p, when):
     """`--since` as the log's "YYYY-MM-DD HH:MM": a date as is, a commit (say the one that changed CALIBRATION.md)
-    as its commit time in local time, like the verdicts' own `at`."""
+    as its author time in local time, like the verdicts' own `at`: a rebase moves the commit time later, past
+    verdicts given after the change was written."""
     if re.fullmatch(r"\d{4}-\d\d-\d\d", when):
         return when
-    at = gout(p.root, "log", "-1", "--format=%cd", "--date=format-local:%Y-%m-%d %H:%M", f"{when}^{{commit}}", "--")
+    at = gout(p.root, "log", "-1", "--format=%ad", "--date=format-local:%Y-%m-%d %H:%M", f"{when}^{{commit}}", "--")
     return at or sys.exit(f"--since: {when!r} is neither a date (YYYY-MM-DD) nor a commit")
 
 
 def ticket_outcomes(p, agg):
-    """merged / parked / failed / open for each ticket in `agg`, from the queue's git-derived status and the log
-    ("-" for runs that belong to no ticket, like the planner's)."""
+    """merged / parked / failed / open for each ticket in `agg`, from the queue's git-derived status and the ledger,
+    "gone" for a ticket no longer in the queue (runs that belong to no ticket, like the planner's, get none)."""
     try:
         q = Queue(p)
     except Exception:  # no remote yet: no outcomes rather than no stats
         return {}
     names, failed = {"done": "merged", "parked": "parked"}, failed_tickets(p)
-    return {t: names.get(q.status(t), "failed" if t in failed else "open") for t in agg if t in q.files}
+    return {t: names.get(q.status(t), "failed" if t in failed else "open") if t in q.files else "gone"
+            for t, g in agg.items() if g["ticket"]}
 
 
 def failed_tickets(p):
-    """Tickets whose last attempt in the log ended `<ID>: FAILED: ...`: a later worker run (the ticket retried)
-    makes it open again."""
-    last = {}
+    """Tickets whose last attempt failed: the ledger's `outcome: failed` row (`Pilot.fail` writes it) unless a later
+    worker run retried the ticket. Tickets with no such row, failed before the ledger kept it, by the log's
+    `<ID>: FAILED: ...` line, the same way."""
+    last, recorded = {}, set()
+    for r in read_jsonl(p.state / "ledger.jsonl"):  # in the order things happened, whatever --days says
+        t = r.get("ticket")
+        if r.get("event") == "outcome" and t:
+            last[t] = r.get("outcome")
+            recorded.add(t)
+        elif t and r.get("role") == "worker" and not r.get("event"):
+            last[t] = "run"
+    failed = {t for t in recorded if last[t] == "failed"}
+    old = {}
     for line in last_log(p, None):
-        if m := re.match(r"\S+ \S+ (\S+): (FAILED:|worker run)", line):
-            last[m[1]] = m[2]
-    return {t for t, what in last.items() if what == "FAILED:"}
+        if (m := re.match(r"\S+ \S+ (\S+): (FAILED:|worker run)", line)) and m[1] not in recorded:
+            old[m[1]] = m[2]
+    return failed | {t for t, what in old.items() if what == "FAILED:"}
 
 
 def cmd_mode(a, p):
@@ -647,6 +698,7 @@ def main(argv=None):
     s = sub.add_parser("stats", help="tokens per role or ticket, from the ledger")
     s.add_argument("--days", type=float, default=7)
     s.add_argument("--by", choices=("role", "ticket"), default="role")
+    s.add_argument("--wide", action="store_true", help="add the context columns: base and cached/turn")
     s.add_argument("--critic", action="store_true", help="the spread of the critic's scores instead")
     s.add_argument("--periodic", action="store_true", help="the scores [[periodic]] sessions gave, oldest first")
     s.add_argument("--last", type=int, default=10, help="with --critic: over the last N tickets (default 10)")
