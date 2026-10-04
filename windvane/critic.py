@@ -131,11 +131,14 @@ def beyond(critique):
 
 
 def followups(p):
-    """Every critique's "Beyond this ticket" points since the last plan run that used them: [(ticket, point)]."""
+    """Each ticket's "Beyond this ticket" points from its latest critique since the last plan run that used them:
+    [(ticket, point)]. Only the latest, as a re-critique restates the earlier points that still hold in new words, so
+    taking every critique fed the planner the same notes two to four times."""
     recs = read_jsonl(p.state / "critic.jsonl")
     last = max((i for i, r in enumerate(recs) if r.get("ticket") == "PLAN"), default=-1)
+    latest = {r.get("ticket"): r for r in recs[last + 1:] if r.get("critique")}  # dicts keep first-seen order
     seen, out = set(), []
-    for r in recs[last + 1:]:
+    for r in latest.values():
         for b in beyond(r.get("critique")):
             if b.lower() not in seen:
                 seen.add(b.lower())

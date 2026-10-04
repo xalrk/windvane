@@ -33,7 +33,8 @@ isn't, that's a "Fix in this ticket" point naming the evidence that would show i
 
 ## On a re-critique
 Check each earlier "Fix in this ticket" point first; the earlier scores are withheld, so score the revision afresh.
-No new nits unless the revision broke something. If what the ticket is for doesn't work at all, say what to rethink.
+No new nits unless the revision broke something; repeat the earlier "Beyond" points that still hold (only your last
+reply's reach the planner). If what the ticket is for doesn't work at all, say what to rethink.
 
 ## Your reply
 Under 250 words, in this shape, ending with exactly one CRITIC line (the scale's dimensions, or `score=<n>`;

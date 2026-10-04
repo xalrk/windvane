@@ -105,10 +105,10 @@ class Notes(Base):
         self.p.cfg["forge"] = "github"
         net = mock.MagicMock()
         net.sh.return_value = "https://github.com/o/r/pull/5"
-        net.call.return_value.returncode = 0
+        net.call.return_value.returncode = net.git.return_value.returncode = 0
         with mock.patch.object(driver, "net", net):
             self.pilot().periodic(self.p.periodic["triage"])
-        create = next(c.args for c in net.sh.call_args_list if c.args[1:3] == ("gh", "pr"))
+        create = next(c.args for c in net.sh.call_args_list if c.args[1:4] == ("gh", "pr", "create"))
         body = create[create.index("--body") + 1]
         self.assertIn("not ticketed: the fog (by design)", body)
         self.assertEqual(create[create.index("--title") + 1], "Periodic: notes on T-001")

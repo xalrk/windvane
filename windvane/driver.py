@@ -1437,13 +1437,32 @@ def author_ident(p):
             if "<" in a else [])
 
 
+def push_branch(p, cd, branch):
+    """Push `cd`'s HEAD to `branch`, trying twice. When both fail, the commit stays on a local branch of that name, so
+    the next run's reset of `cd` can't lose paid-for work. Returns where it is: `branch`, or "the local branch ..."."""
+    for _ in range(2):
+        res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+        if res.returncode == 0:
+            return branch
+    git(cd, "branch", "-f", branch, "HEAD")
+    log(p, f"push to {branch} refused ({' '.join(res.stderr.split())[:200]}); "
+           f"kept only locally on {branch}: push it by hand")
+    return f"the local branch {branch}"
+
+
+def is_local(where):
+    return where.startswith("the local branch ")
+
+
 def land(p, cd, branch, title, body, commit=True):
     """Put the driver's own change in `cd` (staged, or committed when `commit` is off) on main: through a merged PR on
     github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is)."""
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
     if p.cfg["forge"] == "github":
-        net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+        where = push_branch(p, cd, branch)
+        if is_local(where):
+            return False, where
         pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title, "--body", body)
         pr_n = pr.rstrip("/").rsplit("/", 1)[-1]
         merged = pr_n.isdigit() and (
@@ -1460,42 +1479,75 @@ def land(p, cd, branch, title, body, commit=True):
         else:
             git(cd, "rebase", "--abort")
         if res.returncode:  # keep the paid-for work on its branch rather than drop it
-            net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
-            return False, branch
+            return False, push_branch(p, cd, branch)
     return True, p.main
 
 
-def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max_new=6):
+class PlanBusy(Exception):
+    """Another plan holds the lock: raised for the desk's `windvane plan`, which must say so."""
+
+
+def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max_new=6, busy_raises=False):
     """A planner run writes tickets for `goal` (and the critic's follow-ups) on a branch the driver commits;
-    `merge` merges it at once. Returns how many tickets it merged (with `merge`) or wrote."""
+    `merge` merges it at once. Returns how many tickets it merged (with `merge`) or wrote; while another plan runs,
+    0 (or PlanBusy with `busy_raises`)."""
     p.state.mkdir(parents=True, exist_ok=True)
     with open(p.state / "plan.lock", "w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             log(p, "plan: another plan is running")
+            if busy_raises:
+                raise PlanBusy("another plan is running")
             return 0
         return _plan(p, goal, use_followups, usage, stop_if, merge, max_new)
 
 
 def pending_ids(p):
     """Ticket ids on unmerged remote `plan-*` and `periodic-*` branches: tickets whose PR is still open have claimed
-    them."""
+    them. A branch whose PR was closed unmerged frees its ids (its branch is left alone)."""
     ids = set()
     branches = gout(p.main_root(), "branch", "-r", "--no-merged", p.upstream, "--format=%(refname:short)")
+    closed = closed_prs(p)
     for b in branches.split():
-        if b.startswith((f"{p.remote}/plan-", f"{p.remote}/periodic-")):
+        if b.startswith((f"{p.remote}/plan-", f"{p.remote}/periodic-")) and b.split("/", 1)[1] not in closed:
             names = gout(p.main_root(), "ls-tree", "--name-only", b, p.tickets_rel + "/").split()
             ids |= {p.norm(Path(n).stem) for n in names if n.endswith(".md")} - {None}
     return ids
+
+
+def closed_prs(p):
+    """Head branches whose PRs were all closed unmerged; empty off github or without `gh` (every branch counts)."""
+    if p.cfg["forge"] != "github":
+        return set()
+    out = net.sh(p.main_root(), "gh", "pr", "list", "--state", "all", "--limit", "300", "--json",
+                 "headRefName,state", "-q", '.[] | .headRefName + " " + .state')
+    states = {}
+    for line in out.splitlines():
+        if " " in line:
+            b, st = line.rsplit(" ", 1)
+            states.setdefault(b, set()).add(st)
+    return {b for b, st in states.items() if st == {"CLOSED"}}
+
+
+def plan_branch(p, cd):
+    """`plan-<date>-<time to the second>`, with a suffix should that name be taken here or on the remote."""
+    base = name = f"plan-{now():%Y%m%d-%H%M%S}"
+    n = 1
+    while any(git(cd, "rev-parse", "-q", "--verify", ref).returncode == 0
+              for ref in (f"refs/heads/{name}", f"refs/remotes/{p.remote}/{name}")):
+        n += 1
+        name = f"{base}-{n}"
+    return name
 
 
 def unmerged(p, n, where):
     """A plan that couldn't merge counts as none (so `run --replan` doesn't take it for new work), but the user
     hears where it waits: it was a paid planner session."""
     clean_detach(p, p.plan_dir, p.upstream)
-    log(p, f"plan: {n} tickets on {where}, not merged; merge it by hand")
-    push("plan not merged", f"{n} tickets wait on {where}: merge it by hand.", 4, "warning")
+    how = "push it by hand" if is_local(where) else "merge it by hand"
+    log(p, f"plan: {n} tickets on {where}, not merged; {how}")
+    push("plan not merged", f"{n} tickets wait on {where}: {how}.", 4, "warning")
     return 0
 
 
@@ -1544,7 +1596,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
         log(p, f"plan: wrote outside .windvane/ ({outside[0]}); discarded")
         return 0
     n = int(m.group(1) or 0)
-    branch = f"plan-{now():%Y%m%d-%H%M}"
+    branch = plan_branch(p, cd)
     git(cd, "add", "-A", ".windvane")
     git(cd, *author_ident(p), "commit", "-q", "-m", f"Plan: {n} tickets ({m.group(3)[:60]})", "-m",
         text.strip()[-3000:])
@@ -1556,18 +1608,19 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
         if not ok:
             return unmerged(p, n, where)
         log(p, f"plan: {n} tickets on {where} (merged)")
-    elif p.cfg["forge"] == "github":
-        net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
-        pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title",
-                    f"Plan: {n} new tickets", "--body", text.strip()[-6000:])
-        log(p, f"plan: {n} tickets on {pr or branch}")
     else:
-        res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
-        if res.returncode:
+        where = push_branch(p, cd, branch)
+        if is_local(where):
             clean_detach(p, cd, p.upstream)
-            log(p, f"plan: push to {branch} refused ({' '.join(res.stderr.split())[:200]}); plan dropped")
+            log(p, f"plan: {n} tickets kept only locally on {branch}: push it by hand")
+            push("plan not pushed", f"{n} tickets kept only locally on {branch}: push it by hand.", 4, "warning")
             return 0
-        log(p, f"plan: {n} tickets pushed to {branch}")
+        if p.cfg["forge"] == "github":
+            pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title",
+                        f"Plan: {n} new tickets", "--body", text.strip()[-6000:])
+            log(p, f"plan: {n} tickets on {pr or branch}")
+        else:
+            log(p, f"plan: {n} tickets pushed to {branch}")
     push(f"planned {n} tickets", m.group(3)[:200] or "See the queue.", 3, "memo")
     clean_detach(p, cd, p.upstream)
     return n
