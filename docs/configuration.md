@@ -26,7 +26,7 @@ matching keys for one run.
 | `forge` | `"github"` | `github`: workers open pull requests with `gh` and the driver merges them. `git`: no pull requests; the driver merges the ticket branch and pushes `main` itself. |
 | `check` | `""` | The project's test command, run by `windvane check` in the worker's worktree and by the driver on every pushed head and merged tree, e.g. `"pytest -q"` or `"npm test"`. Empty means no check. |
 | `setup` | `""` | A command run once in each fresh autopilot worktree before it is used, e.g. `"npm ci"`, with no input. If it fails, the run stops with its output. |
-| `setup_minutes` | `20` | The longest `setup` may run. One still running then (a hung `npm ci`) is killed, its child processes too, and fails as above: `setup ... timed out after 20 min`. |
+| `setup_minutes` | `20` | The longest `setup` may run, in minutes (any number above 0, e.g. `0.5`). One still running then (a hung `npm ci`) is killed, its child processes too, and fails as above: `setup ... timed out after 20 min in work: <its last line>; raise setup_minutes in config.toml or fix the setup`. A `windvane stop` or the run's deadline ends it sooner, and the run ends as stopped, not failed. |
 | `isolate` | `true` | Work in the autopilot's own worktrees. `false` runs sessions in your checkout instead, for projects whose builds can't be duplicated; it also limits the run to one ticket at a time. |
 | `goal` | `""` | What `windvane plan` and `windvane run --replan` aim at when no goal is given. |
 | `author` | git's identity | `"Name <email>"` for the driver's own commits (merges, planned tickets). |
@@ -103,7 +103,7 @@ the [README](../README.md#periodic-sessions) for an example.
 | `after_group` | unset | Run when a group of tickets is finished: a regex searched in each ticket's header (its first 8 lines), whose group 1 names the ticket's group, e.g. `'Milestone:\s*(M\d+)'`. A group is finished when none of its tickets is open (merged or `done:`; `parked:` ones don't hold it up). Groups finished when the run starts, or when the entry last ran, don't count, even if they gain a ticket and finish again (a playtest's fix tickets filed under its milestone don't start another); several finishing before it runs give one session, whose prompt names them and their tickets (`## Finished since the last run: M7 (12 tickets: T-031, ...)`). A round skipped before its session (the checkout busy, a failed `setup`, no time before the deadline) leaves them owed until the next merge. With `every` too, either makes it due and a run resets both. `windvane queue` shows the closest groups, and their parked tickets. |
 | `minutes` | `60` | The session's time limit. It is skipped when the deadline is nearer. |
 | `setup` | `""` | A shell command run first on current `main` (a build), with no input. A failure skips this round and is logged; so does a setup still running at `setup_minutes`, when the session would no longer fit before the deadline, or at any `windvane stop`. |
-| `setup_minutes` | `60` | The longest `setup` may run. |
+| `setup_minutes` | `60` | The longest `setup` may run, in minutes (any number above 0, e.g. `0.5`). |
 | `prompt` | required | The project's rules file for the session, a path in the repo. |
 | `then` | `""` | Another `[[periodic]]` entry run right after, given this one's final text and the files it names. |
 | `allow`, `deny` | `[]` | This session's own permission rules, after `[permissions]`' `periodic_allow` / `periodic_deny`; see [`[permissions]`](#permissions). |

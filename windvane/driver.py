@@ -110,9 +110,10 @@ def nth(n):
     return {1: "1st", 2: "2nd", 3: "3rd"}.get(n, f"{n}th")
 
 
-def ensure_worktree(p, path, setup=True):
+def ensure_worktree(p, path, setup=True, stop=lambda: ""):
     """The autopilot's own worktree at `path`, created detached at upstream (and set up) when missing. With
-    isolate off, work_dir and ci_dir are the checkout itself, which is left alone."""
+    isolate off, work_dir and ci_dir are the checkout itself, which is left alone. `stop()` gives a reason to end
+    the setup early (the run's stop or deadline), raised as SetupFailed's `killed`."""
     if path == p.main_root() or (path / ".git").exists():
         return
     root = p.main_root()
@@ -124,21 +125,40 @@ def ensure_worktree(p, path, setup=True):
     if setup and p.cfg["setup"]:
         log(p, f"setting up {path}: {p.cfg['setup']}…")
         limit = p.cfg["setup_minutes"]
-        code, why, lines = run_limited(p.cfg["setup"], path, now() + timedelta(minutes=limit), echo=True, keep=15)
-        if code:  # a half-made tree fails every check: remove it, so the next start sets it up afresh
+        code, why, lines = run_limited(p.cfg["setup"], path, now() + timedelta(minutes=limit), stop, echo=True,
+                                       keep=15)
+        if code or why:  # a half-made tree fails every check: remove it, so the next start sets it up afresh
             git(root, "worktree", "remove", "--force", str(path))
             shutil.rmtree(path, ignore_errors=True)
             git(root, "worktree", "prune")
-            how = f"timed out after {limit:g} min" if why else f"failed (exit {code})"
-            raise SetupFailed(f"setup `{p.cfg['setup']}` {how} in {path}", lines)
+            how = (f"timed out after {limit:g} min" if why == TIMED_OUT else f"cut short ({why})" if why
+                   else f"failed (exit {code})")
+            raise SetupFailed(f"setup `{p.cfg['setup']}` {how} in {short_path(p, path)}", lines, why)
+
+
+TIMED_OUT = "out of time"  # run_limited's reason when `until` passes
+
+
+def short_path(p, path):
+    """`path` as the user knows it: relative to the state dir (`work-1`), else its last two parts."""
+    try:
+        return str(Path(path).relative_to(p.state))
+    except ValueError:
+        return str(Path(*Path(path).parts[-2:]))
 
 
 class SetupFailed(Exception):
-    """The project's `setup` command failed in a fresh worktree; `lines` are the end of its output."""
+    """The project's `setup` command failed in a fresh worktree; `lines` are the end of its output, `killed` why it
+    was killed (TIMED_OUT at `setup_minutes`, or the stop rule's reason), "" when it failed on its own."""
 
-    def __init__(self, why, lines):
+    def __init__(self, why, lines, killed=""):
         super().__init__(why)
-        self.lines = lines
+        self.lines, self.killed = lines, killed
+
+    @property
+    def cut(self):
+        """Ended by the run's stop or deadline: the run ends as a stop, with nothing to fix."""
+        return self.killed not in ("", TIMED_OUT)
 
 
 def clean_detach(p, cwd, rev):
@@ -1077,17 +1097,26 @@ class Pilot(Desk, Periodic):
 
     def prepare(self, slot):
         """Both of a slot's worktrees. A failed setup halts the run: every check in that tree would fail, and each
-        ticket would bounce back to its worker with a red check it can't fix."""
+        ticket would bounce back to its worker with a red check it can't fix. A stop or the deadline ends the setup as
+        it ends the run."""
         try:
             for d in self.slot_dirs(slot):
-                ensure_worktree(self.p, d)
+                ensure_worktree(self.p, d, stop=self.setup_stop)
             return True
         except SetupFailed as e:
+            if e.cut:  # stop_check gives the stop or the deadline as the run's reason
+                self.log(str(e))
+                return False
             last = e.lines[-1][:200] if e.lines else "no output"
-            self.halt = f"{e}: {last}"
+            fix = "; raise `setup_minutes` in config.toml or fix the setup" if e.killed == TIMED_OUT else ""
+            self.halt = f"{e}: {last}{fix}"
             self.log(str(e))
             log(self.p, "\n".join(["its last lines:", *e.lines]), echo=False)  # the terminal showed them already
             return False
+
+    def setup_stop(self):
+        """A setup's stop rule: any stop (it's nothing paid for yet), or the run's deadline as it now is."""
+        return "stopped" if (self.p.state / "STOP").exists() else "deadline" if now() >= self.end() else ""
 
     def rules_ok(self):
         """The project's `[permissions]` rules all parse. The CLI drops a rule it can't read without a word, so a
@@ -1303,8 +1332,8 @@ class Pilot(Desk, Periodic):
                 self.usage.probe(p)
                 push("windvane started", f"Until {hhmm(deadline)}. {self.usage.text()}.", 2, "rocket",
                      ("Status=status", "Stop=stop"))
-            else:
-                self.stop_reason = self.halt
+            elif not ready:
+                self.stop_reason = self.halt or self.stop_check()
             if ready:
                 self.loop()
         except Exception as e:
@@ -1321,6 +1350,8 @@ class Pilot(Desk, Periodic):
             if crashed and os.environ.get(SUPERVISED):  # `supervise` restarts it, or pushes why it doesn't
                 self.hand_over()
                 save_json(p.state / "crash.json", {"error": crashed, "summary": summary.split("\n", 1)[1]})
+            elif not ready and self.halt:  # just why, once: nothing ran, so the summary's other lines say nothing
+                push("windvane couldn't start", f"{self.halt[0].upper()}{self.halt[1:]}.", 4, "warning")
             else:
                 push("windvane stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                      "checkered_flag", ("Usage=usage",))
