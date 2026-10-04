@@ -490,6 +490,8 @@ def critic_stats(a, p):
     print(f"needed revisions: {c['revised']} of {n}")
     print(f"exactly on the pass mark: {c['final_on_bar']} of {n} final scores, {c['on_bar']} of {c['verdicts']} verdicts")
     print(f"passed only by running out of revisions (accept): {c['accepted']} of {n}")
+    print(f"cap checks answered: {c['checked']} of {c['verdicts']} verdicts; a hit cap lowered the score in "
+          f"{c['capped']}")
     if collapse := critic_mod.collapsed(recs):
         print(collapse)
     for t, rs in c["tickets"]:

@@ -21,6 +21,9 @@ from .util import append_jsonl, git, gout, load_json, read_jsonl
 OLD_RE = re.compile(r"CRITIC: (\d+(?:\.\d+)?)/10 (\S+) fixes=(\d+)[ \t]*(.*)")
 CRITIC_RE = re.compile(r"CRITIC: (\S+) ((?:[\w-]+=(?:\d+(?:\.\d+)?|-)[ \t]+)+?)fixes=(\d+)[ \t]*(.*)")
 DIM_RE = re.compile(r"([\w-]+)=(\d+(?:\.\d+)?|-)")
+CAP_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?([\w-]+)[ \t]*(?:<=|≤)[ \t]*(\d+(?:\.\d+)?)`?[^:\n]*:[ \t*_]*(yes|no)\b",
+                    re.I | re.M)
+ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
 DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]
 
@@ -75,6 +78,32 @@ def verdict(text):
     return None
 
 
+def checks(text):
+    """The critic's cap checks, answered before its scores: ([(dimension, cap, hit?)], nearest anchor or "").
+    T-046: 15 of 20 tickets ended on 7 with nothing to fix, among them T-040, whose critique named a lost milestone
+    (a "lose work" cap at 5) three times. Making the critic answer each cap from the calibration, line by line, puts
+    those failures in front of it before it picks a number. A reply without the checks gives ([], "")."""
+    body = (text or "").rsplit("CRITIC:", 1)[0]
+    caps = [(d, float(n), a.lower() == "yes") for d, n, a in CAP_RE.findall(body)]
+    m = ANCHOR_RE.search(body)
+    return caps, (m.group(1).strip()[:200] if m else "")
+
+
+def capped(dims, caps):
+    """`dims` with every hit cap applied, and {dimension: the critic's own number} for those it lowered. A hit cap
+    wins over the number: a critic that says "yes, it can lose work" and then writes works=7 meant works=5 (the
+    calibration says so). A cap on a dimension the critic marked `-` still counts: the failure it names is real.
+    `judge` also counts each hit as a fix: T-040 went on as "scope" three times with a lost-work hole named and
+    nothing listed to fix, and the calibration says a hit cap belongs under "Fix in this ticket"."""
+    out, was = dict(dims), {}
+    for d, n, hit in caps:
+        if hit and out.get(d, n + 1) > n:
+            if d in out:
+                was.setdefault(d, out[d])
+            out[d] = n
+    return out, was
+
+
 def step(p, dims, fixes, revs):
     """What a verdict leads to. The critic never sees the bar (T-022: shown it, it decided pass or fail first and
     wrote the matching number); the driver compares here. Open "Fix in this ticket" points block a pass whatever the
@@ -91,7 +120,8 @@ def step(p, dims, fixes, revs):
 
 def unscored(critique):
     """An earlier critique without its score lines, so a revision is judged afresh, not as "last time +1"."""
-    return "\n".join(l for l in critique.splitlines() if not re.match(r"\s*(Scores?:|CRITIC:)", l)).strip()
+    return "\n".join(l for l in critique.splitlines()
+                     if not re.match(r"\s*(Scores?:|CRITIC:|Nearest anchor:|Capped by the driver:)", l) and not CAP_RE.match(l)).strip()
 
 
 def beyond(critique):
@@ -134,6 +164,8 @@ def calibration(recs, bar, last=10):
         "final_on_bar": sum(rs[-1]["score"] == bar for _, rs in tickets),
         "on_bar": sum(x == bar for x in scores),
         "accepted": sum(rs[-1].get("step") == "accept" for _, rs in tickets),
+        "checked": sum(bool(r.get("checks")) for _, rs in tickets for r in rs),
+        "capped": sum(bool(r.get("capped")) for _, rs in tickets for r in rs),
     }
 
 
@@ -227,10 +259,19 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     if not v or p.norm(v[0]) != tid:
         return None, text or "The critic ended without a verdict."
     _, dims, fixes, gist = v
-    critique = text[text.find("Score"):] if "Score" in text else text
+    caps, anchor = checks(text)
+    dims, was = capped(dims, caps)
+    hits = [f"{d}<={c:g}" for d, c, hit in caps if hit]
+    critique = text[min((i for i in (text.find("Caps:"), text.find("Score")) if i >= 0), default=0):]
+    if hits:
+        low = ", ".join(f"{d} {was[d]:g} → {dims[d]:g}" for d in was)
+        critique += (f"\nCapped by the driver: {', '.join(hits)} answered yes{f' ({low})' if low else ''}; "
+                     "a hit cap counts as a fix.")
     entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
-             "dims": dims, "fixes": fixes, "revisions": n, "step": step(p, dims, fixes, n), "gist": gist[:200],
-             "critique": critique, "scale": scale(p, cwd)}
+             "dims": dims, "fixes": fixes, "revisions": n, "gist": gist[:200],
+             "step": step(p, dims, max(fixes, len(hits)), n),
+             "critique": critique, "scale": scale(p, cwd), "checks": len(caps),
+             "hits": hits, "capped": was, "anchor": anchor}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
 
