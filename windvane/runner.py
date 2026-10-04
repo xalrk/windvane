@@ -62,11 +62,14 @@ def started_at(pid):
         return None
 
 
-def signal_group(pgid, sig, mark=None):
+def signal_group(pgid, sig, mark=None, strict=False):
     """Send `sig` to a process group; False when it's gone. With `mark` (the file written as it started), a leader
-    started after it is someone else reusing the number (after a reboot, say), and is left alone."""
+    started after it is someone else reusing the number (after a reboot, say), and is left alone. `strict` leaves it
+    alone too when its start time can't be read (no /proc): numbers from a dead driver may well be a stranger's now."""
     if mark:
         t = started_at(pgid)
+        if t is None and strict:
+            return False
         try:
             if t is not None and t > mark.stat().st_mtime + 2:  # /proc's boot time is in whole seconds
                 return False
@@ -79,13 +82,13 @@ def signal_group(pgid, sig, mark=None):
         return False
 
 
-def kill_nested(p, session):
+def kill_nested(p, session, strict=False):
     """Stop the sessions started inside `session`: SIGTERM, then SIGKILL for groups alive after GRACE. Claude Code
     runs each Bash command in a session of its own, so killing a worker's process group misses a critic it started:
-    each one registers its group here instead. How many groups were still running."""
+    each one registers its group here instead. How many groups were still running (`strict`: see signal_group)."""
     d = p.state / "nested" / session
     marks = list(d.glob("*")) if d.is_dir() else []
-    alive = [int(f.name) for f in marks if f.name.isdigit() and signal_group(int(f.name), signal.SIGTERM, f)]
+    alive = [int(f.name) for f in marks if f.name.isdigit() and signal_group(int(f.name), signal.SIGTERM, f, strict)]
     n, end = len(alive), time.time() + GRACE
     while alive and time.time() < end:
         time.sleep(0.1)
@@ -103,7 +106,9 @@ def kill_nested(p, session):
 
 def sweep_nested(p):
     """Kill what sessions of a driver that died left running (`nested/<session>/<group>`), and their dirs. A session
-    still alive (`session` holds its pid: a desk `plan` beside the run) keeps its own. How many groups were killed."""
+    still alive (`session` holds its pid: a desk `plan` beside the run) keeps its own; so does a dead driver's worker
+    that outlived it, as the two can't be told apart. Strict, as these numbers may predate a reboot. How many groups
+    were killed."""
     n = 0
     for d in sorted((p.state / "nested").glob("*")):
         own = d / "session"
@@ -112,7 +117,7 @@ def sweep_nested(p):
                 continue
         except OSError:
             pass
-        n += kill_nested(p, d.name)
+        n += kill_nested(p, d.name, strict=True)
     return n
 
 

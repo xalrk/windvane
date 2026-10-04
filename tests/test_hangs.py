@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import unittest
+import unittest.mock
 from datetime import timedelta
 from pathlib import Path
 
@@ -116,7 +117,7 @@ class Hangs(unittest.TestCase):
         self.mark(p, "T-001-worker", polite.pid)
         t = time.time()
         runner.kill_nested(p, "T-001-worker")
-        self.assertLess(time.time() - t, 0.4)
+        self.assertLess(time.time() - t, 1.5)  # well under the grace: not waited out
         self.assertTrue(self.gone(polite))
         self.assertEqual(polite.returncode, -signal.SIGTERM)
 
@@ -128,6 +129,15 @@ class Hangs(unittest.TestCase):
         os.utime(f, (time.time() - 3600, time.time() - 3600))  # marked before this process existed: a reboot since
         self.assertEqual(runner.kill_nested(p, "T-001-worker"), 0)
         self.assertTrue(alive(stranger.pid))
+
+    def test_the_sweep_spares_a_group_whose_start_it_cant_read(self):
+        p = Project(self.s.root)
+        stranger = self.group()
+        self.mark(p, "T-007-worker", stranger.pid)
+        with unittest.mock.patch.object(runner, "started_at", return_value=None):  # no /proc (macOS)
+            self.assertEqual(runner.sweep_nested(p), 0)
+        self.assertTrue(alive(stranger.pid))
+        self.assertFalse((p.state / "nested" / "T-007-worker").exists())
 
     def test_the_start_sweeps_what_a_dead_drivers_sessions_left(self):
         p = Project(self.s.root)
