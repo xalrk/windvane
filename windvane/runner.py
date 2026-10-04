@@ -1,6 +1,7 @@
 """Headless Claude sessions: one per worker, critic, reviewer and planner run. Each run's stream is kept in
 `runs/`, and its tokens and turns go to `ledger.jsonl` (`windvane stats`). Usage limits come from the stream's
 rate_limit_event, so they count the user's other sessions too."""
+import calendar
 import json
 import os
 import re
@@ -52,26 +53,61 @@ def inherited_stop(p, usage):
     return stop_if
 
 
+PROC = Path("/proc")
+
+
 def started_at(pid):
-    """When process `pid` started (epoch seconds), or None where /proc can't tell (gone, or not Linux)."""
+    """When process `pid` started (epoch seconds), or None when it's gone. /proc on Linux; elsewhere (macOS) `ps`,
+    whose `lstart` has a fixed format under LC_ALL=C, in UTC so the hour clocks go back can't read an hour off."""
+    if not PROC.is_dir():
+        try:
+            out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10,
+                                 env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}).stdout
+            return calendar.timegm(time.strptime(" ".join(out.split()), "%a %b %d %H:%M:%S %Y"))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
     try:
-        ticks = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
-        boot = next(int(l.split()[1]) for l in Path("/proc/stat").read_text().splitlines() if l.startswith("btime"))
+        ticks = int((PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[19])
+        boot = next(int(l.split()[1]) for l in (PROC / "stat").read_text().splitlines() if l.startswith("btime"))
         return boot + ticks / os.sysconf("SC_CLK_TCK")
     except (OSError, ValueError, IndexError, StopIteration):
         return None
 
 
+def owner_line(pid):
+    """What a session's `session` file holds: its pid, then the pid and start time of the process that owns it (the
+    driver, or a desk `plan`), so the sweep can tell a dead driver's worker from a desk session that's still wanted."""
+    me = os.getpid()
+    return f"{pid} {me} {started_at(me) or '-'}"
+
+
+def owner_alive(owner):
+    """Whether the process named by a `session` file's owner fields ([pid, start]) still runs: the same pid, started
+    at the same time (a reused number is someone else). A start it can't read either side counts as alive."""
+    try:
+        pid, start = int(owner[0]), float(owner[1]) if owner[1:2] not in ([], ["-"]) else None
+    except ValueError:
+        return True  # unreadable: spared, as before owners were recorded
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # another user's: a reused number, which the start time shows
+        pass
+    t = started_at(pid)
+    return t is None or start is None or abs(t - start) <= 2
+
+
 def signal_group(pgid, sig, mark=None, strict=False):
     """Send `sig` to a process group; False when it's gone. With `mark` (the file written as it started), a leader
     started after it is someone else reusing the number (after a reboot, say), and is left alone. `strict` leaves it
-    alone too when its start time can't be read (no /proc): numbers from a dead driver may well be a stranger's now."""
+    alone too when its start time can't be read: numbers from a dead driver may well be a stranger's now."""
     if mark:
         t = started_at(pgid)
         if t is None and strict:
             return False
         try:
-            if t is not None and t > mark.stat().st_mtime + 2:  # /proc's boot time is in whole seconds
+            if t is not None and t > mark.stat().st_mtime + 2:  # /proc's boot time and ps's are in whole seconds
                 return False
         except OSError:
             pass
@@ -82,13 +118,15 @@ def signal_group(pgid, sig, mark=None, strict=False):
         return False
 
 
-def kill_nested(p, session, strict=False):
+def kill_nested(p, session, strict=False, lead=()):
     """Stop the sessions started inside `session`: SIGTERM, then SIGKILL for groups alive after GRACE. Claude Code
     runs each Bash command in a session of its own, so killing a worker's process group misses a critic it started:
-    each one registers its group here instead. How many groups were still running (`strict`: see signal_group)."""
+    each one registers its group here instead. `lead` adds the session's own group (the sweep's orphaned worker). How
+    many groups were still running (`strict`: see signal_group)."""
     d = p.state / "nested" / session
     marks = list(d.glob("*")) if d.is_dir() else []
-    alive = [int(f.name) for f in marks if f.name.isdigit() and signal_group(int(f.name), signal.SIGTERM, f, strict)]
+    groups = [(int(f.name), f) for f in marks if f.name.isdigit()] + [(g, d / "session") for g in lead]
+    alive = [g for g, f in groups if signal_group(g, signal.SIGTERM, f, strict)]
     n, end = len(alive), time.time() + GRACE
     while alive and time.time() < end:
         time.sleep(0.1)
@@ -105,20 +143,26 @@ def kill_nested(p, session, strict=False):
 
 
 def sweep_nested(p):
-    """Kill what sessions of a driver that died left running (`nested/<session>/<group>`), and their dirs. A session
-    still alive (`session` holds its pid: a desk `plan` beside the run) keeps its own; so does a dead driver's worker
-    that outlived it, as the two can't be told apart. Strict, as these numbers may predate a reboot. How many groups
-    were killed."""
+    """Kill what sessions of a driver that died left running (`nested/<session>/<group>`), and their dirs, under the
+    run's lock. A live session whose owner lives too (a desk `plan` beside the run) keeps its own; one whose owner is
+    gone (a dead driver's worker that outlived it) is killed with its own. A `session` file from before owners were
+    recorded holds only the pid, and a live one is spared. Strict, as these numbers may predate a reboot. How many
+    groups were killed; a sweep that kills any leaves a `swept` row in the ledger (`windvane stats`)."""
     n = 0
     for d in sorted((p.state / "nested").glob("*")):
-        own = d / "session"
+        own, lead = d / "session", []
         try:
-            pid = own.read_text().strip()
+            pid, *owner = own.read_text().split() or [""]
             if pid.isdigit() and signal_group(int(pid), 0, own):
-                continue
+                if not owner or owner_alive(owner):
+                    continue
+                lead = [int(pid)]
         except OSError:
             pass
-        n += kill_nested(p, d.name, strict=True)
+        n += kill_nested(p, d.name, strict=True, lead=lead)
+    if n:
+        append_jsonl(p.state / "ledger.jsonl", {"event": "swept", "role": "driver", "groups": n,
+                                                "at": f"{datetime.now():%Y-%m-%d %H:%M}"})
     return n
 
 
@@ -243,7 +287,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     mark = p.state / "nested" / parent / str(proc.pid) if parent else None
     own = p.state / "nested" / raw.stem / "session"  # alive, so a run's start never sweeps what it started
     own.parent.mkdir(parents=True, exist_ok=True)
-    own.write_text(str(proc.pid))
+    own.write_text(owner_line(proc.pid))
     if mark:
         mark.parent.mkdir(parents=True, exist_ok=True)
         mark.touch()
