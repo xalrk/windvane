@@ -85,8 +85,9 @@ class PlanSafety(unittest.TestCase):
         self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
         branch, files = self.local_plan()
         self.assertIn(".windvane/tickets/T-003.md", files)
-        self.assertEqual(self.pushes, [("plan not merged", f"1 tickets wait on the local branch {branch}: "
-                                                           "push it by hand.")])
+        self.assertEqual(self.pushes, [("plan not merged", f"1 ticket waits on the local branch {branch} (refused "
+                                                           "by a hook or branch protection on the remote): push it by "
+                                                           "hand.")])
 
     def test_two_plans_in_the_same_minute_both_survive(self):
         orig = driver.now
@@ -112,8 +113,8 @@ class PlanSafety(unittest.TestCase):
     def test_closed_pr_plan_branch_no_longer_reserves_ids(self):
         self.open_plan_branch("plan-20260101-000000", "T-003")
         self.open_plan_branch("plan-20260102-000000", "T-004")
-        self.forge("github", "#!/bin/sh\n[ \"$2\" = list ] && printf '%s\\n' 'plan-20260101-000000 CLOSED' "
-                             "'plan-20260102-000000 OPEN' 'plan-20260102-000000 CLOSED'\nexit 0\n")
+        self.forge("github", "#!/bin/sh\ncase \"$*\" in *'--head plan-20260101-000000 '*) echo CLOSED;; "
+                             "*'--head plan-20260102-000000 '*) printf 'OPEN\\nCLOSED\\n';; esac\nexit 0\n")
         self.s.git("fetch", "-q", "origin")
         self.assertEqual(driver.pending_ids(self.p) - {"T-001", "T-002"}, {"T-004"})  # the open one holds its id
         self.assertEqual(self.s.git("ls-remote", "--heads", "origin", "plan-20260101-000000").count("plan-"), 1)
@@ -141,7 +142,7 @@ class PlanSafety(unittest.TestCase):
         self.assertNotEqual(e.exception.code, 0)
 
     def test_desk_plan_unlocked_runs(self):
-        self.assertIn("1 tickets planned", self.cmd_plan())
+        self.assertIn("1 ticket planned", self.cmd_plan())
 
 
 class Followups(unittest.TestCase):
