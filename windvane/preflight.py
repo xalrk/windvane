@@ -140,14 +140,16 @@ def block(x, letter, text, followup=""):
 
 def answered_block(prov, x):
     """The ## Provisional block the answer `x` is for: the one with its exact question, else the one its id names
-    (`T-003.p2`: the ticket's second), else the ticket's only one. A worker may reword the question on its branch,
-    and a block left behind would be asked again next run."""
+    (`T-003.p2`: the ticket's second) with the same options, else the ticket's only one. A worker may reword the
+    question on its branch, and a block left behind would be asked again next run. The options guard the id: blocks
+    added or filed since preflight saved it shift the numbers, and a wrong block removed is never asked at all."""
     mine = [m for m in BLOCK_RE.finditer(prov) if m.group(1) == x["ticket"]]
     exact = [m for m in mine if m.group(2).strip() == x["question"]]
     n = re.search(r"\.p(\d+)$", x["id"])
     if exact:
         return exact[0]
-    if n and 0 < int(n.group(1)) <= len(mine):
+    if n and 0 < int(n.group(1)) <= len(mine) and dict(OPT_RE.findall(mine[int(n.group(1)) - 1].group(3))) \
+            == x["options"]:
         return mine[int(n.group(1)) - 1]
     return mine[0] if len(mine) == 1 else None
 

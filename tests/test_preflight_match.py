@@ -39,6 +39,15 @@ class ProvisionalMatch(unittest.TestCase):
         text = preflight.file_answers(now, [(x, "A", ""), (y, "A", "")])  # both at once: neither shifts the other
         self.assertEqual(preflight.provisionals(text), [])
 
+    def test_a_shifted_id_leaves_another_question_alone(self):
+        old = qfile(("T-003", "Red or blue?", "red"), ("T-003", "Round or square?", "round"))
+        y = saved(old, "T-003", 2)
+        # Since the save, the first block was filed and a new one merged in: p2 is now another question.
+        now = qfile(("T-003", "Round or square, at last?", "round"), ("T-003", "Fast or cheap?", "fast"))
+        text = preflight.file_answers(now, [(y, "A", "")])
+        self.assertEqual([q["question"] for q in preflight.provisionals(text)], ["Round or square, at last?",
+                                                                                 "Fast or cheap?"])
+
     def test_the_exact_text_comes_first(self):
         old = qfile(("T-003", "Red or blue?", "red"), ("T-003", "Round or square?", "round"))
         x = saved(old, "T-003", 2)
