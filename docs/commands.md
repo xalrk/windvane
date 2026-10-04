@@ -50,8 +50,8 @@ Options of `windvane run`:
 | `windvane status [--line]` | Running or not, the slots, questions waiting for you, the log's tail. `--line`: one line. |
 | `windvane overview` | Where the project stands: tickets merged, underway, not started; critic scale health; then `overview_extra`'s output. |
 | `windvane watch [-n 30] [-o 6]` | Follow the running sessions live: what each says, the commands it runs, their output (`-o` lines each, 0 hides output). |
-| `windvane stats [--days 7] [--by role\|ticket]` | Tokens, turns and minutes per role or ticket, from the ledger. See [Token efficiency](tokens.md). |
-| `windvane stats --critic [--last 10]` | How the critic's scores spread over the last N tickets. |
+| `windvane stats [--days 7] [--by role\|ticket]` | Tokens, turns and minutes per role or ticket, from the ledger, costliest first by weighted tokens (cache reads and output priced in); died runs, and by ticket the cost per merged ticket with and without overhead. See [Token efficiency](tokens.md). |
+| `windvane stats --critic [--last 10] [--since <YYYY-MM-DD\|commit>]` | How the critic's scores spread over the last N tickets; `--since` keeps only verdicts at or after a date or a commit's time (say, the one that changed `CALIBRATION.md`). |
 | `windvane stats --periodic [--days 7]` | Each [[periodic]] entry's `score=<n>` over time, oldest first, with its last summary. |
 | `windvane mode` | How a design question is handled right now: asked, or built provisionally (quiet time). |
 | `windvane quiet` | Show the quiet times file and what it means now. See [Quiet times](configuration.md#quiet-times). |
