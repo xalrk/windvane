@@ -293,6 +293,26 @@ def cmd_check(a, p):
     sys.exit(0 if ok else 1)
 
 
+CRITIC_WAIT = 8  # minutes of retry pauses `windvane critic` may spend: the worker's Bash call stops at 10
+
+
+def critic_retry(p, sleep=time.sleep):
+    """`critic.judge`'s retry when a worker runs `windvane critic`: the run's backoff (`retries`, `retry_minutes`),
+    as many pauses as fit in CRITIC_WAIT. When they're spent the worker is told the critic is unavailable and goes
+    on; the driver asks the critic again, with its full backoff, after the worker finishes."""
+    waits = []
+
+    def retry(error):
+        wait = p.ap["retry_minutes"] * 2 ** len(waits)
+        if len(waits) >= p.ap["retries"] or sum(waits) + wait > CRITIC_WAIT:
+            return False
+        waits.append(wait)
+        print(f"The critic session died ({error}); retry {len(waits)} in {wait:g} min.", flush=True)
+        sleep(wait * 60)
+        return True
+    return retry
+
+
 def cmd_critic(a, p):
     tid = p.norm(a.ticket) or sys.exit("give a ticket id")
     if not p.critic["enabled"]:
@@ -304,7 +324,8 @@ def cmd_critic(a, p):
               "resolved it. Go on to the check.")
         return
     usage = Usage(p)
-    entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage))
+    entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage),
+                                   retry=critic_retry(p))
     print(text)
     if entry is None:
         print("\nCRITIC STEP: none. Fix the pack and run it again; if the critic itself keeps failing, go on.")
