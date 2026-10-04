@@ -344,7 +344,7 @@ def cmd_plan(a, p):
         n = driver.plan(p, goal, not a.no_followups, Usage(p), None, merge=a.merge, max_new=a.max, busy_raises=True)
     except driver.PlanBusy as e:
         raise SystemExit(f"windvane: {e}; try again when it's done")
-    print(f"{n} tickets planned" + ("" if n else "; see the log: windvane status"))
+    print(f"{driver.n_tickets(n)} planned" + ("" if n else "; see the log: windvane status"))
 
 
 def cmd_new(a, p):
