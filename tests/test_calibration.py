@@ -36,15 +36,16 @@ class Calibration(unittest.TestCase):
 
     def test_stats_critic_prints_the_spread(self):
         out = self.run_cli(cli.cmd_stats, critic=True, last=10).splitlines()
-        self.assertEqual(out[:6], [
+        self.assertEqual(out[:7], [
             "critic: last 4 tickets, 9 verdicts, pass mark 8/10",
             "first scores: 4-9 (median 6.5)",
             "final scores: 7-9 (median 8)",
             "needed revisions: 2 of 4",
             "exactly on the pass mark: 2 of 4 final scores, 3 of 9 verdicts",
             "passed only by running out of revisions (accept): 1 of 4",
+            "cap checks answered: 0 of 9 verdicts; a hit cap lowered the score in 0",
         ])
-        self.assertRegex(out[6], r"^  T-001 +4 → 6 → 8 +pass$")
+        self.assertRegex(out[7], r"^  T-001 +4 → 6 → 8 +pass$")
         self.assertRegex(out[-1], r"^  T-005 +8 → 8 +pass$")
 
     def test_last_n_keeps_the_latest_tickets(self):
