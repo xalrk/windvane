@@ -53,11 +53,11 @@ NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
-SUPERVISED = "WINDVANE_SUPERVISED"
+SUPERVISED = "WINDVANE_SUPERVISED"  # set for a driver under `supervise`: it hands a crash over instead of pushing it
 # Errors a ticket brings on itself, as (text in the error, lowercase; what to do), for its set-aside push
 SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it reads."),
                   ("context limit", "Split the ticket, or trim what it reads."),
-                  ("request too large", "Split the ticket, or trim what it reads."))  # set for a driver under `supervise`: it hands a crash over instead of pushing it
+                  ("request too large", "Split the ticket, or trim what it reads."))
 
 
 def said_times(n):
