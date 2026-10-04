@@ -25,10 +25,13 @@ from .config import user_dir
 DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb": 6}
 
 
+def machine_file():
+    return user_dir("XDG_CONFIG_HOME", ".config") / "machine.toml"
+
+
 def machine():
-    f = user_dir("XDG_CONFIG_HOME", ".config") / "machine.toml"
     try:
-        return {**DEFAULTS, **tomllib.loads(f.read_text())}
+        return {**DEFAULTS, **tomllib.loads(machine_file().read_text())}
     except (OSError, ValueError):
         return dict(DEFAULTS)
 

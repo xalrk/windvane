@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 
-from . import install, phone, runner
+from . import heavy, install, phone, runner
 from .config import CHECKOUT
 
 
@@ -96,6 +96,9 @@ def main(p=None):
     label = {"ok": "ok      ", "need": "MISSING ", "optional": "optional"}
     for level, what, fix in rows:
         print(f"{label[level]}  {what.ljust(width) if fix else what}" + (f"  -> {fix}" if fix else ""))
+    # Where new projects go is the user's own setting; the windvane skill reads this line rather than guess the path.
+    folder = heavy.machine().get("projects_dir")
+    print(f"machine settings: {heavy.machine_file()} (projects_dir: {folder or 'not set'})")
     missing = sum(level == "need" for level, _, _ in rows)
     print(f"{missing} to fix before windvane can run" if missing else "all set: windvane can run here")
     return 1 if missing else 0

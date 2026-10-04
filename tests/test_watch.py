@@ -100,6 +100,46 @@ class Show(unittest.TestCase):
             {"type": "tool_use", "name": "Bash", "input": {"command": "grep -n '**x**' `pwd`/a_b_c"}}]}}
         self.assertEqual(shown(ev, False), "  Bash: grep -n '**x**' `pwd`/a_b_c\n")
 
+    def test_a_long_bullet_wraps_under_its_text(self):
+        words = " ".join(f"word{i}" for i in range(15))
+        with mock.patch.dict("os.environ", {"COLUMNS": "42"}):
+            out = shown(say(f"- {words}\n  - nested {words}\n> quoted {words}"), False)
+        rows = out.removeprefix("› ").rstrip("\n").split("\n")
+        self.assertTrue(all(watch.width(r) <= 40 for r in rows), rows)
+        self.assertEqual(rows[0][:4], "  • ")
+        self.assertRegex(rows[1], r"^    word\d")  # under the first word, not at column 0
+        self.assertTrue(any(re.match(r"      word\d", r) for r in rows))  # the nested bullet's own indent
+        self.assertTrue(any(r.startswith("▎ word") for r in rows))
+        self.assertEqual(" ".join(r.strip(" •▎") for r in rows), f"{words} nested {words} quoted {words}")
+
+    def test_a_word_wider_than_the_terminal_is_cut_not_lost(self):
+        url = "https://example.com/" + "x" * 90
+        rows = watch.markdown(f"- see {url}", False, 40)
+        self.assertTrue(all(watch.width(r) <= 40 for r in rows), rows)
+        self.assertEqual("".join(r.strip(" •") for r in rows[1:]), url)
+
+    def test_a_clipped_table_shows_its_rows(self):
+        text = "\n\n".join(f"Line {i}." for i in range(10)) + "\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nAfter."
+        out = shown(say(text), False)
+        self.assertIn("1 │ 2", out)
+        self.assertIn("3 │ 4", out)
+        self.assertNotIn("After", out)
+        self.assertTrue(out.endswith("… (+2 lines)\n"), out)
+
+    def test_a_huge_table_is_still_clipped(self):
+        rows = "\n".join(f"| {i} | x |" for i in range(40))
+        out = shown(say("Intro.\n\n" + "\n".join(f"- {i}" for i in range(10)) + f"\n\n| a | b |\n|---|---|\n{rows}"),
+                    False)
+        self.assertLess(len(out.split("\n")), 22)
+        self.assertRegex(out, r"… \(\+\d+ lines\)\n$")
+
+    def test_a_url_with_brackets_stays_whole(self):
+        self.assertEqual(watch.markdown("see [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) now", False),
+                         ["see Foo (https://en.wikipedia.org/wiki/Foo_(bar)) now"])
+        self.assertEqual(watch.markdown("see [Foo](https://w.org/Foo_(bar)) now", True),
+                         ["see Foo\033[2m (https://w.org/Foo_(bar))\033[0m now"])  # dim to its last bracket
+        self.assertEqual(watch.markdown("[https://w.org/a_(b)](https://w.org/a_(b))", False), ["https://w.org/a_(b)"])
+        self.assertEqual(watch.markdown("[a](https://x.org/a) (b)", False), ["a (https://x.org/a) (b)"])
 
 if __name__ == "__main__":
     unittest.main()

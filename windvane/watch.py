@@ -2,6 +2,7 @@
 commands it runs and their output) and the driver's log. Local only: costs no tokens."""
 import json
 import re
+import shutil
 import sys
 import time
 import unicodedata
@@ -22,7 +23,7 @@ CODE = re.compile(r"(`+)(.+?)\1")
 ESC = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~])")
 HOLD = re.compile("[\ue000-\uefff]")  # placeholders for code spans and escapes, so no marker inside them counts
 SPAN = re.compile(
-    r"\[(?P<lt>[^\]]+)\]\((?P<url>[^)\s]+)\)"
+    r"\[(?P<lt>[^\]]+)\]\((?P<url>(?:[^()\s]|\([^()\s]*\))+)\)"  # a URL's own (…) pair stays in it
     r"|\*\*(?=\S)(?P<b1>.+?)(?<=\S)\*\*"
     r"|(?<!\w)__(?=\S)(?P<b2>.+?)(?<=\S)__(?!\w|\.\w)"
     r"|(?<![\w*])\*(?=[^\s*])(?P<i1>.+?)(?<=[^\s*])\*(?![\w*])"  # not intra-word: 2*3*4 stays as typed
@@ -135,11 +136,57 @@ def table(rows, rule, color):
     return out
 
 
-def markdown(text, color):
-    """Assistant text as terminal lines: headings, lists, quotes, rules, fenced code and tables by line, the rest
-    inline. Code blocks get a dim gutter and their language, with nothing inside them read as Markdown."""
+def wrap(segs, cols, lead=()):
+    """Segments as lines at most `cols` wide, broken between words. Lines after the first start with `lead` (spaces
+    under a bullet's text, the bar of a quote), so wrapped text hangs under its first word and not at column 0."""
+    if cols < 20 or width("".join(t for t, _ in segs)) <= cols:
+        return [segs]
+    lw = width("".join(t for t, _ in lead))
+    lead, lw = (list(lead), lw) if lw <= cols // 2 else ([], 0)
+    lines, cur, w = [], [], 0
+
+    def close():
+        while cur and not cur[-1][0].strip():  # no line ends in the spaces it broke at
+            cur.pop()
+        lines.append(cur)
+        return list(lead), lw
+    for t, st in segs:
+        for word in re.split(r"( +)", t):
+            if not word or word.isspace() and (lines and w == lw or w + width(word) > cols):
+                continue
+            if not word.isspace() and w + width(word) > cols and w > (lw if lines else 0):
+                cur, w = close()
+            while w + width(word) > cols:  # one word wider than a line: cut where the line ends
+                cut = fit(word, cols - w)
+                cur.append((word[:cut], st))
+                word = word[cut:]
+                cur, w = close()
+            if word:
+                cur.append((word, st))
+                w += width(word)
+    if cur != lead:
+        close()
+    return lines
+
+
+def fit(word, cols):
+    """How many characters of `word` fit in `cols` columns (at least one)."""
+    n = 0
+    while n < len(word) and width(word[:n + 1]) <= cols:
+        n += 1
+    return max(1, n)
+
+
+def blocks(text, color, cols=0):
+    """Assistant text as blocks of terminal lines, each line with whether it counts towards the clip: headings,
+    lists, quotes, rules, fenced code and tables by line, the rest inline, wrapped to `cols` (0: not wrapped).
+    A table is one block; blank lines and rules don't count. Code blocks get a dim gutter and their language, with
+    nothing inside them read as Markdown."""
     lines, out, i, fence = text.split("\n"), [], 0, None
     dim = frozenset({"dim"})
+
+    def add(segs, lead=()):
+        out.append([(paint(l, color), True) for l in wrap(segs, cols, lead)])
     while i < len(lines):
         line = lines[i].rstrip()
         m = FENCE.match(line)
@@ -147,38 +194,60 @@ def markdown(text, color):
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2):
                 fence = None
             else:
-                out.append(paint([("  │ ", dim), (line, frozenset())], color))
+                out.append([(paint([("  │ ", dim), (line, frozenset())], color), True)])
         elif m:
             fence = m.group(1)
-            out.append(paint([("  ┌ " + m.group(2) if m.group(2) else "  ┌", dim)], color))
+            out.append([(paint([("  ┌ " + m.group(2) if m.group(2) else "  ┌", dim)], color), True)])
         elif "|" in line and i + 1 < len(lines) and "|" in lines[i + 1] and TABLE_RULE.match(lines[i + 1]):
             rows, rule, i = [line], lines[i + 1], i + 2
             while i < len(lines) and "|" in lines[i] and lines[i].strip():
                 rows.append(lines[i])
                 i += 1
-            out += table(rows, rule, color)
+            out.append([(l, k != 1) for k, l in enumerate(table(rows, rule, color))])
             continue
         elif m := HEADING.match(line):
-            out.append(paint(inline(m.group(1), frozenset({"b", "h"})), color))
+            add(inline(m.group(1), frozenset({"b", "h"})))
         elif RULE.match(line):
-            out.append(paint([("─" * 40, dim)], color))
+            out.append([(paint([("─" * 40, dim)], color), False)])
         elif m := BULLET.match(line):
-            out.append(paint([("  " + m.group(1) + "• ", frozenset())] + inline(m.group(2)), color))
+            mark = "  " + m.group(1) + "• "
+            add([(mark, frozenset())] + inline(m.group(2)), [(" " * len(mark), frozenset())])
         elif m := NUMBERED.match(line):
-            out.append(paint([("  " + m.group(1) + m.group(2) + " ", frozenset())] + inline(m.group(3)), color))
+            mark = "  " + m.group(1) + m.group(2) + " "
+            add([(mark, frozenset())] + inline(m.group(3)), [(" " * len(mark), frozenset())])
         elif m := QUOTE.match(line):
-            out.append(paint([("▎ ", dim)] + inline(m.group(1), frozenset({"i"})), color))
+            add([("▎ ", dim)] + inline(m.group(1), frozenset({"i"})), [("▎ ", dim)])
+        elif not line.strip():
+            out.append([("", False)])
         else:
-            out.append(paint(inline(line), color))
+            add(inline(line))
         i += 1
     return out
 
 
-def clip_rendered(lines, n, color):
-    """The first n rendered lines; a clipped message ends with a reset, so no colour can run on."""
-    if len(lines) <= n:
-        return "\n".join(lines)
-    return "\n".join(lines[:n]) + ("\033[0m" if color else "") + f"\n… (+{len(lines) - n} lines)"
+def markdown(text, color, cols=0):
+    """Assistant text as terminal lines (see `blocks`)."""
+    return [line for b in blocks(text, color, cols) for line, _ in b]
+
+
+def clip_rendered(parts, n, color, more=4):
+    """Whole blocks up to n counted lines. The block that crosses n is shown up to `more` lines past it, so a table
+    that started shows rows and a wrapped paragraph its end. A clipped message ends with a reset, so no colour can
+    run on."""
+    shown, count, total = [], 0, sum(len(b) for b in parts)
+    for b in parts:
+        if count >= n and any(k for _, k in b):
+            break
+        for line, k in b:
+            if count + k > n + more:
+                break
+            shown.append(line)
+            count += k
+    if len(shown) == total:
+        return "\n".join(shown)
+    while shown and not shown[-1]:
+        shown.pop()
+    return "\n".join(shown) + ("\033[0m" if color else "") + f"\n… (+{total - len(shown)} lines)"
 
 
 def show(ev, out_lines):
@@ -186,7 +255,7 @@ def show(ev, out_lines):
     if t == "assistant":
         for b in ev.get("message", {}).get("content", []):
             if b.get("type") == "text" and b.get("text", "").strip():
-                print(c("1", "› ") + clip_rendered(markdown(b["text"].strip(), tty), 12, tty))
+                print(c("1", "› ") + clip_rendered(blocks(b["text"].strip(), tty, shutil.get_terminal_size().columns - 2), 12, tty))
             elif b.get("type") == "tool_use":
                 i = b.get("input", {})
                 arg = i.get("command") or i.get("file_path") or i.get("pattern") or json.dumps(i)[:120]

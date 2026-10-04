@@ -17,8 +17,8 @@ Do everything yourself. The user should only have to answer real product questio
 1. **Pin the idea down.** Restate it in a few lines. Ask only the questions that change what gets built (who it's
    for, the platform or stack when it matters, the one thing it must do well), in one AskUserQuestion with
    recommendations. Decide engineering questions yourself.
-2. **Make the repo.** Put it in the user's projects folder: `projects_dir` in `~/.config/windvane/machine.toml`
-   (if it isn't set, ask once and save their answer there), as `<projects_dir>/<short-name>`. Then `git init -b main`, and a minimal skeleton in the stack you chose
+2. **Make the repo.** Put it in the user's projects folder: `projects_dir` in the machine settings file
+   `windvane doctor` names on its `machine settings:` line (if it isn't set, ask once and save their answer there), as `<projects_dir>/<short-name>`. Then `git init -b main`, and a minimal skeleton in the stack you chose
    (project files, one smoke test, a test command that passes). Add a `CLAUDE.md` with what the project is, its hard
    rules, how to run and test it, and that tests come with every change. Then
    `gh repo create "$(gh api user -q .login)/<short-name>" --private --source . --push`. Repos are private unless the
