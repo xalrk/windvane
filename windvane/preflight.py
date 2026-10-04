@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from .config import slots
 from .driver import REVIEW_DENY, clean_detach, ensure_worktree, land, pending_ids, rules
-from .questions import OPT_RE, blocks, give_answer, part
+from .questions import BLOCK_RE, OPT_RE, blocks, give_answer, part
 from .queue import Queue
 from .runner import run_claude
 from .util import git, gout, load_json, log, now, read_jsonl, save_json
@@ -138,16 +138,30 @@ def block(x, letter, text, followup=""):
     return "\n".join(l for l in lines if l)
 
 
+def answered_block(prov, x):
+    """The ## Provisional block the answer `x` is for: the one with its exact question, else the one its id names
+    (`T-003.p2`: the ticket's second), else the ticket's only one. A worker may reword the question on its branch,
+    and a block left behind would be asked again next run."""
+    mine = [m for m in BLOCK_RE.finditer(prov) if m.group(1) == x["ticket"]]
+    exact = [m for m in mine if m.group(2).strip() == x["question"]]
+    n = re.search(r"\.p(\d+)$", x["id"])
+    if exact:
+        return exact[0]
+    if n and 0 < int(n.group(1)) <= len(mine):
+        return mine[int(n.group(1)) - 1]
+    return mine[0] if len(mine) == 1 else None
+
+
 def file_answers(qtext, answers):
     """QUESTIONS.md with each (question, letter, text) moved or added under ## Answered."""
     text = qtext or "# Questions for the user\n\n## Open\n\n## Provisional\n\n## Answered\n"
-    for x, *_ in answers:
-        if x["kind"] == "provisional":
-            prov = part(text, "Provisional")
-            m = re.search(rf"^### {re.escape(x['ticket'])}:?[ \t]+{re.escape(x['question'])}[ \t]*$.*?(?=^### |\Z)",
-                          prov, re.M | re.S)
-            if m:
-                text = text.replace(prov, prov.replace(m.group(0), "", 1), 1)
+    prov = part(text, "Provisional")
+    hits = {m.span(): m for x, *_ in answers if x["kind"] == "provisional" and (m := answered_block(prov, x))}
+    keep = prov
+    for (a, b) in sorted(hits, reverse=True):
+        keep = keep[:a] + keep[b:]
+    if hits:
+        text = text.replace(prov, keep, 1)
     if "\n## Answered" not in "\n" + text:
         text = text.rstrip("\n") + "\n\n## Answered\n"
     head, _, rest = text.partition("## Answered")
