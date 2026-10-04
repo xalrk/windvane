@@ -46,6 +46,11 @@ if hang and system.startswith(os.environ.get("FAKE_HANG_ROLE", "")):
     open(hang, "w").write("streamed")
     import time
     time.sleep(60)
+if os.environ.get("FAKE_ERROR_FOR") and re.search(os.environ["FAKE_ERROR_FOR"], prompt.split("\n")[0]):
+    step = "error"  # FAKE_ERROR_FOR: a regex on the prompt's first line ("Ticket T-001.", "Critique T-001.")
+if os.environ.get("FAKE_MAX_TURNS") and system.startswith(os.environ["FAKE_MAX_TURNS"]):
+    emit({"type": "result", "subtype": "error_max_turns", "is_error": True, "num_turns": 5, "result": ""})
+    sys.exit(1)
 if step == "error":
     emit({"type": "result", "subtype": "success", "is_error": True, "num_turns": 1,
           "result": 'API Error: 529 {"type":"overloaded_error","message":"Overloaded"}'})

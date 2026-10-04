@@ -145,12 +145,15 @@ def settings_json(allow=(), deny=()):
 
 def ending(final, code, noise):
     """How a session ended, as (kind, error text): "ok"; "error" when the result event says the API or the CLI failed
-    (overload, 5xx, not logged in, max turns); "no result" when the process died before one (network drop, crash).
+    (overload, 5xx, not logged in); "budget" when the session spent its own budget (max turns, max dollars): the
+    ticket's doing, not a crash to retry; "no result" when the process died before one (network drop, crash).
     `noise` is the stream's last non-JSON lines, where a crash says why."""
     if not final:
         why = " ".join(" ".join(noise).split())[-300:]
         return "no result", f"no result event (exit {code})" + (f": {why}" if why else "")
     sub = final.get("subtype") or "success"
+    if sub.startswith("error_max_"):
+        return "budget", sub.removeprefix("error_").replace("_", " ")
     if final.get("is_error") or sub != "success":
         why = " ".join(str(final.get("result") or final.get("errors") or "").split())
         why = re.sub(r'\{.*"message":\s*"([^"]*)".*\}', r"\1", why)[:300] or f"exit {code}"  # the API's JSON body
@@ -163,7 +166,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     """Run one headless session to its end. `stop_if()` returns a reason to kill it (deadline, usage cap);
     `limits` (kill time, 5-hour cap, weekly cap) passes the same rule on to sessions started inside this one.
     Returns (final text, why it was stopped or None, why it failed or None): a failure is the session's own
-    (API error, crash), never the ticket's, so callers can retry it."""
+    (API error, crash), never the ticket's, so callers can retry it; a session out of its own turns or budget comes
+    back stopped ("max turns")."""
     if p.perm_problems:  # the run and `windvane periodic` stop before this; a desk `plan` or `critic` stops here
         raise SystemExit(f"windvane: bad permission rules in config.toml: {'; '.join(p.perm_problems)}")
     own = p.perms.get(role, {})
@@ -232,6 +236,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     if mark:
         mark.unlink(missing_ok=True)
     end, error = ("killed", None) if killed else ending(final, code, noise)
+    if end == "budget":  # stopped by its own limit: the caller treats it as a killed run, never retries it
+        killed, error = error, None
     u, turns = final.get("usage"), final.get("num_turns")
     estimated = not u and bool(seen)
     if estimated:  # killed or crashed before its result event: add up what the stream showed

@@ -8,7 +8,8 @@ ticket's next worker run as written feedback. Design questions go to the user's 
 build their recommendation and record it instead.
 
 Stops at the deadline, `windvane stop`, two failed tickets in a row, an empty queue, the weekly cap, or sessions that
-keep dying (API errors, crashes; each is retried after a growing pause first). A network outage stops nothing: it is
+keep dying across tickets (API errors, crashes; each is retried after a growing pause first; one ticket's alone set
+it aside). A network outage stops nothing: it is
 waited out (net.py), and what it broke is resumed with no retry spent. At the 5-hour cap it stops the running
 session and pauses until the window resets. A detached run's driver is itself restarted after a crash (`supervise`).
 """
@@ -41,7 +42,7 @@ RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)"
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
-           "conflicts", "spent", "update_said", "scale_said", "desk_merged")  # the run's own memory, handed to the driver a self-update restarts
+           "conflicts", "spent", "update_said", "scale_said", "desk_merged", "suspect")  # the run's own memory, handed to the driver a self-update restarts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
@@ -174,6 +175,10 @@ class Pilot(Desk, Periodic):
         self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
+        # Sessions dead per ticket: ticket -> [crashes, self.oks at its first], and the sessions that ended well, so a
+        # ticket whose own sessions keep dying can be told from a broken API. `suspect`: [ticket, error] set aside
+        # on its own crashes alone, until another ticket's session shows the API works.
+        self.ticket_crashes, self.oks, self.suspect = {}, 0, None
         self.sleep = time.sleep  # the retry backoff's; tests make it instant
         self.stop_reason = "unknown"
         self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
@@ -272,23 +277,57 @@ class Pilot(Desk, Periodic):
         if killed:
             self.log(f"  stopped {label}: {killed} ({self.usage.text()})")
         elif not error:
-            self.crashes = 0
+            self.session_ok(ticket)
         return text, killed, error
+
+    def session_ok(self, tid):
+        """A session ended well: the API works, so a ticket set aside on its own crashes alone stays aside, said now."""
+        with self.lock:
+            self.crashes, self.oks = 0, self.oks + 1
+            self.ticket_crashes.pop(tid, None)
+            suspect, self.suspect = self.suspect, None
+        if suspect:
+            self.set_aside(*suspect)
 
     def wait_online(self):
         """Wait out a network outage; False when a stop or the deadline ended the wait."""
         return net.wait(self.p, self.end, lambda: (self.p.state / "STOP").exists(), self.sleep)
 
-    def crashed(self, label, error):
+    def crashed(self, label, error, tid=""):
         """A session died for a reason outside its ticket (API overload, network, not logged in): pause, longer each
-        time, and return True to run it again. Too many in a row stop the run instead of failing ticket after ticket
-        on a broken API; nothing is pushed until then. With the network down it waits for it instead, and the rerun
-        spends no retry."""
+        time, and return True to run it again. Nothing is pushed for a retry. With the network down it waits for it
+        instead, and the rerun spends no retry.
+        When one ticket's sessions have died more than `retries` times, it is set aside for the run if other
+        sessions ended well since its first crash; with none since, it is set aside on trial while other tickets
+        can run, and the next session decides: a good one keeps it aside, a dead one stops the run. Sessions dying
+        across tickets stop the run instead of failing ticket after ticket on a broken API."""
         if not net.online():
             self.log(f"  {label} died ({error}) with the network down; rerun when it's back, no retry spent")
             return self.wait_online()
-        self.crashes += 1
-        n, wait = self.p.ap["retries"], self.p.ap["retry_minutes"] * 2 ** (self.crashes - 1)
+        n = self.p.ap["retries"]
+        with self.lock:
+            self.crashes += 1
+            own = self.ticket_crashes.setdefault(tid, [0, self.oks]) if tid else None
+            if own:
+                own[0] += 1
+            if own and own[0] > n and self.oks > own[1]:
+                self.crashes = 0  # the API works: this ticket is what fails
+                del self.ticket_crashes[tid]
+                aside = "now"
+            elif own and own[0] > n and not self.suspect and self.others_left(tid):
+                self.suspect = [tid, error]
+                aside = "on trial"
+            else:
+                aside = None
+        if aside == "now":
+            self.set_aside(tid, error)
+            return False
+        if aside:
+            self.skip.add(tid)
+            self.log(f"  {label}: {own[0]} sessions died ({error}); set aside while another ticket runs: if its "
+                     "session dies too, the run stops")
+            return False
+        wait = self.p.ap["retry_minutes"] * 2 ** (max(self.crashes, own[0] if own else 0) - 1)
         if self.crashes > n:
             self.halt = f"{self.crashes} sessions in a row died ({error})"
         elif now() + timedelta(minutes=wait) >= self.end() - timedelta(minutes=self.a.min_slot):
@@ -296,12 +335,48 @@ class Pilot(Desk, Periodic):
         if self.halt:
             self.log(f"  {label}: {self.halt}")
             return False
-        self.log(f"  {label} died ({error}); retry {self.crashes}/{n} in {wait:g} min")
-        for _ in range(round(wait)):
+        self.log(f"  {label} died ({error}); retry {own[0] if own else self.crashes}/{n} in {wait:g} min")
+        return self.backoff(wait)
+
+    def backoff(self, minutes):
+        """A retry's backoff; False when a stop or the deadline came first."""
+        for _ in range(round(minutes)):
             if (self.p.state / "STOP").exists() or now() >= self.end():
                 return False
             self.sleep(60)
         return True
+
+    def others_left(self, tid):
+        """Whether a ticket other than `tid` is running or could start: the session that tells a ticket's own
+        failure from a broken API."""
+        q, blocked = self.queue, set(self.questions)
+        return any(t != tid for t in self.running) or any(
+            t != tid and t not in self.skip and q.status(t, blocked) in ("wip", "todo") for t in q.order)
+
+    def set_aside(self, tid, error):
+        """A ticket whose own sessions keep dying while others' don't: the rest of the run goes on without it."""
+        self.skip.add(tid)
+        self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work")
+        push(f"Set aside: {self.name(tid)}", f"Its sessions died {self.p.ap['retries'] + 1} times ({error}) while "
+             "other sessions worked. Its branch is kept; the run goes on without it.", 4, "warning")
+
+    def critic_retry(self, tid):
+        """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
+        retries only make the critic unavailable for this head (it never gates a ticket on its own failure), and
+        they count toward neither the ticket's crashes nor the run's."""
+        tries = []
+
+        def retry(error):
+            if not net.online():
+                self.log(f"  {tid}-critic died ({error}) with the network down; rerun when it's back")
+                return self.wait_online()
+            tries.append(error)
+            n, wait = self.p.ap["retries"], self.p.ap["retry_minutes"] * 2 ** (len(tries) - 1)
+            if len(tries) > n or now() + timedelta(minutes=wait) >= self.end() - timedelta(minutes=self.a.min_slot):
+                return False
+            self.log(f"  {tid}-critic died ({error}); retry {len(tries)}/{n} in {wait:g} min")
+            return self.backoff(wait)
+        return retry
 
     # ---------- one ticket
 
@@ -339,7 +414,7 @@ class Pilot(Desk, Periodic):
         allow, deny = worker_perms(p)
         text, killed, error = self.claude("worker", tid, prompt, self.worker_rules, wd, limit, allow, deny, tid)
         if error:
-            self.crashed(tid, error)  # the loop picks the ticket again, with its branch as it now is
+            self.crashed(tid, error, tid)  # the loop picks the ticket again, with its branch as it now is
         else:
             self.handle(tid, text, killed)
         if start_five is not None and self.usage.five is not None and self.usage.five >= start_five:
@@ -359,6 +434,9 @@ class Pilot(Desk, Periodic):
         if killed:
             if killed == "time" and now() < self.end() - timedelta(minutes=5):
                 self.log(f"{tid}: hit the {self.a.ticket_hours:g}-hour limit for one run; set aside")
+                self.skip.add(tid)
+            elif killed.startswith("max "):  # out of its own turns or budget: the ticket's doing, like the time box
+                self.log(f"{tid}: the run hit its {killed}; set aside")
                 self.skip.add(tid)
             return
         m = last_match(RESULT_RE, text)
@@ -481,7 +559,7 @@ class Pilot(Desk, Periodic):
                 return False
             self.log(f"{tid}: critic run (the worker didn't finish it)")
             entry, text = critic.judge(p, tid, self.wd, sha, self.usage,
-                                       self.stopper(now() + timedelta(minutes=30)))
+                                       self.stopper(now() + timedelta(minutes=30)), self.critic_retry(tid))
             if entry is None:
                 self.log(f"{tid}: the critic gave no verdict; on to the check")  # a help, never a gate on its own failure
                 return True
@@ -613,7 +691,7 @@ class Pilot(Desk, Periodic):
                                               now() + timedelta(hours=1),
                                               ["Bash(git diff *)", "Bash(git show *)", "Bash(git log *)"],
                                               REVIEW_DENY, tid)
-            if error and self.crashed(f"{tid}-review", error):
+            if error and self.crashed(f"{tid}-review", error, tid):
                 continue
             m = None if killed or error else last_match(REVIEW_RE, text)
             if m or killed or error or net.online():

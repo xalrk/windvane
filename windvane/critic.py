@@ -34,6 +34,8 @@ NEXT = {
     "accept": ("Out of revisions and still under the bar. Go on; put the critique in the PR body under "
                "\"Critic (under the bar)\"."),
     "skip": "Not user-facing: go on to the check (the reviewer checks that claim).",
+    "unavailable": ("No critique this time: go on to the check, and say in the PR body that the critic was "
+                    "unavailable. The driver asks it again after you finish."),
 }
 
 
@@ -186,8 +188,10 @@ def system_prompt(p, cwd):
     return "\n\n".join(parts)
 
 
-def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None):
-    """Critique a ticket's pack at `rev` and record the verdict. Returns (record or None, reply text)."""
+def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
+    """Critique a ticket's pack at `rev` and record the verdict. Returns (record or None, reply text).
+    A critic session that dies (API error, crash) is no verdict on the ticket: `retry(error)` waits and says whether
+    to run it again; when it says no, the record's step is "unavailable", with no score, so it never counts as one."""
     notes, images, facing = pack(p, tid)
     if notes is None:
         return None, f"No critic pack: write {pack_dir(p, tid)}/notes.md first."
@@ -209,8 +213,16 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None):
         f"## Files the change touches\n{stat}",
         "## Your earlier critiques of this ticket, oldest first\n" + "\n---\n".join(earlier) if earlier else "",
     ]))
-    text, _, _ = run_claude(p, "critic", f"{tid}-critic", prompt, system_prompt(p, cwd), cwd, deny=DENY,
-                            usage=usage, stop_if=stop_if, ticket=tid)
+    while True:
+        text, _, error = run_claude(p, "critic", f"{tid}-critic", prompt, system_prompt(p, cwd), cwd, deny=DENY,
+                                    usage=usage, stop_if=stop_if, ticket=tid)
+        if not error or not retry or not retry(error):
+            break
+    if error:
+        entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": None, "fixes": 0,
+                 "revisions": n, "step": "unavailable", "gist": error[:200], "critique": ""}
+        append_jsonl(p.state / "critic.jsonl", entry)
+        return entry, f"Critic unavailable ({error})."
     v = verdict(text)
     if not v or p.norm(v[0]) != tid:
         return None, text or "The critic ended without a verdict."

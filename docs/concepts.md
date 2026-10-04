@@ -80,8 +80,15 @@ Anything sent back (critic points, review changes, a red check, a merge conflict
 run as written feedback. Each kind of send-back spends its own budget, so a flaky check can't use up the reviewer's
 rounds. A ticket that keeps bouncing is **set aside** for the rest of the run: after `review_rounds` reviews asking
 for changes, more than `check_retries` red checks, `conflict_retries` merge conflicts or `[critic] revisions` critic
-send-backs, `partials` runs in a row out of time, or a run longer than `ticket_hours`. The run's summary and the
-phone say which budget ran out and why.
+send-backs, `partials` runs in a row out of time, or a run longer than `ticket_hours` (or out of its own turns).
+The run's summary and the phone say which budget ran out and why.
+
+A session that dies outside its ticket's control (API error, crash) is rerun after a growing pause (`retries`,
+`retry_minutes`). When one ticket's sessions have died more than `retries` times while other sessions worked, that
+ticket is set aside for the rest of the run, with one push, and its branch is kept. With no other session in between
+(one ticket at a time), it is set aside on trial while another ticket runs: if that session dies too, the run stops,
+as it does whenever sessions keep dying across tickets. A dead critic is retried the same way; when it keeps dying the
+worker is told it's unavailable and goes on, and no score is recorded.
 
 ## Touches and parallel slots
 
