@@ -141,5 +141,36 @@ class Show(unittest.TestCase):
         self.assertEqual(watch.markdown("[https://w.org/a_(b)](https://w.org/a_(b))", False), ["https://w.org/a_(b)"])
         self.assertEqual(watch.markdown("[a](https://x.org/a) (b)", False), ["a (https://x.org/a) (b)"])
 
+    # T-053: cases from running the wrap over every message in the real stream logs.
+    def test_a_long_code_line_wraps_under_its_gutter(self):
+        line = "Scores: works=8 clear=7 lean=8 " + " ".join(f"word{i}" for i in range(20))  # critics fence verdicts
+        rows = watch.markdown(f"```\n{line}\n```", False, 40)
+        self.assertTrue(all(watch.width(r) <= 40 for r in rows), rows)
+        self.assertTrue(all(r.startswith("  │ ") for r in rows[1:]), rows)
+        self.assertEqual(" ".join(r.removeprefix("  │ ") for r in rows[1:]), line)
+
+    def test_a_table_wider_than_the_terminal_wraps_its_cells(self):
+        text = ("| Send-back | Budget it spends | Default |\n|---|---|--:|\n"
+                "| Reviewer asks for changes | review_rounds, as before | 3 |\n"
+                "| Merge conflict | conflict_retries (new); conflicts it resolves itself don't count | 2 |")
+        rows = watch.markdown(text, False, 40)
+        self.assertTrue(all(watch.width(r) <= 40 for r in rows), rows)
+        self.assertEqual(rows[0].split(" │ ")[0].strip(), "Send-back")
+        rules = [i for i, r in enumerate(rows) if "─┼─" in r]
+        self.assertEqual(len(rules), 2, "a rule under the header and one between the body rows")
+        body = rows[rules[0] + 1:rules[1]]
+        self.assertGreater(len(body), 1, "the first row wrapped")
+        self.assertEqual(" ".join(r.split(" │ ")[0].strip() for r in body).split(), "Reviewer asks for changes".split())
+        self.assertEqual(body[0].split(" │ ")[2].strip(), "3", "right-aligned on the row's first line")
+        squeeze = lambda rs: sorted(re.sub(r"[\s│─┼]", "", "".join(rs)))
+        self.assertEqual(squeeze(rows), squeeze(watch.markdown(text, False)), "no character lost")
+        block = watch.blocks(text, False, 40)[0]
+        self.assertEqual([k for _, k in block], ["─┼─" not in r for r in rows], "rules don't count toward the clip")
+
+    def test_a_table_too_wide_to_narrow_is_left_whole(self):
+        row = "| " + " | ".join("x" * 6 for _ in range(12)) + " |"
+        text = f"{row}\n|{'---|' * 12}\n{row}"
+        self.assertEqual(watch.markdown(text, False, 40), watch.markdown(text, False))
+
 if __name__ == "__main__":
     unittest.main()

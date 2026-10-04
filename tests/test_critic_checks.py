@@ -53,6 +53,7 @@ class Checks(unittest.TestCase):
         self.assertEqual(entry["hits"], ["works<=5"])
         self.assertEqual(entry["checks"], 3)
         self.assertEqual((entry["fixes"], entry["step"]), (0, "revise"), "a hit cap with nothing listed goes back")
+        self.assertEqual(entry["effective"], 1, "the count the step used is stored beside the critic's own")
         self.assertIn("Capped by the driver: works<=5 answered yes (works 7 → 5)", critique)
         self.assertNotIn("Capped by the driver", critic.unscored(critique))
         self.assertTrue(critique.startswith("Caps:"), "the checks stay in the recorded critique")

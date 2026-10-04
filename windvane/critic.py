@@ -191,7 +191,7 @@ def collapsed(recs, last=10, least=5):
     by = {}
     for _, rs in c["tickets"]:
         for r in rs:
-            by.setdefault(r.get("fixes", 0), []).append(r["score"])
+            by.setdefault(effective(r), []).append(r["score"])
     guess = {f: statistics.mode(xs) for f, xs in by.items()}
     hits = sum(xs.count(guess[f]) for f, xs in by.items())
     if len(set(guess.values())) > 1 and c["verdicts"] - hits <= c["verdicts"] // 10:
@@ -199,6 +199,12 @@ def collapsed(recs, last=10, least=5):
         return (f"Critic scale collapsed: the fix count sets the score ({rule}) in {hits} of {c['verdicts']} "
                 "verdicts; recalibrate at the desk")
     return None
+
+
+def effective(r):
+    """The fix count the step used: a hit cap counts as a fix even when the critic's own list was empty. Read from
+    `hits` too, so records from before `effective` was stored group right."""
+    return r.get("effective", max(r.get("fixes", 0), len(r.get("hits") or [])))
 
 
 def spread(xs):
@@ -271,7 +277,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         critique += (f"\nCapped by the driver: {', '.join(hits)} answered yes{f' ({low})' if low else ''}; "
                      "a hit cap counts as a fix.")
     entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
-             "dims": dims, "fixes": fixes, "revisions": n, "gist": gist[:200],
+             "dims": dims, "fixes": fixes, "effective": max(fixes, len(hits)), "revisions": n, "gist": gist[:200],
              "step": step(p, dims, max(fixes, len(hits)), n),
              "critique": critique, "scale": scale(p, cwd), "checks": len(caps),
              "hits": hits, "capped": was, "anchor": anchor}
