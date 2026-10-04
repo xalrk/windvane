@@ -48,6 +48,16 @@ class Doctor(unittest.TestCase):
         self.assertRegex(out, r"optional +the windvane skill .*-> windvane install")
         self.assertRegex(out, r"optional +phone pushes")
 
+    def test_it_names_the_machine_settings_file_the_skill_reads(self):
+        conf = self.tmp / "xdg"
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(conf)}):
+            out, _ = self.run_doctor(GITHUB)
+            self.assertIn(f"machine settings: {conf}/windvane/machine.toml (projects_dir: not set)", out)
+            (conf / "windvane").mkdir(parents=True)
+            (conf / "windvane/machine.toml").write_text('projects_dir = "/srv/code"\n')
+            out, _ = self.run_doctor(GITHUB)
+        self.assertIn("(projects_dir: /srv/code)", out)
+
     def test_claude_logged_out_says_how_to_log_in(self):
         out, code = self.run_doctor(claude=LOGGED_OUT)
         self.assertEqual(code, 1)
