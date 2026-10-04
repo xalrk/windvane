@@ -8,7 +8,8 @@ ticket's next worker run as written feedback. Design questions go to the user's 
 build their recommendation and record it instead.
 
 Stops at the deadline, `windvane stop`, two failed tickets in a row, an empty queue, the weekly cap, or sessions that
-keep dying (API errors, crashes; each is retried after a growing pause first). A network outage stops nothing: it is
+keep dying across tickets (API errors, crashes; each is retried after a growing pause first; one ticket's alone set
+it aside). A network outage stops nothing: it is
 waited out (net.py), and what it broke is resumed with no retry spent. At the 5-hour cap it stops the running
 session and pauses until the window resets. A detached run's driver is itself restarted after a crash (`supervise`).
 """

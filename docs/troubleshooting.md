@@ -37,8 +37,9 @@ let it spend more of your window.
 meanwhile; without an answer the recommendation is built after `answer_wait` minutes.
 
 **Sessions keep dying with an API or network error.**
-Each is rerun after a growing pause (`retries`, `retry_minutes`) without failing its ticket. If they keep dying, the
-run stops and the log shows the error. Check that `claude` works by hand (`claude -p "hi"`).
+Each is rerun after a growing pause (`retries`, `retry_minutes`) without failing its ticket. If only one ticket's
+sessions keep dying (say "prompt is too long"), that ticket is set aside and the run goes on; if they keep dying
+across tickets, the run stops and the log shows the error. Check that `claude` works by hand (`claude -p "hi"`).
 
 **The network went down.**
 The run waits it out: when a session dies or a git or `gh` call fails, it checks that the API and the git remote
