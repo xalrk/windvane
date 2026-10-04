@@ -60,7 +60,8 @@ line the driver acts on. Product calls are never a session's to make: they becom
 `windvane stop` ends a run after its current ticket; `windvane stop --now` kills every session of the run (workers,
 reviewers, the critics and background jobs they started) and leaves the worktrees, so the next run resumes the work. A
 nested session that ignores the stop is killed outright a few seconds later, and if the driver itself dies, the next
-run's start kills what its sessions left running.
+run's start kills what its sessions left running (only where it can tell the process is the same one: on a system
+without `/proc`, such as macOS, it just forgets them, as a reboot may have handed their numbers to other programs).
 
 ## The heavy lock
 
