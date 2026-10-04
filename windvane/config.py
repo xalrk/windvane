@@ -30,6 +30,7 @@ DEFAULTS = {
     "forge": "github",  # github: PRs through gh; git: the driver merges and pushes to main itself
     "check": "",  # the project's CI command, run by `windvane check` (empty: no check)
     "setup": "",  # run once in a fresh worktree (e.g. "npm ci"); failing stops the run
+    "setup_minutes": 20,  # a setup still running then is killed and fails (a hung `npm ci` never wedges a run)
     "isolate": True,  # work in the autopilot's own worktrees; false: in the checkout itself (huge builds)
     "goal": "",  # what `windvane plan` aims at when given no goal
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
@@ -190,6 +191,9 @@ class Project:
         self.models = c["models"]
         self.critic = c["critic"]
         self.ap = c["autopilot"]
+        sm = c["setup_minutes"]
+        if isinstance(sm, bool) or not isinstance(sm, (int, float)) or sm <= 0:
+            raise SystemExit(f"windvane: setup_minutes = {sm!r} in config.toml: use a number of minutes above 0")
         self.periodic = periodic(c.get("periodic", []))
         self.perms, self.perm_problems = permissions(c["permissions"], self.periodic)
         self.append_only = rules(c.get("append_only", []))

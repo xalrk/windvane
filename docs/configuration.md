@@ -25,7 +25,8 @@ matching keys for one run.
 | `main` | `"main"` | The branch work is merged into. Sessions may never push to it or check it out. |
 | `forge` | `"github"` | `github`: workers open pull requests with `gh` and the driver merges them. `git`: no pull requests; the driver merges the ticket branch and pushes `main` itself. |
 | `check` | `""` | The project's test command, run by `windvane check` in the worker's worktree and by the driver on every pushed head and merged tree, e.g. `"pytest -q"` or `"npm test"`. Empty means no check. |
-| `setup` | `""` | A command run once in each fresh autopilot worktree before it is used, e.g. `"npm ci"`. If it fails, the run stops with its output. |
+| `setup` | `""` | A command run once in each fresh autopilot worktree before it is used, e.g. `"npm ci"`, with no input. If it fails, the run stops with its output. |
+| `setup_minutes` | `20` | The longest `setup` may run. One still running then (a hung `npm ci`) is killed, its child processes too, and fails as above: `setup ... timed out after 20 min`. |
 | `isolate` | `true` | Work in the autopilot's own worktrees. `false` runs sessions in your checkout instead, for projects whose builds can't be duplicated; it also limits the run to one ticket at a time. |
 | `goal` | `""` | What `windvane plan` and `windvane run --replan` aim at when no goal is given. |
 | `author` | git's identity | `"Name <email>"` for the driver's own commits (merges, planned tickets). |

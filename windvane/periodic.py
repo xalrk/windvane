@@ -15,18 +15,13 @@ A `score=<n>` on the PERIODIC line goes to the ledger (`event: score`), and `win
 import difflib
 import os
 import re
-import signal
-import subprocess
-import threading
-import time
-from collections import deque
 from datetime import timedelta
 from pathlib import Path
 
 from . import critic, phone
 from .questions import quiet_now
 from .queue import Queue, title as title_of
-from .util import append_jsonl, git, gout, hhmm, last_match, now, push
+from .util import append_jsonl, git, gout, hhmm, last_match, now, push, run_limited
 
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
 SCORE_RE = re.compile(r"\bscore=(-?\d+(?:\.\d+)?)\b")
@@ -132,25 +127,10 @@ class Periodic:
         """Run `e`'s setup with no stdin, within `setup_minutes` and so the session still fits before the deadline;
         any stop ends it (nothing is paid for yet). Why it failed, or ""."""
         until = min(now() + timedelta(minutes=e["setup_minutes"]), self.end() - timedelta(minutes=e["minutes"]))
-        with subprocess.Popen(e["setup"], shell=True, cwd=cd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, start_new_session=True) as proc:
-            lines = deque(maxlen=1)
-            reader = threading.Thread(target=lambda: lines.extend(proc.stdout), daemon=True)
-            reader.start()
-            why = ""
-            while proc.poll() is None and not why:
-                why = ("stopped" if (self.p.state / "STOP").exists() else "out of time" if now() >= until else "")
-                if not why:
-                    time.sleep(0.2)
-            if why:
-                try:  # the whole group: a build's own children too
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:  # it ended (and was reaped) as the stop came
-                    pass
-                proc.wait()
-            reader.join(5)
-        last = lines[0].decode(errors="replace").strip()[:200] if lines else "no output"
-        return why or (f"exit {proc.returncode}: {last}" if proc.returncode else "")
+        stopped = lambda: "stopped" if (self.p.state / "STOP").exists() else ""  # noqa: E731
+        code, why, lines = run_limited(e["setup"], cd, until, stopped)
+        last = lines[0].strip()[:200] if lines else "no output"
+        return why or (f"exit {code}: {last}" if code else "")
 
     def periodic_session(self, e, cd, prev, finished=None):
         """One periodic session: (its final reply, that plus the files it names), False when it was skipped before it

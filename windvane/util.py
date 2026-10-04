@@ -1,14 +1,47 @@
 """Small shared helpers: git, the log, phone pushes, JSON state files."""
 import json
 import os
+import signal
 import subprocess
 import threading
+import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
 
 def run(cmd, cwd, timeout=None, env=None):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
+
+
+def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1):
+    """Run shell `cmd` with no input in a process group of its own until it ends, `until` passes or `stop()` gives a
+    reason; then the whole group is killed (a build's own children too). (exit code, why it was stopped or "", its
+    last `keep` lines); `echo` shows its output as it comes, so a long `npm ci` doesn't look stuck."""
+    lines = deque(maxlen=keep)
+
+    def read(out):
+        for line in out:
+            if echo:
+                print(line, end="", flush=True)
+            lines.append(line.rstrip())
+    with subprocess.Popen(cmd, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True) as proc:
+        reader = threading.Thread(target=read, args=(proc.stdout,), daemon=True)
+        reader.start()
+        why = ""
+        while proc.poll() is None and not why:
+            why = stop() or ("out of time" if now() >= until else "")
+            if not why:
+                time.sleep(0.2)
+        if why:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:  # it ended (and was reaped) as the stop came
+                pass
+            proc.wait()
+        reader.join(5)
+    return proc.returncode, why, list(lines)
 
 
 def sh(cwd, *cmd):
