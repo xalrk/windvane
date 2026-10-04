@@ -17,15 +17,15 @@ import test_hangs  # noqa: E402
 from test_hangs import alive  # noqa: E402
 
 FAKE_PS = """#!/bin/sh
-# `ps -o lstart= -p <pid>`: the start written for that pid, in ps's C-locale format
-[ "$LC_ALL" = C ] || exit 1
+# `ps -o lstart= -p <pid>`: the start written for that pid, in ps's C-locale format, in UTC
+[ "$LC_ALL" = C ] && [ "$TZ" = UTC ] || exit 1
 for a; do pid=$a; done
 cat "$FAKE_PS/$pid" 2>/dev/null
 """
 
 
 def lstart(t):
-    return time.strftime("%a %b %e %H:%M:%S %Y", time.localtime(t))  # "Sun Oct  4 15:03:37 2026", as ps prints it
+    return time.strftime("%a %b %e %H:%M:%S %Y", time.gmtime(t))  # "Sun Oct  4 15:03:37 2026", as ps prints it
 
 
 class Sweep(test_hangs.Hangs):

@@ -1,6 +1,7 @@
 """Headless Claude sessions: one per worker, critic, reviewer and planner run. Each run's stream is kept in
 `runs/`, and its tokens and turns go to `ledger.jsonl` (`windvane stats`). Usage limits come from the stream's
 rate_limit_event, so they count the user's other sessions too."""
+import calendar
 import json
 import os
 import re
@@ -57,12 +58,12 @@ PROC = Path("/proc")
 
 def started_at(pid):
     """When process `pid` started (epoch seconds), or None when it's gone. /proc on Linux; elsewhere (macOS) `ps`,
-    whose `lstart` has a fixed format under LC_ALL=C."""
+    whose `lstart` has a fixed format under LC_ALL=C, in UTC so the hour clocks go back can't read an hour off."""
     if not PROC.is_dir():
         try:
             out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10,
-                                 env={**os.environ, "LC_ALL": "C"}).stdout
-            return time.mktime(time.strptime(" ".join(out.split()), "%a %b %d %H:%M:%S %Y"))
+                                 env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}).stdout
+            return calendar.timegm(time.strptime(" ".join(out.split()), "%a %b %d %H:%M:%S %Y"))
         except (OSError, ValueError, subprocess.SubprocessError):
             return None
     try:
