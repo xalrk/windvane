@@ -9,11 +9,13 @@ import signal
 import subprocess
 import time
 from datetime import datetime
+from pathlib import Path
 
 from .util import append_jsonl, load_json, save_json
 
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
 TOOL_MS = "600000"
+GRACE = 3  # seconds a nested session gets to end on SIGTERM before SIGKILL: short, the driver waits on it
 POLL = 5  # seconds between a quiet session's stop checks (small file reads, no tokens): how soon `stop --now` acts
 
 
@@ -50,20 +52,74 @@ def inherited_stop(p, usage):
     return stop_if
 
 
-def kill_nested(p, session):
-    """Stop the sessions started inside `session`. Claude Code runs each Bash command in a session of its own, so
-    killing a worker's process group misses a critic it started: each one registers its group here instead."""
-    d = p.state / "nested" / session
-    for f in d.glob("*") if d.is_dir() else ():
+def started_at(pid):
+    """When process `pid` started (epoch seconds), or None where /proc can't tell (gone, or not Linux)."""
+    try:
+        ticks = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+        boot = next(int(l.split()[1]) for l in Path("/proc/stat").read_text().splitlines() if l.startswith("btime"))
+        return boot + ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def signal_group(pgid, sig, mark=None, strict=False):
+    """Send `sig` to a process group; False when it's gone. With `mark` (the file written as it started), a leader
+    started after it is someone else reusing the number (after a reboot, say), and is left alone. `strict` leaves it
+    alone too when its start time can't be read (no /proc): numbers from a dead driver may well be a stranger's now."""
+    if mark:
+        t = started_at(pgid)
+        if t is None and strict:
+            return False
         try:
-            os.killpg(int(f.name), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, ValueError):
+            if t is not None and t > mark.stat().st_mtime + 2:  # /proc's boot time is in whole seconds
+                return False
+        except OSError:
             pass
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def kill_nested(p, session, strict=False):
+    """Stop the sessions started inside `session`: SIGTERM, then SIGKILL for groups alive after GRACE. Claude Code
+    runs each Bash command in a session of its own, so killing a worker's process group misses a critic it started:
+    each one registers its group here instead. How many groups were still running (`strict`: see signal_group)."""
+    d = p.state / "nested" / session
+    marks = list(d.glob("*")) if d.is_dir() else []
+    alive = [int(f.name) for f in marks if f.name.isdigit() and signal_group(int(f.name), signal.SIGTERM, f, strict)]
+    n, end = len(alive), time.time() + GRACE
+    while alive and time.time() < end:
+        time.sleep(0.1)
+        alive = [g for g in alive if signal_group(g, 0)]
+    for g in alive:
+        signal_group(g, signal.SIGKILL)
+    for f in marks:
         f.unlink(missing_ok=True)
     try:
         d.rmdir()
     except OSError:  # gone, or a nested session registered just now (its own deadline and caps still stop it)
         pass
+    return n
+
+
+def sweep_nested(p):
+    """Kill what sessions of a driver that died left running (`nested/<session>/<group>`), and their dirs. A session
+    still alive (`session` holds its pid: a desk `plan` beside the run) keeps its own; so does a dead driver's worker
+    that outlived it, as the two can't be told apart. Strict, as these numbers may predate a reboot. How many groups
+    were killed."""
+    n = 0
+    for d in sorted((p.state / "nested").glob("*")):
+        own = d / "session"
+        try:
+            pid = own.read_text().strip()
+            if pid.isdigit() and signal_group(int(pid), 0, own):
+                continue
+        except OSError:
+            pass
+        n += kill_nested(p, d.name, strict=True)
+    return n
 
 
 class Usage:
@@ -185,6 +241,9 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             start_new_session=True, env=env(extra))
     mark = p.state / "nested" / parent / str(proc.pid) if parent else None
+    own = p.state / "nested" / raw.stem / "session"  # alive, so a run's start never sweeps what it started
+    own.parent.mkdir(parents=True, exist_ok=True)
+    own.write_text(str(proc.pid))
     if mark:
         mark.parent.mkdir(parents=True, exist_ok=True)
         mark.touch()

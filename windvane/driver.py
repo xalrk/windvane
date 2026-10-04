@@ -23,7 +23,6 @@ import shutil
 import subprocess
 import time
 import traceback
-from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -35,8 +34,8 @@ from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
 from .queue import Queue
-from .runner import Usage, over_caps, run_claude
-from .util import git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
+from .runner import Usage, over_caps, run_claude, sweep_nested
+from .util import git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, run_limited, save_json
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
@@ -123,18 +122,15 @@ def ensure_worktree(p, path, setup=True):
     if r.returncode:
         raise SystemExit(f"windvane: can't create the worktree {path}: {r.stderr.strip()}")
     if setup and p.cfg["setup"]:
-        log(p, f"setting up {path}: {p.cfg['setup']}")
-        lines = deque(maxlen=15)
-        with subprocess.Popen(p.cfg["setup"], shell=True, cwd=path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              text=True, errors="replace") as r:
-            for line in r.stdout:  # shown as it comes (a long `npm ci` doesn't look stuck), the end kept for the log
-                print(line, end="", flush=True)
-                lines.append(line.rstrip())
-        if r.returncode:  # a half-made tree fails every check: remove it, so the next start sets it up afresh
+        log(p, f"setting up {path}: {p.cfg['setup']}…")
+        limit = p.cfg["setup_minutes"]
+        code, why, lines = run_limited(p.cfg["setup"], path, now() + timedelta(minutes=limit), echo=True, keep=15)
+        if code:  # a half-made tree fails every check: remove it, so the next start sets it up afresh
             git(root, "worktree", "remove", "--force", str(path))
             shutil.rmtree(path, ignore_errors=True)
             git(root, "worktree", "prune")
-            raise SetupFailed(f"setup `{p.cfg['setup']}` failed (exit {r.returncode}) in {path}", list(lines))
+            how = f"timed out after {limit:g} min" if why else f"failed (exit {code})"
+            raise SetupFailed(f"setup `{p.cfg['setup']}` {how} in {path}", lines)
 
 
 class SetupFailed(Exception):
@@ -1291,6 +1287,9 @@ class Pilot(Desk, Periodic):
         self.log(f"autopilot {'restarted' if restarted else 'started'}, until {hhmm(deadline)} (5h cap "
                  f"{self.a.cap:g}%, week cap {self.a.week_cap:g}%"
                  + (f", up to {self.n} tickets at a time" if self.n > 1 else "") + ")")
+        swept = sweep_nested(p)  # under the lock: no live run owns them
+        if swept:
+            self.log(f"killed {swept} process group{'s' * (swept > 1)} left running by an earlier run's sessions")
         ready, crashed = False, None
         try:
             ready = self.rules_ok() and self.prepare(0)  # before any session or push: a bad rule or a failed setup

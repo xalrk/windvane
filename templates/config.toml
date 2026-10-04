@@ -7,6 +7,7 @@ main = "main"
 forge = "github"          # github: PRs through gh; git: the driver merges and pushes to main itself
 check = ""                # the project's CI command, run by `windvane check` (e.g. "npm test", "pytest -q")
 setup = ""                # run once in each fresh autopilot worktree (e.g. "npm ci")
+setup_minutes = 20        # a setup still running then is killed: the run stops, as for a failed setup
 isolate = true            # work in the autopilot's own worktrees; false: in this checkout (for huge builds)
 goal = ""                 # what `windvane plan` and `run --replan` aim at when given no goal
 author = ""               # "Name <email>" for the driver's own commits (merges, plans); default: git's
