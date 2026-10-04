@@ -89,7 +89,7 @@ class StatsCost(unittest.TestCase):
     def test_by_ticket_summary_lines(self):
         out = self.cli("stats", "--by", "ticket")
         self.assertIn("per merged ticket (1): 2.0 runs, 34k weighted tokens, 1.20 API $\n", out)
-        self.assertIn("with overhead (planner: 11k): 45k weighted tokens per merged ticket\n", out)
+        self.assertIn("with overhead: 45k weighted tokens per merged ticket\n  overhead: planner: 11k\n", out)
         self.assertIn("spent on tickets not merged (open, parked, failed): 31k weighted tokens, 48% of ticket", out)
         self.assertIn("died or killed: 1 run (1 died, 0 killed for time), 4k weighted tokens, 5% of all\n", out)
 
@@ -180,17 +180,15 @@ class StatsCost(unittest.TestCase):
         append_jsonl(self.p.state / "ledger.jsonl", dict(role="worker", ticket="T-009", input=5000, usd=0.1))
         out = self.cli("stats", "--by", "ticket")
         self.assertEqual(self.rows(out)["T-009"][1], "gone")
-        self.assertIn("with overhead", out)
-        out = " ".join(out.split()) + "\n"  # wrapped to 100 columns
-        self.assertIn("with overhead (planner: 11k; 1 ticket no longer in the queue (T-009): 5k): 50k weighted "
-                      "tokens per merged ticket ", out)
+        self.assertIn("with overhead: 50k weighted tokens per merged ticket\n"
+                      "  overhead: planner: 11k; 1 ticket no longer in the queue (T-009): 5k\n", out)
 
     def test_swept_rows_sum_into_the_orphan_line(self):
         self.assertNotIn("orphaned", self.cli("stats"))
         for n in (2, 3):
             append_jsonl(self.p.state / "ledger.jsonl", {"event": "swept", "role": "driver", "groups": n})
         out = self.cli("stats")
-        self.assertIn("orphaned process groups killed: 5\n", out)
+        self.assertIn("5% of all\norphaned process groups killed: 5\n", out)  # with the summary, before the notes
         self.assertEqual(self.rows(out)["worker"][1], "5")  # a sweep is no run
 
 if __name__ == "__main__":

@@ -394,13 +394,17 @@ def cmd_stats(a, p):
     rows = [r for r in rows if not r.get("event")]  # a periodic score, an outcome, a sweep: not a session
     if not rows:
         print("no runs yet")
+        orphans(swept)
     else:
-        session_stats(a, p, rows)
+        session_stats(a, p, rows, swept)
+
+
+def orphans(swept):
     if swept:  # a dead driver's sessions, killed by the next run: its log says when
         print(f"orphaned process groups killed: {swept}")
 
 
-def session_stats(a, p, rows):
+def session_stats(a, p, rows, swept=0):
     agg = {}
     key = (lambda r: r.get("ticket") or r["role"]) if a.by == "ticket" else (lambda r: r["role"])
     for r in rows:
@@ -433,6 +437,7 @@ def session_stats(a, p, rows):
         lost, total = sum(g["lost_w"] for g in agg.values()), sum(g["w"] for g in agg.values())
         print(f"died or killed: {plural(died + killed, 'run')} ({died} died, {killed} killed for time), "
               f"{k(lost)} weighted tokens, {100 * lost / max(1, total):.0f}% of all")
+    orphans(swept)
     est = sum(g["no_usd"] for g in agg.values())
     if est:
         note(f"(≥: {plural(est, 'run')} ended before {'its' if est == 1 else 'their'} result, so the API $ is "
@@ -491,8 +496,9 @@ def stats_per_merged(agg, outcome):
         parts += [f"{plural(len(gone), 'ticket')} no longer in the queue ({names(gone)}): "
                   f"{k(w(agg[n] for n in gone))}"] if gone else []
         over = w(agg[n] for n in loose + gone)
-        note(f"with overhead ({'; '.join(parts) or 'none'}): {k((w(merged) + over) / m)} weighted tokens per "
-             "merged ticket")
+        print(f"with overhead: {k((w(merged) + over) / m)} weighted tokens per merged ticket")
+        if parts:
+            note(f"  overhead: {'; '.join(parts)}")
     print(f"spent on tickets not merged (open, parked, failed): {k(other)} weighted tokens, "
           f"{100 * other / max(1, other + w(merged)):.0f}% of ticket tokens")
 

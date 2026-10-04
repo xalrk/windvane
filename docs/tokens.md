@@ -76,7 +76,8 @@ T-032        merged     8           1   115      302k     6,706k     89k    1,49
 planner      -          3           0    55      193k     1,903k     49k      674k    2.90     9
 preflight    -          2           0     2       26k        18k      1k       38k    0.11     0
 per merged ticket (49): 4.2 runs, 659k weighted tokens, 2.51 API $
-with overhead (planner, preflight: 712k): 673k weighted tokens per merged ticket
+with overhead: 673k weighted tokens per merged ticket
+  overhead: planner, preflight: 712k
 spent on tickets not merged (open, parked, failed): 0k weighted tokens, 0% of ticket tokens
 died or killed: 1 run (1 died, 0 killed for time), 948k weighted tokens, 3% of all
 ```
@@ -88,8 +89,9 @@ died or killed: 1 run (1 died, 0 killed for time), 948k weighted tokens, 3% of a
   with no ticket.
 - `per merged ticket`: the merged tickets' own runs, averaged.
 - `with overhead`: the same, plus every run with no ticket (planner, preflight, periodic sessions) and every
-  `gone` ticket spread over the merged tickets: the figure to compare with a person's work. The parentheses name
-  what it adds and how much (`planner, preflight: 712k; 2 tickets no longer in the queue (T-009, T-010): 40k`).
+  `gone` ticket spread over the merged tickets: the figure to compare with a person's work. The `overhead` line
+  under it names what it adds and how much (`planner, preflight: 712k; 2 tickets no longer in the queue (T-009,
+  T-010): 40k`).
 - `spent on tickets not merged`: the waste, tokens on tickets that are open, parked or failed.
 
 ## Tuning
