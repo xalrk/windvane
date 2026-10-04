@@ -24,8 +24,8 @@ The check runs in a fresh worktree, without untracked files, local `.env` files 
 Make it work from a clean clone, or prepare what it needs in `setup`.
 
 **A ticket was set aside.**
-The log says why: reviews kept asking for changes (`review_rounds`), runs kept running out of time (`partials`), or
-one run hit `ticket_hours`. The work so far is on the ticket's branch. Usually the ticket is too big or too vague:
+The push and the log say why: reviews kept asking for changes (`review_rounds`), runs kept running out of time
+(`partials`), one run hit `ticket_hours` or its max turns, or its sessions kept dying. The work so far is on the ticket's branch. Usually the ticket is too big or too vague:
 split it or sharpen "Done when", then run again; the next worker resumes the branch.
 
 **The run paused (`paused ... Resuming at 14:00`).**
