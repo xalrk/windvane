@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import driver, runner  # noqa: E402
+from windvane import driver, runner, util  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -90,6 +90,19 @@ class Hangs(unittest.TestCase):
         self.assertIn("timed out after 0.02 min", log)
         self.assertIn("installing", log)  # the command's last lines
         self.assertFalse(p.work_dir.exists())  # the next start sets it up afresh
+
+    def test_a_ctrl_c_during_setup_kills_it_and_returns_at_once(self):
+        pidfile = self.s.tmp / "group.pid"
+
+        def ctrl_c():
+            if pidfile.exists() and pidfile.read_text().strip():
+                raise KeyboardInterrupt
+            return ""
+        t = time.monotonic()
+        with self.assertRaises(KeyboardInterrupt):
+            util.run_limited(f"echo $$ > {pidfile}; sleep 600", self.s.tmp, now() + timedelta(minutes=5), stop=ctrl_c)
+        self.assertLess(time.monotonic() - t, 3)
+        self.assertFalse(alive(int(pidfile.read_text())))
 
     def test_setup_minutes_must_be_a_positive_number(self):
         cfg = self.s.root / ".windvane/config.toml"

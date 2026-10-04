@@ -113,7 +113,8 @@ def sweep_nested(p):
     for d in sorted((p.state / "nested").glob("*")):
         own = d / "session"
         try:
-            if own.read_text().strip().isdigit() and signal_group(int(own.read_text()), 0, own):
+            pid = own.read_text().strip()
+            if pid.isdigit() and signal_group(int(pid), 0, own):
                 continue
         except OSError:
             pass

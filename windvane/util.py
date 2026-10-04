@@ -30,18 +30,26 @@ def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1):
         reader = threading.Thread(target=read, args=(proc.stdout,), daemon=True)
         reader.start()
         why = ""
-        while proc.poll() is None and not why:
-            why = stop() or ("out of time" if now() >= until else "")
-            if not why:
-                time.sleep(0.2)
+        try:
+            while proc.poll() is None and not why:
+                why = stop() or ("out of time" if now() >= until else "")
+                if not why:
+                    time.sleep(0.2)
+        except BaseException:  # a Ctrl-C reaches only us: kill the group, or closing its pipe waits for it to end
+            _kill_group(proc)
+            raise
         if why:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:  # it ended (and was reaped) as the stop came
-                pass
-            proc.wait()
+            _kill_group(proc)
         reader.join(5)
     return proc.returncode, why, list(lines)
+
+
+def _kill_group(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:  # it ended (and was reaped) as the stop came
+        pass
+    proc.wait()
 
 
 def sh(cwd, *cmd):
