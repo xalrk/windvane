@@ -23,7 +23,8 @@ CODE = re.compile(r"(`+)(.+?)\1")
 ESC = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~])")
 HOLD = re.compile("[\ue000-\uefff]")  # placeholders for code spans and escapes, so no marker inside them counts
 SPAN = re.compile(
-    r"\[(?P<lt>[^\]]+)\]\((?P<url>(?:[^()\s]|\([^()\s]*\))+)\)"  # a URL's own (…) pair stays in it
+    # a URL's own (…) pair stays in it, one level deep: a(b(c)) ends the URL at the first ")"
+    r"\[(?P<lt>[^\]]+)\]\((?P<url>(?:[^()\s]|\([^()\s]*\))+)\)"
     r"|\*\*(?=\S)(?P<b1>.+?)(?<=\S)\*\*"
     r"|(?<!\w)__(?=\S)(?P<b2>.+?)(?<=\S)__(?!\w|\.\w)"
     r"|(?<![\w*])\*(?=[^\s*])(?P<i1>.+?)(?<=[^\s*])\*(?![\w*])"  # not intra-word: 2*3*4 stays as typed
@@ -113,33 +114,46 @@ def cells(row):
     return out + [cur.strip()]
 
 
-def table(rows, rule, color):
-    """Rows padded to aligned columns (`:--:` centres, `--:` right-aligns), the header bold, a rule under it."""
+def table(rows, rule, color, cols=0):
+    """Rows padded to aligned columns (`:--:` centres, `--:` right-aligns), the header bold, a rule under it, as
+    (line, counts) pairs. A table wider than `cols` narrows its widest columns and wraps their cells, with a rule
+    between rows so a wrapped row stays one row; the terminal would otherwise wrap it to column 0. One that can't fit
+    with every column 4 wide stays as it is."""
     aligns = [("^" if a.startswith(":") else ">") if a.endswith(":") else "<" for a in cells(rule)]
     grid = [[inline(x, frozenset({"b"}) if r == 0 else frozenset()) for x in cells(row)] for r, row in enumerate(rows)]
     n = max(len(r) for r in grid)
     grid = [r + [[]] * (n - len(r)) for r in grid]
     widths = [max(width("".join(t for t, _ in r[k])) for r in grid) for k in range(n)]
+    natural = list(widths)
+    while cols and sum(widths) + 3 * (n - 1) > cols and max(widths) > 4:
+        widths[widths.index(max(widths))] -= 1
+    if cols and sum(widths) + 3 * (n - 1) > cols:  # can't fit even narrowed: wrapping would only garble it
+        widths = natural
     aligns += ["<"] * n
     bar = (" │ ", frozenset({"dim"}))
+    dim_rule = lambda: (paint([("─┼─".join("─" * w for w in widths), frozenset({"dim"}))], color), False)
     out = []
     for r, row in enumerate(grid):
-        line = []
-        for k, segs in enumerate(row):
-            gap = widths[k] - width("".join(t for t, _ in segs))
-            left = {"<": 0, ">": gap, "^": gap // 2}[aligns[k]]
-            pad = [(" " * (gap - left), frozenset())] if k < n - 1 else []
-            line += ([bar] if k else []) + [(" " * left, frozenset())] + segs + pad
-        out.append(paint(line, color))
-        if r == 0:
-            out.append(paint([("─┼─".join("─" * w for w in widths), frozenset({"dim"}))], color))
+        parts = [wrap(segs, widths[k], least=1) for k, segs in enumerate(row)]
+        for j in range(max(len(p) for p in parts)):
+            line = []
+            for k, p in enumerate(parts):
+                segs = p[j] if j < len(p) else []
+                gap = widths[k] - width("".join(t for t, _ in segs))
+                left = {"<": 0, ">": gap, "^": gap // 2}[aligns[k]]
+                pad = [(" " * (gap - left), frozenset())] if k < n - 1 else []
+                line += ([bar] if k else []) + [(" " * left, frozenset())] + segs + pad
+            out.append((paint(line, color), True))
+        if r == 0 or widths != natural and r < len(grid) - 1:
+            out.append(dim_rule())
     return out
 
 
-def wrap(segs, cols, lead=()):
+def wrap(segs, cols, lead=(), least=20):
     """Segments as lines at most `cols` wide, broken between words. Lines after the first start with `lead` (spaces
-    under a bullet's text, the bar of a quote), so wrapped text hangs under its first word and not at column 0."""
-    if cols < 20 or width("".join(t for t, _ in segs)) <= cols:
+    under a bullet's text, the bar of a quote), so wrapped text hangs under its first word and not at column 0.
+    Under `least` columns it doesn't wrap at all (a table cell may be narrower than that)."""
+    if cols < least or width("".join(t for t, _ in segs)) <= cols:
         return [segs]
     lw = width("".join(t for t, _ in lead))
     lead, lw = (list(lead), lw) if lw <= cols // 2 else ([], 0)
@@ -194,7 +208,8 @@ def blocks(text, color, cols=0):
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2):
                 fence = None
             else:
-                out.append([(paint([("  │ ", dim), (line, frozenset())], color), True)])
+                gutter = [("  │ ", dim)]  # a long code line wraps under its gutter
+                out.append([(paint(l, color), True) for l in wrap(gutter + [(line, frozenset())], cols, gutter)])
         elif m:
             fence = m.group(1)
             out.append([(paint([("  ┌ " + m.group(2) if m.group(2) else "  ┌", dim)], color), True)])
@@ -203,7 +218,7 @@ def blocks(text, color, cols=0):
             while i < len(lines) and "|" in lines[i] and lines[i].strip():
                 rows.append(lines[i])
                 i += 1
-            out.append([(l, k != 1) for k, l in enumerate(table(rows, rule, color))])
+            out.append(table(rows, rule, color, cols))
             continue
         elif m := HEADING.match(line):
             add(inline(m.group(1), frozenset({"b", "h"})))
