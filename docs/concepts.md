@@ -87,7 +87,7 @@ A session that dies outside its ticket's control (API error, crash) is rerun aft
 `retry_minutes`). When one ticket's sessions have died more than `retries` times while other sessions worked, that
 ticket is set aside for the rest of the run, with one push, and its branch is kept. With no other session in between
 (one ticket at a time), it is set aside on trial while another ticket runs: if that session dies too, the run stops,
-as it does whenever sessions keep dying across tickets. A dead critic is retried the same way; when it keeps dying the
+as it does whenever sessions keep dying across tickets; a restart (self-update, `supervise`) keeps the trial. A dead critic is retried the same way; when it keeps dying the
 worker is told it's unavailable and goes on, and no score is recorded.
 
 ## Touches and parallel slots
