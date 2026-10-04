@@ -35,7 +35,7 @@ from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
 from .queue import Queue
 from .runner import Usage, over_caps, run_claude, sweep_nested
-from .util import git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, run_limited, save_json
+from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, run_limited, save_json
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
@@ -872,6 +872,8 @@ class Pilot(Desk, Periodic):
         self.failed.append(tid)
         self.approved.pop(tid, None)
         self.log(f"{tid}: FAILED: {why}")
+        # what `windvane stats` reads as the ticket's outcome, so a reworded log line can't hide a failure
+        append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "failed"})
         if net.online():
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run

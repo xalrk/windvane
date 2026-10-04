@@ -29,22 +29,22 @@ times its context size, so windvane cuts turns:
 ## `windvane stats`
 
 `windvane stats` reads the token ledger (`ledger.jsonl`, one line per session, killed sessions included) and costs
-no tokens itself. By role, over the last 7 days (`--days N` to change), costliest first:
+no tokens itself. By role, over the last 7 days (`--days N` to change), costliest first, in 100 columns:
 
 ```
-role         runs died turns  fresh in  cached in     out  weighted   API $   min   base cached/turn
-worker         51    1  1779    3,062k    98,766k  1,299k   20,198k   70.22   663  12.6k       55.5k
-reviewer       50    0   277    1,558k     8,292k    281k    4,182k   19.74    55  25.8k       29.9k
-critic         64    0   300      918k     4,558k    159k    2,397k   11.43    34  13.0k       15.2k
-planner         2    0    38      138k     1,435k     34k      489k    2.08     7  16.0k       37.8k
-preflight       2    0     2       26k        18k      1k       38k    0.11     0      -        9.1k
-died or retried: 1 runs, 948k weighted tokens, 3% of all
+role         runs died/killed turns  fresh in  cached in     out  weighted   API $   min
+worker         65           1  2204    3,741k   116,066k  1,595k   24,258k   85.03   911
+reviewer       63           0   342    1,895k     9,728k    349k    5,087k   24.09    78
+critic         79           0   366    1,125k     5,394k    197k    2,929k   14.01    43
+planner         3           0    55      193k     1,903k     49k      674k    2.90     9
+preflight       2           0     2       26k        18k      1k       38k    0.11     0
+died or killed: 1 run (1 died, 0 killed for time), 948k weighted tokens, 3% of all
 ```
 
 | Column | Meaning |
 |---|---|
 | `runs` | sessions started |
-| `died` | sessions that died on an API error or crashed (the ledger's `error` is set): the driver runs them again, so their tokens buy nothing |
+| `died/killed` | sessions that died on an API error or crashed (the ledger's `error` is set), or were killed for time (`killed: time`: the ticket's time box or the run's deadline, where a hung session ends too): the ticket runs again, so their tokens buy nothing. A deliberate stop (`stop --now`, a usage cap, a session's own turn or budget limit) isn't counted |
 | `turns` | model turns: each one re-reads the context |
 | `fresh in` | input tokens not served from the prompt cache (cache writes included): the expensive part of input |
 | `cached in` | input tokens read from the cache: cheap per token, but most of the volume |
@@ -52,8 +52,8 @@ died or retried: 1 runs, 948k weighted tokens, 3% of all
 | `weighted` | what the tokens cost, in fresh-input equivalents (below); rows sort by it |
 | `API $` | what these tokens would cost at API prices: a relative meter, not a bill, on a subscription. `≥` when some runs ended before their result (no $ for them), `?` when none has one |
 | `min` | wall-clock minutes |
-| `base` | average first-turn context per run: system prompt, tools, `CLAUDE.md` files and the prompt (`-` for runs logged before the ledger kept it) |
-| `cached/turn` | `cached in` over `turns`: what each turn re-reads; the gap to `base` is what the run's own tool output added |
+| `base` (`--wide`) | average first-turn context per run: system prompt, tools, `CLAUDE.md` files and the prompt (`-` for runs logged before the ledger kept it) |
+| `cached/turn` (`--wide`) | `cached in` over `turns`: what each turn re-reads; the gap to `base` is what the run's own tool output added |
 
 **Weighted tokens** count each kind of token by what it costs relative to fresh input, from the API's price ratios:
 fresh input 1, cache write 1.25, cached input 0.1, output 5. They are fixed weights, not a price table, so the figure
@@ -61,29 +61,37 @@ doesn't go stale when prices change, and it is the same for every model (API $ i
 Cached input is ~94% of all tokens, so at 0.1 it still costs more than fresh input: a figure that leaves it out
 flatters a run that re-reads a big context.
 
-The `died or retried` line is what outages and crashes cost: their runs' weighted tokens, and their share of all.
+The `died or killed` line is what outages, crashes and hung sessions cost: their runs' weighted tokens, and their
+share of all. `orphaned process groups killed: N` follows when a run killed process groups a dead driver's sessions
+left running (the ledger's `swept` rows); without any, there's no line.
 
 By ticket (`--by ticket`), with each ticket's outcome and what a merged ticket costs:
 
 ```
-ticket       outcome runs died turns  fresh in  cached in     out  weighted   API $   min   base cached/turn
-T-017        merged     6    0   106      286k     7,412k     86k    1,527k    5.48    20      -       69.9k
-T-016        merged     3    0   118      174k     9,505k     66k    1,499k    4.62    30      -       80.6k
-T-032        merged     8    1   115      302k     6,706k     89k    1,492k    5.53    76  22.5k       58.3k
+ticket       outcome runs died/killed turns  fresh in  cached in     out  weighted   API $   min
+T-017        merged     6           0   106      286k     7,412k     86k    1,527k    5.48    20
+T-016        merged     3           0   118      174k     9,505k     66k    1,499k    4.62    30
+T-032        merged     8           1   115      302k     6,706k     89k    1,492k    5.53    76
 ...
-planner      -          2    0    38      138k     1,435k     34k      489k    2.08     7  16.0k       37.8k
-preflight    -          2    0     2       26k        18k      1k       38k    0.11     0      -        9.1k
-per merged ticket (38): 4.3 runs, 704k weighted tokens, 2.66 API $
-with overhead (planner, preflight, periodic): 718k per merged ticket
+planner      -          3           0    55      193k     1,903k     49k      674k    2.90     9
+preflight    -          2           0     2       26k        18k      1k       38k    0.11     0
+per merged ticket (49): 4.2 runs, 659k weighted tokens, 2.51 API $
+with overhead: 673k weighted tokens per merged ticket
+  overhead: planner, preflight: 712k
 spent on tickets not merged (open, parked, failed): 0k weighted tokens, 0% of ticket tokens
-died or retried: 1 runs, 948k weighted tokens, 3% of all
+died or killed: 1 run (1 died, 0 killed for time), 948k weighted tokens, 3% of all
 ```
 
-- `outcome`: `merged` and `parked` come from git; `failed` is a ticket whose last attempt in the log ended in
-  `FAILED` (a later worker run makes it `open` again); `open` is everything else; `-` is a run with no ticket.
+- `outcome`: `merged` and `parked` come from git; `failed` is a ticket whose last attempt failed: the ledger's
+  `{"event": "outcome", "outcome": "failed"}` row, which the driver writes when it gives up on a ticket (a later
+  worker run makes it `open` again; for failures from before the ledger kept them, the log's `FAILED` line);
+  `gone` is a ticket no longer in the queue (renumbered, folded, deleted); `open` is everything else; `-` is a run
+  with no ticket.
 - `per merged ticket`: the merged tickets' own runs, averaged.
-- `with overhead`: the same, plus every run with no ticket (planner, preflight, periodic sessions, the plan's
-  critic) spread over the merged tickets: the figure to compare with a person's work.
+- `with overhead`: the same, plus every run with no ticket (planner, preflight, periodic sessions) and every
+  `gone` ticket spread over the merged tickets: the figure to compare with a person's work. The `overhead` line
+  under it names what it adds and how much (`planner, preflight: 712k; 2 tickets no longer in the queue (T-009,
+  T-010): 40k`).
 - `spent on tickets not merged`: the waste, tokens on tickets that are open, parked or failed.
 
 ## Tuning
@@ -108,7 +116,7 @@ show (median per role, from `runs/`); a one-turn session with each role's rules 
 | reviewer | 19.9k | 8.9k |
 | critic | 20.4k | 9.6k |
 
-Compare on the next run's `windvane stats`: the worker's `base` should drop from ~21k to ~12k, and its `cached/turn`
+Compare on the next run's `windvane stats --wide`: the worker's `base` should drop from ~21k to ~12k, and its `cached/turn`
 from ~56k to ~46k or lower (the base cut on every turn, plus slower growth). At ~1,100 worker turns a week, that is
 ~11M fewer cached tokens for the worker alone. If `turns` per worker run rises instead, a missing tool is costing
 turns: see which in the run streams.

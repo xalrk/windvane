@@ -78,7 +78,7 @@ class Context(unittest.TestCase):
         self.assertEqual(row["base"], 3 + 4000 + 6000)  # fresh, cache writes and cache reads of turn 1
         out = io.StringIO()
         with redirect_stdout(out):
-            cli.cmd_stats(argparse.Namespace(days=7, by="role", critic=False), self.p)
+            cli.cmd_stats(argparse.Namespace(days=7, by="role", critic=False, wide=True), self.p)
         head, line = (next(x for x in out.getvalue().splitlines() if x.startswith(w)) for w in ("role", "worker"))
         self.assertEqual(head.split()[-2:], ["base", "cached/turn"])
         self.assertEqual(line.split()[-2:], ["10.0k", "0.0k"])  # 2 runs of 10,003; 2 x 100 cached over 6 turns
@@ -89,7 +89,7 @@ class Context(unittest.TestCase):
                                                      "at": f"{now():%Y-%m-%d %H:%M}"})
         out = io.StringIO()
         with redirect_stdout(out):
-            cli.cmd_stats(argparse.Namespace(days=7, by="role", critic=False), self.p)
+            cli.cmd_stats(argparse.Namespace(days=7, by="role", critic=False, wide=True), self.p)
         line = next(x for x in out.getvalue().splitlines() if x.startswith("critic"))
         self.assertEqual(line.split()[-2:], ["-", "20.0k"])
 
