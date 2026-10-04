@@ -144,10 +144,10 @@ def periodic(entries):
         if not e.get("prompt"):
             raise SystemExit(f"windvane: [[periodic]] {name} needs prompt = \"<the project's rules file>\"")
         try:
-            every, minutes, setup_m = (int(e.get(k, d)) for k, d in (("every", 0), ("minutes", 60),
-                                                                      ("setup_minutes", 60)))
+            every, minutes = (int(e.get(k, d)) for k, d in (("every", 0), ("minutes", 60)))
         except (TypeError, ValueError):
-            raise SystemExit(f"windvane: [[periodic]] {name}: every, minutes and setup_minutes are whole numbers")
+            raise SystemExit(f"windvane: [[periodic]] {name}: every and minutes are whole numbers")
+        setup_m = setup_minutes(e.get("setup_minutes", 60), f"[[periodic]] {name}: ")
         land = str(e.get("land", ""))
         if land and land not in LANDS:
             raise SystemExit(f"windvane: [[periodic]] {name}: land = {land!r}: use one of {', '.join(LANDS)}")
@@ -158,13 +158,20 @@ def periodic(entries):
         except re.error as err:
             raise SystemExit(f"windvane: [[periodic]] {name}: after_group = {group!r}: {err}")
         out[name] = {"name": name, "land": land, "every": max(0, every), "after_group": group, "minutes": max(1, minutes),
-                     "setup": e.get("setup", ""), "setup_minutes": max(1, setup_m),
+                     "setup": e.get("setup", ""), "setup_minutes": setup_m,
                      "prompt": e["prompt"], "then": e.get("then", ""),
                      "allow": e.get("allow", []), "deny": e.get("deny", [])}
     for e in out.values():
         if e["then"] and e["then"] not in out:
             raise SystemExit(f"windvane: [[periodic]] {e['name']}: then = {e['then']!r} names no [[periodic]] entry")
     return out
+
+
+def setup_minutes(v, where=""):
+    """A `setup_minutes` value, top-level or a [[periodic]]'s (`where`): any number of minutes above 0."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+        raise SystemExit(f"windvane: {where}setup_minutes = {v!r} in config.toml: use a number of minutes above 0")
+    return v
 
 
 def toplevel(start=None):
@@ -191,9 +198,7 @@ class Project:
         self.models = c["models"]
         self.critic = c["critic"]
         self.ap = c["autopilot"]
-        sm = c["setup_minutes"]
-        if isinstance(sm, bool) or not isinstance(sm, (int, float)) or sm <= 0:
-            raise SystemExit(f"windvane: setup_minutes = {sm!r} in config.toml: use a number of minutes above 0")
+        setup_minutes(c["setup_minutes"])
         self.periodic = periodic(c.get("periodic", []))
         self.perms, self.perm_problems = permissions(c["permissions"], self.periodic)
         self.append_only = rules(c.get("append_only", []))

@@ -83,7 +83,7 @@ class Hangs(unittest.TestCase):
         self.assertLess(time.time() - t, 30)
         self.assertFalse(alive(int(pidfile.read_text())))  # its whole group, the sleep too
         self.assertIn("timed out after 0.02 min", pilot.stop_reason)
-        self.assertEqual([t for t, _ in self.pushes], ["windvane stopped"])
+        self.assertEqual([t for t, _ in self.pushes], ["windvane couldn't start"])
         self.assertIn("timed out after 0.02 min", self.pushes[0][1])
         log = (p.state / "autopilot.log").read_text()
         self.assertIn(f"setting up {p.work_dir}: echo installing;", log)
