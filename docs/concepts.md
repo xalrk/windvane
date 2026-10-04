@@ -139,7 +139,7 @@ mark; the driver turns its scores into the worker's next step:
 **Calibration.** A scale whose scores all land on the pass mark measures nothing. `.windvane/CALIBRATION.md` holds
 your own verdicts where you disagreed with the critic (date, ticket, its score, yours, why); every critic reads it.
 It can also name **caps** (`works<=5`: a known crash, lost work or wedge): the critic answers each, yes or no, and
-names the anchor it sits nearest before it scores, and the driver lowers a dimension whose cap it answered yes.
+names the anchor it sits nearest before it scores; a cap answered yes lowers that dimension and counts as a fix.
 `windvane stats --critic` shows how scores spread over recent tickets: first and final scores, revisions, how many
 sit exactly on the pass mark. Once five tickets are scored on the current scale, the driver checks for a
 **collapsed scale** (half the recent first scores share one value, or the number of fixes alone predicts the score)

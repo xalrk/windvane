@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from windvane import critic  # noqa: E402
 from windvane.config import Project  # noqa: E402
-from windvane.util import read_jsonl  # noqa: E402
+from windvane.util import append_jsonl, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
 CHECKED = """Caps:
@@ -52,8 +52,17 @@ class Checks(unittest.TestCase):
         self.assertEqual(entry["capped"], {"works": 7.0})
         self.assertEqual(entry["hits"], ["works<=5"])
         self.assertEqual(entry["checks"], 3)
+        self.assertEqual((entry["fixes"], entry["step"]), (0, "revise"), "a hit cap with nothing listed goes back")
+        self.assertIn("Capped by the driver: works<=5 answered yes (works 7 → 5)", critique)
+        self.assertNotIn("Capped by the driver", critic.unscored(critique))
         self.assertTrue(critique.startswith("Caps:"), "the checks stay in the recorded critique")
         self.assertEqual(read_jsonl(self.p.state / "critic.jsonl")[-1]["score"], 5.0)
+
+    def test_a_hit_cap_still_runs_out_of_revisions(self):
+        for _ in range(3):
+            append_jsonl(self.p.state / "critic.jsonl", {"ticket": "T-040", "score": 5, "step": "revise", "fixes": 1})
+        entry, _ = self.judge(CHECKED)
+        self.assertEqual(entry["step"], "accept")
 
     def test_a_cap_under_the_number_already_leaves_it(self):
         dims, was = critic.capped({"works": 3, "clear": 8}, [("works", 5, True), ("clear", 7, False)])

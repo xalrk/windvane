@@ -92,7 +92,9 @@ def checks(text):
 def capped(dims, caps):
     """`dims` with every hit cap applied, and {dimension: the critic's own number} for those it lowered. A hit cap
     wins over the number: a critic that says "yes, it can lose work" and then writes works=7 meant works=5 (the
-    calibration says so). A cap on a dimension the critic marked `-` still counts: the failure it names is real."""
+    calibration says so). A cap on a dimension the critic marked `-` still counts: the failure it names is real.
+    `judge` also counts each hit as a fix: T-040 went on as "scope" three times with a lost-work hole named and
+    nothing listed to fix, and the calibration says a hit cap belongs under "Fix in this ticket"."""
     out, was = dict(dims), {}
     for d, n, hit in caps:
         if hit and out.get(d, n + 1) > n:
@@ -119,7 +121,7 @@ def step(p, dims, fixes, revs):
 def unscored(critique):
     """An earlier critique without its score lines, so a revision is judged afresh, not as "last time +1"."""
     return "\n".join(l for l in critique.splitlines()
-                     if not re.match(r"\s*(Scores?:|CRITIC:|Nearest anchor:)", l) and not CAP_RE.match(l)).strip()
+                     if not re.match(r"\s*(Scores?:|CRITIC:|Nearest anchor:|Capped by the driver:)", l) and not CAP_RE.match(l)).strip()
 
 
 def beyond(critique):
@@ -259,11 +261,17 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     _, dims, fixes, gist = v
     caps, anchor = checks(text)
     dims, was = capped(dims, caps)
+    hits = [f"{d}<={c:g}" for d, c, hit in caps if hit]
     critique = text[min((i for i in (text.find("Caps:"), text.find("Score")) if i >= 0), default=0):]
+    if hits:
+        low = ", ".join(f"{d} {was[d]:g} → {dims[d]:g}" for d in was)
+        critique += (f"\nCapped by the driver: {', '.join(hits)} answered yes{f' ({low})' if low else ''}; "
+                     "a hit cap counts as a fix.")
     entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
-             "dims": dims, "fixes": fixes, "revisions": n, "step": step(p, dims, fixes, n), "gist": gist[:200],
+             "dims": dims, "fixes": fixes, "revisions": n, "gist": gist[:200],
+             "step": step(p, dims, max(fixes, len(hits)), n),
              "critique": critique, "scale": scale(p, cwd), "checks": len(caps),
-             "hits": [f"{d}<={c:g}" for d, c, hit in caps if hit], "capped": was, "anchor": anchor}
+             "hits": hits, "capped": was, "anchor": anchor}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
 
