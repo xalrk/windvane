@@ -71,5 +71,27 @@ class Scale(unittest.TestCase):
         self.assertEqual((entry["score"], entry["dims"], entry["step"]), (8, {"works": 8, "clear": 8}, "pass"))
 
 
+class EffectiveFixes(unittest.TestCase):
+    """T-053: the collapse check groups by the fix count the step used, so a capped verdict whose critic listed no
+    fix sits with the 1-fix verdicts, not the 0-fix ones (where it would hide or fake a collapse)."""
+
+    def recs(self):
+        rows = [(f"T-00{i}", s, f) for i, (s, f) in enumerate([(6, 1), (5, 2), (4, 3), (6, 1), (5, 2), (4, 3)], 1)
+                for s, f in ((s, f), (9, 0))]
+        return [{"ticket": t, "score": s, "fixes": f, "hits": []} for t, s, f in rows]
+
+    def test_a_capped_verdict_with_no_fix_listed_groups_with_one_fix(self):
+        recs = self.recs()
+        for r in (recs[0], recs[6]):  # two 1-fix verdicts the critic listed as 0, each with one hit cap
+            r.update(fixes=0, hits=["works<=6"])
+        self.assertEqual(critic.effective(recs[0]), 1)
+        self.assertIn("(0 fixes: 9, 1 fix: 6, 2 fixes: 5, 3 fixes: 4) in 12 of 12", critic.collapsed(recs))
+
+    def test_the_stored_count_wins_and_old_records_still_read(self):
+        self.assertEqual(critic.effective({"fixes": 0, "hits": ["a<=5", "b<=5"], "effective": 2}), 2)
+        self.assertEqual(critic.effective({"fixes": 2}), 2)
+        self.assertEqual(critic.effective({}), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
