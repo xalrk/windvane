@@ -53,7 +53,8 @@ if os.environ.get("FAKE_MAX_TURNS") and system.startswith(os.environ["FAKE_MAX_T
     sys.exit(1)
 if step == "error":
     emit({"type": "result", "subtype": "success", "is_error": True, "num_turns": 1,
-          "result": 'API Error: 529 {"type":"overloaded_error","message":"Overloaded"}'})
+          "result": os.environ.get("FAKE_ERROR_TEXT")  # FAKE_ERROR_TEXT: the error's own words, else an overload
+          or 'API Error: 529 {"type":"overloaded_error","message":"Overloaded"}'})
     sys.exit(1)
 if step == "crash":
     print("Error: socket hang up", file=sys.stderr, flush=True)

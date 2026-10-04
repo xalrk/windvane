@@ -41,7 +41,7 @@ RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)"
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
-           "conflicts", "spent", "update_said", "scale_said", "desk_merged", "suspect")  # the run's own memory, handed to the driver a self-update restarts
+           "conflicts", "spent", "update_said", "scale_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
@@ -53,7 +53,11 @@ NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
-SUPERVISED = "WINDVANE_SUPERVISED"  # set for a driver under `supervise`: it hands a crash over instead of pushing it
+SUPERVISED = "WINDVANE_SUPERVISED"
+# Errors a ticket brings on itself, as (text in the error, lowercase; what to do), for its set-aside push
+SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it reads."),
+                  ("context limit", "Split the ticket, or trim what it reads."),
+                  ("request too large", "Split the ticket, or trim what it reads."))  # set for a driver under `supervise`: it hands a crash over instead of pushing it
 
 
 def said_times(n):
@@ -373,8 +377,17 @@ class Pilot(Desk, Periodic):
         """A ticket whose own sessions keep dying while others' don't: the rest of the run goes on without it."""
         self.skip.add(tid)
         self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work")
+        fix = next((advice for text, advice in SELF_INFLICTED if text in error.lower()), "")
         push(f"Set aside: {self.name(tid)}", f"Its sessions died {self.p.ap['retries'] + 1} times ({error}) while "
-             "other sessions worked. Its branch is kept; the run goes on without it.", 4, "warning")
+             "other sessions worked. " + (fix + " " if fix else "") + "Its branch is kept; the run goes on without it.",
+             4, "warning")
+
+    def set_aside_limit(self, tid, limit, fix):
+        """A worker run stopped at a limit of its own (the time box, max turns or budget): the ticket is too big for
+        one run as it stands, so the run goes on without it and the phone says which limit and what to change."""
+        self.skip.add(tid)
+        self.log(f"{tid}: the run hit {limit}; set aside")
+        push(f"Set aside: {self.name(tid)}", f"Its run hit {limit}. {fix} Its branch is kept.", 3, "hourglass")
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
@@ -449,11 +462,10 @@ class Pilot(Desk, Periodic):
     def handle(self, tid, text, killed):
         if killed:
             if killed == "time" and now() < self.end() - timedelta(minutes=5):
-                self.log(f"{tid}: hit the {self.a.ticket_hours:g}-hour limit for one run; set aside")
-                self.skip.add(tid)
+                self.set_aside_limit(tid, f"the {self.a.ticket_hours:g}-hour limit for one run",
+                                     "Split the ticket, or raise ticket_hours.")
             elif killed.startswith("max "):  # out of its own turns or budget: the ticket's doing, like the time box
-                self.log(f"{tid}: the run hit its {killed}; set aside")
-                self.skip.add(tid)
+                self.set_aside_limit(tid, f"its {killed}", "Split the ticket.")
             return
         m = last_match(RESULT_RE, text)
         branch = gout(self.wd, "rev-parse", "--abbrev-ref", "HEAD")
@@ -1281,7 +1293,8 @@ class Pilot(Desk, Periodic):
 
     def carry_over(self, restarted):
         """A restart (a self-update, or `supervise` after a crash) goes on with the run it replaced: the same tickets set aside or failed, the same
-        replan budget, and the same merges in the final summary. Any other start begins afresh."""
+        replan budget, the same dead-session counts (so a ticket on trial is still decided by the next session), and
+        the same merges in the final summary. Any other start begins afresh."""
         f = self.p.state / "restart.json"
         if restarted:
             for k, v in load_json(f, {}).items():
