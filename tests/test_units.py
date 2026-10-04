@@ -154,9 +154,9 @@ class Stats(unittest.TestCase):
         lines = out.getvalue().splitlines()
         self.assertIn("outcome", lines[0])
         self.assertRegex(out.getvalue(), r"T-001\s+merged\s+2 .* ≥1.00 ")
-        self.assertRegex(out.getvalue(), r"T-002\s+open\s+1 .* ≥0.00 ")
-        self.assertIn("per merged ticket (1): 2.0 runs, 20k tokens, ≥1.00 API $", out.getvalue())
-        self.assertIn("not merged: 20k tokens, 50%", out.getvalue())
+        self.assertRegex(out.getvalue(), r"T-002\s+open\s+1 .* \? ")
+        self.assertIn("per merged ticket (1): 2.0 runs, 28k weighted tokens, ≥1.00 API $", out.getvalue())
+        self.assertIn("not merged (open, parked, failed): 24k weighted tokens, 46%", out.getvalue())
         self.assertIn("(≥: 2 runs ended before their result", out.getvalue())
 
 
