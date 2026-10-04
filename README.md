@@ -43,12 +43,12 @@ Built, checked, reviewed and merged. Critic 7/10. 5h 5% · week 9%
 
 `windvane stats` shows where the tokens went:
 ```
-role         runs turns  fresh in  cached in     out   API $   min   base cached/turn
-worker         34  1166    2,016k    66,032k    877k   46.87   353  20.8k       56.6k
-reviewer       34   183    1,062k     5,881k    194k   13.55    37  29.5k       32.1k
-critic         42   199      632k     3,368k    108k    7.89    23  21.2k       16.9k
-planner         1    11       74k       376k     16k    0.99     3  17.4k       34.2k
-preflight       2     2       26k        18k      1k    0.11     0      -        9.1k
+role         runs died/killed turns  fresh in  cached in     out  weighted   API $   min
+worker         65           1  2204    3,741k   116,066k  1,595k   24,258k   85.03   911
+reviewer       63           0   342    1,895k     9,728k    349k    5,087k   24.09    78
+critic         79           0   366    1,125k     5,394k    197k    2,929k   14.01    43
+planner         3           0    55      193k     1,903k     49k      674k    2.90     9
+preflight       2           0     2       26k        18k      1k       38k    0.11     0
 ```
 
 ## Install
