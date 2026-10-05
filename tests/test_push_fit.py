@@ -17,7 +17,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver, net, planner  # noqa: E402
+from windvane import driver, net, planner, scratch  # noqa: E402
 from windvane import held as held_mod  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
@@ -224,9 +224,15 @@ def planned(p, patch, s):
     return {"planned 1 ticket": ("API Error",)}
 
 
+def tmp_full(p, patch, s):
+    patch(scratch, "fullness", lambda path=None: (93.4, 20))
+    pilot(p).clean_tmp()
+    return {"Temp dir nearly full": ("93% full of inodes", "isn't windvane's")}
+
+
 SITES = [set_aside, own_limit, dollar_budget, partials, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, restarted, crashed_stopped,
-         held, unmerged_local, unmerged_remote, plan_not_pushed, planned]
+         held, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full]
 
 
 def drive(site):
