@@ -84,7 +84,7 @@ class GhFailed(Exception):
     """A gh call the count needs failed: which one, and gh's first stderr line (not logged in, network, rate limit),
     so the log can say why instead of the count just coming back empty."""
     def __init__(self, what, r):
-        why = next((x.strip() for x in (r.stderr or "").splitlines() if x.strip()), f"exit {r.returncode}")
+        why = next((" ".join(x.split()) for x in (r.stderr or "").splitlines() if x.strip()), f"exit {r.returncode}")
         super().__init__(f"`{what}`: {why}" if r.returncode else f"`{what}`: not JSON")
 
 
@@ -319,8 +319,7 @@ def refresh_now(p):
     except GhFailed as e:
         if p.name not in recount_logged:
             recount_logged.add(p.name)
-            log(p, f"actions: recount failed: {e} (run `gh auth status`); "
-                   f"after a day without a count, workers' commits carry {SKIP}")
+            log(p, f"actions: recount failed: {e} (run `gh auth status`)")
     except Exception as e:
         log(p, f"actions: recount failed: {type(e).__name__}: {(str(e).splitlines() or [''])[0]}")
     finally:
