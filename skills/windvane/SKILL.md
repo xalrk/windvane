@@ -41,19 +41,21 @@ Do everything yourself. The user should only have to answer real product questio
    alone. Name test files (`tests/test_<topic>.py`), not `tests/`, which overlaps every ticket. Put the order in
    `.windvane/QUEUE.md` (`- T-001 <title>`). A product call nobody has made yet becomes a ticket whose first step
    asks it (the worker rules cover how).
-5. **Calibrate the critic, with the user.** It scores every ticket blind (it never sees the bar) on the project's
-   own scale, and sends work back below the bar, so the scale decides what "done" means.
+5. **Calibrate the critic, with the user.** It answers yes/no checks on every ticket blind (it never sees the bar),
+   the driver scores them on the project's own scale, and work under the bar goes back: the scale decides "done".
    - `.windvane/CRITIC.md`: who uses this and what a 10 means (name the products to beat), then 2-4 dimensions drawn
-     from that 10 (the first: does it work at all). Give each 2/5/8 anchors that say what a user would see or a test
-     would show ("loses the file on a crash"), never adjectives ("solid"). The top must be reachable by a good
-     ticket, not only by a measurement most tickets can't make.
-   - `.windvane/CALIBRATION.md`: anchors on your own first tickets, at least one of them expected under the bar.
+     from that 10 (the first: does it work at all), each a `## <name>` ladder of `- <rung> <id>: <check>` lines
+     (`templates/CRITIC.md`). Write checks someone reading the evidence pack could answer yes or no, about what a
+     user would see or a test would show ("a crash keeps the file"), never adjectives ("solid"); about 12 in all.
+     Each should fail on some tickets, and the top must be reachable by a good ticket.
+   - `.windvane/CALIBRATION.md`: your own first tickets as check answers, at least one with a `no` under the bar.
    - The bar: `[critic] pass` (default 8) and `revisions` (default 3) in the config. Never put the pass mark in the
-     scale, and add no rule asking the critic to justify a score: it writes the sentence instead of a lower score.
+     scale, and add no rule asking the critic to justify an answer: it writes the sentence instead of a `no`.
    Then **explain it to the user** in a few plain lines: one dimension's anchors, one first ticket scored on it, the
    pass mark and what it costs. Ask with AskUserQuestion: looks right / score harsher / score gentler / other changes.
    If they're away, ask with `notify-ask`. Adjust until they're happy; after 10 minutes with no answer, go with it and
-   say so in step 8. Redo this step when `windvane overview` says "Critic scale collapsed" and the user is at the desk.
+   say so in step 8. Redo this step when `windvane overview` names a check to sharpen or lower, or calls the scale the old numeric kind,
+   and the user is at the desk.
 6. **Commit and push** (`git add -A && git commit && git push`). The autopilot reads tickets from `origin/main`.
 7. **Start it.** Check `windvane quiet`, and ask the user about a deadline if they gave none and one matters (a
    shutdown, a meeting). Then `windvane preflight --for <hours> --json`: the product questions the next tickets will

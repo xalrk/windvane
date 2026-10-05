@@ -60,8 +60,9 @@ on the repository. Projects not on GitHub use `forge = "git"`.
 to the right server, if you use your own). `windvane phone setup` again sends a test push.
 
 **The critic gives everything the same score.**
-`windvane stats --critic` shows the spread. Rewrite `.windvane/CRITIC.md` with concrete examples of a 2, a 5 and an
-8 for each dimension, and record your own verdicts in `CALIBRATION.md`. See
+`windvane stats --critic` shows the spread and each check's yes rate. Sharpen a check every ticket passes, lower one
+none ever does (or, on an old numeric scale, rewrite `.windvane/CRITIC.md` as ladders of yes/no checks, like
+`templates/CRITIC.md`), and record your own verdicts in `CALIBRATION.md`. See
 [calibration](concepts.md#the-critic-and-calibration).
 
 ## FAQ
