@@ -1,8 +1,10 @@
 """T-092: before git 2.38 (no `merge-tree --write-tree`), a held change squash-merged from several commits drops off
-`held_now` by its whole change's patch-id, which `git cherry` alone misses; one only half on upstream stays listed.
+`status` by its whole change's patch-id, which `git cherry` alone misses; one only half on upstream, or with a binary
+file (whose patch-id old git takes from its name alone), stays listed.
 `status` prunes a hand-pushed change's remote branch once it's deleted, so its line reads as never pushed again."""
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 import unittest
@@ -24,10 +26,13 @@ class HeldOldGit(Base):
     def setUp(self):
         super().setUp()
         self.other = self.s.tmp / "other"
-        orig = held.git
-        self.addCleanup(setattr, held, "git", orig)
-        held.git = lambda cwd, *a: (subprocess.CompletedProcess(a, 129, "", "error: unknown option `write-tree'")
-                                    if a[:2] == ("merge-tree", "--write-tree") else orig(cwd, *a))
+        old = self.s.bin / "git"  # git before 2.38 on the PATH, for `windvane` too: no `merge-tree --write-tree`
+        old.write_text(f"""#!/bin/sh
+[ "$1 $2" = "merge-tree --write-tree" ] && {{ echo "error: unknown option \\`write-tree'" >&2; exit 129; }}
+exec {shutil.which("git")} "$@"
+""")
+        old.chmod(0o755)
+        self.assertEqual(shutil.which("git"), str(old))
 
     def three_commits(self):
         """A held change pushed by hand, grown to three commits (pushed too, as its local branch): its branch."""
@@ -52,9 +57,25 @@ class HeldOldGit(Base):
     def test_a_squash_of_three_commits_drops_off(self):
         branch = self.three_commits()
         self.squash_onto_main(f"origin/{branch}-b")
-        self.assertEqual(held.git(self.s.root, "merge-tree", "--write-tree", "a", "b").returncode, 129)
+        self.assertEqual(held.git(self.s.root, "merge-tree", "--write-tree", "main", branch).returncode, 129)
         self.assertIn("+", self.s.git("cherry", "origin/main", branch))  # cherry alone keeps it listed
         self.assertEqual(held.held_now(self.p), [])
+        self.assertNotIn("held", self.windvane("status"))
+        self.assertNotIn("held", self.windvane("overview").lower())
+        self.assertEqual(held.held_branches(self.p), {})  # a run's start stops tracking it
+        self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {})
+
+    def test_a_squash_with_a_binary_file_stays_listed(self):
+        branch, dev = self.three_commits(), self.s.tmp / "dev"
+        (dev / "logo.png").write_bytes(b"\x89PNG\0\1\2")
+        self.s.git("add", "logo.png", cwd=dev)
+        self.s.git("commit", "-qm", "logo", cwd=dev)
+        self.s.git("push", "-q", "origin", f"HEAD:{branch}-b", cwd=dev)
+        self.s.git("fetch", "-q", "origin")
+        self.s.git("branch", "-f", branch, f"origin/{branch}-b")
+        self.squash_onto_main(f"origin/{branch}-b")
+        self.assertEqual([b for b, *_ in held.held_now(self.p)], [branch])  # can't tell: kept, never lost
+        self.assertIn(f"pushed to origin/{branch}-b, not merged", self.windvane("status"))
 
     def test_a_change_half_on_main_stays_listed(self):
         branch = self.three_commits()

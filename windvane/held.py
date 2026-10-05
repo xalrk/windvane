@@ -214,9 +214,12 @@ SQUASH_WALK = 200  # upstream commits `squashed_on` reads at most, so a long-liv
 
 def squashed_on(root, upstream, branch):
     """Whether one of the last SQUASH_WALK upstream commits since the merge-base is `branch`'s whole change (the same
-    patch-id): a squash of several commits, which `git cherry` misses as it compares them one by one."""
+    patch-id): a squash of several commits, which `git cherry` misses as it compares them one by one. A change to a
+    binary file can't tell: before git 2.39 its patch-id leaves the content out, so any commit to that file matches."""
     base = gout(root, "merge-base", upstream, branch)
-    change = patch_ids(root, "diff", base, branch) if base else []
+    if not base or re.search(r"^-\t-\t", gout(root, "diff", "--numstat", base, branch), re.M):  # a binary file
+        return False
+    change = patch_ids(root, "diff", base, branch)
     return bool(change) and change[0] in patch_ids(
         root, "log", "-p", "--no-merges", f"-{SQUASH_WALK}", "--format=commit %H", f"{base}..{upstream}")
 
