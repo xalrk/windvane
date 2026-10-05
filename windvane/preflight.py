@@ -71,8 +71,12 @@ def waiting(p, qtext):
     for tid, q in load_json(p.state / "state.json", {}).get("questions", {}).items():
         out.append({"id": tid, "ticket": tid, "kind": "open", "question": q["q"], "context": "",
                     "options": q["opts"], "recommendation": q["rec"], "why": "", "built": "", "change_at": ""})
+    prov = provisionals(qtext)
+    keys = {qkey(x) for x in prov}
+    if qtext:  # the record keeps only those still provisional
+        note(p, lambda s: s.update(preflight=[k for k in s["preflight"] if k in keys]))
     offered = set(shown(p)["preflight"])
-    return out + [x for x in provisionals(qtext) if qkey(x) not in offered]
+    return out + [x for x in prov if qkey(x) not in offered]
 
 
 def offered(p, qs):

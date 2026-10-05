@@ -822,6 +822,8 @@ class Pilot(Desk, Periodic):
         p = self.p
         picks = [q for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
                  if p.norm(q["ticket"]) == tid]
+        if not picks:
+            return ""
         with self.lock:  # slots merge side by side
             new = unseen(picks, shown(p)["asked"].get(tid, []))
 
@@ -831,7 +833,7 @@ class Pilot(Desk, Periodic):
             note(p, told)
         how = f"to change: windvane answer {tid} <letter>."
         return "".join(f"\n{q['question']} Built {q['built']} without asking you: {q['option']}; {how}" if q in new
-                       else f"\nBuilt {q['built']} for {tid}; {how}" for q in picks)
+                       else f"\nBuilt {q['built']} for {tid}: {q['option']}; {how}" for q in picks)
 
     def fail(self, tid, why):
         self.skip.add(tid)
@@ -912,6 +914,8 @@ class Pilot(Desk, Periodic):
                                       + (f" They added: {text}" if text else "")
                                       + ". Build that, and move the question to ## Answered with the answer.")
                 self.log(f"{tid}: answered {letter or ''} {text or ''}".rstrip())
+                with self.lock:  # answered, so never mistaken for a reworded copy of a later provisional answer
+                    note(p, lambda s: s["asked"].update({tid: [a for a in s["asked"].get(tid, []) if a != q["q"]]}))
             elif (not q.get("later") and not q["must_wait"] and q["rec"]
                   and time.time() - q["asked"] > self.a.answer_wait * 60):
                 self.feedback[tid] = (f"The user didn't answer your question \"{q['q']}\" within "

@@ -148,14 +148,8 @@ def note(p, change):
 
 def unseen(picks, asked):
     """The provisional answers in `picks` whose question the user never got. A worker may reword a question as it
-    moves it to ## Provisional, so a sent question no pick matches word for word stands for the first unmatched pick."""
+    moves it to ## Provisional, so each sent question no pick matches word for word stands for one unmatched pick;
+    with more unmatched picks than such questions, which is which can't be told, so all of them are spelled out."""
     left = [a for a in asked if a not in {q["question"] for q in picks}]
-    out = []
-    for q in picks:
-        if q["question"] in asked:
-            continue
-        if left:
-            left.pop(0)
-            continue
-        out.append(q)
-    return out
+    out = [q for q in picks if q["question"] not in asked]
+    return [] if len(out) <= len(left) else out

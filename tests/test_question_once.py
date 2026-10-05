@@ -67,7 +67,7 @@ class AskOnce(unittest.TestCase):
                                                                 "Provisional"))
         self.assertEqual(self.holding("Red or blue?"), ["Question", "Question"])  # T-001's and T-002's, nothing more
         done = dict(self.sent)["Done: do T-001 (T-001)"]
-        self.assertIn("\nBuilt A for T-001; to change: windvane answer T-001 <letter>.", done)
+        self.assertIn("\nBuilt A for T-001: red; to change: windvane answer T-001 <letter>.", done)
         self.assertNotIn("Provisional: do T-001 (T-001)", dict(self.sent))  # no second push behind the Done one
         self.assertIn("T-001 (built A: red)", dict(self.sent)["windvane stopped"])
 
@@ -83,6 +83,26 @@ class AskOnce(unittest.TestCase):
         pl.was_quiet = True
         pl.quiet_check()
         self.assertEqual(len(self.sent), 1, self.sent)
+
+    def test_an_answered_question_doesnt_hide_a_later_quiet_time_one(self):
+        """Q1 asked on the phone and answered; Q2 built in a quiet time: Q2 isn't taken for a reworded Q1."""
+        pl = self.pilot()
+        pl.questions["T-001"] = {"q": "Big or small?", "opts": {"A": "big", "B": "small"}, "rec": "A",
+                                 "must_wait": False, "branch": "", "asked": None}
+        pl.send_question("T-001")
+        questions.give_answer(self.p, "T-001", "B")
+        pl.poll_questions()
+        self.assertEqual(questions.shown(self.p)["asked"].get("T-001"), [])
+        self.questions_md(prov=COLOUR + BUILT)
+        pl.merged_ok("T-001", "", self.s.git("rev-parse", "HEAD"))
+        self.assertIn("\nRed or blue? Built A without asking you: red;", self.sent[-1][1])
+
+    def test_unseen_spells_out_every_pick_it_cant_pair(self):
+        red, big = {"ticket": "T-1", "question": "Red or blue?"}, {"ticket": "T-1", "question": "Big or small?"}
+        self.assertEqual(questions.unseen([red], ["Red or blue?"]), [])
+        self.assertEqual(questions.unseen([red], ["Red, or blue?"]), [])  # reworded as it moved
+        self.assertEqual(questions.unseen([red, big], ["Red, or blue?"]), [red, big])  # which one was sent?
+        self.assertEqual(questions.unseen([red, big], ["Red or blue?"]), [big])
 
     def test_the_digest_lists_only_answers_built_since_the_last_one(self):
         self.patch(driver, "quiet_now", lambda p: (None, None))
@@ -109,6 +129,10 @@ class AskOnce(unittest.TestCase):
             qs = preflight.find(self.p, 0.1)
             preflight.ask(self.p, qs, inp=lambda prompt: "", say=said.append)  # Enter: skipped
         self.assertEqual(sum("Red or blue?" in s for s in said), 1, said)
+        self.questions_md()  # answered since: the record forgets it
+        preflight.find(self.p, 0.1)
+        self.assertEqual(questions.shown(self.p)["preflight"], [])
+        self.questions_md(prov=COLOUR + BUILT)
         x = preflight.lookup(self.p, "T-001")  # still answerable at the desk, and listed there
         self.assertEqual((x["kind"], x["question"]), ("provisional", "Red or blue?"))
         out = io.StringIO()
