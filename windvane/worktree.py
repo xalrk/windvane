@@ -31,13 +31,8 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
             git(root, "worktree", "prune")
             how = (f"timed out after {limit:g} min" if why == TIMED_OUT else f"cut short ({why})" if why
                    else f"failed (exit {code})")
-            cmd, where = f"`{clip(p.cfg['setup'], 60)}`", short_path(p, path)
+            cmd, where = f"`{p.cfg['setup']}`", short_path(p, path)
             raise SetupFailed(f"setup {cmd} {how} in {where}", lines, why, how, f"{cmd} in {where}")
-
-
-def clip(text, n):
-    """`text` cut to `n` characters with "…": a long chained `setup` would fill the phone's first line."""
-    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
 
 TIMED_OUT = "out of time"  # run_limited's reason when `until` passes

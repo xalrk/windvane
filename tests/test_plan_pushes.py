@@ -58,7 +58,7 @@ class PlanPushes(unittest.TestCase):
         self.assertEqual(planner.plan(self.p, "make it great"), 0)
         self.assertEqual(self.pushes[-1][0], "plan not pushed")
         self.assertRegex(self.pushes[-1][1], r"^Refused by a hook or branch rule; change the rule, or push it by hand "
-                                             r"with…\n…`git push origin (plan-\S+):\1-b` and merge it into main\.\n"
+                                             r"with `git push origin (plan-\S+):\1-b` and merge it into main\.\n"
                                              r"1 ticket kept only locally on \1\.$")
 
     def test_a_refused_merge_says_why_too(self):

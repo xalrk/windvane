@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import actions, critic, net
 from .held import author_ident, is_local, land, local_push, n_tickets, push_branch
-from .phone import lead
+from .phone import whole
 from .queue import Queue
 from .runner import rules, run_claude
 from .util import git, gout, last_match, load_json, log, now, push, save_json
@@ -114,8 +114,8 @@ def unmerged(p, n, where):
     how = "" if is_local(where) else ": merge it by hand"  # a local branch's reason says what to do
     log(p, f"plan: {n_tickets(n)} on {where}, not merged{how}")
     waits = f"{n_tickets(n)} {'waits' if n == 1 else 'wait'} on"
-    body = (lead(f"{waits} ", where, f"{how}.", log=lambda m: log(p, m)) if how
-            else local_push(where, f"{waits} the local branch"))
+    body = (whole(f"{waits} ", where, f"{how}.", log=lambda m: log(p, m)) if how
+            else local_push(where, f"{waits} the local branch", lambda m: log(p, m)))
     push("plan not merged", body, 4, "warning")
     return 0
 
@@ -183,7 +183,8 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
             clean_detach(p, cd, p.upstream)
             kept = f"{n_tickets(n)} kept only locally on {where.removeprefix('the local branch ')}"
             log(p, f"plan: {kept}")
-            push("plan not pushed", local_push(where, f"{n_tickets(n)} kept only locally on"), 4, "warning")
+            push("plan not pushed", local_push(where, f"{n_tickets(n)} kept only locally on", lambda m: log(p, m)),
+                 4, "warning")
             return 0
         if p.cfg["forge"] == "github":
             pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title",
@@ -191,6 +192,6 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
             log(p, f"plan: {n_tickets(n)} on {pr or branch}")
         else:
             log(p, f"plan: {n_tickets(n)} pushed to {branch}")
-    push(f"planned {n_tickets(n)}", lead("", m.group(3)[:300] or "See the queue."), 3, "memo")
+    push(f"planned {n_tickets(n)}", whole("", m.group(3) or "See the queue.", log=lambda m: log(p, m)), 3, "memo")
     clean_detach(p, cd, p.upstream)
     return n

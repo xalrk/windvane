@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import cli, held, phone, planner  # noqa: E402
+from windvane import cli, held, planner  # noqa: E402
 from test_held_age import HOOK  # noqa: E402
 import test_held_secret  # noqa: E402
 from test_plan_retry import Base  # noqa: E402
@@ -142,9 +142,8 @@ class HeldMerged(Base):
         planner.plan(self.p, "make it great")
         body = self.pushes[-1][1]
         first = body.splitlines()[0]
-        self.assertLessEqual(len(first), phone.LOCK_SCREEN)
         self.assertTrue(first.startswith("Refused: it holds a secret in `README.md:4`"), first)
-        self.assertIn(f"or allow it on GitHub if it isn't a secret: {UNBLOCK}", " ".join(body.split()))
+        self.assertIn(f"or allow it on GitHub if it isn't a secret: {UNBLOCK}.", first)  # whole, in reading order
         why = json.loads((self.p.state / "held_why.json").read_text())[self.local()]["why"]
         self.assertTrue(why.endswith(UNBLOCK), why)  # whole in `status` too
         bare = held.push_refusal("remote: error: Secret scanning found a token", "git", "x")

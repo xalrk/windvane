@@ -313,8 +313,7 @@ class Periodic:
         if quiet_now(p)[0]:
             self.log(f"{name}: quiet time, no question; the tickets are held")
             return "hold"
-        which = "; ".join(f"{t} {titles.get(t, '')[:60]}".strip() for t in tickets)
-        which = which if len(which) <= 400 else which[:399] + "…"
+        which = ticket_list(tickets, titles)
         sent = phone.ask(qid, f"{name} wrote {n} ticket{'s' * (n != 1)}: {which}. Queue them? "
                          f"No answer in {self.a.answer_wait:g} min: hold.", [o for _, o in ASK_LAND])
         if not sent:
@@ -414,6 +413,18 @@ def added_lines(old, new, onto=None):
     for at, lines in reversed(adds):  # from the bottom, so the places above stay right
         out[at:at] = [line for line in lines if not line.strip() or line not in out]
     return "\n".join(out)
+
+
+def ticket_list(tickets, titles):
+    """`T-004 Title; T-005 Title` with whole titles (a cut one reads as a typo) while they fit a push, the rest
+    counted: `; and 3 more`."""
+    which = []
+    for t in tickets:
+        if len("; ".join(which)) > phone.MOST // 2:
+            which.append(f"and {len(tickets) - len(which)} more")
+            break
+        which.append(f"{t} {titles.get(t, '')}".strip())
+    return "; ".join(which)
 
 
 def cut_lines(text, n):
