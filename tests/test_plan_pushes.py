@@ -47,8 +47,8 @@ class PlanPushes(unittest.TestCase):
         self.assertEqual(driver.plan(self.p, "make it great"), 0)
         title, msg = self.pushes[-1]
         self.assertEqual(title, "plan not pushed")
-        self.assertRegex(msg, r"^1 ticket kept only locally on plan-\S+ \(login refused; check your login to the "
-                              r"remote and the next run pushes it\)\.$")
+        self.assertRegex(msg, r"^Login refused; check your login to the remote and the next run pushes it\.\n"
+                              r"1 ticket kept only locally on plan-\S+\.$")
         self.assertIn("plan: 1 ticket kept only locally on plan-", self.log())
 
     def test_a_hook_refusal_names_the_hook(self):
@@ -57,16 +57,17 @@ class PlanPushes(unittest.TestCase):
         hook.chmod(0o755)
         self.assertEqual(driver.plan(self.p, "make it great"), 0)
         self.assertEqual(self.pushes[-1][0], "plan not pushed")
-        self.assertRegex(self.pushes[-1][1], r"\(refused by a hook or branch rule; change the rule, or push it by hand "
-                                             r"with `git push origin (plan-\S+):\1-b` and merge it into main\)\.$")
+        self.assertRegex(self.pushes[-1][1], r"^Refused by a hook or branch rule; change the rule, or push it by hand "
+                                             r"with…\n…`git push origin (plan-\S+):\1-b` and merge it into main\.\n"
+                                             r"1 ticket kept only locally on \1\.$")
 
     def test_a_refused_merge_says_why_too(self):
         self.refuse_with("ssh: connect to host github.com port 22: Connection timed out\n"
                          "fatal: Could not read from remote repository.\n")
         self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
         self.assertEqual(self.pushes[-1][0], "plan not merged")
-        self.assertRegex(self.pushes[-1][1], r"^1 ticket waits on the local branch plan-\S+ \(network down; "
-                                             r"the next run pushes it again\)\.$")
+        self.assertRegex(self.pushes[-1][1], r"^Network down; the next run pushes it again\.\n"
+                                             r"1 ticket waits on the local branch plan-\S+\.$")
 
     def test_one_ticket_is_singular_in_the_push_and_the_log(self):
         self.assertEqual(driver.plan(self.p, "make it great"), 1)

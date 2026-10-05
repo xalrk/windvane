@@ -63,7 +63,7 @@ class PlanSafety(unittest.TestCase):
         self.assertEqual(self.s.git("ls-remote", "--heads", "origin", "plan-*"), "")
         self.assertIn(f"plan: 1 ticket kept only locally on {branch} (refused by a hook", self.log())
         self.assertEqual(self.pushes[-1][0], "plan not pushed")
-        self.assertIn(f"kept only locally on {branch}", self.pushes[-1][1])
+        self.assertIn(f"\n1 ticket kept only locally on {branch}.", self.pushes[-1][1])
         driver.plan(self.p, "more")  # the next plan resets the plan tree; the kept branch stays and holds its id
         self.assertIn(".windvane/tickets/T-003.md", self.s.git("ls-tree", "-r", "--name-only", branch).split())
         second = [b for b in self.s.git("branch", "--list", "plan-*", "--format=%(refname:short)").split()
@@ -85,10 +85,10 @@ class PlanSafety(unittest.TestCase):
         self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
         branch, files = self.local_plan()
         self.assertIn(".windvane/tickets/T-003.md", files)
-        self.assertEqual(self.pushes, [("plan not merged", f"1 ticket waits on the local branch {branch} (refused "
-                                                           "by a hook or branch rule; change the rule, or push it by "
-                                                           f"hand with `git push origin {branch}:{branch}-b` and open "
-                                                           "a PR from it).")])
+        self.assertEqual(self.pushes, [("plan not merged", "Refused by a hook or branch rule; change the rule, or push "
+                                                           f"it by hand with…\n…`git push origin {branch}:{branch}-b` "
+                                                           f"and open a PR from it.\n1 ticket waits on the local branch "
+                                                           f"{branch}.")])
 
     def test_two_plans_in_the_same_minute_both_survive(self):
         orig = driver.now
