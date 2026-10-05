@@ -247,16 +247,17 @@ def tmp_warnings(p=None):
                     "windvane's own leftovers"))
     left = scratch.leftovers(*tmp_scope(p))
     if left:
-        big = ", ".join(f"{d.name} ({n} file{'s' * (n != 1)})" for d, n, _ in left[:3])
-        out.append(("warn", f"{len(left)} leftover windvane temp dirs, {sum(n for _, n, _ in left)} files "
-                    f"(biggest: {big})", "windvane doctor --clean"))
+        files = lambda n: f"{n} file{'s' * (n != 1)}"
+        big = ", ".join(f"{d.name} ({files(n)})" for d, n, _ in left[:3])
+        out.append(("warn", f"{len(left)} leftover windvane temp dir{'s' * (len(left) > 1)}, "
+                    f"{files(sum(n for _, n, _ in left))} (biggest: {big})", "windvane doctor --clean"))
     return out
 
 
 def main(p=None, clean=False):
     if clean:
         dirs, n = scratch.clean(*tmp_scope(p))
-        print(f"removed {dirs} leftover windvane temp dirs ({n} files) from {scratch.root()}"
+        print(f"removed {dirs} leftover windvane temp dir{'s' * (dirs != 1)} ({n} files) from {scratch.root()}"
               + (f" and {p.state / 'tmp'}" if tmp_scope(p)[0] else ""))
     rows = checks(p)
     width = max(len(what) for level, what, _ in rows if level != "warn")  # a long warning mustn't push every fix out

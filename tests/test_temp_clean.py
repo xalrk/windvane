@@ -175,6 +175,10 @@ class Doctor(unittest.TestCase):
         self.assertIn(f"removed 3 leftover windvane temp dirs (52 files) from {self.tmp} and {self.p.state / 'tmp'}",
                       out)
         self.assertNotIn("leftover windvane temp dirs,", out)
+        d = self.tmp / "windvane-one"
+        d.mkdir()
+        age(d)
+        self.assertIn("1 leftover windvane temp dir, 1 file (biggest: windvane-one (1 file))", self.doctor())
         self.assertTrue((self.p.state / "tmp/T-004").exists())
 
 
