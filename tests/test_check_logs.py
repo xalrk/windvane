@@ -119,6 +119,24 @@ class Prune(Check):
         self.assertEqual(self.left(), sorted(["20260902-new-passed", "20260903-old-passed-locked",
                                               *(p.name[:-4] for p in failed[1:])]))
 
+    def test_a_killed_checks_minutes_outlive_its_pruned_log(self):
+        WASTED = "costliest wasted check: T-060, 18 min, cut off"  # noqa: N806
+        start = time.time() - 40 * DAY
+        self.add(event="check-start", ticket="T-060", start=start, log="20260801-killed.log")
+        killed = self.logs / "20260801-killed.log"
+        killed.write_text("out\n")
+        os.utime(killed, (start + 18 * 60,) * 2)
+        for i in range(jobs.KEEP_FAILED):  # newer failures, so the killed one isn't kept as one of the newest
+            self.log(f"2026090{i}-newer-failed", 1, False)
+        self.assertEqual(self.lines("--by", "role", start="costliest"), [WASTED])
+        passed, _, _ = self.run_check(lambda out: 0)
+        self.assertTrue(passed)
+        self.assertFalse(killed.exists())
+        self.assertEqual(self.lines("--by", "role", start="costliest"), [WASTED])
+        end = [r for r in read_jsonl(self.ledger) if r["event"] == "check" and r["ticket"] == "T-060"]
+        self.assertEqual([(r["finished"], r["passed"], r["start"]) for r in end], [(False, False, start)])
+        self.assertEqual(end[0]["at"], self.starts()[0]["at"])  # dated as it happened
+
     def test_a_file_it_cannot_read_or_delete_does_not_fail_the_check(self):
         """Both are old passed logs, so the prune tries them (first: names sort by time) and must go on past them."""
         self.log("20260801-a-directory", 4, True).unlink()
@@ -142,7 +160,7 @@ class Prune(Check):
             passed, _, _ = self.run_check(lambda out: 0)
         self.assertTrue(passed)
         self.assertTrue(old.exists())
-        self.assertEqual(err.getvalue(), "check logs not pruned: bad ledger\n")
+        self.assertEqual(err.getvalue(), "check logs not pruned (the check runs anyway): bad ledger\n")
 
 
 class Costliest(Base):

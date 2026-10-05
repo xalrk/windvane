@@ -500,10 +500,9 @@ def check_runs(p, checks):
 def killed_minutes(p, start_row):
     """A killed check's minutes: the check wrote its log up to the kill, so the log's last write is about when."""
     try:
-        mtime = (p.state / "checks" / start_row["log"]).stat().st_mtime
-    except (KeyError, OSError):  # no log: a row from before logs were named, or the log was cleared
+        return jobs.log_minutes(p.state / "checks" / start_row["log"], start_row["start"])
+    except (KeyError, OSError):  # no log: a row from before logs were named, or the log was cleared by hand
         return 0
-    return round(max(0.0, mtime - start_row.get("start", mtime)) / 60, 2)
 
 
 def check_stats(checks, by, p):

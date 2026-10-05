@@ -74,7 +74,8 @@ failed or was cut off, the time that bought nothing; no line when every check pa
 `most check time: T-060, 4 runs, 31 min` comes before it (the ticket whose checks took longest).
 
 Check logs (`state/checks/`) are pruned when a check starts: a passed check's log after 3 days, any after 3 weeks,
-but never one still running or one of the 5 newest that failed or were cut off.
+but never one still running or one of the 5 newest that failed or were cut off. A killed check's log gets its
+end row (its minutes) in the ledger before it goes, so its time still counts.
 
 The `died or killed` line is what outages, crashes and hung sessions cost: their runs' weighted tokens, and their
 share of all. `orphaned process groups killed: N` follows when a run killed process groups a dead driver's sessions

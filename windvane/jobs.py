@@ -144,21 +144,29 @@ def running(p, start_row):
         return False
 
 
-def passed_logs(p):
-    """The logs of checks that passed, by the ledger: a start row names the log, its end row (same ticket and start)
-    says how it went. A log no row names (a check at the desk, for no ticket) counts as not passed."""
+def outcomes(p):
+    """(the logs of checks that passed, the start rows of killed or running checks by log name), from the ledger: a
+    start row names the log, its end row (same ticket and start) says how it went. A log no row names (a check at
+    the desk, for no ticket) is in neither, and counts as not passed."""
     rows = read_jsonl(p.state / "ledger.jsonl")
-    ok = {(r.get("ticket"), r.get("start")) for r in rows if r.get("event") == "check" and r.get("passed")}
-    return {r["log"] for r in rows if r.get("event") == "check-start" and "log" in r
-            and (r.get("ticket"), r.get("start")) in ok}
+    ends = {(r.get("ticket"), r["start"]): r.get("passed") for r in rows if r.get("event") == "check" and "start" in r}
+    starts = [r for r in rows if r.get("event") == "check-start" and "log" in r]
+    return ({r["log"] for r in starts if ends.get((r.get("ticket"), r.get("start")))},
+            {r["log"]: r for r in starts if (r.get("ticket"), r.get("start")) not in ends})
+
+
+def log_minutes(log, start):
+    """A killed check's minutes: from its start to its log's last write (its output's or the heartbeat's)."""
+    return round(max(0.0, log.stat().st_mtime - start) / 60, 2)
 
 
 def prune(p, logs, clock=time.time):
     """Delete check logs past their keep (`KEEP_PASSED`, `KEEP_ANY`), but never a locked one (its check runs) or
-    one of the `KEEP_FAILED` newest that didn't pass. Never fails the check it runs for: a file it can't read or
-    delete stays, and anything else wrong skips the prune."""
+    one of the `KEEP_FAILED` newest that didn't pass. A killed check's log gets the end row it never wrote first, so
+    `stats` doesn't time its hang at 0 once the log is gone. Never fails the check it runs for: a file it can't read
+    or delete stays, and anything else wrong skips the prune."""
     try:
-        passed = passed_logs(p)
+        passed, killed = outcomes(p)
         files = sorted(logs.glob("*.log"))  # names sort by start time
         keep = set([f for f in files if f.name not in passed][-KEEP_FAILED:])
         t = clock()
@@ -167,11 +175,21 @@ def prune(p, logs, clock=time.time):
                 if (f in keep or t - f.stat().st_mtime < (KEEP_PASSED if f.name in passed else KEEP_ANY)
                         or locked(f)):
                     continue
+                if f.name in killed:
+                    close(p, killed[f.name], f)
                 f.unlink()
             except OSError:
                 pass
     except Exception as e:  # noqa: BLE001 - a prune is housekeeping: the check must still run
-        print(f"check logs not pruned: {e}", file=sys.stderr)
+        print(f"check logs not pruned (the check runs anyway): {e}", file=sys.stderr)
+
+
+def close(p, start_row, log):
+    """The end row a killed check never wrote (cut off, timed to its log's last write), dated like its start row so
+    `stats --days` counts it where it happened."""
+    row = {"event": "check", "ticket": start_row["ticket"], "minutes": log_minutes(log, start_row["start"]),
+           "passed": False, "reused": False, "start": start_row["start"], "finished": False}
+    append_jsonl(p.state / "ledger.jsonl", {**({"at": start_row["at"]} if "at" in start_row else {}), **row})
 
 
 def tail(path, n=40):
