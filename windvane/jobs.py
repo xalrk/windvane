@@ -6,16 +6,18 @@ never recorded.
 """
 import fcntl
 import hashlib
+import itertools
 import os
 import subprocess
 import sys
 import time
-from contextlib import suppress
 from pathlib import Path
 
 from .config import exe
 from .runner import NEST, TICKET
 from .util import append_jsonl, gout, now
+
+_LOGS = itertools.count(1)  # a check log's number in this process
 
 
 def tree_key(p, cwd):
@@ -46,7 +48,7 @@ def check(p, cwd, quiet=False, ticket=None):
         return True, f"CHECK PASSED (reused the pass from {(passes / key).read_text().strip()} for this tree)", None
     logs = p.state / "checks"
     logs.mkdir(parents=True, exist_ok=True)
-    log = logs / f"{now():%Y%m%d-%H%M%S}.log"
+    log = logs / log_name()
     code, mins = run_logged(p, ticket, cmd, cwd, log)
     if code == 0:
         if key and tree_key(p, cwd) == key:
@@ -54,6 +56,13 @@ def check(p, cwd, quiet=False, ticket=None):
             (passes / key).write_text(f"{now():%Y-%m-%d %H:%M} ({gout(cwd, 'rev-parse', '--short', 'HEAD')})")
         return True, f"CHECK PASSED in {mins:.1f} min" + ("" if key else " (uncommitted changes: not recorded)"), log
     return False, f"CHECK FAILED (exit {code}) in {mins:.1f} min; log {log}", log
+
+
+def log_name():
+    """A check log's name, sortable by time and its own even for checks started in the same second (parallel slots,
+    a session's check beside the driver's): a shared log would be truncated by the second check, and its lock would
+    make a killed check look still running."""
+    return f"{now():%Y%m%d-%H%M%S}-{os.getpid()}-{next(_LOGS)}.log"
 
 
 def run_logged(p, ticket, cmd, cwd, log):
@@ -68,8 +77,7 @@ def run_logged(p, ticket, cmd, cwd, log):
     code = None
     try:
         with log.open("w") as f:
-            with suppress(BlockingIOError):  # a check started the same second shares the log: never wait on it
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(f, fcntl.LOCK_EX)  # blocking: `running` may hold a momentary shared probe
             if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
                 code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
                                        "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd, stdout=f,

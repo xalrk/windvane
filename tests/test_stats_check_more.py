@@ -135,7 +135,8 @@ class Costliest(Base):
         self.add_checks()
         self.add(event="check", ticket="T-001", start=5.0, minutes=1.0, passed=False, reused=False, finished=False)
         after = self.cli("stats", "--by", "ticket")
-        self.assertEqual([l for l in after.splitlines() if not l.startswith(("checks:", "most check time:"))],
+        skip = ("checks:", "most check time:", "costliest wasted check:")
+        self.assertEqual([l for l in after.splitlines() if not l.startswith(skip)],
                          before.splitlines())
 
 

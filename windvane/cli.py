@@ -455,21 +455,31 @@ def cmd_stats(a, p):
 
 def check_runs(p, checks):
     """(the checks that ran, reused passes, checks still running). Ran: the end rows that didn't reuse a pass, plus
-    a start row no end row matches (same ticket and start) whose check isn't running any more: it was killed, so it
-    has no minutes, and counts as cut off like an end row with `finished: false`."""
+    a start row no end row matches (same ticket and start) whose check isn't running any more: it was killed, and
+    counts as cut off like an end row with `finished: false`, timed from its start to its log's last write (0 with
+    no log)."""
     ends = [r for r in checks if r.get("event") == "check"]
     ended = {(r["ticket"], r.get("start")) for r in ends}
     open_ = [r for r in checks if r.get("event") == "check-start" and (r["ticket"], r.get("start")) not in ended]
     live = [r for r in open_ if jobs.running(p, r)]
-    killed = [{**r, "minutes": 0, "finished": False} for r in open_ if r not in live]
+    killed = [{**r, "minutes": killed_minutes(p, r), "finished": False} for r in open_ if r not in live]
     ran = [r for r in ends if not r.get("reused")]
     return ran + killed, len(ends) - len(ran), len(live)
 
 
+def killed_minutes(p, start_row):
+    """A killed check's minutes: the check wrote its log up to the kill, so the log's last write is about when."""
+    try:
+        mtime = (p.state / "checks" / start_row["log"]).stat().st_mtime
+    except (KeyError, OSError):  # no log: a row from before logs were named, or the log was cleared
+        return 0
+    return round(max(0.0, mtime - start_row.get("start", mtime)) / 60, 2)
+
+
 def check_stats(checks, by, p):
     """What the check costs: its runs and minutes, per ticket that ran one, and the failed, cut off, reused and still
-    running ones (only when there are some); by ticket, the ticket whose checks took longest. Not in the table: a check spends
-    time, not tokens."""
+    running ones (only when there are some); by ticket, the ticket whose checks took longest and the longest check
+    that bought nothing (failed or cut off). Not in the table: a check spends time, not tokens."""
     if not checks:
         return
     ran, reused, live = check_runs(p, checks)
@@ -488,6 +498,11 @@ def check_stats(checks, by, p):
     if by == "ticket" and per:
         top = max(per, key=lambda t: (per[t][1], per[t][0]))
         print(f"most check time: {top}, {plural(per[top][0], 'run')}, {m(per[top][1])} min")
+        wasted = [r for r in ran if not r.get("passed") and (r.get("minutes") or 0) > 0]
+        if wasted:
+            w = max(wasted, key=lambda r: r["minutes"])
+            print(f"costliest wasted check: {w['ticket']}, {m(w['minutes'])} min, "
+                  + ("cut off" if w.get("finished") is False else "failed"))
 
 
 def orphans(swept):

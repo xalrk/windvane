@@ -65,9 +65,12 @@ flatters a run that re-reads a big context.
 `checks:` is the check's time for tickets (the driver's and their sessions' `windvane check`, not the desk's), apart
 from the `min` column; no line without any. The average is over the tickets that ran a check (a ticket that only
 reused a pass isn't one). `cut off` counts checks that never finished: stopped by Ctrl-C or an error (their minutes so
-far count), or killed outright, a driver or a session's tool timeout, which leaves only the check's start row and no
-minutes, so the total is a floor. A check that's still going is neither: `1 still running`. With `--by ticket`, `most check time: T-060, 4 runs, 31 min` follows: the ticket
-whose checks took longest.
+far count), or killed outright, a driver or a session's tool timeout, which leaves only the check's start row: it is
+timed from its start to its log's last write (each check has its own log; one that went quiet before the kill
+counts up to its last output), or 0 if the log is gone. A check that's
+still going is neither: `1 still running`. With `--by ticket`, `most check time: T-060, 4 runs, 31 min` follows (the
+ticket whose checks took longest), then `costliest wasted check: T-060, 18 min, cut off`: the longest check that
+failed or was cut off, the time that bought nothing; no line when every check passed.
 
 The `died or killed` line is what outages, crashes and hung sessions cost: their runs' weighted tokens, and their
 share of all. `orphaned process groups killed: N` follows when a run killed process groups a dead driver's sessions
