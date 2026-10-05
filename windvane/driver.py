@@ -41,7 +41,7 @@ RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)"
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
-           "conflicts", "spent", "update_said", "scale_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes")  # the run's own memory, handed to the driver a restart starts
+           "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
@@ -223,7 +223,6 @@ class Pilot(Desk, Periodic):
         self.home = HOME if CHECKOUT and os.environ.get("WINDVANE_SELF_UPDATE") != "0" else None
         self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, [], None
         self.pulled = (0, -1)  # (when, merges then): pull after each merge, else every PULL_EVERY seconds at most
-        self.scale_said = False  # the collapsed-scale warning: logged and pushed once a run
         self.stash_failed = set()  # what waited, or was skipped, on a failed stash of the checkout: pushed once a run
         self.periodic_at, self.held = {}, []  # [[periodic]] (periodic.py): name -> merges when it last ran; tickets held
         self.groups_seen, self.groups_read = {}, (None, None)  # name -> groups finished then; (main's sha, its queue)
@@ -597,10 +596,11 @@ class Pilot(Desk, Periodic):
         dims = " ".join(f"{k}={v:g}" for k, v in last.get("dims", {}).items() if k != "score")
         self.log(f"{tid}: critic {'-' if score is None else f'{score:g}'}/10{f' ({dims})' if dims else ''} "
                  f"({last['step']}): {last.get('gist', '')}")
-        self.watch_scale()
+        if last.get("unanswered"):
+            self.log(f"{tid}: the critic left {', '.join(last['unanswered'])} unanswered (counted as no)")
         if last["step"] in ("revise", "rethink"):
-            self.feedback[tid] = (f"The critic scored your head {score:g}/10 ({last['step']}). Fix its \"Fix in this "
-                                  f"ticket\" points, refresh the pack and run `windvane critic {tid}` again:\n"
+            self.feedback[tid] = (f"The critic scored your head {score:g}/10 ({last['step']}). Fix its failed checks "
+                                  f"and \"Fix in this ticket\" points, refresh the pack and run `windvane critic {tid}` again:\n"
                                   f"{last.get('critique', '')}")
             pr = pr_for(p, branch)
             if not critic.comment(p, last, pr):
@@ -610,16 +610,6 @@ class Pilot(Desk, Periodic):
         if score is not None:
             self.scores[tid] = score
         return True
-
-    def watch_scale(self):
-        """Say once a run when the critic's scale stopped measuring anything (`critic.collapsed`): in the first
-        self-run the user only saw it in a status report, after a dozen tickets had passed on it."""
-        line = None if self.scale_said else critic.collapsed(read_jsonl(self.p.state / "critic.jsonl"))
-        if line:
-            self.scale_said = True
-            self.log(line)
-            push("critic scale collapsed", line.split(": ", 1)[1] + ". The run goes on.", 3,
-                 "warning")
 
     def clean_wait(self, tid, why):
         """keep_changes() before an approved ticket's check or merge, tried again every STASH_WAIT seconds while it
