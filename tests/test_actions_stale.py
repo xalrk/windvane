@@ -68,6 +68,17 @@ class Stale(unittest.TestCase):
         self.assertEqual(len(said), 1, self.log())  # once a run, not once a session
         self.assertIn("gh auth status", said[0])
 
+    def test_no_stale_line_while_a_recount_is_in_flight(self):
+        self.cache(10, 2 * 86400)
+        self.assertTrue(actions.counting.acquire(blocking=False))  # the driver's start-up recount, still running
+        try:
+            self.assertEqual(self.commit("one"), f"one {actions.SKIP}")  # still tags: the count is unknown
+        finally:
+            actions.counting.release()
+        self.assertEqual(self.log(), [])  # but doesn't call it failing yet
+        self.commit("two")  # the recount ended and the count is still old: now it is failing
+        self.assertEqual(len([x for x in self.log() if "2 days old" in x]), 1, self.log())
+
     def test_a_fresh_under_cap_total_does_not_tag(self):
         self.cache(10, 60)
         self.assertFalse(actions.cached_over_cap(self.p))

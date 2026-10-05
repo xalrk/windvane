@@ -310,9 +310,11 @@ def cached_over_cap(p):
 
 
 def say_stale(p):
-    """Once a run, when only the stale rule makes workers tag: the log says why, as nothing else would."""
+    """Once a run, when only the stale rule makes workers tag: the log says why, as nothing else would. Quiet while
+    this process's recount is in flight (a driver started after a weekend idle): it may yet succeed."""
     total = cached()
-    if p.name in stale_logged or not total or not stale(total) or total["used"] >= cap_minutes(p):
+    if (p.name in stale_logged or counting.locked() or not total or not stale(total)
+            or total["used"] >= cap_minutes(p)):
         return
     stale_logged.add(p.name)
     days = int((time.time() - total["at"]) // 86400)
