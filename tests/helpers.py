@@ -120,6 +120,8 @@ elif system.startswith("# windvane critic"):
     fix = f"Fix in this ticket:\n- {tid} x\n" if fixes != "0" else ""
     text = (f"Score: {score}/10\nGood.\n{fix}Beyond this ticket:\n- make it faster\n"
             f"CRITIC: {score}/10 {tid} fixes={fixes} good")
+    if os.environ.get("FAKE_CRITIC_TEXT"):  # a whole critique, `{tid}` filled in
+        text = os.environ["FAKE_CRITIC_TEXT"].replace("{tid}", tid)
 elif system.startswith("# windvane planner run"):
     ids = re.search(r"## Ids for new tickets.*\n(.*)", prompt).group(1).split(", ")
     os.makedirs(".windvane/tickets", exist_ok=True)

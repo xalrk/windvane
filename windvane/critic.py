@@ -31,7 +31,7 @@ HEAD_RE = re.compile(r"^#{2,}[ \t]+`?([\w-]+)")
 RUNG_RE = re.compile(r"^[ \t]*[-*][ \t]*(\d+(?:\.\d+)?)[ \t]+`?([\w-]+)`?[ \t]*:[ \t]*(.+)$")
 ANSWER_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?(?:[\w-]+(?:\.|[ \t]+(?=\d)))?(?:\d+(?:\.\d+)?[ \t]+)?([\w-]+)`?[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
                        r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$", re.I)
-LISTS_RE = re.compile(r"^[ \t#*_]*(?:fix in|beyond) this ticket\b", re.I | re.M)
+LISTS_RE = re.compile(r"^[ \t#*_-]*(?:fix in|beyond) this ticket\b", re.I | re.M)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
 DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]

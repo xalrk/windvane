@@ -1,5 +1,6 @@
 import argparse
 import io
+import os
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -8,9 +9,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import cli, critic  # noqa: E402
+from windvane import cli, critic, driver  # noqa: E402
 from windvane.config import Project  # noqa: E402
-from windvane.util import append_jsonl  # noqa: E402
+from windvane.util import append_jsonl, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
 CRITIQUE = """Checks:
@@ -37,7 +38,8 @@ class Answers(unittest.TestCase):
     """T-055: the driver scores the critic's answers, so only its Checks block may answer a check."""
 
     def test_a_follow_up_list_never_answers_a_check_the_checks_block_left_out(self):
-        for heading in ("Fix in this ticket:", "Beyond this ticket:", "**Beyond this ticket:**", "## Fix in this ticket"):
+        for heading in ("Fix in this ticket:", "Beyond this ticket:", "**Beyond this ticket:**", "## Fix in this ticket",
+                        "- Fix in this ticket:"):
             with self.subTest(heading=heading):
                 ans = critic.answers(CRITIQUE.format(heading=heading))
                 self.assertNotIn("safe", ans)
@@ -59,6 +61,38 @@ class Answers(unittest.TestCase):
         self.assertEqual(critic.clip("short enough"), "short enough")
         self.assertEqual(critic.clip("x" * 300), "x" * 199 + "…")
         self.assertEqual(critic.clip("a, " + "b" * 300)[:3], "a…", "trailing punctuation goes before the …")
+
+
+class Gate(unittest.TestCase):
+    """T-055 end to end: a fake critic's "Beyond this ticket" says `safe: yes` for a check its Checks block left out.
+    Before, that line scored `safe` and the head passed at 8; now `safe` is unanswered and the work goes back."""
+
+    def test_a_follow_up_line_cant_pass_a_check(self):
+        s = Sandbox()
+        self.addCleanup(s.close)
+        s.write(".windvane/config.toml", s.root.joinpath(".windvane/config.toml").read_text()
+                .replace("enabled = false", "enabled = true"))
+        s.write(".windvane/CRITIC.md", "# Scale\n## works\n- 2 shown: shown.\n- 5 safe: no crash.\n"
+                                       "- 8 failures: failure paths tested.\n")
+        s.publish("critic on, as ladders")
+        s.git("switch", "-q", "-c", "t-001-x")
+        p = Project(s.root)
+        notes = p.state / "critic" / "T-001" / "notes.md"
+        notes.parent.mkdir(parents=True)
+        notes.write_text("User-facing: yes\nfaster\n")
+        os.environ["FAKE_CRITIC_TEXT"] = ("Checks:\n- shown: yes, a transcript\n- failures: yes, tested\n"
+                                          "Beyond this ticket:\n- safe: yes, a restart is safe now\n"
+                                          "CRITIC: {tid} fixes=0 fine")
+        pilot = driver.Pilot(p, argparse.Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0, answer_wait=10,
+                                                   replan=0, goal="", parallel=1))
+        pilot.tl.wd, pilot.deadline = s.root, driver.now() + driver.timedelta(hours=1)
+        with redirect_stdout(io.StringIO()):
+            self.assertFalse(pilot.critic_gate("T-001", s.git("rev-parse", "HEAD"), branch="t-001-x"))
+        last = read_jsonl(p.state / "critic.jsonl")[-1]
+        self.assertEqual((last["score"], last["step"], last["unanswered"]), (2, "revise", ["safe"]))
+        log = (p.state / "autopilot.log").read_text()
+        self.assertIn("T-001: critic 2/10 (works=2) (revise)", log)
+        self.assertIn("T-001: the critic left safe unanswered (counted as no)", log)
 
 
 class Advice(unittest.TestCase):
