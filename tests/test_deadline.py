@@ -20,6 +20,7 @@ from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_parallel import args  # noqa: E402
+from test_set_aside import Base  # noqa: E402
 
 
 class LiveRun(unittest.TestCase):
@@ -146,3 +147,31 @@ class LiveRun(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoppedThenMovedLater(Base):
+    tickets = ("T-001",)
+
+    def test_a_ticket_stopped_at_the_deadline_that_merges_after_it_moves_later_is_not_listed_as_stopped(self):
+        """The first worker run is cut off by a deadline two minutes away; the user then moves it two hours later,
+        so the same run resumes the ticket and merges it: the summary mustn't still say it was stopped."""
+        pilot, handle = self.pilot(), driver.Pilot.handle
+        deadline = self.p.state / "DEADLINE"
+
+        self.after_cut = None
+
+        def cut_once(me, tid, text, killed):
+            if self.after_cut is None:  # the first worker run only
+                deadline.write_text((now() + timedelta(minutes=2)).isoformat())
+                handle(me, tid, "", "time")  # what the stop rule's kill at the deadline hands over
+                self.after_cut = list(me.stopped)
+                deadline.write_text((now() + timedelta(hours=2)).isoformat())  # `windvane deadline` moves it later
+                return
+            handle(me, tid, text, killed)
+
+        pilot.handle = cut_once.__get__(pilot)
+        pilot.run(now() + timedelta(hours=2))
+        self.assertEqual(self.after_cut, ["T-001"])
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.assertEqual(pilot.stopped, [])
+        self.assertNotIn("Stopped at the deadline", pilot.summary())

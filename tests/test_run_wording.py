@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from windvane import cli, critic, driver  # noqa: E402
-from windvane.config import Project  # noqa: E402
+from windvane.config import HOME, Project  # noqa: E402
 from windvane.util import append_jsonl, now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_critic_scale import LADDER  # noqa: E402
@@ -40,16 +40,22 @@ class DeadlineApart(Base):
         self.assertNotIn("Stopped at the deadline", self.pilot().summary())
 
 
-class MaxTurnsPush(Base):
+class SetAsidePushes(Base):
     tickets = ("T-001",)
 
-    def test_the_max_turns_fix_fits_one_phone_line_and_says_where(self):
-        self.pilot().handle("T-001", "", "max turns")
-        [(title, msg)] = self.aside()
-        fix = msg.removeprefix("Its run hit its max turns. ").removesuffix(" Its branch is kept.")
-        self.assertLess(len(fix), 110, fix)
-        self.assertIn(".claude/", fix)
-        self.assertIn("split the ticket", fix)
+    def test_each_limit_push_fits_a_lock_screen_and_names_the_limit_the_fix_and_the_branch(self):
+        """A lock-screen preview shows about two lines: past 90 characters the branch, said last, is cut off."""
+        cases = {"time": ("1.5-hour limit", "ticket_hours"), "max turns": ("max turns", ".claude/ settings"),
+                 "dollar budget": ("dollar budget", "Split the ticket")}
+        for killed, (limit, fix) in cases.items():
+            with self.subTest(killed):
+                self.pushes.clear()
+                self.pilot(ticket_hours=1.5).handle("T-001", "", killed)
+                [(title, msg)] = self.aside()
+                self.assertLessEqual(len(msg), 90, msg)
+                self.assertTrue(msg.startswith("Hit "), msg)
+                for words in (limit, fix, "Branch kept."):
+                    self.assertIn(words, msg)
 
 
 def entry(i, missing=()):
@@ -78,7 +84,7 @@ class UnansweredLine(unittest.TestCase):
 
     def test_three_of_ten_is_named(self):
         self.assertIn("Critic left safe unanswered in 3 of the last 10: check its wording in .windvane/CRITIC.md or "
-                      "prompts/CRITIC.md.\n", self.overview({4, 7, 11}))
+                      f"windvane's {HOME / 'prompts/CRITIC.md'}.\n", self.overview({4, 7, 11}))
 
     def test_two_of_ten_is_not(self):
         self.assertNotIn("unanswered", self.overview({4, 11}))

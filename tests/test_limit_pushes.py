@@ -30,7 +30,7 @@ class SummaryAside(Base):
         os.environ["FAKE_LIMIT"] = "error_max_budget_usd"
         self.pilot().run(now() + timedelta(hours=2))
         self.assertEqual(self.aside(), [("Set aside: do T-001 (T-001)",
-                                         "Its run hit its dollar budget. Split the ticket. Its branch is kept.")])
+                                         "Hit its dollar budget. Split the ticket. Branch kept.")])
         self.assertIn("\nSet aside: do T-001 (T-001) (hit its dollar budget).\n", self.summary())
 
     def test_a_max_turns_kill_is_in_the_summary(self):

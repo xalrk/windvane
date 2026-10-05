@@ -274,7 +274,7 @@ def check_line(p, recs):
     said = [f"{d}.{cid} {a}" for d, cs in lad.items() for r, cid, _ in cs
             if cid in rates and (a := critic_mod.advice(*rates[cid], top=r == cs[-1][0]))]
     gaps = [f"Critic left {cid} unanswered in {k} of the last {n}: check its wording in {p.rubric_rel} or "
-            f"prompts/CRITIC.md." for cid, k, n in critic_mod.unanswered(recs)]
+            f"windvane's {HOME / 'prompts/CRITIC.md'}." for cid, k, n in critic_mod.unanswered(recs)]
     return "\n".join(filter(None, [shared_line(p, lad),
                                     f"Critic checks, last 10 tickets: {'; '.join(said)}." if said else "", *gaps]))
 

@@ -398,7 +398,7 @@ class Pilot(Desk, Periodic):
         self.skip.add(tid)
         self.aside[tid] = f"hit {limit}"
         self.log(f"{tid}: the run hit {limit}; set aside")
-        push(f"Set aside: {self.name(tid)}", f"Its run hit {limit}. {fix} Its branch is kept.", 3, "hourglass")
+        push(f"Set aside: {self.name(tid)}", f"Hit {limit}. {fix} Branch kept.", 3, "hourglass")
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
@@ -478,13 +478,12 @@ class Pilot(Desk, Periodic):
         if killed:
             if killed == "time" and now() < self.end() - timedelta(minutes=5):
                 self.set_aside_limit(tid, f"the {self.a.ticket_hours:g}-hour limit for one run",
-                                     "Split the ticket, or raise ticket_hours.")
+                                     "Split it, or raise ticket_hours.")
             elif killed == "time":  # the run ends in minutes: its summary says so, and the next run resumes it
                 self.stopped += [tid] * (tid not in self.stopped)
                 self.log(f"{tid}: the worker run was stopped at the deadline")
             elif killed == "max turns":  # out of its own turns or budget: the ticket's doing, like the time box
-                self.set_aside_limit(tid, "its max turns", "Raise the Claude CLI's max turns (.claude/ settings), "
-                                     "or split the ticket.")
+                self.set_aside_limit(tid, "its max turns", "Raise max turns in .claude/ settings or split it.")
             elif killed.startswith("max ") or killed == "dollar budget":
                 self.set_aside_limit(tid, f"its {killed}", "Split the ticket.")
             return
