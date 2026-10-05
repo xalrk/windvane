@@ -1,5 +1,7 @@
 """T-058: a table too wide to narrow renders as records, a narrowed table rules off only its wrapped rows, and
-tools/watch-sweep.py reports what a renderer change broke."""
+tools/watch-sweep.py reports what a renderer change broke. T-069: records pack short cells several to a line, and the
+sweep checks the clip `watch` prints too."""
+import importlib.util
 import json
 import re
 import subprocess
@@ -57,7 +59,61 @@ class Records(unittest.TestCase):
 STATS = "\n".join(["Totals by run:", "",
                    "| Ticket | Role | Turns | Fresh in | Output | Cache read | Cost | Minutes | Result | Branch |",
                    "|---" * 10 + "|"]
-                  + [f"| T-04{i} | worker | 41 | 12k | 9k | 2.1M | $3.10 | 22 | READY | t-04{i}-x |" for i in range(3)])
+                  + [f"| T-04{i} | worker | 41 | 12k | 9k | 2.1M | $3.10 | 22 | READY | t-04{i}-x |" for i in range(6)])
+
+
+def records(text, cols=40):
+    """A too-wide table's rendered lines, each checked to fit `cols`."""
+    rows = watch.markdown(text, False, cols)
+    assert all(watch.width(r) <= cols for r in rows), rows
+    return rows
+
+
+class Packed(unittest.TestCase):
+    def test_short_cells_share_lines_in_order(self):
+        rows = records(STATS.split("\n", 2)[2])
+        first = rows[:rows.index("─" * 40)]
+        self.assertEqual(first, ["Ticket: T-040 · Role: worker · Turns: 41", "Fresh in: 12k · Output: 9k",
+                                 "Cache read: 2.1M · Cost: $3.10", "Minutes: 22 · Result: READY", "Branch: t-040-x"])
+        self.assertIn("T-040\033[2m · Role: \033[0mworker", watch.markdown(STATS, True, 40)[2], "the joint is dim")
+
+    def test_a_long_cell_breaks_the_packing_onto_its_own_lines(self):
+        head = "| A | B | Note | C | D |" + "".join(f" X{k} |" for k in range(8))
+        row = "| a | b | " + "words that wrap " * 4 + "| c | d |" + " x |" * 8
+        rows = records(head + "\n" + "|---" * 13 + "|\n" + row)
+        self.assertEqual(rows[0], "A: a · B: b")
+        self.assertTrue(rows[1].startswith("Note: words that wrap"), rows)
+        note = rows[1:rows.index(next(r for r in rows if r.startswith("C: ")))]
+        self.assertGreater(len(note), 1, "the long cell wraps")
+        self.assertTrue(all(r.startswith(" " * len("Note: ")) for r in note[1:]), "under its value")
+        self.assertTrue(rows[len(note) + 1].startswith("C: c · D: d · X0: x"), rows)
+        self.assertEqual("".join(rows).count("X7: x"), 1, "no cell lost")
+
+    def test_a_header_only_table_packs_its_headers(self):
+        text = "| " + " | ".join(f"Head {k}" for k in range(12)) + " |\n" + "|---" * 12 + "|"
+        rows = records(text)
+        self.assertEqual(rows[0], "Head 0 · Head 1 · Head 2 · Head 3")
+        self.assertEqual(" · ".join(rows).split(" · "), [f"Head {k}" for k in range(12)])
+        self.assertTrue(watch.markdown(text, True, 40)[0].startswith("\033[1mHead 0"), "headers stay bold")
+
+    def test_a_header_wider_than_half_drops_the_hanging_indent(self):
+        name = "A header past half a line"
+        text = f"| {name} | B |" + " C |" * 9 + "\n" + "|---" * 11 + "|\n| " + "long value " * 8 + "| b |" + " c |" * 9
+        rows = records(text)
+        self.assertTrue(rows[0].startswith(name + ": long"), rows)
+        value = rows[:rows.index(next(r for r in rows if r.startswith("B: ")))]
+        self.assertGreater(len(value), 1)
+        self.assertTrue(all(r[0] != " " for r in value[1:]), "from column 0, not 27 columns in")
+
+    def test_the_rule_spans_the_widest_line_of_the_records(self):
+        short = "| " + " | ".join(f"H{k}" for k in range(12)) + " |\n" + "|---" * 12 + "|\n"
+        rows = records(short + "\n".join("| " + " | ".join(f"v{r}" for _ in range(12)) + " |" for r in range(3)))
+        rules = [r for r in rows if set(r) == {"─"}]
+        widest = max(watch.width(r) for r in rows if r not in rules)
+        self.assertLess(widest, 40)
+        self.assertEqual(rules, ["─" * widest] * 2, "between records, as wide as their widest line")
+        wrapped = records(ten_columns())
+        self.assertEqual([r for r in wrapped if set(r) == {"─"}], ["─" * max(map(watch.width, wrapped))])
 
 
 def watched(text, color=False):
@@ -71,14 +127,15 @@ def watched(text, color=False):
 
 
 class Watched(unittest.TestCase):
-    def test_watch_shows_the_first_record_whole_then_clips(self):
+    def test_watch_shows_three_packed_records_whole_then_clips(self):
         out = watched(STATS)
         rows = out.removeprefix("› ").rstrip("\n").split("\n")
         self.assertTrue(all(watch.width(r) <= 40 for r in rows), rows)
-        self.assertEqual(rows[:4], ["Totals by run:", "", "Ticket: T-040", "Role: worker"])
-        self.assertIn("Branch: t-040-x", rows, "the first record whole")
+        self.assertEqual(rows[:3], ["Totals by run:", "", "Ticket: T-040 · Role: worker · Turns: 41"])
+        self.assertIn("Branch: t-042-x", rows, "three records whole")
         self.assertRegex(rows[-1], r"^… \(\+\d+ lines\)$")
-        self.assertNotIn("T-042", out, "the clip still holds")
+        self.assertNotIn("T-043", out, "the clip still holds")
+        self.assertEqual(rows[-2], "Branch: t-042-x", "no rule left dangling before the clip line")
         coloured = watched(STATS, True)
         self.assertIn("\033[2mTicket: \033[0mT-040", coloured)
         self.assertIn("\033[0m\n… (+", coloured, "a reset before the clip line")
@@ -131,6 +188,14 @@ class Sweep(unittest.TestCase):
         self.assertTrue(r.stdout.endswith("2 messages at widths 60: 1 marker backtick, 1 marker bold **\n"), r.stdout)
         shown = self.run_sweep(["a stray ** and an unclosed `tick"], "--show").stdout
         self.assertIn("\n    a stray ** and an unclosed `tick\n", shown)
+
+    def test_a_line_only_the_clip_breaks_is_reported_as_clipped(self):
+        spec = importlib.util.spec_from_file_location("watch_sweep", ROOT / "tools" / "watch-sweep.py")
+        sweep = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sweep)
+        self.assertEqual(sweep.check(STATS, 60), [], "clean whole and clipped")
+        with mock.patch.object(watch, "clip_rendered", lambda parts, n, color: "fine\n" + "x" * 61):
+            self.assertEqual(sweep.check(STATS, 60), [("clipped too wide (61)", "x" * 61)])
 
     def test_an_empty_state_dir_is_an_error(self):
         r = self.run_sweep([])

@@ -37,6 +37,7 @@ BULLET = re.compile(r"(\s*)[-*+]\s+(.*)")
 NUMBERED = re.compile(r"(\s*)(\d+[.)])\s+(.*)")
 QUOTE = re.compile(r"\s*>\s?(.*)")
 TABLE_RULE = re.compile(r"\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+TEXT_LINES = 12  # counted lines `watch` shows of one assistant message before it clips
 
 
 def inline(text, st=frozenset()):
@@ -153,25 +154,49 @@ def table(rows, rule, color, cols=0):
 
 
 def records(rows, color, cols):
-    """A table too wide for `cols` even with narrow columns, as one record per body row: a `header: value` line per
-    cell (the header dim), the value wrapped under itself, and a dim rule between records. Squeezed further, every
-    cell would wrap to a few letters a line."""
+    """A table too wide for `cols` even with narrow columns, as one record per body row: `header: value` cells (the
+    header dim) packed on a line while they fit, a value too long for a line wrapped under itself, and a dim rule
+    between records as wide as their widest line, as a table's rule spans the table. Squeezed further, every cell
+    would wrap to a few letters a line."""
     dim = frozenset({"dim"})
     head = cells(rows[0])
     if len(rows) == 1:
-        return [(paint(l, color), True) for x in head for l in wrap(inline(x, frozenset({"b"})), cols, least=1)]
+        return [(paint(l, color), True) for l in pack([(inline(x, frozenset({"b"})), ()) for x in head], cols)]
     recs = []
     for row in rows[1:]:
         vals = cells(row)
-        lines = []
+        fields = []
         for k in range(max(len(head), len(vals))):
             name, val = (head[k] if k < len(head) else ""), (vals[k] if k < len(vals) else "")
             label = inline(name, dim) + [(":" + (" " if val else ""), dim)] if name else []
             lead = [(" " * (width(name) + 2), frozenset())] if name else ()
-            lines += wrap(label + inline(val), cols, lead, least=1)
-        recs.append([(paint(l, color), True) for l in lines])
-    rule = (paint([("─" * min(cols, 40), dim)], color), False)
-    return [line for i, rec in enumerate(recs) for line in ([rule] if i else []) + rec]
+            fields.append((label + inline(val), lead))
+        recs.append(pack(fields, cols))
+    wide = max((width("".join(t for t, _ in l)) for rec in recs for l in rec), default=0)
+    rule = (paint([("─" * min(max(wide, 1), cols), dim)], color), False)
+    return [line for i, rec in enumerate(recs)
+            for line in ([rule] if i else []) + [(paint(l, color), True) for l in rec]]
+
+
+def pack(fields, cols):
+    """(segments, lead) fields as lines: consecutive ones that each fit a line share it, joined by a dim ` · `, while
+    the line fits `cols`, so a record of short cells takes a few lines, not one a cell. A field too long for a line
+    gets its own, wrapped with `lead`. An empty field is left out: on a shared line it would be a stray ` · `."""
+    lines, cur, w = [], [], 0
+    for segs, lead in fields:
+        n = width("".join(t for t, _ in segs))
+        if not n:
+            continue
+        if cur and (n > cols or w + 3 + n > cols):
+            lines.append(cur)
+            cur, w = [], 0
+        if n > cols:
+            lines += wrap(segs, cols, lead, least=1)
+        elif cur:
+            cur, w = cur + [(" · ", frozenset({"dim"}))] + segs, w + 3 + n
+        else:
+            cur, w = list(segs), n
+    return lines + ([cur] if cur else [])
 
 
 def wrap(segs, cols, lead=(), least=20):
@@ -273,7 +298,7 @@ def markdown(text, color, cols=0):
 def clip_rendered(parts, n, color, more=4):
     """Whole blocks up to n counted lines. The block that crosses n is shown up to `more` lines past it, so a table
     that started shows rows and a wrapped paragraph its end. A clipped message ends with a reset, so no colour can
-    run on."""
+    run on, and not on a blank line or a rule, which would part nothing from the next one shown."""
     shown, count, total = [], 0, sum(len(b) for b in parts)
     for b in parts:
         if count >= n and any(k for _, k in b):
@@ -281,13 +306,13 @@ def clip_rendered(parts, n, color, more=4):
         for line, k in b:
             if count + k > n + more:
                 break
-            shown.append(line)
+            shown.append((line, k))
             count += k
     if len(shown) == total:
-        return "\n".join(shown)
-    while shown and not shown[-1]:
+        return "\n".join(line for line, _ in shown)
+    while shown and not shown[-1][1]:
         shown.pop()
-    return "\n".join(shown) + ("\033[0m" if color else "") + f"\n… (+{total - len(shown)} lines)"
+    return "\n".join(line for line, _ in shown) + ("\033[0m" if color else "") + f"\n… (+{total - len(shown)} lines)"
 
 
 def show(ev, out_lines):
@@ -295,7 +320,7 @@ def show(ev, out_lines):
     if t == "assistant":
         for b in ev.get("message", {}).get("content", []):
             if b.get("type") == "text" and b.get("text", "").strip():
-                print(c("1", "› ") + clip_rendered(blocks(b["text"].strip(), tty, shutil.get_terminal_size().columns - 2), 12, tty))
+                print(c("1", "› ") + clip_rendered(blocks(b["text"].strip(), tty, shutil.get_terminal_size().columns - 2), TEXT_LINES, tty))
             elif b.get("type") == "tool_use":
                 i = b.get("input", {})
                 arg = i.get("command") or i.get("file_path") or i.get("pattern") or json.dumps(i)[:120]
