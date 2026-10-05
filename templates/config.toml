@@ -5,6 +5,9 @@ prefix = "T"              # ticket ids: T-001, T-002a
 remote = "origin"
 main = "main"
 forge = "github"          # github: PRs through gh; git: the driver merges and pushes to main itself
+actions_minutes = 0       # your GitHub Actions minutes a month (e.g. 2000), counted from the run history (0: off)
+actions_cap = 0.9         # the share of them windvane never passes: `windvane ci` refuses a workflow that would, and
+                          # at the cap the driver's commits carry [skip ci]
 check = ""                # the project's CI command, run by `windvane check` (e.g. "npm test", "pytest -q")
 setup = ""                # run once in each fresh autopilot worktree (e.g. "npm ci")
 setup_minutes = 20        # a setup still running then is killed: the run stops, as for a failed setup

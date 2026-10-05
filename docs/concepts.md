@@ -75,6 +75,13 @@ the order), and **open** otherwise. `windvane queue` shows all three.
    twice per ticket (its PR, its merge) and can use up a month's Actions minutes in days. Test other versions in the
    check (windvane's own runs every Python 3.11 to 3.14 installed, `tools/check_pythons.sh`), keep workflows
    `workflow_dispatch` only, and `windvane doctor` warns about any that run on their own.
+   With `actions_minutes` set (your plan's monthly minutes), windvane counts the month's billed minutes itself from
+   the run history of your repos (each job rounded up to the minute, macOS x10, Windows x2; finished runs cached in
+   the state dir) and keeps them under `actions_cap` (90%): a session starts a workflow only through `windvane ci`,
+   which refuses one whose last run's minutes would pass the cap; at or over it the driver adds `[skip ci]` to its
+   merges and the commits it pushes, and says so once on your phone that month. `status` and `overview` show
+   `Actions 1,983/2,000 min`. The count reads GitHub's run history, not its bill, so it can run a little under
+   GitHub's figure: keep the cap below 100%.
 4. **Reviewer.** A fresh read-only session with the diff, the ticket and the critic's verdict in its prompt. It
    approves or lists changes.
 5. **Merge.** The driver merges `main` into the ticket's head in its own worktree, runs the check again if `main`

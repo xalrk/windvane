@@ -49,10 +49,10 @@ heavy job on this machine. Other tickets may be running beside yours in their ow
 ## Decisions
 - **Engineering** calls the docs leave open (code layout, algorithms, test shape, tooling): make them, and say why in
   the PR. Follow the project's own rule for recording architecture decisions if `CLAUDE.md` has one.
-- **Product calls**: what users see or do, naming, scope, look and feel, money (hosted CI minutes too: never add or
-  widen a workflow that runs on push or pull_request), licences, or anything the project marks as the user's: never
-  on your own taste. Write the question into `.windvane/QUESTIONS.md` (create it with
-  `## Open`, `## Provisional`, `## Answered` sections if missing):
+- **Product calls**: what users see or do, naming, scope, look and feel, money (hosted CI minutes too: no workflow on
+  push or pull_request; start one only with `windvane ci`, only for a platform this machine can't test like macOS or
+  Windows), licences, or anything the project marks as the user's: never on your own taste. Write the question into
+  `.windvane/QUESTIONS.md` (create it with `## Open`, `## Provisional`, `## Answered` sections if missing):
   ```
   ### <ID>: <the question, one line>
   <context, a few lines>

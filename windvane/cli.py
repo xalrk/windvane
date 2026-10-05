@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from . import actions
 from . import critic as critic_mod
 from . import doctor, driver, install, jobs, phone, preflight, questions, watch
 from . import periodic as periodic_mod
@@ -204,10 +205,13 @@ def cmd_status(a, p):
     on = running(p)
     if a.line:
         last = (last_log(p) or [""])[0][11:]
-        print(f"{p.display}: autopilot {'running' if on else 'off'}" + (f". Last: {last}" if last else ""))
+        extra = "".join(f". {x}" for x in (actions.line(p), f"Last: {last}" if last else "") if x)
+        print(f"{p.display}: autopilot {'running' if on else 'off'}{extra}")
         return
     print(f"autopilot: {('running in tmux ' + p.tmux if in_tmux(p) else 'running') if on else 'not running'}")
     print(f"questions now: {questions.mode(p)}")
+    if (spent := actions.line(p)):
+        print(f"{spent} this month (cap {actions.cap_minutes(p):,})")
     st = load_json(p.state / "state.json", {})
     for tid, slot in sorted(st.get("running", {}).items(), key=lambda kv: kv[1]) if on else ():
         print(f"slot {slot}: {tid}")
@@ -236,6 +240,7 @@ def cmd_overview(a, p):
             line += f" {c['accepted']} passed only by running out of revisions."
         lines.append(line)
     lines.append(check_line(p, recs))
+    lines.append((spent := actions.line(p)) and f"{spent} this month.")
     print("\n".join(filter(None, lines + overview_extra(p))))
 
 
@@ -280,6 +285,10 @@ def overview_extra(p, limit=30, most=15):
         why = (err.strip().splitlines() or [""])[-1][:160]
         return [f"overview_extra failed (exit {r.returncode}){f': {why}' if why else ''}"]
     return out.rstrip().splitlines()[:most]
+
+
+def cmd_ci(a, p):
+    sys.exit(actions.ci(p, a.workflow, a.ref, a.dry_run))
 
 
 def cmd_queue(a, p):
@@ -723,6 +732,10 @@ def main(argv=None):
     s.add_argument("answer", help="a letter, or free text in quotes")
     s = sub.add_parser("check", help="the project's check, reusing a pass for the same tree")
     s.add_argument("--lines", type=int, default=60)
+    s = sub.add_parser("ci", help="start a GitHub Actions workflow, only within the month's minutes cap")
+    s.add_argument("workflow", nargs="?", default="", help="its file or name (default: the repo's only one)")
+    s.add_argument("--ref", default="", help="the branch to run it on (default: the current one)")
+    s.add_argument("--dry-run", action="store_true", help="count and say, but start nothing")
     s = sub.add_parser("critic", help="have the critic judge a ticket's evidence pack")
     s.add_argument("ticket")
     s = sub.add_parser("bg", help="start a long command in the background")

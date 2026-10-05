@@ -26,7 +26,7 @@ import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import critic, net, phone, renumber, selfupdate
+from . import actions, critic, net, phone, renumber, selfupdate
 from .renumber import OLD_NUMBERS, said
 from .desk import Desk
 from .periodic import Periodic
@@ -76,7 +76,8 @@ def worker_perms(p):
     m = p.main
     deny = [f"Bash(git push * {m})", f"Bash(git push * HEAD:{m})", f"Bash(git push * {m}:{m})",
             "Bash(git push --force *)", "Bash(git push -f *)", "Bash(git reset --hard *)", "Bash(gh pr merge *)",
-            f"Bash(git switch {m})", f"Bash(git checkout {m})", "Bash(git worktree *)"]
+            f"Bash(git switch {m})", f"Bash(git checkout {m})", "Bash(git worktree *)",
+            *actions.DENY]
     if not p.ap["subagents"]:
         deny.append("Agent")
     allow = ["Bash(windvane *)", "Bash(git *)", "Bash(gh pr create *)", "Bash(gh pr view *)", "Bash(gh pr edit *)",
@@ -759,7 +760,7 @@ class Pilot(Desk, Periodic):
                 return None
             self.fetch()
             clean_detach(p, cd, p.upstream)
-            msg = f"Merge {tid}: {title} (branch {branch})"
+            msg = actions.tag(p, f"Merge {tid}: {title} (branch {branch})", cd)
             ok, renumbered = self.merge_main(sha, msg)
             if not ok:
                 self.feedback[tid] = (f"Your approved head {sha[:12]} conflicts with {p.upstream}: `git merge "
@@ -1351,6 +1352,8 @@ class Pilot(Desk, Periodic):
                 self.newer = selfupdate.newer_release(selfupdate.version())
                 if self.newer:
                     self.log(f"windvane {self.newer} is out: pipx upgrade windvane")
+            if ready:
+                actions.refresh(p)  # status and the phone read only the cached count
             if ready and not restarted:
                 self.usage.probe(p)
                 push("windvane started", f"Until {hhmm(deadline)}. {self.usage.text()}.", 2, "rocket",
@@ -1557,6 +1560,7 @@ def land(p, cd, branch, title, body, commit=True, tries=2):
     """Put the driver's own change in `cd` (staged, or committed when `commit` is off) on main: through a merged PR on
     github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is). One kept on a local
     branch is noted as one to land when pushed again."""
+    title = actions.tag(p, title, cd)
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
     ok, where = _land(p, cd, branch, title, body, tries)
@@ -1573,7 +1577,8 @@ def _land(p, cd, branch, title, body, tries):
         pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title, "--body", body)
         pr_n = pr.rstrip("/").rsplit("/", 1)[-1]
         merged = pr_n.isdigit() and (
-            net.call(["gh", "pr", "merge", pr_n, "--merge"], p.main_root()).returncode
+            net.call(["gh", "pr", "merge", pr_n, "--merge", *(["--subject", title] * (actions.SKIP in title))],
+                     p.main_root()).returncode
             == 0 or net.sh(p.main_root(), "gh", "pr", "view", pr_n, "--json", "state", "-q", ".state") == "MERGED")
         if merged:
             net.git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
@@ -1777,8 +1782,8 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
     n = int(m.group(1) or 0)
     branch = plan_branch(p, cd)
     git(cd, "add", "-A", ".windvane")
-    git(cd, *author_ident(p), "commit", "-q", "-m", f"Plan: {n_tickets(n)} ({m.group(3)[:60]})", "-m",
-        text.strip()[-3000:])
+    title = actions.tag(p, f"Plan: {n_tickets(n)} ({m.group(3)[:60]})", cd)
+    git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", text.strip()[-3000:])
     if notes:
         from .util import append_jsonl
         append_jsonl(p.state / "critic.jsonl", {"ticket": "PLAN", "step": "plan", "notes": len(notes)})
