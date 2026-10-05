@@ -259,7 +259,7 @@ class Budget(unittest.TestCase):
         p = Project(self.s.root)
         self.assertIsNone(actions.budget(p))
         self.assertEqual(actions.tag(p, "Merge T-001: x"), "Merge T-001: x")
-        self.assertEqual(actions.now_line(p), "")
+        self.assertEqual(actions.line(p), "")
         out = subprocess.run(["windvane", "status", "--line"], cwd=self.s.root, capture_output=True, text=True).stdout
         self.assertNotIn("Actions", out)
         self.assertEqual(self.gh_calls(), [])  # nothing counted, nothing asked of GitHub
@@ -267,9 +267,54 @@ class Budget(unittest.TestCase):
     def test_status_and_overview_show_the_months_minutes(self):
         self.add("me/proj", 1, [job(1983 * 60)])
         self.project(minutes=2000)
+        actions.count(self.s.root)  # as the driver does at its start and at each merge
+        Path(os.environ["FAKE_GH_LOG"]).unlink()
         for cmd in (["status", "--line"], ["status"], ["overview"]):
             out = subprocess.run(["windvane", *cmd], cwd=self.s.root, capture_output=True, text=True).stdout
             self.assertIn("Actions 1,983/2,000 min", out, cmd)
+        self.assertEqual(self.gh_calls(), [])  # they read the cache: the phone never waits on 18 repos' runs
+
+    def test_status_shows_when_an_old_count_was_made_without_recounting(self):
+        self.add("me/proj", 1, [job(1983 * 60)])
+        self.project(minutes=2000)
+        self.stale_cache()
+        (self.s.bin / "gh").write_text("#!/bin/sh\nsleep 30\n")  # a recount would hang the phone's status
+        t = time.time()
+        out = subprocess.run(["windvane", "status", "--line"], cwd=self.s.root, capture_output=True, text=True).stdout
+        self.assertLess(time.time() - t, 10)
+        self.assertRegex(out, r"Actions 1,983/2,000 min \(counted \d\d:\d\d\)")
+
+    def stale_cache(self):
+        """This month's count, made two hours ago."""
+        actions.count(self.s.root)
+        c = json.loads(actions.cache_file().read_text())
+        c["total"]["at"] -= 7200
+        actions.cache_file().write_text(json.dumps(c))
+
+    def test_the_driver_uses_the_last_count_when_gh_fails_at_a_merge(self):
+        self.s.ticket("T-001")
+        self.add("me/proj", 1, [job(95 * 60)])
+        p = self.project(minutes=100)
+        self.stale_cache()  # over the cap, and too old to reuse without trying a recount
+        (self.s.bin / "gh").write_text("#!/bin/sh\nexit 1\n")
+        driver.Pilot(p, args()).run(local_now() + timedelta(hours=1))
+        self.s.git("fetch", "-q", "origin")
+        self.assertIn("Merge T-001: do T-001 (branch t-001-work) [skip ci]", self.s.git("log", "origin/main", "--format=%s"))
+
+    def test_the_driver_doesnt_tag_when_gh_fails_and_nothing_was_counted(self):
+        self.s.ticket("T-001")
+        p = self.project(minutes=100)
+        (self.s.bin / "gh").write_text("#!/bin/sh\nexit 1\n")
+        pilot = driver.Pilot(p, args())
+        pilot.run(local_now() + timedelta(hours=1))
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.s.git("fetch", "-q", "origin")
+        self.assertNotIn("[skip ci]", self.s.git("log", "origin/main", "--format=%s"))
+
+    def test_workers_cant_start_or_rerun_a_workflow_past_claude_ci(self):
+        allow, deny = driver.worker_perms(Project(self.s.root))
+        for rule in ("Bash(gh workflow run *)", "Bash(gh workflow enable *)", "Bash(gh run rerun *)"):
+            self.assertIn(rule, deny)
 
     def test_a_bad_budget_stops_at_once(self):
         cfg = self.s.root / ".windvane/config.toml"

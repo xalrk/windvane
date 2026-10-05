@@ -76,7 +76,8 @@ def worker_perms(p):
     m = p.main
     deny = [f"Bash(git push * {m})", f"Bash(git push * HEAD:{m})", f"Bash(git push * {m}:{m})",
             "Bash(git push --force *)", "Bash(git push -f *)", "Bash(git reset --hard *)", "Bash(gh pr merge *)",
-            f"Bash(git switch {m})", f"Bash(git checkout {m})", "Bash(git worktree *)"]
+            f"Bash(git switch {m})", f"Bash(git checkout {m})", "Bash(git worktree *)",
+            *actions.DENY]
     if not p.ap["subagents"]:
         deny.append("Agent")
     allow = ["Bash(windvane *)", "Bash(git *)", "Bash(gh pr create *)", "Bash(gh pr view *)", "Bash(gh pr edit *)",
@@ -1351,6 +1352,8 @@ class Pilot(Desk, Periodic):
                 self.newer = selfupdate.newer_release(selfupdate.version())
                 if self.newer:
                     self.log(f"windvane {self.newer} is out: pipx upgrade windvane")
+            if ready:
+                actions.refresh(p)  # status and the phone read only the cached count
             if ready and not restarted:
                 self.usage.probe(p)
                 push("windvane started", f"Until {hhmm(deadline)}. {self.usage.text()}.", 2, "rocket",

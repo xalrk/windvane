@@ -205,12 +205,12 @@ def cmd_status(a, p):
     on = running(p)
     if a.line:
         last = (last_log(p) or [""])[0][11:]
-        extra = "".join(f". {x}" for x in (actions.now_line(p), f"Last: {last}" if last else "") if x)
+        extra = "".join(f". {x}" for x in (actions.line(p), f"Last: {last}" if last else "") if x)
         print(f"{p.display}: autopilot {'running' if on else 'off'}{extra}")
         return
     print(f"autopilot: {('running in tmux ' + p.tmux if in_tmux(p) else 'running') if on else 'not running'}")
     print(f"questions now: {questions.mode(p)}")
-    if (spent := actions.now_line(p)):
+    if (spent := actions.line(p)):
         print(f"{spent} this month (cap {actions.cap_minutes(p):,})")
     st = load_json(p.state / "state.json", {})
     for tid, slot in sorted(st.get("running", {}).items(), key=lambda kv: kv[1]) if on else ():
@@ -240,7 +240,7 @@ def cmd_overview(a, p):
             line += f" {c['accepted']} passed only by running out of revisions."
         lines.append(line)
     lines.append(check_line(p, recs))
-    lines.append((spent := actions.now_line(p)) and f"{spent} this month.")
+    lines.append((spent := actions.line(p)) and f"{spent} this month.")
     print("\n".join(filter(None, lines + overview_extra(p))))
 
 

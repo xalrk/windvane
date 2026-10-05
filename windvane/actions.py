@@ -11,6 +11,7 @@ driver adds `[skip ci]` to the commits it pushes.
 """
 import json
 import math
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -21,6 +22,8 @@ from .util import load_json, log, push, run, save_json
 MULT = (("self-hosted", 0), ("macos", 10), ("windows", 2))  # the first label that matches sets the rate
 FRESH_S = 600  # a total this young is reused: status and every merge would otherwise list every repo's runs again
 SKIP = "[skip ci]"
+# Denied to worker sessions: workflows start only through `windvane ci`, which runs gh itself, past these rules.
+DENY = ["Bash(gh workflow run *)", "Bash(gh workflow enable *)", "Bash(gh run rerun *)"]
 
 
 def cache_file():
@@ -191,10 +194,20 @@ def fmt(n):
 
 
 def line(p, total=None):
-    """`Actions 1,983/2,000 min` for status and overview, or "" with the budget off or nothing counted yet."""
+    """`Actions 1,983/2,000 min` for status and overview (with the count's time once it's over an hour old), or ""
+    with the budget off or nothing counted yet."""
     b = budget(p)
     total = total or (cached() if b else None)
-    return f"Actions {fmt(total['used'])}/{fmt(b[0])} min" if b and total else ""
+    if not (b and total):
+        return ""
+    when = time.strftime("%H:%M", time.localtime(total["at"]))
+    return f"Actions {fmt(total['used'])}/{fmt(b[0])} min" + f" (counted {when})" * (time.time() - total["at"] > 3600)
+
+
+def refresh(p):
+    """Recount in the background (the driver at its start): status and the phone only read the cache, never wait."""
+    if budget(p):
+        threading.Thread(target=count, args=(p.root,), daemon=True).start()
 
 
 def over_cap(p, cd=None):
@@ -224,11 +237,6 @@ def tag(p, msg, cd=None):
         push("Actions minutes at the cap", f"{line(p)} used this month (cap {cap_minutes(p):,}). windvane adds "
              f"{SKIP} to its commits and `windvane ci` refuses workflows until the month ends.", 4, "warning")
     return f"{msg} {SKIP}"
-
-
-def now_line(p):
-    """status and overview's `Actions ...` line: a count at most FRESH_S old, or the last one when it fails."""
-    return line(p, count(p.root) or cached()) if budget(p) else ""
 
 
 def ci(p, name="", ref="", dry=False):
