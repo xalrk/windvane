@@ -140,7 +140,7 @@ class Prune(Check):
     def test_one_prune_at_a_time(self):
         """A check starting while another slot's check prunes skips its prune, so a killed log is closed once."""
         old = self.log("20260901-old-passed", 4, True)
-        with (self.logs / ".prune.lock").open("w") as lock:
+        with (self.p.state / "prune.lock").open("w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             self.assertTrue(self.run_check(lambda out: 0)[0])
             self.assertTrue(old.exists())

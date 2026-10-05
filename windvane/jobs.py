@@ -167,7 +167,7 @@ def prune(p, logs, clock=time.time):
     or delete stays, and anything else wrong skips the prune. One prune at a time (another slot's check may start
     alongside): two would both close the same killed check, counting its minutes twice."""
     try:
-        with (logs / ".prune.lock").open("w") as lock:
+        with logs.with_name("prune.lock").open("w") as lock:  # beside the logs: `checks/` holds only logs
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:  # another check is pruning right now
