@@ -50,11 +50,13 @@ class CheckPythons(unittest.TestCase):
                            env={"PATH": str(bindir), "HOME": str(bindir)})
         return r.stdout + r.stderr, r.returncode
 
-    def test_a_missing_version_is_named_as_skipped(self):
+    def test_a_missing_version_is_named_as_not_installed(self):
+        """Not "skipped": that word is unittest's, for tests it skipped, in each version's summary line."""
         out, code = self.run_script(python3_11="OK", python3_13="OK")
         self.assertEqual(code, 0, out)
         self.assertIn("python3.11: Ran 3 tests in 0.1s OK\n", out)
-        self.assertIn("skipped (not on PATH): python3.12 python3.14\n", out)
+        self.assertIn("not installed: python3.12 python3.14\n", out)
+        self.assertNotIn("skipped", out)
         self.assertTrue(out.endswith("passed on: python3.11 python3.13\n"), out)
 
     def test_one_failing_version_fails_the_check_and_shows_its_output(self):

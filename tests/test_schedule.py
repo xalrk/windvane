@@ -78,6 +78,7 @@ class Schedule(unittest.TestCase):
 
     def test_two_conflict_bounces_drop_a_slot(self):
         os.environ["FAKE_CONFLICT"] = "1"
+        os.environ["FAKE_BARRIER"] = "3"  # T-003 starting after T-001 merged would fork past it and not conflict
         self.ticket("T-001", "a.py")
         self.ticket("T-002", "b.py")
         self.ticket("T-003", "c.py")

@@ -19,7 +19,7 @@ from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_pipeline import args  # noqa: E402
 
-DEAF = "trap '' TERM; sleep 600"  # a whole group that ignores SIGTERM (sleep inherits the ignored signal)
+DEAF = "trap '' TERM; : > \"$READY\"; sleep 600"  # a group deaf to SIGTERM (sleep inherits the ignored signal)
 CHILD = "sleep 600 & wait"  # a sleep of its own under the shell on any sh: bash runs a last `sleep` in its place
 
 
@@ -79,10 +79,16 @@ class Hangs(unittest.TestCase):
         self.s.close()
 
     def group(self, cmd="sleep 600"):
-        proc = subprocess.Popen(["bash", "-c", cmd], start_new_session=True)
+        """A process group running `cmd`. One that writes the file in $READY (DEAF, once its trap is set) is waited
+        for, so a SIGTERM can't beat the trap on a loaded machine; any other may take the signal at any point."""
+        ready = self.s.tmp / f"ready{len(self.procs)}"
+        proc = subprocess.Popen(["bash", "-c", cmd], start_new_session=True, env={**os.environ, "READY": str(ready)})
         self.procs.append(proc)
         threading.Thread(target=proc.wait, daemon=True).start()  # reaped as it ends, as its real parent would
-        time.sleep(0.2)  # the trap is set before the test signals it
+        end = time.monotonic() + 30
+        while "$READY" in cmd and not ready.exists():
+            self.assertLess(time.monotonic(), end, f"{cmd!r} never got ready")
+            time.sleep(0.01)
         return proc
 
     def mark(self, p, session, pid, name=None):
