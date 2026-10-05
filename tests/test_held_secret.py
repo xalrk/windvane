@@ -66,8 +66,9 @@ class HeldSecret(Base):
 
     def test_push_protection_says_remove_the_secret(self):
         why = driver.push_refusal(SECRET, "github", "plan-x", "origin")
-        self.assertEqual(why, "refused: it holds a secret (GitHub push protection); remove it from the branch's commit "
-                              "(`git commit --amend` on `plan-x`), then the next run pushes it")
+        self.assertTrue(why.startswith(
+            "refused: it holds a secret in `README.md:4` (GitHub push protection); remove it from the branch's commit "
+            "(`git commit --amend` on `plan-x`), then the next run pushes it; "), why)  # the rest: T-082's test
         self.assertNotIn("-b", why)
         self.assertIn("remove it", driver.push_refusal("remote: error: Secret scanning found a token", "git", "x"))
 

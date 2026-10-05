@@ -54,19 +54,23 @@ Start it again. Unfinished tickets are resumed from their branches and worktrees
 **"plan not pushed" (or "not merged") with a local branch.**
 A plan, periodic change or desk answer whose push was refused waits on a local branch (`plan-...`), and the push says
 why and what to do:
-- "refused: it holds a secret (GitHub push protection); remove it from the branch's commit (`git commit --amend` on
-  `plan-...`), then the next run pushes it": GitHub's push protection found a token or key in the commit. Pushing it
-  by hand under another name fails the same way. In your checkout, `git switch` to that branch, take the secret out
-  of the file the refusal names, `git commit --amend -a`, and `git switch -` back; the next run pushes the cleaned
-  commit.
+- "refused: it holds a secret in `README.md:4` (GitHub push protection); remove it from the branch's commit
+  (`git commit --amend` on `plan-...`), then the next run pushes it; or allow it on GitHub if it isn't a secret:
+  https://github.com/.../unblock-secret/...": GitHub's push protection found a token or key in that file and line.
+  Pushing it by hand under another name fails the same way. In your checkout, `git switch` to that branch, take the
+  secret out, `git commit --amend -a`, and `git switch -` back; the next run pushes the cleaned commit. A false
+  positive (a test fixture, an example key): open the URL, allow it, and the next run pushes the branch as it is.
 - "login refused; run `gh auth login` and the next run pushes it" (off GitHub: "check your login to the remote"):
   once you're logged in, the next run or `windvane plan` pushes it.
 - "refused by a hook or branch rule; change the rule, or push it by hand with
   `git push origin plan-20261005-040000:plan-20261005-040000-b` and open a PR from it" (off GitHub: "and merge it into
   main"): the command names your branch and remote; run it in your checkout. Pushed under another name counts as
   pushed, so windvane stops pushing it: landing it (the PR, or the merge) is then yours. A change meant to land on
-  main (a periodic report, a plan run with `--merge`) stays listed as "pushed to origin/plan-...-b, not merged" until
-  main has it (or, on GitHub, its PR is closed); a plain plan goes from the list at once. Without either, pushing
+  main (a periodic report, a plan run with `--merge`) stays listed as "pushed to origin/plan-...-b, not merged: ...:
+  open a PR from it and merge it" (off GitHub: "merge it into main") until main has it (or, on GitHub, its PR is
+  closed); a plain plan goes from the list at once. Any merge counts, a squash or rebase merge too: once main holds
+  the change, it drops off by itself, and `windvane status` fetches first while such a change is listed, so it goes
+  as soon as the merge is on the remote. Without either, pushing
   again fails the same way until the rule changes.
 - "network down; the next run pushes it again": nothing to do.
 - "push failed; see the windvane log": the log (`windvane status`) has git's own words.
