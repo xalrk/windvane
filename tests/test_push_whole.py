@@ -86,6 +86,15 @@ class PushWhole(unittest.TestCase):
         msg = self.assert_whole("Set aside")
         self.assertTrue(msg.startswith(f"Sessions died 4×: {REASON}. Branch kept, run goes on.\n"), msg)
 
+    def test_a_5000_character_error_with_a_known_cause_stays_under_ntfys_limit_and_is_logged_whole(self):
+        error = "API Error: 400 Prompt is too long. " + " ".join(f"Part {i} of the prompt." for i in range(250))
+        self.assertGreater(len(error), 5000)
+        self.pilot().set_aside("T-001", error)
+        msg = self.sent("Set aside")
+        self.assertLess(len(msg.encode()), 4096)
+        self.assertIn(" (the rest is in the log).\nBranch kept, run goes on.", msg)
+        self.assertIn(f"the whole text: {error}\n", (self.p.state / "autopilot.log").read_text())
+
     def test_no_answer(self):
         pl = self.pilot()
         self.question(pl, time.time() - 3600)
@@ -132,6 +141,10 @@ class Bound(unittest.TestCase):
         out = ticket_list(many, dict.fromkeys(many, TITLE))
         self.assertRegex(out, rf"^(T-\d+ {TITLE}; )+and \d+ more$")
         self.assertLess(len(out), phone.MOST)
+
+    def test_one_token_without_spaces_is_cut_at_the_bound(self):
+        out = phone.whole("", "x" * 5000, ".", log=[].append)
+        self.assertEqual(out, "x" * phone.MOST + " (the rest is in the log).")
 
     def test_text_that_fits_logs_nothing_and_keeps_one_full_stop(self):
         lines = []

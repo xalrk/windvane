@@ -113,12 +113,12 @@ def is_local(where):
     return where.startswith("the local branch ")
 
 
-def local_push(where, kept):
+def local_push(where, kept, log):
     """A push's body for a branch `push_branch` kept locally: why the push was refused and the next step first, then
     `kept` with the branch's name on its own line."""
     m = re.fullmatch(r"the local branch (\S+) \((.*)\)", where, re.S)
     branch, why = m.groups() if m else (where, "")
-    return whole("", why[:1].upper() + why[1:], ".") + f"\n{kept} {branch}."
+    return whole("", why[:1].upper() + why[1:], ".", log=log) + f"\n{kept} {branch}."
 
 
 def land(p, cd, branch, title, body, commit=True, tries=2):

@@ -322,7 +322,7 @@ class Pilot(Desk, Periodic):
         hit = next(((text, fix) for text, fix in SELF_INFLICTED if text in error.lower()), None)
         if hit:  # the fix leads: the error's own words rarely say what to do
             body = (whole(died, hit[0], f". {hit[1]}", log=self.log)
-                    + f"\nThe error: {' '.join(error.split())}\nBranch kept, run goes on. {why}")
+                    + "\n" + whole("The error: ", error, ".", log=self.log) + f"\nBranch kept, run goes on. {why}")
         else:
             body = whole(died, error, ". Branch kept, run goes on.", log=self.log) + f"\n{why}"
         push(f"Set aside: {self.name(tid)}", body, 4, "warning")
@@ -596,7 +596,7 @@ class Pilot(Desk, Periodic):
         if r.returncode == 0 and not gout(cd, "status", "--porcelain"):
             self.stash_failed.discard(why)
             self.log(f"{why}: stashed the checkout's uncommitted changes as \"{msg}\"")
-            push("your changes were stashed", whole("Your uncommitted changes were stashed before ", why, ".")
+            push("your changes were stashed", whole("Your uncommitted changes were stashed before ", why, ".", log=self.log)
                  + f"\ngit stash list: {msg}", 3, "package")
             return True
         err = (r.stderr.strip() or "?").splitlines()[0] if r.returncode else "changes were left after it"
@@ -606,8 +606,9 @@ class Pilot(Desk, Periodic):
         if first:
             self.stash_failed.add(why)
             push("checkout not cleaned", whole("Commit or stash your checkout's changes: ",
-                                              then or why + " was skipped", ".")
-                 + f"\nwindvane couldn't stash them, and deleted nothing. git said: {err}", 4, "warning")
+                                              then or why + " was skipped", ".", log=self.log)
+                 + "\nwindvane couldn't stash them, and deleted nothing. " + whole("git said: ", err, "", log=self.log),
+                 4, "warning")
         return False
 
     def check_at(self, rev, ticket=None):
@@ -898,7 +899,7 @@ class Pilot(Desk, Periodic):
                                       "move the question to ## Provisional with its `Built:` line.")
                 self.log(f"{tid}: no answer in {self.a.answer_wait:g} min; building {q['rec']}")
                 opt = q["opts"].get(q["rec"], "")
-                push(f"No answer: {self.name(tid)}", whole(f"Going with {q['rec']}: ", opt, ".")
+                push(f"No answer: {self.name(tid)}", whole(f"Going with {q['rec']}: ", opt, ".", log=self.log)
                      + f"\nTo change it later: windvane answer {tid} <letter>.", 3, "hourglass")
             else:
                 continue
@@ -1379,7 +1380,7 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
                 why = f"the driver was killed ({signal.Signals(-rc).name})"
                 log(p, f"{why}; not restarted: its sessions may still be running in the worktrees")
-                push("windvane stopped", whole("Why: ", why, ". Not restarted.") + "\nIts sessions may still be "
+                push("windvane stopped", whole("Why: ", why, ". Not restarted.", log=lambda m: log(p, m)) + "\nIts sessions may still be "
                      "running in the worktrees.", 4, "rotating_light", ("Status=status",))
             return rc  # its own end (a stop, the deadline, the queue, a failed setup), or a kill
         why = info["error"]
