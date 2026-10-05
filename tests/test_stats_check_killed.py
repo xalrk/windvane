@@ -1,6 +1,6 @@
 """Every check gets its own log, even two started in the same second, so a killed one can't pass for running or
-overwrite another's log; a killed check is timed to its log's last write; and `--by ticket` names the costliest
-check that bought nothing."""
+overwrite another's log; a killed check is timed to its log's last write; and `stats` names the costliest check that
+bought nothing."""
 import fcntl
 import os
 import signal
@@ -144,7 +144,8 @@ class KilledMinutes(Base):
         self.add(event="check", ticket="T-004", start=4.0, minutes=25.0, passed=False, reused=False)
         self.assertEqual(self.lines("--by", "ticket", start="costliest wasted check:"),
                          ["costliest wasted check: T-004, 25 min, failed"])
-        self.assertEqual(self.lines("--by", "role", start="costliest wasted check:"), [])  # by ticket only
+        self.assertEqual(self.lines("--by", "role", start=("most check time:", "costliest wasted check:")),
+                         ["costliest wasted check: T-004, 25 min, failed"])  # not by ticket only
 
     def test_no_wasted_check_no_line(self):
         self.add(event="check", ticket="T-001", start=1.0, minutes=30.0, passed=True, reused=False)
