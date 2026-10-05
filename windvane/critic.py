@@ -29,7 +29,7 @@ CAP_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?([\w-]+)[ \t]*(?:<=|≤)[ \t]*(\d+
 NEW_RE = re.compile(r"CRITIC: (\S+) fixes=(\d+)[ \t]*(.*)")
 HEAD_RE = re.compile(r"^#{2,}[ \t]+`?([\w-]+)")
 RUNG_RE = re.compile(r"^[ \t]*[-*][ \t]*(\d+(?:\.\d+)?)[ \t]+`?([\w-]+)`?[ \t]*:[ \t]*(.+)$")
-ANSWER_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?([\w-]+)`?[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
+ANSWER_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?(?:[\w-]+(?:\.|[ \t]+(?=\d)))?(?:\d+(?:\.\d+)?[ \t]+)?([\w-]+)`?[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
                        r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$", re.I)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
@@ -109,7 +109,8 @@ def rubric(p, cwd):
 def answers(text):
     """The critic's answers before its CRITIC line: {check id or dimension: (answer, evidence)}, the answer `yes`,
     `no`, `scope` (`no (out of scope: <why>)`, the why kept as evidence) or `-` (a dimension the ticket doesn't
-    touch). The last answer to an id wins."""
+    touch). A check may be named `safe`, `works.safe`, `5 safe` or `works 5 safe`: the critic reads all of those in
+    the scale, the calibration and `overview`. The last answer to an id wins."""
     out = {}
     for line in (text or "").rsplit("CRITIC:", 1)[0].splitlines():
         if m := ANSWER_RE.match(line):
@@ -380,7 +381,7 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
     critique = head[max(0, head.find("Checks:")):].rstrip()
     if block:
         critique += "\nFailed checks under the bar (fix these too):\n" + "\n".join(
-            f"- {d} {r:g} {cid}: {q} ({ev})" for d, r, cid, q, ev in block)
+            f"- {d}.{cid} (rung {r:g}) failed: {q} ({ev})" for d, r, cid, q, ev in block)
     if missing:
         critique += f"\nUnanswered, counted as no: {', '.join(missing)}"
     critique += f"\nCRITIC: {tid} {scores} fixes={eff} {gist}"

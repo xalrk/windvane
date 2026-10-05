@@ -159,13 +159,14 @@ class Ladder(unittest.TestCase):
         entry, critique = self.judge({**YES, "safe": "no"})
         self.assertEqual((entry["dims"]["works"], entry["score"]), (2, 2))
         self.assertEqual((entry["step"], entry["failed"], entry["fixes"], entry["effective"]), ("revise", ["safe"], 0, 1))
-        self.assertIn("- works 5 safe: no known way its code crashes or loses work. (because the pack says so)", critique)
+        self.assertIn("- works.safe (rung 5) failed: no known way its code crashes or loses work. (because the pack says so)",
+                      critique)
 
     def test_a_plain_no_under_the_bar_sends_it_back_with_the_failed_checks_as_fixes(self):
         entry, critique = self.judge({**YES, "failures": "no", "awake": "no"})
         self.assertEqual((entry["score"], entry["step"], entry["failed"]), (5, "revise", ["failures", "awake"]))
-        self.assertIn("Failed checks under the bar (fix these too):\n- works 8 failures:", critique)
-        self.assertIn("- clear 8 awake:", critique)
+        self.assertIn("Failed checks under the bar (fix these too):\n- works.failures (rung 8) failed:", critique)
+        self.assertIn("- clear.awake (rung 8) failed:", critique)
         self.assertIn("CRITIC: T-054 works=5 clear=5 fixes=2", critique)
 
     def test_out_of_scope_gives_scope_and_a_follow_up(self):
@@ -184,7 +185,7 @@ class Ladder(unittest.TestCase):
         self.assertEqual((entry["dims"]["clear"], entry["step"]), (5, "revise"))
         self.assertEqual((entry["unanswered"], entry["failed"], entry["answers"]["awake"]), (["awake"], ["awake"], "none"))
         self.assertIn("Unanswered, counted as no: awake", critique)
-        self.assertIn("- clear 8 awake: read half awake, it says what to do. (unanswered)", critique)
+        self.assertIn("- clear.awake (rung 8) failed: read half awake, it says what to do. (unanswered)", critique)
 
     def test_an_untouched_dimension_is_left_out_but_never_the_first(self):
         entry, critique = self.judge({"works": "-", "shown": "yes", "safe": "yes", "failures": "yes", "clear": "-"})
@@ -210,12 +211,23 @@ class Ladder(unittest.TestCase):
         self.assertNotIn("class", ans, "nothing after the CRITIC line counts")
         self.assertNotIn("nothing", ans)
 
+    def test_a_check_named_with_its_dimension_or_rung_still_counts(self):
+        ans = critic.answers("- works.safe: no, a race\n- 8 failures: yes, tested\n- works 10 class: no (out of scope: "
+                             "T-060)\n- `clear.quoted`: yes\n- clear 8 awake: yes")
+        self.assertEqual({k: a for k, (a, _) in ans.items()},
+                         {"safe": "no", "failures": "yes", "class": "scope", "quoted": "yes", "awake": "yes"})
+        entry, _ = self.judge({"works.shown": "yes", "works.safe": "no", "8 failures": "yes", "clear 5 quoted": "yes",
+                               "clear 8 awake": "yes"})
+        self.assertEqual((entry["dims"], entry["failed"], entry["unanswered"]), ({"works": 2, "clear": 8}, ["safe"], ["class"]))
+
     def test_a_recritique_hides_the_answers_but_keeps_the_fix_list(self):
         _, critique = self.judge({**YES, "safe": "no"})
         hidden = critic.unscored(critique)
         self.assertNotIn("- shown: yes", hidden)
         self.assertNotIn("CRITIC:", hidden)
-        self.assertIn("- works 5 safe:", hidden)
+        self.assertIn("- works.safe (rung 5) failed:", hidden)
+        self.assertEqual(critic.answers(critique)["safe"][0], "no", "the fix list never reads as an answer")
+        self.assertNotIn("failures", {k for k, (a, _) in critic.answers(hidden).items()})
 
     def test_the_prompt_asks_for_answers_not_numbers(self):
         sp = critic.system_prompt(self.p, self.s.root)
