@@ -91,7 +91,7 @@ class StatsCost(unittest.TestCase):
         self.assertIn("per merged ticket (1): 2.0 runs, 34k weighted tokens, 1.20 API $\n", out)
         self.assertIn("with overhead: 45k weighted tokens per merged ticket\n  overhead: planner: 11k\n", out)
         self.assertIn("spent on tickets not merged (open, parked, failed): 31k weighted tokens, 48% of ticket", out)
-        self.assertIn("died or killed: 1 run (1 died, 0 killed for time), 4k weighted tokens, 5% of all\n", out)
+        self.assertIn("died or killed: 1 run (died), 4k weighted tokens, 5% of all\n", out)
 
     def test_by_role_shows_the_died_column(self):
         out = self.cli("stats")
