@@ -1205,8 +1205,10 @@ class Pilot(Desk, Periodic):
             return
         full = max(inodes, space) > scratch.FULL
         if full and not self.tmp_full:
-            msg = (f"{scratch.root()} is {inodes:.0f}% full of inodes and {space:.0f}% of space after windvane "
-                   "removed its leftovers: the rest isn't windvane's. When either is full, no command runs.")
+            tmp, young = scratch.root(), len(scratch.old_leaks()) - len(scratch.stale(scratch.old_leaks(), scratch.DAY))
+            mine = f"{young} dirs older windvane tests leaked go once a day old; the rest" if young else "the rest"
+            msg = (f"{tmp} is {inodes:.0f}% full of inodes and {space:.0f}% of space after cleaning: {mine} isn't "
+                   f"windvane's. See what fills it: du --inodes -s {tmp}/* | sort -n | tail")
             self.log(msg)
             push("Temp dir nearly full", msg, 4, "warning")
         self.tmp_full = full

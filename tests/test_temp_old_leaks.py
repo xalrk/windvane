@@ -1,6 +1,8 @@
 """Before windvane named its tests' temp dirs, they leaked as plain `tmpXXXXXXXX` dirs, ten thousand of them in a day:
 the cleaner removes those that are a day old and hold only what windvane makes, and the driver pushes when the temp
 dir is nearly full even after cleaning."""
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -14,7 +16,7 @@ from test_install import REPO
 from test_pipeline import args
 
 sys.path.insert(0, str(REPO))
-from windvane import driver, scratch  # noqa: E402
+from windvane import doctor, driver, scratch  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from test_temp_clean import age  # noqa: E402
 
@@ -65,6 +67,13 @@ class OldLeaks(unittest.TestCase):
         self.assertEqual([d.name for d in gone if d.exists()], [])
         self.assertEqual([d.name for d in kept if not d.exists()], [])
 
+    def test_doctor_clean_removes_them(self):
+        gone, kept = self.dir("tmpdoctor01", "Critic"), self.dir("tmpdoctor02", "Critic", old=False)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            doctor.main(Project(self.s.root), True)
+        self.assertIn("removed 1 leftover windvane temp dir (2 files)", out.getvalue())
+        self.assertEqual((gone.exists(), kept.exists()), (False, True))
+
     def test_an_old_leak_touched_today_or_in_use_stays(self):
         d = self.dir("tmptouched1", "runs/a")
         os.utime(d / "runs/a")
@@ -91,9 +100,15 @@ class FullPush(unittest.TestCase):
                 with mock.patch.object(scratch, "fullness", return_value=f):
                     self.pilot.clean_tmp()
         self.assertEqual([a[0] for a in sent], ["Temp dir nearly full"] * 2)
-        self.assertIn("is 93% full of inodes and 20% of space after windvane removed its leftovers: the rest isn't "
-                      "windvane's", sent[0][1])
+        self.assertIn("is 93% full of inodes and 20% of space after cleaning: the rest isn't windvane's. See what "
+                      "fills it: du --inodes -s ", sent[0][1])
         self.assertIn("is 10% full of inodes and 91% of space", sent[1][1])
+        (Path(os.environ["TMPDIR"]) / "tmpyoung001").mkdir()  # a leak under a day old: counted, not blamed on others
+        with mock.patch.object(driver, "push", side_effect=lambda *a: sent.append(a)), \
+                mock.patch.object(scratch, "fullness", side_effect=[(10, 10), (95, 10)]):
+            self.pilot.clean_tmp(), self.pilot.clean_tmp()
+        self.assertIn("after cleaning: 1 dirs older windvane tests leaked go once a day old; the rest isn't",
+                      sent[2][1])
 
 
 if __name__ == "__main__":
