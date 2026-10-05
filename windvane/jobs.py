@@ -103,7 +103,8 @@ def run_logged(p, ticket, cmd, cwd, log):
                                           stdout=f, stderr=subprocess.STDOUT,
                                           env={**env, "PYTHONPATH": str(Path(__file__).parents[1])}).returncode
                 else:
-                    code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT, env=env).returncode
+                    code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
+                                          env=env).returncode
             finally:
                 beat.set()
     finally:
