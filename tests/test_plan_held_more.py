@@ -52,6 +52,13 @@ class ReopenedPlans(Base):
         self.assertEqual(len([c for c in calls if c.startswith("pr list --state open")]), 1)  # one query, once
         self.assertFalse([c for c in calls if f"--head {OLD} " in c])  # an open one isn't asked about again
 
+    def test_a_failed_open_list_frees_nothing(self):
+        self.p.state.mkdir(parents=True, exist_ok=True)
+        self.closed.write_text(json.dumps([OLD]))
+        (self.s.bin / "gh").write_text("#!/bin/sh\ncase \"$*\" in \"pr list --state open\"*) exit 1;; esac\nexit 0\n")
+        self.assertIn("T-009", driver.pending_ids(self.p))  # maybe reopened: a skipped id beats a collision
+        self.assertEqual(json.loads(self.closed.read_text()), [OLD])  # asked again next time
+
     def test_no_remembered_branch_no_extra_query(self):
         driver.pending_ids(self.p)
         self.assertFalse([c for c in self.gh_calls() if c.startswith("pr list --state open")])

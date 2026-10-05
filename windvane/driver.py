@@ -1735,13 +1735,19 @@ def closed_prs(p, branches):
     counts). One query per branch rather than a list of recent PRs, so no limit drops an old closed plan; a branch
     found closed is remembered in closed_plans.json and not asked about again (each query takes ~0.8 s, and the
     closed ones pile up, since their paid-for branches are kept). One list of the open PRs per call notices a
-    reopened one: its branch leaves the file and claims its ids again, or a new plan would reuse them."""
+    reopened one: its branch leaves the file and claims its ids again, or a new plan would reuse them; when that
+    list fails, no branch counts as closed and the file stays."""
     if p.cfg["forge"] != "github":
         return set()
     f = p.state / "closed_plans.json"
     known = set(load_json(f, []))
-    reopened = set(net.sh(p.main_root(), "gh", "pr", "list", "--state", "open", "--limit", "1000", "--json",
-                          "headRefName", "-q", ".[].headRefName").split()) if known & set(branches) else set()
+    reopened = set()
+    if known & set(branches):
+        r = net.call(["gh", "pr", "list", "--state", "open", "--limit", "1000", "--json", "headRefName", "-q",
+                      ".[].headRefName"], p.main_root())
+        if r.returncode:  # can't tell which reopened: all keep their ids this time (a skipped id costs nothing)
+            return set()
+        reopened = set(r.stdout.split())
     closed = (known - reopened) & set(branches)
     for b in sorted(set(branches) - known - reopened):
         states = set(net.sh(p.main_root(), "gh", "pr", "list", "--head", b, "--state", "all", "--json", "state",
