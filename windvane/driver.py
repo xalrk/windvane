@@ -1570,10 +1570,14 @@ def save_held(p, held, notes=None):
     save_json(p.state / "held_why.json", {b: w for b, w in reasons.items() if b in held})
 
 
-# What a refused push's stderr says, first match wins, with its next step: a login problem is fixed by logging in, a
-# hook or branch protection by changing the rule or the branch (pushing again alone fails the same way), the network
-# by waiting: the next run pushes what was held back (`push_held`).
+# What a refused push's stderr says, first match wins, with its next step: a secret by taking it out of the commit
+# (GitHub's push protection is a GH013 rule too, but no rule change or other name gets past it), a login problem by
+# logging in, a hook or branch protection by changing the rule or the branch (pushing again alone fails the same way),
+# the network by waiting: the next run pushes what was held back (`push_held`).
 REFUSALS = (
+    ("refused: it holds a secret (GitHub push protection); remove it from the branch's commit "
+     "(`git commit --amend` on `{branch}`), then the next run pushes it",
+     re.compile(r"push protection|cannot contain secrets|secret scanning", re.I)),
     ("login refused; {login} and the next run pushes it",
      re.compile(r"authentication failed|permission denied|permission to .* denied|could not read username|"
                 r"terminal prompts disabled|invalid username or password|\b403\b", re.I)),
@@ -1587,7 +1591,8 @@ REFUSALS = (
 
 
 LOGIN = {"github": "run `gh auth login`", "git": "check your login to the remote"}
-# After a hand push: windvane counts the branch as pushed and stops tracking it, so the user lands it.
+# After a hand push: windvane counts the branch as pushed and stops pushing it, so the user lands it (a change to land
+# stays listed until main has it).
 THEN = {"github": "open a PR from it", "git": "merge it into {main}"}
 
 
@@ -1679,44 +1684,56 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
 
 
 def held_branches(p):
-    """The branches `hold` noted that still wait: unmerged and on no remote branch (pushing one by hand under another
-    name counts as pushed), with no PR on github (one pushed by hand, its PR closed and branch deleted, stays
-    closed). Notes and reasons for any other branch are dropped."""
+    """The branches `hold` noted that still wait to be pushed: unmerged and on no remote branch (pushing one by hand
+    under another name counts as pushed), with no PR on github (one pushed by hand, its PR closed and branch deleted,
+    stays closed). A change to land pushed by hand stays noted, not pushed again, until main has it or its PR is
+    closed. Notes and reasons for any other branch are dropped."""
     held, root = load_json(p.state / "held.json", {}), p.main_root()
-    waiting = {b: how for b, how in held_here(p, held).items()
-               if not (p.cfg["forge"] == "github" and net.sh(root, "gh", "pr", "list", "--head", b, "--state", "all",
-                                                                "--json", "number", "-q", ".[].number"))}
-    if waiting != held or set(load_json(p.state / "held_why.json", {})) - set(waiting):
-        save_held(p, waiting)
-    return waiting
+    here, tracked = held_here(p, held), {}
+    for b, (how, on) in here.items():
+        states = p.cfg["forge"] == "github" and net.sh(
+            root, "gh", "pr", "list", "--head", on.removeprefix(f"{p.remote}/") if on else b, "--state", "all",
+            "--json", "state", "-q", ".[].state")
+        if not states or (on and "OPEN" in states.split()):
+            tracked[b] = how
+    if tracked != held or set(load_json(p.state / "held_why.json", {})) - set(tracked):
+        save_held(p, tracked)
+    return {b: how for b, how in tracked.items() if not here[b][1]}
 
 
 def held_here(p, held):
-    """`held`'s branches that are still unmerged and on no remote branch: git alone, no network."""
+    """`held`'s branches still tracked, as branch -> (how, the remote branch that has it or ""): unmerged ones on no
+    remote branch, and a change to land on one too (pushed by hand, it isn't done until main has it). Git alone, no
+    network."""
     if not held:  # the usual case: no git call for `status`
         return {}
-    root = p.main_root()
+    root, out = p.main_root(), {}
     unmerged = set(gout(root, "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split())
-    return {b: how for b, how in held.items() if b in unmerged and not gout(root, "branch", "-r", "--contains", b)}
+    for b, how in held.items():
+        on = gout(root, "branch", "-r", "--contains", b, "--format=%(refname:short)").split() if b in unmerged else []
+        if b in unmerged and (not on or how == "land"):
+            out[b] = how, (on or [""])[0]
+    return out
 
 
 def held_now(p):
-    """(branch, the last refusal's reason and next step, when it was held) for each held branch still waiting; read
-    only (no `gh`, no write: `held_branches` prunes at the next run's start). One held before T-072 has no time
-    noted: its last commit's date stands in."""
+    """(branch, the last refusal's reason and next step, when it was held, the remote branch a hand push put it on or
+    "") for each held branch still tracked; read only (no `gh`, no write: `held_branches` prunes at the next run's
+    start). One held before T-072 has no time noted: its last commit's date stands in."""
     reasons, out = load_json(p.state / "held_why.json", {}), []
-    for b in held_here(p, load_json(p.state / "held.json", {})):  # no git call when none is held
+    for b, (_, on) in held_here(p, load_json(p.state / "held.json", {})).items():  # no git call when none is held
         note = held_note(reasons.get(b))
         at = note.get("at") or int(gout(p.main_root(), "log", "-1", "--format=%ct", b) or time.time())
-        out.append((b, note["why"] or "push failed; see the windvane log", at))
+        out.append((b, note["why"] or "push failed; see the windvane log", at, on))
     return out
 
 
 def held_lines(p):
-    """One line per held branch with how long it has waited, the last refusal's reason and next step, for `status`
-    and `overview`."""
-    return [f"held back for {age(time.time() - at)}, not pushed: {b} "
-            f"({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:60]}): {why}" for b, why, at in held_now(p)]
+    """One line per held branch with how long it has waited and where it is: the last refusal's reason and next step,
+    or, pushed by hand, the merge still to do; for `status` and `overview`."""
+    return [f"held back for {age(time.time() - at)}, " + (f"pushed to {on}, not merged" if on else "not pushed")
+            + f": {b} ({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:60]}): "
+            + (f"merge it into {p.main}" if on else why) for b, why, at, on in held_now(p)]
 
 
 def age(seconds):

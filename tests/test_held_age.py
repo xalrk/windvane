@@ -79,7 +79,7 @@ class HeldAge(Base):
         notes = self.notes()
         notes[old]["at"] = int(time.time()) - 3 * DAY - 60
         (self.p.state / "held_why.json").write_text(json.dumps(notes))
-        self.assertIn("2 held-back changes not pushed, oldest 3 days.", self.windvane("status", "--line"))
+        self.assertTrue(self.windvane("status", "--line").endswith(". 2 held-back changes not pushed, oldest 3 days\n"))
         status = self.windvane("status")
         self.assertIn(f"held back for 3 days, not pushed: {old} ", status)
         self.assertIn(f"held back for under an hour, not pushed: {new} ", status)

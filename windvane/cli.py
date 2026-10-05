@@ -205,8 +205,9 @@ def parallel_arg(v):
 def cmd_status(a, p):
     on = running(p)
     if a.line:
-        last = (last_log(p) or [""])[0][11:]
-        extra = "".join(f". {x}" for x in (held_count(p), actions.line(p), f"Last: {last}" if last else "") if x)
+        held, last = held_count(p), (last_log(p) or [""])[0][11:]
+        last = "" if held or HELD_LOG.search(last) else last  # the held count says it; or it's no longer held
+        extra = "".join(f". {x}" for x in (held, actions.line(p), f"Last: {last}" if last else "") if x)
         print(f"{p.display}: autopilot {'running' if on else 'off'}{extra}")
         return
     print(f"autopilot: {('running in tmux ' + p.tmux if in_tmux(p) else 'running') if on else 'not running'}")
@@ -221,13 +222,20 @@ def cmd_status(a, p):
     print("\n".join(held_text(p) + last_log(p, 12)))
 
 
+# A log line about a held branch: `status --line` leaves it out, as the held count (or none, once it's gone) says more.
+HELD_LOG = re.compile(r"kept only locally on |: still not pushed")
+
+
 def held_count(p):
-    """The phone's held-back count and how long the oldest has waited; "" when none waits."""
-    held = [at for _, _, at in driver.held_now(p)]
+    """The phone's held-back count (pushed by hand but not merged counts too: it waits on the user) and how long the
+    oldest has waited; "" when none waits."""
+    held = driver.held_now(p)
     if not held:
         return ""
-    n, waited = len(held), driver.age(time.time() - min(held))
-    return f"{n} held-back change{'s' * (n > 1)} not pushed, " + (f"oldest {waited}" if n > 1 else f"for {waited}")
+    n, pushed = len(held), sum(bool(on) for *_, on in held)
+    waited = driver.age(time.time() - min(at for _, _, at, _ in held))
+    state = "not pushed" if not pushed else "pushed, not merged" if pushed == n else "not merged"
+    return f"{n} held-back change{'s' * (n > 1)} {state}, " + (f"oldest {waited}" if n > 1 else f"for {waited}")
 
 
 def held_text(p):
