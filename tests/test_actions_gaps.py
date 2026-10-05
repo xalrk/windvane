@@ -144,6 +144,7 @@ class Gaps(unittest.TestCase):
         self.s.ticket("T-001")
         self.add(1, [job(minutes_used * 60)])
         p = self.project(minutes=100)
+        actions.count(p.root)  # the worker's hook reads it at commit time: the driver's own count is in the background
         config = (self.s.root / ".git/config").read_text()
         actions.push, orig = (lambda *a, **k: None), actions.push
         self.addCleanup(setattr, actions, "push", orig)

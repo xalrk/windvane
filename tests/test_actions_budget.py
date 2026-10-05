@@ -248,7 +248,10 @@ class Budget(unittest.TestCase):
     def test_the_driver_merges_without_skip_ci_under_the_cap(self):
         self.s.ticket("T-001")
         self.add("me/proj", 1, [job(10 * 60)])
-        pilot = driver.Pilot(self.project(minutes=100), args())
+        p = self.project(minutes=100)
+        actions.count(p.root)  # the worker's hook reads the cache at commit time; the driver's start counts in the
+        # background, so a fake worker's quick commit could beat it
+        pilot = driver.Pilot(p, args())
         pilot.run(local_now() + timedelta(hours=1))
         self.s.git("fetch", "-q", "origin")
         self.assertNotIn("[skip ci]", self.s.git("log", "origin/main", "--format=%s"))
@@ -309,7 +312,8 @@ class Budget(unittest.TestCase):
         pilot.run(local_now() + timedelta(hours=1))
         self.assertEqual(pilot.merged, ["T-001"])
         self.s.git("fetch", "-q", "origin")
-        self.assertNotIn("[skip ci]", self.s.git("log", "origin/main", "--format=%s"))
+        driver_own = [m for m in self.s.git("log", "origin/main", "--format=%s").splitlines() if "T-001: build" not in m]
+        self.assertNotIn("[skip ci]", "\n".join(driver_own))  # the worker's own is tagged: its hook reads no count
 
     def test_workers_cant_start_or_rerun_a_workflow_past_claude_ci(self):
         allow, deny = driver.worker_perms(Project(self.s.root))
