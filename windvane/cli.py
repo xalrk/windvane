@@ -249,7 +249,7 @@ def cmd_overview(a, p):
         lines.append(line)
     lines.append(check_line(p, recs))
     lines.append((spent := actions.line(p)) and f"{spent} this month.")
-    lines += held_text(p)
+    lines += [l[:1].upper() + l[1:] for l in held_text(p)]  # overview's lines are sentences
     print("\n".join(filter(None, lines + overview_extra(p))))
 
 

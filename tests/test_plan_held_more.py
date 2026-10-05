@@ -72,7 +72,7 @@ class HeldInStatus(Base):
         for cmd in (["status"], ["overview"]):
             with self.subTest(cmd=cmd):
                 out = self.windvane(*cmd)
-                self.assertRegex(out, rf"held back, not pushed: {branch} \(Plan: 1 ticket.*\): {HOOK_WHY}\n"
+                self.assertRegex(out, rf"(?i)held back, not pushed: {branch} \(Plan: 1 ticket.*\): {HOOK_WHY}\n"
                                       r"  \(each run's start tries these again\)")
         self.assertIn("1 held-back change not pushed", self.windvane("status", "--line"))
 
