@@ -200,7 +200,8 @@ def main_has(root, upstream, branch):
     """Whether `upstream` already holds `branch`'s change though git doesn't count it merged: a squash or rebase merge
     (GitHub's, or a `git merge --squash`) makes new commits. Merging the branch in would change nothing; before git
     2.38 (no `merge-tree --write-tree`), `git cherry` finds a rebased or one-commit squashed change and `squashed_on`
-    a squash of several. When none can tell, it isn't landed: a change kept listed costs a line, a dropped one is
+    a squash of several. A squashed change main later reverted counts as landed too (as `git cherry` counts it): the
+    user undid it on purpose. When none can tell, it isn't landed: a change kept listed costs a line, a dropped one is
     lost."""
     r = git(root, "merge-tree", "--write-tree", upstream, branch)
     if r.returncode in (0, 1):  # 1: the merge conflicts, so main lacks some of it
@@ -213,22 +214,47 @@ SQUASH_WALK = 200  # upstream commits `squashed_on` reads at most, so a long-liv
 
 
 def squashed_on(root, upstream, branch):
-    """Whether one of the last SQUASH_WALK upstream commits since the merge-base is `branch`'s whole change (the same
-    patch-id): a squash of several commits, which `git cherry` misses as it compares them one by one. A change to a
-    binary file can't tell: before git 2.39 its patch-id leaves the content out, so any commit to that file matches."""
+    """Whether one of the last SQUASH_WALK upstream commits since the merge-base is `branch`'s whole change: a squash
+    of several commits, which `git cherry` misses as it compares them one by one. Old `git patch-id` leaves a binary
+    file's content out, so binary files are matched by blob instead: the commit has the change's patch-id without
+    them (or, for binary files alone, touches them) and holds each at the branch's blob."""
     base = gout(root, "merge-base", upstream, branch)
-    if not base or re.search(r"^-\t-\t", gout(root, "diff", "--numstat", base, branch), re.M):  # a binary file
+    if not base:
         return False
-    change = patch_ids(root, "diff", base, branch)
-    return bool(change) and change[0] in patch_ids(
-        root, "log", "-p", "--no-merges", f"-{SQUASH_WALK}", "--format=commit %H", f"{base}..{upstream}")
+    binary = binary_files(root, base, branch)
+    rest = ["--", ".", *(f":(exclude,literal){b}" for b in binary)]
+    change = patch_ids(root, raw(root, "diff-tree", "-p", base, branch, *rest))
+    # raw, so it ends in a newline: `diff-tree --stdin` drops a last line without one
+    recent = raw(root, "rev-list", "--no-merges", f"-{SQUASH_WALK}", f"{base}..{upstream}")
+    if change:
+        hits = [c for pid, c in patch_ids(root, raw(root, "diff-tree", "--stdin", "-p", *rest, stdin=recent))
+                if pid == change[0][0]]
+    elif binary:
+        hits = raw(root, "diff-tree", "--stdin", "-s", "--format=%H", "--", *binary, stdin=recent).decode().split()
+    else:
+        return False
+    if not binary:
+        return bool(hits)
+    blobs = raw(root, "ls-tree", "--full-tree", "-z", branch, "--", *binary)
+    return any(raw(root, "ls-tree", "--full-tree", "-z", c, "--", *binary) == blobs for c in hits)
 
 
-def patch_ids(root, *args):
-    """The stable patch-ids of git `args`' diff output, one per patch (bytes throughout: a diff needn't be UTF-8)."""
-    out = subprocess.run(["git", *args], cwd=root, capture_output=True).stdout
-    ids = subprocess.run(["git", "patch-id", "--stable"], cwd=root, input=out, capture_output=True).stdout
-    return [line.split()[0].decode() for line in ids.splitlines()]
+def binary_files(root, base, branch):
+    """The paths of binary files `branch` changes since `base` (numstat's "-" counts)."""
+    out = raw(root, "diff-tree", "-r", "--numstat", "--no-renames", "-z", base, branch)
+    return [line[4:] for line in out.decode(errors="surrogateescape").split("\0") if line.startswith("-\t-\t")]
+
+
+def raw(root, *args, stdin=b""):
+    """git `args`' output as bytes: a diff or a path needn't be UTF-8."""
+    return subprocess.run(["git", *args], cwd=root, input=stdin, capture_output=True).stdout
+
+
+def patch_ids(root, diff):
+    """(stable patch-id, commit) for each patch in `diff`. Diffs come from plumbing (`diff-tree`), so the user's diff
+    settings (renames, colour, prefixes) can't change a patch-id."""
+    ids = subprocess.run(["git", "patch-id", "--stable"], cwd=root, input=diff, capture_output=True).stdout
+    return [tuple(line.decode().split()[:2]) for line in ids.splitlines()]
 
 
 def held_now(p):
