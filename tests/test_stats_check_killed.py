@@ -105,7 +105,8 @@ class KilledMinutes(Base):
         self.killed("T-060", 1000.0, 18)
         self.add(event="check", ticket="T-003", start=3.0, minutes=4.0, passed=False, reused=False, finished=False)
         out = self.lines("--by", "ticket", start=("most check time:", "costliest wasted check:"))
-        self.assertEqual(out, ["most check time: T-001, 1 run, 30 min", "costliest wasted check: T-060, 18 min, cut off"])
+        self.assertEqual(out, ["most check time: T-001, 1 run, 30 min",
+                               "costliest wasted check: T-060, 18 min, cut off"])
         self.add(event="check", ticket="T-004", start=4.0, minutes=25.0, passed=False, reused=False)
         self.assertEqual(self.lines("--by", "ticket", start="costliest wasted check:"),
                          ["costliest wasted check: T-004, 25 min, failed"])
