@@ -53,7 +53,7 @@ run` and `enable`, `gh run rerun`, `gh alias set` (an alias could hide one) and 
 enable a workflow or write under `/actions/`, however they're made (`env gh …`, a script, a subprocess), with one line
 pointing to `windvane ci`; everything else goes to the real `gh` unchanged. Aliases already in your gh config are
 checked too: a call starting with one is expanded as gh would and refused the same way, and a shell alias (`!…`) is
-refused when its text names one of those commands. Each refusal is a `gh-refused` row in the ledger. The session's `CLAUDE_ENV_FILE` puts
+refused when its text names one of those commands. The list is read afresh on each such call, so an alias added mid-session counts at once, and the guard fails closed: when `gh alias list` fails or takes over 5 s, a call starting with a word gh doesn't know is refused (gh's own commands still pass). Each refusal is a `gh-refused` row in the ledger, and `windvane stats` counts workflow starts, alias changes and unread lists apart. The session's `CLAUDE_ENV_FILE` puts
 it first again after your shell setup (and sources yours, if you set one). It's on with or without an Actions budget:
 workflows start only through `windvane ci`. The worker's deny rules catch the plain forms first. A session could still
 call the real `gh` by its full path; for a hard stop, log `gh` in with a token that has no Actions write permission.

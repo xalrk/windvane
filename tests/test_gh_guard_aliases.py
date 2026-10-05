@@ -95,12 +95,11 @@ class Aliases(unittest.TestCase):
                 self.assertEqual(out, f"real gh: {' '.join(args)}\n")
                 self.assertEqual(self.calls(), [args])
 
-    def test_a_gh_whose_alias_list_fails_still_gets_a_working_guard(self):
-        for aliases in ("fail", ""):
-            with self.subTest(aliases=aliases):
-                self.assertEqual(self.sh("gh wr ci.yml", FAKE_GH_ALIASES=aliases)[:2], (0, "real gh: wr ci.yml\n"))
-                self.assertEqual(self.sh("gh workflow run ci.yml", FAKE_GH_ALIASES=aliases)[0], 1)
-                self.assertEqual(self.calls(), [["wr", "ci.yml"]])
+    def test_a_gh_with_no_aliases_still_gets_a_working_guard(self):
+        # a failing list is refused instead: tests/test_gh_guard_unread.py
+        self.assertEqual(self.sh("gh wr ci.yml", FAKE_GH_ALIASES="")[:2], (0, "real gh: wr ci.yml\n"))
+        self.assertEqual(self.sh("gh workflow run ci.yml", FAKE_GH_ALIASES="")[0], 1)
+        self.assertEqual(self.calls(), [["wr", "ci.yml"]])
 
     def test_each_refusal_is_one_ledger_row_with_the_ticket(self):
         self.sh("gh wr ci.yml", WINDVANE_TICKET="T-007")
