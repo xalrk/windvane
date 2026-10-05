@@ -40,7 +40,7 @@ from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
-CARRIED = ("periodic_at", "groups_seen", "held", "skip", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
+CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
@@ -53,7 +53,8 @@ NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
-SUPERVISED = "WINDVANE_SUPERVISED"  # set for a driver under `supervise`: it hands a crash over instead of pushing it
+# The environment variable set for a driver under `supervise`: it hands a crash over instead of pushing it
+SUPERVISED = "WINDVANE_SUPERVISED"
 # Errors a ticket brings on itself, as (text in the error, lowercase; what to do), for its set-aside push
 SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it reads."),
                   ("context limit", "Split the ticket, or trim what it reads."),
@@ -137,7 +138,12 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
             git(root, "worktree", "prune")
             how = (f"timed out after {limit:g} min" if why == TIMED_OUT else f"cut short ({why})" if why
                    else f"failed (exit {code})")
-            raise SetupFailed(f"setup `{p.cfg['setup']}` {how} in {short_path(p, path)}", lines, why)
+            raise SetupFailed(f"setup `{clip(p.cfg['setup'], 60)}` {how} in {short_path(p, path)}", lines, why)
+
+
+def clip(text, n):
+    """`text` cut to `n` characters with "…": a long chained `setup` would fill the phone's first line."""
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
 
 TIMED_OUT = "out of time"  # run_limited's reason when `until` passes
@@ -192,6 +198,7 @@ class Pilot(Desk, Periodic):
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.skip, self.merged, self.failed = set(), [], []
+        self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
         self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
@@ -343,6 +350,7 @@ class Pilot(Desk, Periodic):
             return False
         if aside:
             self.skip.add(tid)
+            self.aside[tid] = f"on trial: its sessions died ({error})"
             self.log(f"  {label}: {own[0]} sessions died ({error}); set aside while another ticket runs: if its "
                      "session dies too, the run stops")
             return False
@@ -375,6 +383,7 @@ class Pilot(Desk, Periodic):
     def set_aside(self, tid, error):
         """A ticket whose own sessions keep dying while others' don't: the rest of the run goes on without it."""
         self.skip.add(tid)
+        self.aside[tid] = f"its sessions kept dying: {error}"
         self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work")
         fix = next((advice for text, advice in SELF_INFLICTED if text in error.lower()), "")
         push(f"Set aside: {self.name(tid)}", f"Its sessions died {self.p.ap['retries'] + 1} times ({error}) while "
@@ -385,6 +394,7 @@ class Pilot(Desk, Periodic):
         """A worker run stopped at a limit of its own (the time box, max turns or budget): the ticket is too big for
         one run as it stands, so the run goes on without it and the phone says which limit and what to change."""
         self.skip.add(tid)
+        self.aside[tid] = f"hit {limit}"
         self.log(f"{tid}: the run hit {limit}; set aside")
         push(f"Set aside: {self.name(tid)}", f"Its run hit {limit}. {fix} Its branch is kept.", 3, "hourglass")
 
@@ -463,7 +473,14 @@ class Pilot(Desk, Periodic):
             if killed == "time" and now() < self.end() - timedelta(minutes=5):
                 self.set_aside_limit(tid, f"the {self.a.ticket_hours:g}-hour limit for one run",
                                      "Split the ticket, or raise ticket_hours.")
-            elif killed.startswith("max "):  # out of its own turns or budget: the ticket's doing, like the time box
+            elif killed == "time":  # the run ends in minutes: its summary says so, and the next run resumes it
+                self.aside[tid] = "stopped at the deadline mid-run; the next run resumes its branch"
+                self.log(f"{tid}: the worker run was stopped at the deadline")
+            elif killed == "max turns":  # out of its own turns or budget: the ticket's doing, like the time box
+                self.set_aside_limit(tid, "its max turns", "windvane sets none, so it's the Claude CLI's (its "
+                                     "default, or the project's Claude settings in .claude/): raise it there, or "
+                                     "split the ticket.")
+            elif killed.startswith("max ") or killed == "dollar budget":
                 self.set_aside_limit(tid, f"its {killed}", "Split the ticket.")
             return
         m = last_match(RESULT_RE, text)
@@ -478,6 +495,7 @@ class Pilot(Desk, Periodic):
             self.log(f"{tid}: partial ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
                 self.skip.add(tid)
+                self.aside[tid] = f"{self.partials[tid]} runs in a row ran out of time"
                 push(f"Set aside: {self.name(tid)}", f"{self.partials[tid]} runs in a row ran out of time. Left: {rest}",
                      3, "hourglass")
             return
@@ -1339,6 +1357,8 @@ class Pilot(Desk, Periodic):
                      ("Status=status", "Stop=stop"))
             elif not ready:
                 self.stop_reason = self.halt or self.stop_check()
+                if self.stop_reason == "deadline" and not restarted:  # cut short during setup
+                    self.stop_reason = "deadline reached during setup; nothing ran"
             if ready:
                 push_held(p)  # a plan a failed push kept locally, once a run: the network may be back
                 self.loop()
@@ -1387,6 +1407,7 @@ class Pilot(Desk, Periodic):
                    + (f" and {len(picks) - 6} more" if len(picks) > 6 else "") + ". "
                    "To change one: windvane answer <ID> <letter>.\n" if picks else "")
                 + f"Failed: {names(self.failed)}.\n"
+                + "".join(f"Set aside: {self.name(t)} ({why}).\n" for t, why in self.aside.items())
                 + (f"{self.usage.text()}." if self.usage.five is not None else "")
                 + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else ""))
 
