@@ -205,7 +205,9 @@ def cmd_status(a, p):
     on = running(p)
     if a.line:
         last = (last_log(p) or [""])[0][11:]
-        extra = "".join(f". {x}" for x in (actions.line(p), f"Last: {last}" if last else "") if x)
+        held = len(driver.held_lines(p))
+        extra = "".join(f". {x}" for x in (held and f"{held} held-back change{'s' * (held > 1)} not pushed",
+                                           actions.line(p), f"Last: {last}" if last else "") if x)
         print(f"{p.display}: autopilot {'running' if on else 'off'}{extra}")
         return
     print(f"autopilot: {('running in tmux ' + p.tmux if in_tmux(p) else 'running') if on else 'not running'}")
@@ -217,7 +219,13 @@ def cmd_status(a, p):
         print(f"slot {slot}: {tid}")
     for tid, q in st.get("questions", {}).items():
         print(f"waiting on you: {tid}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
-    print("\n".join(last_log(p, 12)))
+    print("\n".join(held_text(p) + last_log(p, 12)))
+
+
+def held_text(p):
+    """The held branches' lines and, after them, what happens next; nothing when none waits."""
+    lines = driver.held_lines(p)
+    return lines + ["  (each run's start tries these again)"] * bool(lines)
 
 
 def cmd_overview(a, p):
@@ -241,6 +249,7 @@ def cmd_overview(a, p):
         lines.append(line)
     lines.append(check_line(p, recs))
     lines.append((spent := actions.line(p)) and f"{spent} this month.")
+    lines += held_text(p)
     print("\n".join(filter(None, lines + overview_extra(p))))
 
 

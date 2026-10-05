@@ -1511,16 +1511,22 @@ def push_branch(p, cd, branch, tries=2):
             return branch
     git(cd, "branch", "-f", branch, "HEAD")
     log(p, f"push to {branch} refused ({' '.join(res.stderr.split())[:200]}); kept only locally on {branch}")
-    hold(p, branch, "push")
-    return f"the local branch {branch} ({push_refusal(res.stderr, p.cfg['forge'])})"
+    why = push_refusal(res.stderr, p.cfg["forge"])
+    hold(p, branch, "push", why)
+    return f"the local branch {branch} ({why})"
 
 
-def hold(p, branch, how):
+def hold(p, branch, how, why=""):
     """Note a branch a failed push kept locally, for `push_held`: "push" it, or "land" it (a merge stays a merge).
-    Only branches noted here are ever pushed again, so a user's own copy of a closed plan never comes back."""
+    Only branches noted here are ever pushed again, so a user's own copy of a closed plan never comes back. The
+    refusal's reason goes beside it (held_why.json, the newest wins), for `status` to show while it waits."""
     held = load_json(p.state / "held.json", {})
     if held.get(branch) != "land":
-        save_json(p.state / "held.json", {**held, branch: how})
+        held = {**held, branch: how}
+        save_json(p.state / "held.json", held)
+    if why:
+        reasons = load_json(p.state / "held_why.json", {})
+        save_json(p.state / "held_why.json", {b: w for b, w in {**reasons, branch: why}.items() if b in held})
 
 
 # What a refused push's stderr says, first match wins, with its next step: a login problem is fixed by logging in, a
@@ -1623,13 +1629,30 @@ def held_branches(p):
     name counts as pushed), with no PR on github (one pushed by hand, its PR closed and branch deleted, stays
     closed). Notes for any other branch are dropped."""
     held, root = load_json(p.state / "held.json", {}), p.main_root()
-    unmerged = set(gout(root, "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split())
-    waiting = {b: how for b, how in held.items() if b in unmerged and not gout(root, "branch", "-r", "--contains", b)
-               and not (p.cfg["forge"] == "github" and net.sh(root, "gh", "pr", "list", "--head", b, "--state", "all",
-                                                                 "--json", "number", "-q", ".[].number"))}
+    waiting = {b: how for b, how in held_here(p, held).items()
+               if not (p.cfg["forge"] == "github" and net.sh(root, "gh", "pr", "list", "--head", b, "--state", "all",
+                                                                "--json", "number", "-q", ".[].number"))}
     if waiting != held:
         save_json(p.state / "held.json", waiting)
     return waiting
+
+
+def held_here(p, held):
+    """`held`'s branches that are still unmerged and on no remote branch: git alone, no network."""
+    if not held:  # the usual case: no git call for `status`
+        return {}
+    root = p.main_root()
+    unmerged = set(gout(root, "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split())
+    return {b: how for b, how in held.items() if b in unmerged and not gout(root, "branch", "-r", "--contains", b)}
+
+
+def held_lines(p):
+    """One line per held branch with the last refusal's reason and next step, for `status` and `overview`; read
+    only (no `gh`, no write: `held_branches` prunes at the next run's start)."""
+    reasons = load_json(p.state / "held_why.json", {})
+    return [f"held back, not pushed: {b} ({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:60]}): "
+            f"{reasons.get(b) or 'push failed; see the windvane log'}"
+            for b in held_here(p, load_json(p.state / "held.json", {}))]
 
 
 def push_held(p):
@@ -1651,12 +1674,22 @@ def push_held(p):
         if branches:
             clean_detach(p, p.plan_dir, p.upstream)
         if pushed:  # one push for them all
-            push(f"{len(pushed)} held-back change{'s' * (len(pushed) > 1)} pushed", "\n".join(pushed), 3, "memo")
+            push(*held_push(pushed), 3, "memo")
         return len(pushed)
 
 
+def held_push(pushed):
+    """The title and body of `push_held`'s one push, from (line, needs the user) pairs: the ones that need the user
+    (not merged, no PR) come first, under a title that says so, so "pushed" never hides them."""
+    todo, done = [l for l, need in pushed if need], [l for l, need in pushed if not need]
+    if not todo:
+        return f"{len(done)} held-back change{'s' * (len(done) > 1)} pushed", "\n".join(done)
+    title = f"{len(todo)} held-back change{'s' * (len(todo) > 1)} pushed, not merged"
+    return title + (f"; {len(done)} more pushed" if done else ""), "\n".join(todo + ["", "Pushed:"] * bool(done) + done)
+
+
 def push_one_held(p, cd, branch, how):
-    """Where `branch` went, as a line for the phone; "" when it stays local."""
+    """Where `branch` went, as a line for the phone and whether it needs the user; "" when it stays local."""
     if not clean_detach(p, cd, branch):
         return ""
     title, body = gout(cd, "log", "-1", "--format=%s"), gout(cd, "log", "-1", "--format=%b")
@@ -1673,10 +1706,11 @@ def push_one_held(p, cd, branch, how):
         return ""
     git(p.main_root(), "branch", "-D", branch)
     save_json(p.state / "held.json", {b: h for b, h in load_json(p.state / "held.json", {}).items() if b != branch})
+    no_pr = not to_land and p.cfg["forge"] == "github" and where == branch
     how = (("merged" if landed else "not merged; merge it by hand") if to_land
-           else "pushed; no PR opened, open one by hand" if p.cfg["forge"] == "github" and where == branch else "pushed")
+           else "pushed; no PR opened, open one by hand" if no_pr else "pushed")
     log(p, f"{branch}: held back, now on {where}, {how}")
-    return f"{title}: on {where}, {how}."
+    return f"{title}: on {where}, {how}.", no_pr or (to_land and not landed)
 
 
 def pending_ids(p):
@@ -1699,15 +1733,17 @@ def pending_ids(p):
 def closed_prs(p, branches):
     """Which of `branches` have PRs that were all closed unmerged; none off github or without `gh` (every branch
     counts). One query per branch rather than a list of recent PRs, so no limit drops an old closed plan; a branch
-    found closed is remembered in closed_plans.json and never asked about again (each query takes ~0.8 s, and the
-    closed ones pile up, since their paid-for branches are kept). A closed PR reopened later isn't noticed: its ids
-    stay free for new tickets until its line is taken out of that file."""
+    found closed is remembered in closed_plans.json and not asked about again (each query takes ~0.8 s, and the
+    closed ones pile up, since their paid-for branches are kept). One list of the open PRs per call notices a
+    reopened one: its branch leaves the file and claims its ids again, or a new plan would reuse them."""
     if p.cfg["forge"] != "github":
         return set()
     f = p.state / "closed_plans.json"
     known = set(load_json(f, []))
-    closed = known & set(branches)
-    for b in sorted(set(branches) - known):
+    reopened = set(net.sh(p.main_root(), "gh", "pr", "list", "--state", "open", "--limit", "1000", "--json",
+                          "headRefName", "-q", ".[].headRefName").split()) if known & set(branches) else set()
+    closed = (known - reopened) & set(branches)
+    for b in sorted(set(branches) - known - reopened):
         states = set(net.sh(p.main_root(), "gh", "pr", "list", "--head", b, "--state", "all", "--json", "state",
                             "-q", ".[].state").split())
         if states == {"CLOSED"}:

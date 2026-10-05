@@ -47,8 +47,8 @@ Options of `windvane run`:
 
 | Command | What it does |
 |---|---|
-| `windvane status [--line]` | Running or not, the slots, questions waiting for you, the log's tail. `--line`: one line. |
-| `windvane overview` | Where the project stands: tickets merged, underway, not started; critic scale health; then `overview_extra`'s output. |
+| `windvane status [--line]` | Running or not, the slots, questions waiting for you, a `held back, not pushed:` line per change a refused push kept on a local branch (with why and what to do), the log's tail. `--line`: one line, with the held-back count. |
+| `windvane overview` | Where the project stands: tickets merged, underway, not started; critic scale health; held-back changes, as in `status`; then `overview_extra`'s output. |
 | `windvane watch [-n 30] [-o 6]` | Follow the running sessions live: what each says, the commands it runs, their output (`-o` lines each, 0 hides output). |
 | `windvane stats [--days 7] [--by role\|ticket] [--wide]` | Tokens, turns and minutes per role or ticket, from the ledger, costliest first by weighted tokens (cache reads and output priced in), in 100 columns (`--wide` adds each run's starting context and what each turn re-reads, wider than 100 columns); runs that died or were killed for time, orphaned process groups killed, and by ticket the outcome and the cost per merged ticket with and without overhead. See [Token efficiency](tokens.md). |
 | `windvane stats --critic [--last 10] [--since <YYYY-MM-DD\|commit>]` | How the critic's scores spread over the last N tickets, and each check's yes rate (first head, any head), naming one to sharpen (always yes) or lower (never yes, except a dimension's top rung, rare by design) and any check id two dimensions share; on an old numeric scale, how often its cap checks were answered and lowered a score; `--since` keeps only verdicts at or after a date or a commit's author time (say, the one that changed `CALIBRATION.md`). |
