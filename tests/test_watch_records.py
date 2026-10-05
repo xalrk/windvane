@@ -177,7 +177,7 @@ class Sweep(unittest.TestCase):
         r = self.run_sweep(["# Title\nSome **bold** and `**literal**` text.", ten_columns(),
                             "```\nprint('**not a marker**')\n```"])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(r.stdout, "3 messages + 5 synthetic at widths 60,80,120: clean\n")
+        self.assertEqual(r.stdout, "3 messages + 6 synthetic at widths 60,80,120: clean\n")
 
     def test_leftover_markers_are_reported_with_their_place(self):
         r = self.run_sweep(["fine", "a stray ** and an unclosed `tick"], "--widths", "60")
@@ -185,7 +185,7 @@ class Sweep(unittest.TestCase):
         self.assertIn("20261004-000000-T-001.jsonl:3 @60: marker bold **\n", r.stdout)
         self.assertIn("20261004-000000-T-001.jsonl:3 @60: marker backtick\n", r.stdout)
         self.assertNotIn("stray", r.stdout, "the rendered line only with --show")
-        self.assertTrue(r.stdout.endswith("2 messages + 5 synthetic at widths 60: 1 marker backtick, 1 marker bold **\n"), r.stdout)
+        self.assertTrue(r.stdout.endswith("2 messages + 6 synthetic at widths 60: 1 marker backtick, 1 marker bold **\n"), r.stdout)
         shown = self.run_sweep(["a stray ** and an unclosed `tick"], "--show").stdout
         self.assertIn("\n    a stray ** and an unclosed `tick\n", shown)
 
@@ -197,8 +197,8 @@ class Sweep(unittest.TestCase):
         with mock.patch.object(watch, "clip_rendered", lambda parts, n, color: "fine\n" + "x" * 61):
             self.assertEqual(sweep.check(STATS, 60), [("clipped too wide (61)", "x" * 61)])
 
-    def test_an_empty_state_dir_is_an_error(self):
-        r = self.run_sweep([])
+    def test_an_empty_state_dir_with_no_synthetic_is_an_error(self):
+        r = self.run_sweep([], "--no-synthetic")
         self.assertEqual(r.returncode, 2)
         self.assertIn("no assistant messages", r.stdout)
 

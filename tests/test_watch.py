@@ -81,7 +81,7 @@ class Markdown(unittest.TestCase):
         self.assertEqual(watch.markdown("**the `x` file**", True),
                          ["\033[1mthe \033[0m\033[1;94mx\033[0m\033[1m file\033[0m"])
         self.assertEqual(watch.markdown("| a |\n|---|\n| `x|y` |", False), ["a", "───", "x|y"])
-        self.assertEqual(watch.markdown("a | b\n---", False), ["a | b", "─" * 40])  # a rule, not a table
+        self.assertEqual(watch.markdown("a | b\n---", False), ["a | b"])  # a setext heading, not a table
 
 
 class Show(unittest.TestCase):

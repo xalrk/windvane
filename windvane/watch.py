@@ -33,6 +33,7 @@ SPAN = re.compile(
 FENCE = re.compile(r"\s*(`{3,}|~{3,})\s*([^\s`]*)")
 HEADING = re.compile(r" {0,3}#{1,6}\s+(.*?)(\s+#+)?\s*$")
 RULE = re.compile(r" {0,3}([-*_])(\s*\1){2,}\s*$")
+SETEXT = re.compile(r" {0,3}(-+|=+)\s*$")  # under a paragraph line, makes it a heading (CommonMark)
 BULLET = re.compile(r"(\s*)[-*+]\s+(.*)")
 NUMBERED = re.compile(r"(\s*)(\d+[.)])\s+(.*)")
 QUOTE = re.compile(r"\s*>\s?(.*)")
@@ -246,14 +247,15 @@ def blocks(text, color, cols=0):
     """Assistant text as blocks of terminal lines, each line with whether it counts towards the clip: headings,
     lists, quotes, rules, fenced code and tables by line, the rest inline, wrapped to `cols` (0: not wrapped).
     A table is one block; blank lines and rules don't count. Code blocks get a dim gutter and their language, with
-    nothing inside them read as Markdown. Rules are drawn last, at `rule_width`."""
-    lines, out, i, fence, rules, tables = text.split("\n"), [], 0, None, [], set()
-    dim = frozenset({"dim"})
+    nothing inside them read as Markdown. A paragraph with `---` or `===` right under it is a heading, as CommonMark
+    has it (`---` after anything else is a rule). Rules are drawn last, at `rule_width`."""
+    lines, out, i, fence, rules, tables, para = text.split("\n"), [], 0, None, [], set(), []
+    dim, head = frozenset({"dim"}), frozenset({"b", "h"})
 
     def add(segs, lead=()):
         out.append([(paint(l, color), True) for l in wrap(segs, cols, lead)])
     while i < len(lines):
-        line = lines[i].rstrip()
+        line, was, para = lines[i].rstrip(), para, []  # was: the paragraph's lines just above, each one block
         m = FENCE.match(line)
         if fence:
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2):
@@ -272,8 +274,12 @@ def blocks(text, color, cols=0):
             tables.add(len(out))
             out.append(table(rows, rule, color, cols))
             continue
+        elif was and SETEXT.match(line):
+            del out[-len(was):]
+            for p in was:
+                add(inline(p.strip(), head))
         elif m := HEADING.match(line):
-            add(inline(m.group(1), frozenset({"b", "h"})))
+            add(inline(m.group(1), head))
         elif RULE.match(line):
             rules.append(len(out))
             out.append(None)
@@ -289,6 +295,7 @@ def blocks(text, color, cols=0):
             out.append([("", False)])
         else:
             add(inline(line))
+            para = was + [line]
         i += 1
     widths = [rule_width(out, r, tables, cols) for r in rules]  # all before any is drawn, which would hide it
     for r, w in zip(rules, widths):
@@ -296,24 +303,34 @@ def blocks(text, color, cols=0):
     return out
 
 
-def rule_width(out, r, tables, cols):
-    """The rule at `out[r]` as wide as the widest line of the block just above it and the block just below it (a
-    table, a paragraph, a list: the entries up to a blank line or another rule), at most `cols`, so two rules in one
-    message can differ. Just above a table, prose above the rule doesn't count: the rule then lines up with the
-    table's own rules (or a wider table's above it) instead of running on past them. Piped (no `cols`), or with
-    nothing beside it, it is 40 as before."""
+def beside(out, r, rules=(), tables=()):
+    """The widths of the lines of the block just above `out[r]` and of the block just below it (a table, a
+    paragraph, a list: the entries past blank lines, up to the next blank line or rule, a None or an index in
+    `rules`). Just above a table in `tables`, the block above is left out: a rule there lines up with the table.
+    `rule_width` sizes rules by it and tools/watch-sweep.py checks them by it, so the two can't drift apart."""
+    blank = lambda b: b is not None and [line for line, _ in b] == [""]
+
     def neighbour(step):
         j, found = r + step, []
-        while 0 <= j < len(out) and out[j] == [("", False)]:
+        while 0 <= j < len(out) and blank(out[j]):
             j += step
-        while 0 <= j < len(out) and out[j] is not None and out[j] != [("", False)]:
+        while 0 <= j < len(out) and out[j] is not None and j not in rules and not blank(out[j]):
             found.append(j)
             j += step
         return found
     above, below = neighbour(-1), neighbour(1)
     if any(j in tables for j in below) and not any(j in tables for j in above):
         above = []
-    widest = max((width(ANSI.sub("", line)) for j in above + below for line, _ in out[j]), default=0)
+    widths = lambda js: [width(ANSI.sub("", line)) for j in js for line, _ in out[j]]
+    return widths(above), widths(below)
+
+
+def rule_width(out, r, tables, cols):
+    """The rule at `out[r]` as wide as the widest line of the blocks `beside` it, at most `cols`, so two rules in
+    one message can differ, and a rule just above a table lines up with the table's own rules (or a wider table's
+    above it) instead of running on past them. Piped (no `cols`), or with nothing beside it, it is 40 as before."""
+    above, below = beside(out, r, tables=tables)
+    widest = max(above + below, default=0)
     return min(cols, widest or 40) if cols else 40
 
 
