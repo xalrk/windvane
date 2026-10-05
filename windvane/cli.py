@@ -227,9 +227,10 @@ FETCH_S = 10  # seconds `status` gives its fetch: a slow remote costs a moment, 
 def fetch_for_held(p):
     """One quick, silent fetch when a held change was pushed by hand, so one merged on the remote meanwhile (squashed
     too: `held_here`) drops off `status` without waiting for a run; no network otherwise, and a failed fetch leaves
-    the local view as it was."""
+    the local view as it was. `--prune`: a head branch deleted once merged mustn't stay as where the change is."""
     if any(on for *_, on in held_mod.held_now(p)):
-        net.call(["git", "fetch", "-q", p.remote], p.main_root(), FETCH_S, {**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        net.call(["git", "fetch", "-q", "--prune", p.remote], p.main_root(), FETCH_S,
+                 {**os.environ, "GIT_TERMINAL_PROMPT": "0"})
 
 
 # A log line about a held branch: `status --line` leaves it out, as the held count (or none, once it's gone) says more.

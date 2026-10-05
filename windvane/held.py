@@ -2,6 +2,7 @@
 locally (held.json) and pushing it again at a later run's start, and landing the driver's own changes on main."""
 import fcntl
 import re
+import subprocess
 import time
 
 from . import actions, net
@@ -198,13 +199,36 @@ def held_here(p, held):
 def main_has(root, upstream, branch):
     """Whether `upstream` already holds `branch`'s change though git doesn't count it merged: a squash or rebase merge
     (GitHub's, or a `git merge --squash`) makes new commits. Merging the branch in would change nothing; before git
-    2.38 (no `merge-tree --write-tree`), `git cherry` finds a rebased or one-commit squashed change. When neither can
-    tell, it isn't landed: a change kept listed costs a line, a dropped one is lost."""
+    2.38 (no `merge-tree --write-tree`), `git cherry` finds a rebased or one-commit squashed change and `squashed_on`
+    a squash of several. When none can tell, it isn't landed: a change kept listed costs a line, a dropped one is
+    lost."""
     r = git(root, "merge-tree", "--write-tree", upstream, branch)
     if r.returncode in (0, 1):  # 1: the merge conflicts, so main lacks some of it
         return r.returncode == 0 and r.stdout.split()[:1] == [gout(root, "rev-parse", f"{upstream}^{{tree}}")]
     marks = [line[:1] for line in gout(root, "cherry", upstream, branch).splitlines()]
-    return bool(marks) and "+" not in marks
+    return (bool(marks) and "+" not in marks) or squashed_on(root, upstream, branch)
+
+
+SQUASH_WALK = 200  # upstream commits `squashed_on` reads at most, so a long-lived repo doesn't make `status` slow
+
+
+def squashed_on(root, upstream, branch):
+    """Whether one of the last SQUASH_WALK upstream commits since the merge-base is `branch`'s whole change (the same
+    patch-id): a squash of several commits, which `git cherry` misses as it compares them one by one. A change to a
+    binary file can't tell: before git 2.39 its patch-id leaves the content out, so any commit to that file matches."""
+    base = gout(root, "merge-base", upstream, branch)
+    if not base or re.search(r"^-\t-\t", gout(root, "diff", "--numstat", base, branch), re.M):  # a binary file
+        return False
+    change = patch_ids(root, "diff", base, branch)
+    return bool(change) and change[0] in patch_ids(
+        root, "log", "-p", "--no-merges", f"-{SQUASH_WALK}", "--format=commit %H", f"{base}..{upstream}")
+
+
+def patch_ids(root, *args):
+    """The stable patch-ids of git `args`' diff output, one per patch (bytes throughout: a diff needn't be UTF-8)."""
+    out = subprocess.run(["git", *args], cwd=root, capture_output=True).stdout
+    ids = subprocess.run(["git", "patch-id", "--stable"], cwd=root, input=out, capture_output=True).stdout
+    return [line.split()[0].decode() for line in ids.splitlines()]
 
 
 def held_now(p):
