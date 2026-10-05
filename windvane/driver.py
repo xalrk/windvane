@@ -1611,15 +1611,18 @@ def push_held(p):
         branches = held_branches(p)
         if branches:
             ensure_worktree(p, p.plan_dir, setup=False)
-        pushed = sum(push_one_held(p, p.plan_dir, b) for b in branches)
+        pushed = list(filter(None, (push_one_held(p, p.plan_dir, b) for b in branches)))
         if branches:
             clean_detach(p, p.plan_dir, p.upstream)
-        return pushed
+        if pushed:  # one push for them all
+            push(f"{len(pushed)} held-back change{'s' * (len(pushed) > 1)} pushed", "\n".join(pushed), 3, "memo")
+        return len(pushed)
 
 
 def push_one_held(p, cd, branch):
+    """Where `branch` went, as a line for the phone; "" when it stays local."""
     if not clean_detach(p, cd, branch):
-        return False
+        return ""
     title, body = gout(cd, "log", "-1", "--format=%s"), gout(cd, "log", "-1", "--format=%b")
     held = load_json(p.state / "held.json", [])
     to_land = branch in held or not branch.startswith("plan-")  # a desk plan without --merge only pushes
@@ -1632,13 +1635,12 @@ def push_one_held(p, cd, branch):
                            "--body", body[-6000:]) or where
     if is_local(where):
         log(p, f"{branch}: still not pushed{where.removeprefix(f'the local branch {branch}')}")
-        return False
+        return ""
     git(p.main_root(), "branch", "-D", branch)
     save_json(p.state / "held.json", [b for b in held if b != branch])
     how = ("merged" if landed else "not merged; merge it by hand") if to_land else "pushed"
     log(p, f"{branch}: held back, now on {where}, {how}")
-    push("held-back change pushed", f"{title}: on {where}, {how}.", 3, "memo")
-    return True
+    return f"{title}: on {where}, {how}."
 
 
 def pending_ids(p):

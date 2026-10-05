@@ -60,7 +60,7 @@ why and what to do:
 - "network down; the next run pushes it again": nothing to do.
 - "push failed; see the windvane log": the log (`windvane status`) has git's own words.
 
-Each run (and each `windvane plan`) tries such a branch once more at its start and pushes "held-back change pushed"
+Each run (and each `windvane plan`) tries such a branch once more at its start and pushes "1 held-back change pushed" (one push for them all)
 when it goes through; while it still fails, only the log says so. The local branch goes once the remote has it.
 
 **A plan PR I closed holds ticket ids.**

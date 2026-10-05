@@ -112,7 +112,7 @@ class HeldPlans(Base):
         self.assertEqual(driver.push_held(self.p), 1)
         self.s.git("fetch", "-q", "origin")
         self.assertIn(".windvane/tickets/T-002.md", self.s.git("ls-tree", "-r", "--name-only", "origin/main"))
-        self.assertEqual(self.pushes[-1][0], "held-back change pushed")
+        self.assertEqual(self.pushes[-1][0], "1 held-back change pushed")
         self.assertRegex(self.pushes[-1][1], r"^Plan: 1 ticket \(.*\): on main, merged\.$")
         self.assertNotIn(branch, json.loads((self.p.state / "held.json").read_text()))
 
