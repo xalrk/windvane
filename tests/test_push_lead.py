@@ -18,7 +18,8 @@ class SetAsideFix(Base):
         [(_, msg)] = self.aside()
         first, *rest = msg.split("\n")
         self.assertEqual(first, "Sessions died 4×: prompt is too long. Split the ticket, or trim what it reads.")
-        self.assertIn(self.ERROR, "\n".join(rest))
+        self.assertEqual(rest[0], "The error: API Error 400: Prompt is too long: 212000 tokens > 200000.")
+        self.assertIn(f"({self.ERROR})", (self.p.state / "autopilot.log").read_text())  # the log keeps it whole
         self.assertIn("Branch kept, run goes on.", "\n".join(rest))
 
     def test_an_unmatched_error_keeps_todays_push(self):

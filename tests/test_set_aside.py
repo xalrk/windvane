@@ -132,7 +132,7 @@ class LoneTicket(Base):
         pilot.run(now() + timedelta(hours=2))
         calls = [l for l in (self.s.tmp / "calls.jsonl").read_text().splitlines() if "windvane worker" in l]
         self.assertEqual(len(calls), self.p.ap["retries"] + 1)
-        self.assertEqual(pilot.stop_reason, "4 sessions in a row died (API Error: 529 Overloaded)")
+        self.assertEqual(pilot.stop_reason, "4 sessions in a row died (API Error 529: Overloaded)")
         self.assertEqual(self.aside(), [])  # nothing to tell it from a broken API: no set-aside, a stop
 
 
