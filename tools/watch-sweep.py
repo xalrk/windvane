@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render every assistant message in a state dir's session logs the way `windvane watch` does, at a few widths, and
 report what a renderer change broke: lines wider than the width, crashes, and Markdown markers left in the text.
+Each message is checked whole and as `watch` prints it, clipped; a finding only the clip has is marked `clipped`.
 
   watch-sweep.py STATE_DIR [--widths 60,80,120] [--show]
 
@@ -45,21 +46,32 @@ def messages(state):
 
 
 def check(text, cols):
-    """(kind, rendered line) for each problem in one message at one width."""
+    """(kind, rendered line) for each problem in one message at one width, whole and as `watch` clips it."""
     found = []
     for color in (False, True):
         try:
-            lines = watch.markdown(text, color, cols)
+            parts = watch.blocks(text, color, cols)
+            whole = [line for b in parts for line, _ in b]
+            clipped = watch.clip_rendered(parts, watch.TEXT_LINES, color).split("\n")
         except Exception:
             return [("crash", traceback.format_exc().strip().splitlines()[-1])]
-        for line in lines:
-            plain = ANSI.sub("", line)
-            if watch.width(plain) > cols:
-                found.append((f"too wide ({watch.width(plain)})", plain))
-            if color and not line.startswith(FENCED):
-                prose = ANSI.sub("", CODE_TEXT.sub("", line))
-                found += [(f"marker {name}", plain) for name, rx in MARKERS if rx.search(prose)]
+        seen = problems(whole, color, cols)
+        found += seen + [("clipped " + kind, line) for kind, line in problems(clipped, color, cols) if (kind, line)
+                         not in seen]
     return list(dict.fromkeys(found))  # once each, though both colourings may find it
+
+
+def problems(lines, color, cols):
+    """(kind, plain line) for each rendered line wider than `cols` or, coloured, with a marker left in its prose."""
+    found = []
+    for line in lines:
+        plain = ANSI.sub("", line)
+        if watch.width(plain) > cols:
+            found.append((f"too wide ({watch.width(plain)})", plain))
+        if color and not line.startswith(FENCED):
+            prose = ANSI.sub("", CODE_TEXT.sub("", line))
+            found += [(f"marker {name}", plain) for name, rx in MARKERS if rx.search(prose)]
+    return found
 
 
 def main(argv=None):
