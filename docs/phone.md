@@ -55,8 +55,8 @@ Set aside: Retry with backoff (T-016) (hit its max turns).
 
 A **Set aside** push says which limit a ticket's run hit and where to change it: the `ticket_hours` time box, its
 max turns (windvane sets none, so it's the Claude CLI's default or the project's Claude settings in `.claude/`), or its
-dollar budget. The summary lists every set-aside ticket with why, including one stopped at the deadline mid-run,
-which the next run resumes. A `setup` that fails is quoted up to 60 characters; a deadline reached during setup reads
+dollar budget. The summary lists every set-aside ticket with why, and on its own line the tickets stopped at the
+deadline mid-run, which the next run resumes. A `setup` that fails is quoted up to 60 characters; a deadline reached during setup reads
 "deadline reached during setup; nothing ran".
 
 A **question** push carries buttons for options A and B and **Answer on computer**. Tap a letter to answer; options
