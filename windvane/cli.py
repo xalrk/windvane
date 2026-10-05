@@ -249,9 +249,17 @@ def check_line(p, recs):
         return (f"Critic scale is the old numeric kind; to convert it, rewrite {p.rubric_rel} as ladders of yes/no "
                 f"checks, like {HOME / 'templates/CRITIC.md'}.")
     rates = critic_mod.rates(recs)
-    said = [f"{d}.{cid} {a}" for d, cs in lad.items() for _, cid, _ in cs
-            if cid in rates and (a := critic_mod.advice(*rates[cid]))]
-    return f"Critic checks, last 10 tickets: {'; '.join(said)}." if said else ""
+    said = [f"{d}.{cid} {a}" for d, cs in lad.items() for r, cid, _ in cs
+            if cid in rates and (a := critic_mod.advice(*rates[cid], top=r == cs[-1][0]))]
+    return "\n".join(filter(None, [shared_line(p, lad),
+                                    f"Critic checks, last 10 tickets: {'; '.join(said)}." if said else ""]))
+
+
+def shared_line(p, lad):
+    """A check id two dimensions share: the critic answers by id, so one answer would score both."""
+    dup = [f"{cid} ({', '.join(ds)})" for cid, ds in critic_mod.shared(lad).items()]
+    return (f"Critic scale reuses check ids, so one answer scores both: {'; '.join(dup)}; rename one in "
+            f"{p.rubric_rel}." if dup else "")
 
 
 def overview_extra(p, limit=30, most=15):
@@ -559,6 +567,8 @@ def critic_stats(a, p):
               f"{c['capped']}")
     for t, rs in c["tickets"]:
         print(f"  {t:8} {' → '.join(g(r['score']) for r in rs):14} {rs[-1].get('step', '')}")
+    if line := shared_line(p, lad):
+        print(line)
     rates = critic_mod.rates(recs, a.last)
     if lad and rates:
         print("checks, yes on the first head / on any head, of the tickets that touched them:")
@@ -567,7 +577,7 @@ def critic_stats(a, p):
                 if cid in rates:
                     first, ever, k = rates[cid]
                     print(f"  {d + ' ' + g(r):9} {cid:10} {first:>2}/{k:<2} {ever:>2}/{k:<2} "
-                          f"{critic_mod.advice(first, ever, k)}".rstrip())
+                          f"{critic_mod.advice(first, ever, k, top=r == cs[-1][0])}".rstrip())
 
 
 def critic_since(p, when):
