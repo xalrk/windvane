@@ -82,6 +82,13 @@ if system.startswith("# windvane worker run"):
         sh("git", "switch", branch)
     else:
         sh("git", "switch", "-c", branch, "origin/main")
+        # FAKE_BARRIER=n: the first n new branches all fork the same main, however late a loaded machine starts one
+        barrier = int(os.environ.get("FAKE_BARRIER", "0"))
+        if barrier and log:
+            open(log + ".forked", "a").write(tid + "\n")
+            end = time.time() + 60
+            while len(open(log + ".forked").read().split()) < barrier and time.time() < end:
+                time.sleep(0.05)
     resolve_only = os.environ.get("FAKE_RESOLVE_ONLY") and "conflicts with" in prompt  # merges main, nothing more
     if not resolve_only:
         with open(f"{tid}.txt", "a") as f:

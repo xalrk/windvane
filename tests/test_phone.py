@@ -114,6 +114,7 @@ class PhoneTest(unittest.TestCase):
         self.c = {"enabled": True, "server": self.ntfy.url, "topic": phone.new_topic(),
                   "reply_topic": phone.new_topic()}
         phone.save_conf(self.c)
+        phone.mark_now()  # as `phone setup` does: else `listen` marks its own start, missing a reply a second older
         phone.git_names.cache_clear()  # git's name comes from this sandbox's HOME
         for k, v in (("PUMP_EVERY", 0), ("RETRY", 0.1), ("_last_pump", 0.0)):
             self.addCleanup(setattr, phone, k, getattr(phone, k))
