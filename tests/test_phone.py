@@ -245,7 +245,7 @@ class Replies(PhoneTest):
         self.ask("sandbox-t-002")
         self.phone_sends("c")
         self.phone_sends("later sandbox-t-001")
-        phone.listen(once=True)
+        self.assertEqual(phone.listen(once=True), 2)  # it read both (False: the lock was taken or the read failed)
         self.assertEqual(phone.answer("sandbox-t-002"), "ANSWER C\tgreen")
         self.assertEqual(phone.answer("sandbox-t-001"), "LATER")
 
