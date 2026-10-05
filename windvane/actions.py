@@ -17,6 +17,7 @@ import math
 import os
 import shlex
 import shutil
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -40,6 +41,7 @@ DENY = [*(f"Bash(gh {verb}*)" for verb in ("workflow run", "workflow enable", "r
         "Bash(gh api *dispatches*)", "Bash(gh api *rerun*)", "Bash(gh api */enable*)",
         *(f"Bash(gh api *{a}*{b}*)" for flag in ("-X", "--method")
           for a, b in ((flag, "/actions/"), ("/actions/", flag)))]
+GUARD = "windvane gh guard"  # in the wrapper's first lines: how a guard is told from the real gh
 
 
 def cache_file():
@@ -381,6 +383,104 @@ def skip_hooks(p, wd):
     return folder
 
 
+# The worker's `gh`: the DENY rules see only the command as typed, so `env gh …`, a script or a subprocess get past
+# them; this sees every call. Standard library only, as it runs on whatever python ran the driver.
+GUARD_SCRIPT = r"""
+import os, sys
+VALUE = {"-R", "--repo", "-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input",
+         "-q", "--jq", "-t", "--template", "-p", "--preview", "--hostname", "--cache"}
+FIELDS = ("-f", "-F", "--field", "--raw-field", "--input")
+
+
+def words(a):
+    # The positional words, as gh finds its command: flags dropped, and the values of those that take one.
+    out, skip = [], False
+    for i, x in enumerate(a):
+        if x == "--":
+            return out + a[i + 1:]
+        if skip:
+            skip = False
+        elif x.startswith("-"):
+            skip = x in VALUE
+        else:
+            out.append(x)
+    return out
+
+
+def method(a):
+    # gh api's method: -X/--method if given, else POST when it sends fields (-f, -F, --input), else GET.
+    m, fields = "", False
+    for i, x in enumerate(a):
+        if x in ("-X", "--method"):
+            m = a[i + 1] if i + 1 < len(a) else m
+        elif x.startswith("--method="):
+            m = x.split("=", 1)[1]
+        elif x.startswith("-X"):
+            m = x[2:].lstrip("=")
+        fields = fields or x.startswith(tuple(f + "=" for f in FIELDS)) or x in FIELDS or (
+            x[:2] in ("-f", "-F") and not x.startswith("--"))
+    return (m or ("POST" if fields else "GET")).upper()
+
+
+def refused(a):
+    w = words(a)
+    if w[:1] == ["workflow"] and w[1:2] in (["run"], ["enable"]) or w[:2] == ["run", "rerun"]:
+        return True
+    if w[:1] == ["alias"] and w[1:2] in (["set"], ["import"]):  # an alias could hide a refused command
+        return True
+    path = w[1] if w[:1] == ["api"] and len(w) > 1 else ""
+    return bool(path) and (any(s in path for s in ("dispatches", "rerun", "/enable"))
+                           or "actions/" in path and method(a) != "GET")
+
+
+a = sys.argv[1:]
+if refused(a):
+    sys.exit("windvane: workers don't start, re-run or enable GitHub workflows (or add gh aliases); "
+             "`windvane ci [workflow]` starts one within the month's Actions minutes.")
+if not REAL:
+    print("gh: not found (windvane's guard found no gh on PATH when the session started)", file=sys.stderr)
+    sys.exit(127)
+os.execv(REAL, [REAL, *a])
+"""
+
+
+def is_guard(f):
+    try:
+        with open(f, "rb") as fh:
+            return GUARD.encode() in fh.read(200)
+    except OSError:
+        return False
+
+
+def real_gh():
+    """The first gh on PATH that isn't a guard, or None. `windvane ci` runs as a worker's command, under the guard's
+    PATH: it starts its workflow with this, which is the guard dir taken off PATH (any project's, by what the file
+    says), not a path the guard recorded, so it needs nothing from the session's state and works the same at the
+    desk. Only that one call: the rest of windvane's gh calls, and the commands it runs for the session (`check`,
+    `bg`, `heavy`), stay behind the guard."""
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        f = Path(d, "gh")
+        if d and f.is_file() and os.access(f, os.X_OK) and not is_guard(f):
+            return str(f)
+    return None
+
+
+def gh_guard(p):
+    """Environment for a worker session: on forge github, PATH led by a `gh` that refuses to start, re-run or enable
+    a workflow and passes everything else to the real gh, unchanged. On with or without a budget: workflows run only
+    by hand (`windvane ci`) is a rule of windvane, not of the budget."""
+    if p.cfg["forge"] != "github":
+        return {}
+    folder = p.state / "gh-guard"
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / f".gh.{os.getpid()}.{threading.get_ident()}"  # parallel slots write it at once: whole or not at all
+    tmp.write_text(f"#!{sys.executable}\n# {GUARD}: workers never start, re-run or enable a GitHub workflow.\n"
+                   f"REAL = {real_gh()!r}\n{GUARD_SCRIPT}")
+    tmp.chmod(0o755)
+    os.replace(tmp, folder / "gh")
+    return {"PATH": f"{folder}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
 def ci(p, name="", ref="", dry=False):
     """`windvane ci [workflow]`: start a workflow with `gh workflow run`, but only when this month's minutes plus its
     estimate (its last finished run's, rounded up) stay within the cap. Prints what was used and what's left; returns
@@ -427,7 +527,7 @@ def ci(p, name="", ref="", dry=False):
     if dry:
         print(f"Dry run: would run {' '.join(cmd)}")
         return 0
-    r = net.call(cmd, cd)
+    r = net.call([real_gh() or "gh", *cmd[1:]], cd)
     if r.returncode:
         print(f"windvane ci: gh workflow run failed: {' '.join((r.stderr or r.stdout).split())[:300]}")
         return 1

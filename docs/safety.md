@@ -46,6 +46,15 @@ Every session gets its rules (`prompts/*.md`) and the ticket in its prompt, and 
 line the driver acts on. Product calls are never a session's to make: they become questions for you (see
 [Concepts](concepts.md#questions-and-quiet-times)).
 
+### Workflows run only by hand
+
+On forge `github`, every worker session's PATH starts with a `gh` wrapper from the state dir. It refuses `gh workflow
+run` and `enable`, `gh run rerun`, `gh alias set` (an alias could hide one) and `gh api` calls that start, re-run or
+enable a workflow or write under `/actions/`, however they're made (`env gh …`, a script, a subprocess), with one line
+pointing to `windvane ci`; everything else goes to the real `gh` unchanged. It's on with or without an Actions budget:
+workflows start only through `windvane ci`. The worker's deny rules catch the plain forms first. A session could still
+call the real `gh` by its full path; for a hard stop, log `gh` in with a token that has no Actions write permission.
+
 ## What only the driver does
 
 - **Merging.** The reviewer has no merge or push rights. The driver merges `main` into the ticket's head in its own
