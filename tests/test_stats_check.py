@@ -109,7 +109,9 @@ class CheckStats(unittest.TestCase):
     def test_the_wide_note_names_the_wide_tables_width(self):
         for by in ("role", "ticket"):
             wide = self.cli("stats", "--by", by, "--wide").splitlines()[0]
-            self.assertIn(f"(--wide, {len(wide)} columns, adds base", self.cli("stats", "--by", by))
+            note = [l for l in self.cli("stats", "--by", by).splitlines() if l.startswith("(--wide")]
+            self.assertEqual(note, [f"(--wide, {len(wide)} columns, adds base and cached/turn: what a run starts with "
+                                    "and each turn re-reads.)"])  # one line: it fits the default table's 100
             self.assertGreater(len(wide), 100)
 
 

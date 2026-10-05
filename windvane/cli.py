@@ -509,8 +509,8 @@ def session_stats(a, p, rows, swept=0, checks=()):
         note("(base: a run's first-turn context, \"-\" for runs logged before windvane kept it; cached/turn: what "
              "each turn re-reads, base plus what the run has added.)")
     else:
-        note(f"(--wide, {len(stats_header(a.by, outcome, True))} columns, adds base and cached/turn: the context each "
-             "run starts with and each turn re-reads.)")
+        note(f"(--wide, {len(stats_header(a.by, outcome, True))} columns, adds base and cached/turn: what a run "
+             "starts with and each turn re-reads.)")
 
 
 def lost_parts(died, killed):
