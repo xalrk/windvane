@@ -2,7 +2,8 @@
 
 windvane is the only thing that spends the user's Actions minutes, so it counts them itself instead of asking the
 billing API (which needs gh's `user` scope): every job that started this calendar month (UTC) in the login's repos,
-whichever month its run was created in (a re-run is billed when it runs), each rounded up to the minute, times 10 on macOS runners and 2 on Windows ones; self-hosted runners are free.
+whichever month its run was created in (a re-run is billed when it runs), each rounded up to the minute, times 10
+on macOS runners and 2 on Windows ones; self-hosted runners are free.
 A desk count done this way matched GitHub's own figure. A running job counts up to now, a cancelled one up to its end.
 
 Off unless `.windvane/config.toml` sets `actions_minutes` (the plan's monthly minutes); `actions_cap` (0.9) is the
@@ -36,7 +37,8 @@ SKIP = "[skip ci]"
 DENY = [*(f"Bash(gh {verb}*)" for verb in ("workflow run", "workflow enable", "run rerun")),
         "Bash(gh workflow * run *)", "Bash(gh workflow * enable *)", "Bash(gh run * rerun*)",
         "Bash(gh api *dispatches*)", "Bash(gh api *rerun*)", "Bash(gh api */enable*)",
-        *(f"Bash(gh api *{a}*{b}*)" for flag in ("-X", "--method") for a, b in ((flag, "/actions/"), ("/actions/", flag)))]
+        *(f"Bash(gh api *{a}*{b}*)" for flag in ("-X", "--method")
+          for a, b in ((flag, "/actions/"), ("/actions/", flag)))]
 
 
 def cache_file():
@@ -195,7 +197,7 @@ def count_now(cd, cache, now):
         return None
     m, used = month(now), 0
     first = datetime.strptime(m, "%Y-%m").replace(tzinfo=timezone.utc)
-    oldest = (first - timedelta(days=RERUN_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")  # GitHub's own format: compares as text
+    oldest = (first - timedelta(days=RERUN_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")  # GitHub's format: compares as text
     for repo in names:
         # Newest created first, back to the oldest run that can still be re-run this month. The runs list filters by
         # `created` only (and stops at 1,000 runs then), not by when a run last ran, so last month's runs are read
@@ -314,7 +316,7 @@ def worker_git(p, wd):
         if p.name not in asked:
             asked.add(p.name)
             log(p, f"GitHub Actions at the cap and core.hooksPath is the project's: workers are asked for {SKIP}")
-        return {}, f"The month's GitHub Actions minutes are at the cap: end each commit message's first line with {SKIP}."
+        return {}, f"GitHub Actions minutes are at the month's cap: end each commit message's first line with {SKIP}."
     n = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
     return {"GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": "core.hooksPath",
             f"GIT_CONFIG_VALUE_{n}": str(skip_hooks(p, wd))}, ""
