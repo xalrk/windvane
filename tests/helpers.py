@@ -28,7 +28,8 @@ if log:
                             "tool_ms": os.environ.get("BASH_DEFAULT_TIMEOUT_MS"),
                             "ticket_env": os.environ.get("WINDVANE_TICKET"),
                             # the gh the Bash tool would run: after the session's env file, as Claude Code does
-                            "gh": sh("bash", "-c", '[ -n "$CLAUDE_ENV_FILE" ] && . "$CLAUDE_ENV_FILE"; command -v gh')})
+                            "gh": os.environ.get("CLAUDE_ENV_FILE") and sh(  # a bash only when there's a file
+                                "bash", "-c", '. "$CLAUDE_ENV_FILE"; command -v gh')})
                 + "\n")
 # FAKE_FAIL: what each session does in turn (ok, error, crash, quiet = no RESULT line); a trailing * repeats the last
 steps, step = os.environ.get("FAKE_FAIL", "").split(","), ""

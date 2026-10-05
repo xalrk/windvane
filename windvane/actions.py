@@ -387,50 +387,57 @@ def skip_hooks(p, wd):
 # them; this sees every call. Standard library only, as it runs on whatever python ran the driver.
 GUARD_SCRIPT = r"""
 import os, sys
-VALUE = {"-R", "--repo", "-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input",
-         "-q", "--jq", "-t", "--template", "-p", "--preview", "--hostname", "--cache"}
-FIELDS = ("-f", "-F", "--field", "--raw-field", "--input")
+SHORT = set("RXHfFqtp")  # gh's one-letter flags that take a value
+LONG = {"--repo", "--method", "--header", "--raw-field", "--field", "--input", "--jq", "--template", "--preview",
+        "--hostname", "--cache"}
+FIELDS = {"-f", "-F", "--field", "--raw-field", "--input"}  # what turns gh api into a POST
 
 
-def words(a):
-    # The positional words, as gh finds its command: flags dropped, and the values of those that take one.
-    out, skip = [], False
-    for i, x in enumerate(a):
+def parse(a):
+    # (positional words, [(flag, value)]) the way gh's flag parser reads them: a short group like -iXPOST is
+    # -i -X POST (a letter that takes a value takes the rest of the group, or the next argument), so no flag's
+    # value is taken for the command or the API path.
+    pos, flags, i = [], [], 0
+    while i < len(a):
+        x, i = a[i], i + 1
         if x == "--":
-            return out + a[i + 1:]
-        if skip:
-            skip = False
-        elif x.startswith("-"):
-            skip = x in VALUE
+            return pos + a[i:], flags
+        if x.startswith("--"):
+            name, eq, v = x.partition("=")
+            if not eq and name in LONG and i < len(a):
+                v, i = a[i], i + 1
+            flags.append((name, v))
+        elif x.startswith("-") and len(x) > 1:
+            for j, c in enumerate(x[1:], 2):
+                if c not in SHORT:
+                    flags.append(("-" + c, ""))
+                    continue
+                v = x[j:]
+                v = v[1:] if v[:1] == "=" and len(v) > 1 else v
+                if not v and i < len(a):
+                    v, i = a[i], i + 1
+                flags.append(("-" + c, v))
+                break
         else:
-            out.append(x)
-    return out
+            pos.append(x)
+    return pos, flags
 
 
-def method(a):
+def method(flags):
     # gh api's method: -X/--method if given, else POST when it sends fields (-f, -F, --input), else GET.
-    m, fields = "", False
-    for i, x in enumerate(a):
-        if x in ("-X", "--method"):
-            m = a[i + 1] if i + 1 < len(a) else m
-        elif x.startswith("--method="):
-            m = x.split("=", 1)[1]
-        elif x.startswith("-X"):
-            m = x[2:].lstrip("=")
-        fields = fields or x.startswith(tuple(f + "=" for f in FIELDS)) or x in FIELDS or (
-            x[:2] in ("-f", "-F") and not x.startswith("--"))
-    return (m or ("POST" if fields else "GET")).upper()
+    m = [v for f, v in flags if f in ("-X", "--method")]
+    return (m[-1] if m else "POST" if any(f in FIELDS for f, _ in flags) else "GET").upper()
 
 
 def refused(a):
-    w = words(a)
+    w, flags = parse(a)
     if w[:1] == ["workflow"] and w[1:2] in (["run"], ["enable"]) or w[:2] == ["run", "rerun"]:
         return True
     if w[:1] == ["alias"] and w[1:2] in (["set"], ["import"]):  # an alias could hide a refused command
         return True
-    path = w[1] if w[:1] == ["api"] and len(w) > 1 else ""
-    return bool(path) and (any(s in path for s in ("dispatches", "rerun", "/enable"))
-                           or "actions/" in path and method(a) != "GET")
+    paths = w[1:] if w[:1] == ["api"] else []  # gh api takes one; every word is checked, should a parse go wrong
+    return any(any(s in p for s in ("dispatches", "rerun", "/enable")) or "actions/" in p and method(flags) != "GET"
+               for p in paths)
 
 
 a = sys.argv[1:]
@@ -447,7 +454,7 @@ os.execv(REAL, [REAL, *a])
 def is_guard(f):
     try:
         with open(f, "rb") as fh:
-            return GUARD.encode() in fh.read(200)
+            return GUARD.encode() in fh.read(1 << 13)  # it follows the python's path, up to 4096 bytes
     except OSError:
         return False
 
@@ -476,12 +483,16 @@ def gh_guard(p, wd):
     folder = p.state / "gh-guard"
     folder.mkdir(parents=True, exist_ok=True)
     tmp = folder / f".gh.{os.getpid()}.{threading.get_ident()}"  # parallel slots write it at once: whole or not at all
-    tmp.write_text(f"#!{sys.executable}\n# {GUARD}: workers never start, re-run or enable a GitHub workflow.\n"
+    # sh starts it with this python: a shebang can't hold a path with spaces, nor one over 255 bytes (a deep venv)
+    tmp.write_text(f"#!/bin/sh\n''''exec {shlex.quote(sys.executable)} \"$0\" \"$@\" # '''\n"
+                   f"# {GUARD}: workers never start, re-run or enable a GitHub workflow.\n"
                    f"REAL = {real_gh()!r}\n{GUARD_SCRIPT}")
     tmp.chmod(0o755)
     os.replace(tmp, folder / "gh")
     own = os.environ.get("CLAUDE_ENV_FILE")
     env_file = folder / f"env-{Path(wd).resolve().name}"  # one per worktree: a session-start hook may append to it
+    if own and Path(own).resolve() == env_file.resolve():  # started from a worker of this worktree: it'd source itself
+        own = None
     env_file.write_text((f". {shlex.quote(own)}\n" if own else "")
                         + f'export PATH={shlex.quote(str(folder))}"{os.pathsep}$PATH"\n')
     return {"PATH": f"{folder}{os.pathsep}{os.environ.get('PATH', '')}", "CLAUDE_ENV_FILE": str(env_file)}

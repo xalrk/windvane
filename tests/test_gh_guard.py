@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import unittest
+from unittest import mock
 from argparse import Namespace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -53,6 +54,14 @@ REFUSED = [
     "gh api repos/me/proj/actions/workflows/1/enable",
     "gh api https://api.github.com/repos/me/proj/actions/runs/1/rerun",
     "gh alias set wr 'workflow run'",
+    # combined short flags, read as gh reads them: -if ref=main is -i -f ref=main
+    "gh api -if ref=main repos/me/proj/actions/workflows/test.yml/dispatches",
+    "gh api -iX POST repos/me/proj/actions/runs/1/rerun",
+    "gh api -iXPOST repos/me/proj/actions/runs/1/cancel",
+    "gh api -iX=POST repos/me/proj/actions/runs/1/cancel",
+    "gh api -iF x=1 repos/me/proj/actions/variables",
+    "gh api -iFx=1 repos/me/proj/actions/variables",
+    "gh -R me/proj api -if ref=main repos/me/proj/dispatches",
 ]
 
 PASSED = [
@@ -61,6 +70,8 @@ PASSED = [
     ("gh api -X GET repos/x/actions/runs -f per_page=100", ["api", "-X", "GET", "repos/x/actions/runs", "-f",
                                                            "per_page=100"]),
     ("gh run list --limit 5", ["run", "list", "--limit", "5"]),
+    ("gh api -iX GET repos/x/actions/runs", ["api", "-iX", "GET", "repos/x/actions/runs"]),
+    ("gh api -iq .total_count repos/x/actions/runs", ["api", "-iq", ".total_count", "repos/x/actions/runs"]),
     ("gh workflow list", ["workflow", "list"]),
     ("gh workflow view run", ["workflow", "view", "run"]),  # a workflow called "run" is only viewed
     ("gh api -X POST repos/x/issues/1/comments -f body='see actions/runs'",
@@ -149,6 +160,24 @@ class Guard(unittest.TestCase):
         os.environ["CLAUDE_ENV_FILE"] = str(own)
         code, out, err = self.sh('. "$CLAUDE_ENV_FILE"; echo "$OWN_ENV"; command -v gh')
         self.assertEqual(out.split(), ["yes", str(self.p.state / "gh-guard/gh")])
+
+    def test_an_env_file_that_is_the_guards_own_is_not_sourced_by_itself(self):
+        os.environ.update(actions.gh_guard(self.p, self.s.root))  # the driver started from a worker of this worktree
+        env_file = Path(actions.gh_guard(self.p, self.s.root)["CLAUDE_ENV_FILE"])
+        self.assertNotIn(". ", env_file.read_text())
+        code, out, err = self.sh('. "$CLAUDE_ENV_FILE"; command -v gh')
+        self.assertEqual((code, out.strip()), (0, str(self.p.state / "gh-guard/gh")))
+
+    def test_a_python_path_with_spaces_or_over_a_shebangs_length_still_runs_the_guard(self):
+        deep = self.s.tmp / "a venv" / ("x" * 200) / ("y" * 200)
+        deep.mkdir(parents=True)
+        (deep / "python3").symlink_to(sys.executable)
+        with mock.patch.object(sys, "executable", str(deep / "python3")):
+            env = self.worker_env()
+        self.assertTrue(actions.is_guard(self.p.state / "gh-guard/gh"))
+        self.assertEqual(self.sh("gh workflow run x", env)[0], 1)
+        self.assertEqual(self.sh("gh run list", env)[:2], (0, "real gh: run list\n"))
+        self.assertEqual(self.calls(), [["run", "list"]])
 
     def test_the_driver_gives_a_worker_session_the_guard(self):
         os.environ["FAKE_LOG"] = str(self.s.tmp / "claude.log")
