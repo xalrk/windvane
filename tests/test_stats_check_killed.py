@@ -1,9 +1,11 @@
 """Every check gets its own log, even two started in the same second, so a killed one can't pass for running or
 overwrite another's log; a killed check is timed to its log's last write; and `--by ticket` names the costliest
 check that bought nothing."""
+import fcntl
 import os
 import signal
 import sys
+import threading
 import time
 import unittest
 from datetime import datetime
@@ -80,6 +82,38 @@ class SameSecond(Base):
         self.assertNotEqual(second, log)
         self.assertEqual(second.read_text(), "second\n")
 
+
+    def test_a_momentary_shared_probe_only_delays_the_checks_lock(self):
+        """`running` (from `stats`) may hold a shared lock on the log just as the check opens it: the check waits for
+        it instead of dying on a busy lock."""
+        log = self.p.state / "checks" / "fixed.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.touch()
+        held, seen = threading.Event(), []
+
+        def probe():
+            with log.open("rb") as f:
+                fcntl.flock(f, fcntl.LOCK_SH)
+                held.set()
+                time.sleep(0.2)
+
+        def run(cmd, *args, **kw):
+            if isinstance(cmd, list) and cmd[0] == "git":
+                return self.real(cmd, *args, **kw)
+            seen.append(jobs.running(self.p, self.starts()[0]))
+            return mock.Mock(returncode=0)
+
+        prober = threading.Thread(target=probe)
+        prober.start()
+        held.wait(5)
+        self.s.write("new", "x")
+        with mock.patch.object(jobs, "log_name", lambda: "fixed.log"), mock.patch.object(jobs.subprocess, "run", run):
+            passed, _, _ = jobs.check(self.p, self.s.root, ticket="T-001")
+        prober.join()
+        self.assertTrue(passed)
+        self.assertEqual(seen, [True])  # locked while it ran
+        end = [r for r in read_jsonl(self.ledger) if r["event"] == "check"]
+        self.assertEqual([(r["passed"], "finished" in r) for r in end], [(True, False)])
 
 class KilledMinutes(Base):
     def killed(self, ticket, start, mins, log=True):

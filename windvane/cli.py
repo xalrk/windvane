@@ -473,7 +473,7 @@ def killed_minutes(p, start_row):
         mtime = (p.state / "checks" / start_row["log"]).stat().st_mtime
     except (KeyError, OSError):  # no log: a row from before logs were named, or the log was cleared
         return 0
-    return round(max(0.0, mtime - (start_row.get("start") or mtime)) / 60, 2)
+    return round(max(0.0, mtime - start_row.get("start", mtime)) / 60, 2)
 
 
 def check_stats(checks, by, p):

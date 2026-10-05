@@ -77,7 +77,7 @@ def run_logged(p, ticket, cmd, cwd, log):
     code = None
     try:
         with log.open("w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # its own log: nothing else holds it
+            fcntl.flock(f, fcntl.LOCK_EX)  # blocking: `running` may hold a momentary shared probe
             if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
                 code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
                                        "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd, stdout=f,

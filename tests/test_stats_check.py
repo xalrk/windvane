@@ -98,7 +98,8 @@ class CheckStats(unittest.TestCase):
         before = self.cli("stats", "--by", "ticket")
         self.add_checks()
         after = self.cli("stats", "--by", "ticket")
-        self.assertEqual([l for l in after.splitlines() if not l.startswith(("checks:", "most check time:", "costliest wasted check:"))],
+        skip = ("checks:", "most check time:", "costliest wasted check:")
+        self.assertEqual([l for l in after.splitlines() if not l.startswith(skip)],
                          before.splitlines())
 
     def test_a_zero_died_killed_cell_is_a_dot(self):
