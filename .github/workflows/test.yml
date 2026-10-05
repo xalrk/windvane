@@ -1,12 +1,11 @@
-# The test suite on every supported Python, and on macOS once (no /proc there: the sweep reads start times from `ps`).
-# Standard library only: nothing to install.
-# Runs on main and on pull requests, not on every branch push: the autopilot pushes its ticket branches often.
+# The test suite on the oldest and newest supported Python, and on macOS once (no /proc there: the sweep reads start
+# times from `ps`). Standard library only: nothing to install.
+# By hand only (Actions tab, or `gh workflow run test.yml`): hosted minutes are limited, and a push or pull_request
+# trigger ran it twice per autopilot ticket. Every merge is already gated by the local check, tools/check_pythons.sh,
+# which runs every supported Python installed on the machine.
 name: tests
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -21,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.14"]
         include:
           - os: macos-latest
             python: "3.13"

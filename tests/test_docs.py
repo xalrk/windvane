@@ -176,12 +176,12 @@ class Workflow(unittest.TestCase):
     def setUp(self):
         self.wf = yaml_subset(WORKFLOW.read_text())
 
-    def test_runs_the_tests_on_python_3_11_to_3_14(self):
+    def test_runs_by_hand_on_the_oldest_and_newest_python(self):
+        """Hosted minutes are limited: the local check runs every Python, the workflow only on request."""
         job = self.wf["jobs"]["test"]
         self.assertEqual([s["run"] for s in job["steps"] if "run" in s], ["python3 -m unittest discover -s tests -q"])
-        self.assertEqual(job["strategy"]["matrix"]["python"], ["3.11", "3.12", "3.13", "3.14"])
-        self.assertIn("pull_request", self.wf["on"])
-        self.assertEqual(self.wf["on"]["push"]["branches"], ["main"])
+        self.assertEqual(job["strategy"]["matrix"]["python"], ["3.11", "3.14"])
+        self.assertEqual(self.wf["on"], {"workflow_dispatch": None})
 
     def test_the_subset_parser_agrees_with_pyyaml(self):
         try:
