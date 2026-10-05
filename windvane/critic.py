@@ -110,13 +110,14 @@ def answers(text):
     """The critic's answers before its CRITIC line: {check id or dimension: (answer, evidence)}, the answer `yes`,
     `no`, `scope` (`no (out of scope: <why>)`, the why kept as evidence) or `-` (a dimension the ticket doesn't
     touch). A check may be named `safe`, `works.safe`, `5 safe` or `works 5 safe`: the critic reads all of those in
-    the scale, the calibration and `overview`. The last answer to an id wins."""
+    the scale, the calibration and `overview`. The first answer to an id wins: the Checks block comes first, and a
+    later follow-up line that happens to read `safe: no ...` mustn't overturn it."""
     out = {}
     for line in (text or "").rsplit("CRITIC:", 1)[0].splitlines():
         if m := ANSWER_RE.match(line):
             a = "scope" if m.group(3) else m.group(2).lower()
             why = re.sub(r"^\s*out of scope\b[:,\s]*", "", m.group(3) or "", flags=re.I)
-            out[m.group(1).lower()] = (a, "; ".join(filter(None, [why.strip(), m.group(4).strip()]))[:200])
+            out.setdefault(m.group(1).lower(), (a, "; ".join(filter(None, [why.strip(), m.group(4).strip()]))[:200]))
     return out
 
 

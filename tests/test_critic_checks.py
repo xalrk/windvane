@@ -214,9 +214,10 @@ class Ladder(unittest.TestCase):
 
     def test_answers_parse_the_ways_a_critic_writes_them(self):
         ans = critic.answers("- `safe`: **no** (out of scope) the lock\n* shown: Yes: transcript\nclear: -\n"
-                             "Fix in this ticket:\n1. nothing: no\nCRITIC: T-1 fixes=0 g\n- class: yes")
+                             "Fix in this ticket:\n1. nothing: no\nBeyond this ticket:\n- shown: no tests for X yet\n"
+                             "CRITIC: T-1 fixes=0 g\n- class: yes")
         self.assertEqual(ans["safe"], ("scope", "the lock"))
-        self.assertEqual(ans["shown"], ("yes", "transcript"))
+        self.assertEqual(ans["shown"], ("yes", "transcript"), "a later follow-up line doesn't overturn an answer")
         self.assertEqual(ans["clear"], ("-", ""))
         self.assertNotIn("class", ans, "nothing after the CRITIC line counts")
         self.assertNotIn("nothing", ans)
