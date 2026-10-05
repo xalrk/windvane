@@ -382,13 +382,13 @@ class Setup(unittest.TestCase):
         self.assertEqual(self.calls(), [])  # not even the usage probe
         self.assertFalse(self.started)  # `windvane run` exits 1
         self.assertEqual(pilot.merged + pilot.failed, [])
-        self.assertIn("setup `echo installing;", pilot.stop_reason)
+        self.assertIn("(it ran `echo installing;", pilot.stop_reason)
         self.assertIn("(exit 3)", pilot.stop_reason)
         self.assertIn("npm ERR! no lockfile", pilot.stop_reason)
         self.assertFalse(p.work_dir.exists())
         self.assertNotIn(str(p.work_dir), self.s.git("worktree", "list"))
         self.assertEqual([t for t, _ in self.pushes], ["windvane couldn't start"])  # the one push says why
-        self.assertTrue(self.pushes[0][1].startswith("Setup `echo installing;"))
+        self.assertTrue(self.pushes[0][1].startswith("Setup failed (exit 3): "))
         log = (p.state / "autopilot.log").read_text()
         self.assertIn("installing\nnpm ERR! no lockfile", log)  # the command's last lines
         cfg = self.s.root / ".windvane/config.toml"  # fixed: the next start makes the tree afresh
@@ -411,7 +411,8 @@ class Setup(unittest.TestCase):
         os.environ["FAKE_WORK_S"] = "1"
         p, pilot = self.run_pilot('case "$PWD" in *-1) exit 4;; esac', parallel=2)
         self.assertEqual(pilot.merged, ["T-001"])  # slot 0's ticket still finishes
-        self.assertIn("(exit 4) in work-1:", pilot.stop_reason)
+        self.assertIn("(exit 4): no output (it ran `case", pilot.stop_reason)
+        self.assertIn("` in work-1)", pilot.stop_reason)
         self.assertFalse((p.state / "work-1").exists())
         workers = [l for l in self.calls() if "windvane worker" in l]
         self.assertEqual(len(workers), 1)

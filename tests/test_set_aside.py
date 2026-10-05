@@ -83,14 +83,15 @@ class CrashPushes(Base):
         self.assertEqual(pilot.merged, ["T-002"])
         [(title, msg)] = self.aside()
         self.assertEqual(title, "Set aside: do T-001 (T-001)")
-        self.assertIn(f"({TOO_LONG}) while other sessions worked. Split the ticket, or trim what it reads.", msg)
+        self.assertEqual(msg, f"Sessions died 4×: {TOO_LONG}. Branch kept, run goes on.\nSplit the ticket, or trim "
+                              "what it reads. Other sessions worked, so it's this ticket's doing.")
 
     def test_other_errors_keep_the_plain_text(self):
         pilot = self.pilot()
         pilot.set_aside("T-001", "API Error: 529 Overloaded")
         [(_, msg)] = self.aside()
         self.assertNotIn("Split", msg)
-        self.assertIn("Its branch is kept; the run goes on without it.", msg)
+        self.assertTrue(msg.startswith("Sessions died 4×: API Error: 529 Overloaded. Branch kept, run goes on.\n"), msg)
 
 
 class TrialAcrossRestart(Base):

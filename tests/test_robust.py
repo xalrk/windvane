@@ -150,8 +150,8 @@ class Supervisor(unittest.TestCase):
             self.assertEqual((rc, len(self.calls), len(self.pushes)), (-sig, 1, pushes))
         self.p.state.mkdir(parents=True, exist_ok=True)
         driver.supervise(self.p, ["run"], now() + timedelta(hours=2), start=lambda a, e: -signal.SIGKILL)
-        self.assertEqual(self.pushes, [("windvane stopped", "Why: the driver was killed (SIGKILL). Not "
-                                        "restarted: its sessions may still be running in the worktrees.")])
+        self.assertEqual(self.pushes, [("windvane stopped", "Why: the driver was killed (SIGKILL). Not restarted.\n"
+                                        "Its sessions may still be running in the worktrees.")])
 
     def test_a_moved_deadline_is_the_restarts(self):
         moved = (now() + timedelta(hours=5)).replace(second=0, microsecond=0)

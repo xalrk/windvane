@@ -94,13 +94,14 @@ class SetupLimits(unittest.TestCase):
         self.assertFalse(ready)
         self.assertEqual([t for t, _ in self.pushes], ["windvane couldn't start"])
         msg = self.pushes[0][1]
-        self.assertTrue(msg.startswith("Setup `echo installing;"), msg)
-        self.assertIn("timed out after 0.02 min in work: installing; " + FIX + ".", msg)
+        self.assertTrue(msg.startswith("Setup timed out after 0.02 min; " + FIX), msg)  # the fix on the lock screen
+        self.assertLessEqual(len(msg.splitlines()[0]), driver.LOCK_SCREEN, msg)
+        self.assertIn("\n…installing (it ran `echo installing;", msg)
         self.assertEqual(msg.count(FIX), 1)
         self.assertNotIn("Why:", msg)
         self.assertNotIn("stopped", msg)
         self.assertNotIn(str(p.state), msg)  # the worktree by its short name
-        self.assertTrue(pilot.stop_reason.endswith(FIX))
+        self.assertIn(FIX, pilot.stop_reason)
 
     def test_a_failed_setup_has_no_timeout_fix(self):
         self.config('setup = "echo nope; exit 3"\n')
@@ -108,7 +109,7 @@ class SetupLimits(unittest.TestCase):
         pilot = driver.Pilot(Project(self.s.root), args())
         pilot.run(now() + timedelta(minutes=15))
         self.assertEqual(self.pushes, [("windvane couldn't start",
-                                        "Setup `echo nope; exit 3` failed (exit 3) in work: nope.")])
+                                        "Setup failed (exit 3): nope (it ran `echo nope; exit 3` in work).")])
 
     def test_short_path(self):
         p = Project(self.s.root)

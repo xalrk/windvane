@@ -61,6 +61,28 @@ SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it read
                   ("request too large", "Split the ticket, or trim what it reads."))
 
 
+LOCK_SCREEN = 90  # characters of a push's body a phone's lock-screen preview shows
+
+
+def lead(head, free, tail="", whole=True):
+    """A push's first line: `head`, the free text `free` (an error, a reason, an option) cut with … so the line fits
+    LOCK_SCREEN, then `tail`, which carries the next step. The cut-off rest follows on the next line (`whole`), so
+    the point is on the lock screen and nothing is lost once the push is opened."""
+    free = " ".join(str(free).split())
+    free = free.rstrip(".") if tail.startswith(".") else free
+    room = LOCK_SCREEN - len(head) - len(tail)
+    if len(free) <= room:
+        return head + free + tail
+    cut = free[:max(room - 1, 0)]
+    if " " in cut[-15:]:  # at a word's end, not inside one
+        cut = cut.rsplit(" ", 1)[0]
+    if cut.count("`") % 2:  # nor inside a command, which the user may copy
+        cut = cut[:cut.rindex("`")]
+    stop = "." * tail.startswith(".")  # "…" ends the line's sentence; the cut-off rest gets the full stop
+    rest = f"\n…{free[len(cut):].lstrip()}{stop}" if whole else ""
+    return head + cut.rstrip(" ,;:(") + "…" + tail.removeprefix(stop) + rest
+
+
 def said_times(n):
     return f"{n} time{'s' * (n != 1)}"
 
@@ -139,7 +161,8 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
             git(root, "worktree", "prune")
             how = (f"timed out after {limit:g} min" if why == TIMED_OUT else f"cut short ({why})" if why
                    else f"failed (exit {code})")
-            raise SetupFailed(f"setup `{clip(p.cfg['setup'], 60)}` {how} in {short_path(p, path)}", lines, why)
+            cmd, where = f"`{clip(p.cfg['setup'], 60)}`", short_path(p, path)
+            raise SetupFailed(f"setup {cmd} {how} in {where}", lines, why, how, f"{cmd} in {where}")
 
 
 def clip(text, n):
@@ -162,9 +185,9 @@ class SetupFailed(Exception):
     """The project's `setup` command failed in a fresh worktree; `lines` are the end of its output, `killed` why it
     was killed (TIMED_OUT at `setup_minutes`, or the stop rule's reason), "" when it failed on its own."""
 
-    def __init__(self, why, lines, killed=""):
+    def __init__(self, why, lines, killed="", how="", ran=""):
         super().__init__(why)
-        self.lines, self.killed = lines, killed
+        self.lines, self.killed, self.how, self.ran = lines, killed, how, ran
 
     @property
     def cut(self):
@@ -388,9 +411,9 @@ class Pilot(Desk, Periodic):
         self.aside[tid] = f"its sessions kept dying: {error}"
         self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work")
         fix = next((advice for text, advice in SELF_INFLICTED if text in error.lower()), "")
-        push(f"Set aside: {self.name(tid)}", f"Its sessions died {self.p.ap['retries'] + 1} times ({error}) while "
-             "other sessions worked. " + (fix + " " if fix else "") + "Its branch is kept; the run goes on without it.",
-             4, "warning")
+        push(f"Set aside: {self.name(tid)}", lead(f"Sessions died {self.p.ap['retries'] + 1}×: ", error,
+                                                  ". Branch kept, run goes on.")
+             + f"\n{fix + ' ' if fix else ''}Other sessions worked, so it's this ticket's doing.", 4, "warning")
 
     def set_aside_limit(self, tid, limit, fix):
         """A worker run stopped at a limit of its own (the time box, max turns or budget): the ticket is too big for
@@ -398,7 +421,7 @@ class Pilot(Desk, Periodic):
         self.skip.add(tid)
         self.aside[tid] = f"hit {limit}"
         self.log(f"{tid}: the run hit {limit}; set aside")
-        push(f"Set aside: {self.name(tid)}", f"Hit {limit}. {fix} Branch kept.", 3, "hourglass")
+        push(f"Set aside: {self.name(tid)}", lead("Hit ", limit, f". {fix} Branch kept."), 3, "hourglass")
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
@@ -484,8 +507,8 @@ class Pilot(Desk, Periodic):
                 self.log(f"{tid}: the worker run was stopped at the deadline")
             elif killed == "max turns":  # out of its own turns or budget: the ticket's doing, like the time box
                 self.set_aside_limit(tid, "its max turns", "Raise max turns in .claude/ settings or split it.")
-            elif killed.startswith("max ") or killed == "dollar budget":
-                self.set_aside_limit(tid, f"its {killed}", "Split the ticket.")
+            elif killed.startswith("max ") or killed == "dollar budget":  # windvane sets no --max-budget-usd: only
+                self.set_aside_limit(tid, f"its {killed}", "Split the ticket.")  # splitting is left to the user
             return
         m = last_match(RESULT_RE, text)
         branch = gout(self.wd, "rev-parse", "--abbrev-ref", "HEAD")
@@ -501,8 +524,8 @@ class Pilot(Desk, Periodic):
             if self.partials[tid] >= self.p.ap["partials"]:
                 self.skip.add(tid)
                 self.aside[tid] = f"{self.partials[tid]} runs in a row ran out of time"
-                push(f"Set aside: {self.name(tid)}", f"{self.partials[tid]} runs in a row ran out of time. Left: {rest}",
-                     3, "hourglass")
+                push(f"Set aside: {self.name(tid)}", f"{self.partials[tid]} runs in a row ran out of time. Split it. "
+                     f"Branch kept.\nLeft: {rest}", 3, "hourglass")
             return
         if status == "FAILED":
             return self.fail(tid, rest)
@@ -660,8 +683,8 @@ class Pilot(Desk, Periodic):
         if r.returncode == 0 and not gout(cd, "status", "--porcelain"):
             self.stash_failed.discard(why)
             self.log(f"{why}: stashed the checkout's uncommitted changes as \"{msg}\"")
-            push("your changes were stashed", f"Uncommitted changes in your checkout were stashed before "
-                 f"{why}: git stash list\n{msg}", 3, "package")
+            push("your changes were stashed", lead("Your uncommitted changes were stashed before ", why, ".")
+                 + f"\ngit stash list: {msg}", 3, "package")
             return True
         err = (r.stderr.strip() or "?").splitlines()[0][:200] if r.returncode else "changes were left after it"
         first = why not in self.stash_failed
@@ -669,9 +692,9 @@ class Pilot(Desk, Periodic):
             self.log(f"{why}: {'waits' if then else 'skipped'}: couldn't stash the checkout's changes ({err})")
         if first:
             self.stash_failed.add(why)
-            push("checkout not cleaned", f"Couldn't stash the uncommitted changes in your checkout, so "
-                 f"{then or why + ' was skipped'}. Nothing was deleted: commit or stash them. git said: {err}", 4,
-                 "warning")
+            push("checkout not cleaned", lead("Commit or stash your checkout's changes: ",
+                                              then or why + " was skipped", ".")
+                 + f"\nwindvane couldn't stash them, and deleted nothing. git said: {err}", 4, "warning")
         return False
 
     def check_at(self, rev, ticket=None):
@@ -876,9 +899,9 @@ class Pilot(Desk, Periodic):
         picks = [q for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
                  if p.norm(q["ticket"]) == tid]
         if picks:
-            push(f"Provisional: {self.name(tid)}", "\n".join(f"{q['question']} Built {q['built']}: {q['option']}"
-                                                             for q in picks)
-                 + f"\nTo change one: windvane answer {tid} <letter>, or tell a Claude session.", 3, "memo")
+            push(f"Provisional: {self.name(tid)}", f"To change one: windvane answer {tid} <letter>, or tell a Claude "
+                 "session."
+                 + "".join(f"\n{q['question']} Built {q['built']}: {q['option']}" for q in picks), 3, "memo")
 
     def fail(self, tid, why):
         self.skip.add(tid)
@@ -891,7 +914,7 @@ class Pilot(Desk, Periodic):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
-        push(f"Failed: {self.name(tid)}", f"{why}. The work so far is on its branch; autopilot moved on.", 4, "x")
+        push(f"Failed: {self.name(tid)}", lead("", why, ". Branch kept, run goes on."), 4, "x")
 
     # ---------- questions
 
@@ -961,8 +984,9 @@ class Pilot(Desk, Periodic):
                                       f"{self.a.answer_wait:g} minutes: build your recommendation ({q['rec']}), and "
                                       "move the question to ## Provisional with its `Built:` line.")
                 self.log(f"{tid}: no answer in {self.a.answer_wait:g} min; building {q['rec']}")
-                push(f"No answer: {self.name(tid)}", f"Going with {q['rec']}: {q['opts'].get(q['rec'], '')[:150]}\n"
-                     f"To change it later: windvane answer {tid} <letter>.", 3, "hourglass")
+                opt = q["opts"].get(q["rec"], "")[:300]
+                push(f"No answer: {self.name(tid)}", lead(f"Going with {q['rec']}: ", opt, ".")
+                     + f"\nTo change it later: windvane answer {tid} <letter>.", 3, "hourglass")
             else:
                 continue
             del self.questions[tid]
@@ -975,8 +999,8 @@ class Pilot(Desk, Periodic):
         end, err = quiet_now(self.p)
         if err and getattr(self, "quiet_err_sent", None) != err:  # once, not on every pass; again after a fix
             self.log(f"quiet times ignored: {err}; asking as usual")
-            push("quiet times ignored", f"{err}. Questions come to the phone as usual until it's "
-                 "fixed (`windvane quiet` shows the format).", 3, "warning")
+            push("quiet times ignored", lead("", err, "; asking as usual till it's fixed.")
+                 + "\n`windvane quiet` shows the format.", 3, "warning")
         self.quiet_err_sent = err
         if not end:  # only money, licence and merged-work questions ask in a quiet time
             self.send_unsent()
@@ -985,7 +1009,8 @@ class Pilot(Desk, Periodic):
             picks = provisional(gout(self.p.main_root(), "show", f"{self.p.upstream}:{self.p.questions_rel}"))
             if picks:
                 push(f"Review: {len(picks)} provisional answer{'s' * (len(picks) > 1)}",
-                     "\n".join(f"{q['ticket']}: {q['question']} Built {q['built']}." for q in picks[:8]), 3, "memo")
+                     "To change one: windvane answer <ID> <letter>."
+                     + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in picks[:8]), 3, "memo")
         self.was_quiet = bool(end)
 
     # ---------- the loop
@@ -1136,7 +1161,7 @@ class Pilot(Desk, Periodic):
                 return False
             last = e.lines[-1][:200] if e.lines else "no output"
             fix = "; raise `setup_minutes` in config.toml or fix the setup" if e.killed == TIMED_OUT else ""
-            self.halt = f"{e}: {last}{fix}"
+            self.halt = f"setup {e.how}{fix}: {last} (it ran {e.ran})"  # the fix first: the push's line is cut
             self.log(str(e))
             log(self.p, "\n".join(["its last lines:", *e.lines]), echo=False)  # the terminal showed them already
             return False
@@ -1382,9 +1407,10 @@ class Pilot(Desk, Periodic):
             self.log(summary.replace("\n", " "))
             if crashed and os.environ.get(SUPERVISED):  # `supervise` restarts it, or pushes why it doesn't
                 self.hand_over()
-                save_json(p.state / "crash.json", {"error": crashed, "summary": summary.split("\n", 1)[1]})
+                rest = "Merged:" + summary.split("\nMerged:", 1)[1]  # past the why, which may run on to a 2nd line
+                save_json(p.state / "crash.json", {"error": crashed, "summary": rest})
             elif not ready and self.halt:  # just why, once: nothing ran, so the summary's other lines say nothing
-                push("windvane couldn't start", f"{self.halt[0].upper()}{self.halt[1:]}.", 4, "warning")
+                push("windvane couldn't start", lead("", self.halt[0].upper() + self.halt[1:], "."), 4, "warning")
             else:
                 push("windvane stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                      "checkered_flag", ("Usage=usage",))
@@ -1404,7 +1430,7 @@ class Pilot(Desk, Periodic):
                  for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))]
         side = (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
                 f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else "")
-        return (f"Why: {self.stop_reason}.\nMerged: {names(self.merged)}.\n"
+        return (lead("Why: ", self.stop_reason, ".") + f"\nMerged: {names(self.merged)}.\n"
                 + (f"Merged under the critic's bar (out of revisions): {names(under)}.\n" if under else "")
                 + (f"Desk PRs merged: {', '.join('#' + n for n in self.desk_merged)}.\n" if self.desk_merged else "")
                 + (f"Critic (/10): {crit}.\n" if crit else "") + side
@@ -1439,8 +1465,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
                 why = f"the driver was killed ({signal.Signals(-rc).name})"
                 log(p, f"{why}; not restarted: its sessions may still be running in the worktrees")
-                push("windvane stopped", f"Why: {why}. Not restarted: its sessions may still be running "
-                     "in the worktrees.", 4, "rotating_light", ("Status=status",))
+                push("windvane stopped", lead("Why: ", why, ". Not restarted.") + "\nIts sessions may still be "
+                     "running in the worktrees.", 4, "rotating_light", ("Status=status",))
             return rc  # its own end (a stop, the deadline, the queue, a failed setup), or a kill
         why = info["error"]
         try:
@@ -1453,13 +1479,14 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
                 else asked() or ("deadline" if now() >= deadline else None))
         if not stop:
             log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour")
-            push("windvane restarted", f"The driver crashed: {why}. Restart {len(crashes)} of "
-                 f"{RESTARTS} this hour; it goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
+            push("windvane restarted", lead("The driver crashed: ", why,
+                                            f". Restart {len(crashes)} of {RESTARTS} this hour.")
+                 + f"\nIt goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
             sleep(RESTART_PAUSE)
             stop = asked()
         if stop:
             log(p, f"driver crashed ({why}); not restarted: {stop}")
-            push("windvane stopped", f"Why: the driver crashed ({why}); not restarted: {stop}.\n"
+            push("windvane stopped", lead("Why: the driver crashed (", why, f"); not restarted: {stop}.") + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             return rc
         args = selfupdate.restart_args(args, deadline)
@@ -1582,6 +1609,14 @@ def n_tickets(n, kind=""):
 
 def is_local(where):
     return where.startswith("the local branch ")
+
+
+def local_push(where, kept):
+    """A push's body for a branch `push_branch` kept locally: why the push was refused and the next step first (the
+    branch's name would push them past the lock screen), then `kept` with the branch's name."""
+    m = re.fullmatch(r"the local branch (\S+) \((.*)\)", where, re.S)
+    branch, why = m.groups() if m else (where, "")
+    return lead("", why[:1].upper() + why[1:], ".") + f"\n{kept} {branch}."
 
 
 def land(p, cd, branch, title, body, commit=True, tries=2):
@@ -1748,7 +1783,7 @@ def push_one_held(p, cd, branch, how):
     how = (("merged" if landed else "not merged; merge it by hand") if to_land
            else "pushed; no PR opened, open one by hand" if no_pr else "pushed")
     log(p, f"{branch}: held back, now on {where}, {how}")
-    return f"{title}: on {where}, {how}.", no_pr or (to_land and not landed)
+    return lead("", title, f": on {where}, {how}.", whole=False), no_pr or (to_land and not landed)
 
 
 def pending_ids(p):
@@ -1814,7 +1849,9 @@ def unmerged(p, n, where):
     clean_detach(p, p.plan_dir, p.upstream)
     how = "" if is_local(where) else ": merge it by hand"  # a local branch's reason says what to do
     log(p, f"plan: {n_tickets(n)} on {where}, not merged{how}")
-    push("plan not merged", f"{n_tickets(n)} {'waits' if n == 1 else 'wait'} on {where}{how}.", 4, "warning")
+    waits = f"{n_tickets(n)} {'waits' if n == 1 else 'wait'} on"
+    body = lead(f"{waits} ", where, f"{how}.") if how else local_push(where, f"{waits} the local branch")
+    push("plan not merged", body, 4, "warning")
     return 0
 
 
@@ -1881,7 +1918,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
             clean_detach(p, cd, p.upstream)
             kept = f"{n_tickets(n)} kept only locally on {where.removeprefix('the local branch ')}"
             log(p, f"plan: {kept}")
-            push("plan not pushed", f"{kept}.", 4, "warning")
+            push("plan not pushed", local_push(where, f"{n_tickets(n)} kept only locally on"), 4, "warning")
             return 0
         if p.cfg["forge"] == "github":
             pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title",
@@ -1889,6 +1926,6 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
             log(p, f"plan: {n_tickets(n)} on {pr or branch}")
         else:
             log(p, f"plan: {n_tickets(n)} pushed to {branch}")
-    push(f"planned {n_tickets(n)}", m.group(3)[:200] or "See the queue.", 3, "memo")
+    push(f"planned {n_tickets(n)}", lead("", m.group(3)[:300] or "See the queue."), 3, "memo")
     clean_detach(p, cd, p.upstream)
     return n

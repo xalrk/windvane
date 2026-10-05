@@ -122,8 +122,9 @@ class InPlaceMerge(Base):
         self.assertEqual((self.pilot.merged, self.pilot.failed), (["T-001"], []))
         self.assertEqual(len(self.stashes()), 1)
         [warn] = [m for t, m in self.pushes if t == "checkout not cleaned"]  # one push for the whole wait
-        self.assertTrue(warn.startswith("Couldn't stash the uncommitted changes in your checkout, so T-001 waits (its "
-                                        "approval stands) and is tried again every 0.3 s. Nothing was deleted"), warn)
+        self.assertTrue(warn.startswith("Commit or stash your checkout's changes: T-001 waits (its approval stands)"),
+                        warn)
+        self.assertIn("again every 0.3 s.\nwindvane couldn't stash them, and deleted nothing.", warn)
         self.assertEqual(self.log().count("checking T-001: waits: couldn't stash"), 1)
         self.assertNotIn("checking T-001", self.pilot.stash_failed)  # a later wait is pushed again
 
