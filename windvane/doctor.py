@@ -120,10 +120,10 @@ def ci_warnings(root):
             continue
         if triggers:
             per_ticket = jobs * (("push" in triggers) + any(t.startswith("pull_request") for t in triggers))
-            out.append((f"{f.relative_to(root)} runs on {' and '.join(triggers)}: about {per_ticket} hosted job(s) "
-                        f"per ticket ({jobs} per run; a ticket's PR and its merge each run it)",
-                        "make it manual: `on: workflow_dispatch` only, and run it by hand (`gh workflow run "
-                        f"{f.name}`); test on this machine in the project's check instead"))
+            out.append((f"{f.relative_to(root)} runs on {' and '.join(triggers)}: about {per_ticket} hosted jobs a "
+                        f"ticket ({jobs} a run, for its PR and again for its merge)",
+                        f"keep only `on: workflow_dispatch` and run it by hand (`gh workflow run {f.name}`); "
+                        "test every version on this machine in the check instead"))
     return out
 
 
@@ -181,7 +181,7 @@ def checks(p=None):
 
 def main(p=None):
     rows = checks(p)
-    width = max(len(what) for _, what, _ in rows)
+    width = max(len(what) for level, what, _ in rows if level != "warn")  # a long warning mustn't push every fix out
     label = {"ok": "ok      ", "need": "MISSING ", "optional": "optional", "warn": "WARNING "}
     for level, what, fix in rows:
         print(f"{label[level]}  {what.ljust(width) if fix else what}" + (f"  -> {fix}" if fix else ""))
