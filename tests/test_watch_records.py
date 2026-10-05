@@ -135,6 +135,7 @@ class Watched(unittest.TestCase):
         self.assertIn("Branch: t-042-x", rows, "three records whole")
         self.assertRegex(rows[-1], r"^… \(\+\d+ lines\)$")
         self.assertNotIn("T-043", out, "the clip still holds")
+        self.assertEqual(rows[-2], "Branch: t-042-x", "no rule left dangling before the clip line")
         coloured = watched(STATS, True)
         self.assertIn("\033[2mTicket: \033[0mT-040", coloured)
         self.assertIn("\033[0m\n… (+", coloured, "a reset before the clip line")

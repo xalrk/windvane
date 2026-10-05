@@ -298,7 +298,7 @@ def markdown(text, color, cols=0):
 def clip_rendered(parts, n, color, more=4):
     """Whole blocks up to n counted lines. The block that crosses n is shown up to `more` lines past it, so a table
     that started shows rows and a wrapped paragraph its end. A clipped message ends with a reset, so no colour can
-    run on."""
+    run on, and not on a blank line or a rule, which would part nothing from the next one shown."""
     shown, count, total = [], 0, sum(len(b) for b in parts)
     for b in parts:
         if count >= n and any(k for _, k in b):
@@ -306,13 +306,13 @@ def clip_rendered(parts, n, color, more=4):
         for line, k in b:
             if count + k > n + more:
                 break
-            shown.append(line)
+            shown.append((line, k))
             count += k
     if len(shown) == total:
-        return "\n".join(shown)
-    while shown and not shown[-1]:
+        return "\n".join(line for line, _ in shown)
+    while shown and not shown[-1][1]:
         shown.pop()
-    return "\n".join(shown) + ("\033[0m" if color else "") + f"\n… (+{total - len(shown)} lines)"
+    return "\n".join(line for line, _ in shown) + ("\033[0m" if color else "") + f"\n… (+{total - len(shown)} lines)"
 
 
 def show(ev, out_lines):
