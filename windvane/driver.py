@@ -297,10 +297,10 @@ class Pilot(Desk, Periodic):
             return "time" if now() >= min(limit, self.end()) else over_caps(self.usage, self.a.cap, self.a.week_cap)
         return stop_if
 
-    def claude(self, role, label, prompt, system, cwd, limit, allow=(), deny=(), ticket=""):
+    def claude(self, role, label, prompt, system, cwd, limit, allow=(), deny=(), ticket="", env=None):
         text, killed, error = run_claude(self.p, role, label, prompt, system, cwd, allow, deny, self.usage,
                                          self.stopper(limit), ticket,
-                                         (min(limit, self.end()), self.a.cap, self.a.week_cap))
+                                         (min(limit, self.end()), self.a.cap, self.a.week_cap), env)
         if killed:
             self.log(f"  stopped {label}: {killed} ({self.usage.text()})")
         elif not error:
@@ -432,6 +432,7 @@ class Pilot(Desk, Periodic):
         fb = self.feedback.get(tid)
         pr = pr_for(p, branches[0]) if branches else ""
         known = self.answered(tid, ref)
+        git_env, skip_line = actions.worker_git(p, wd)
         prompt = "\n\n".join(filter(None, [
             f"Ticket {tid}. Follow the worker rules in your system prompt and end with the RESULT line.",
             f"## The ticket\n{ticket[:8000]}",
@@ -448,10 +449,12 @@ class Pilot(Desk, Periodic):
             "No check is configured: `windvane check` passes at once; run the tests you wrote yourself.",
             f"Forge: {p.cfg['forge']}. Design questions now: {mode(p)}.",
             f"Wrap-up time: {hhmm(wrap)} (the run is stopped at {hhmm(kill_at)}); check with `date`.",
+            skip_line,
         ]))
         self.log(f"{tid}: worker run ({kind}{', ' + ' '.join(branches) if branches else ''})")
         allow, deny = worker_perms(p)
-        text, killed, error = self.claude("worker", tid, prompt, self.worker_rules, wd, limit, allow, deny, tid)
+        text, killed, error = self.claude("worker", tid, prompt, self.worker_rules, wd, limit, allow, deny, tid,
+                                          git_env)
         if error:
             self.crashed(tid, error, tid)  # the loop picks the ticket again, with its branch as it now is
         else:

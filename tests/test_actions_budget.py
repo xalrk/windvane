@@ -313,7 +313,7 @@ class Budget(unittest.TestCase):
 
     def test_workers_cant_start_or_rerun_a_workflow_past_claude_ci(self):
         allow, deny = driver.worker_perms(Project(self.s.root))
-        for rule in ("Bash(gh workflow run *)", "Bash(gh workflow enable *)", "Bash(gh run rerun *)"):
+        for rule in ("Bash(gh workflow run*)", "Bash(gh workflow enable*)", "Bash(gh run rerun*)"):
             self.assertIn(rule, deny)
 
     def test_a_bad_budget_stops_at_once(self):
