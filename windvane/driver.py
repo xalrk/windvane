@@ -1575,8 +1575,8 @@ def save_held(p, held, notes=None):
 # logging in, a hook or branch protection by changing the rule or the branch (pushing again alone fails the same way),
 # the network by waiting: the next run pushes what was held back (`push_held`).
 REFUSALS = (
-    ("refused: it holds a secret (GitHub push protection); remove it from the branch's commit "
-     "(`git commit --amend` on `{branch}`), then the next run pushes it",
+    ("refused: it holds a secret{where} (GitHub push protection); remove it from the branch's commit "
+     "(`git commit --amend` on `{branch}`), then the next run pushes it{allow}",
      re.compile(r"push protection|cannot contain secrets|secret scanning", re.I)),
     ("login refused; {login} and the next run pushes it",
      re.compile(r"authentication failed|permission denied|permission to .* denied|could not read username|"
@@ -1603,8 +1603,18 @@ def push_refusal(stderr, forge="git", branch="BRANCH", remote="origin", main="ma
     for why, pattern in REFUSALS:
         if pattern.search(stderr):
             return why.format(login=LOGIN.get(forge, LOGIN["git"]), branch=branch, remote=remote,
-                              then=THEN.get(forge, THEN["git"]).format(main=main))
+                              then=THEN.get(forge, THEN["git"]).format(main=main), **secret_at(stderr))
     return "push failed; see the windvane log"
+
+
+def secret_at(stderr):
+    """Where GitHub's push protection found the secret (its `path:` lines) and, when it isn't one, the page that
+    allows it (its unblock URL), for the secret's step; empty parts when the stderr names neither. The URL stays
+    whole (a cut one doesn't open): `lead` moves what passes the lock screen to the next line."""
+    paths = list(dict.fromkeys(re.findall(r"^remote:\s+path:\s*(\S+)", stderr, re.M)))
+    url = re.search(r"https://\S+/unblock-secret/\S+", stderr)
+    return {"where": " in " + ", ".join(f"`{x}`" for x in paths[:3]) + " and more" * (len(paths) > 3) if paths else "",
+            "allow": f"; or allow it on GitHub if it isn't a secret: {url.group()}" if url else ""}
 
 
 def n_tickets(n, kind=""):
@@ -1710,10 +1720,24 @@ def held_here(p, held):
     root, out = p.main_root(), {}
     unmerged = set(gout(root, "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split())
     for b, how in held.items():
-        on = gout(root, "branch", "-r", "--contains", b, "--format=%(refname:short)").split() if b in unmerged else []
-        if b in unmerged and (not on or how == "land"):
+        if b not in unmerged or main_has(root, p.upstream, b):
+            continue
+        on = gout(root, "branch", "-r", "--contains", b, "--format=%(refname:short)").split()
+        if not on or how == "land":
             out[b] = how, (on or [""])[0]
     return out
+
+
+def main_has(root, upstream, branch):
+    """Whether `upstream` already holds `branch`'s change though git doesn't count it merged: a squash or rebase merge
+    (GitHub's, or a `git merge --squash`) makes new commits. Merging the branch in would change nothing; before git
+    2.38 (no `merge-tree --write-tree`), `git cherry` finds a rebased or one-commit squashed change. When neither can
+    tell, it isn't landed: a change kept listed costs a line, a dropped one is lost."""
+    r = git(root, "merge-tree", "--write-tree", upstream, branch)
+    if r.returncode in (0, 1):  # 1: the merge conflicts, so main lacks some of it
+        return r.returncode == 0 and r.stdout.split()[:1] == [gout(root, "rev-parse", f"{upstream}^{{tree}}")]
+    marks = [line[:1] for line in gout(root, "cherry", upstream, branch).splitlines()]
+    return bool(marks) and "+" not in marks
 
 
 def held_now(p):
@@ -1728,12 +1752,15 @@ def held_now(p):
     return out
 
 
-def held_lines(p, now=None):
+def held_lines(p, now=None, subject=60):
     """One line per held branch (of `now`, `held_now`'s list) with how long it has waited and where it is: the last
-    refusal's reason and next step, or, pushed by hand, the merge still to do; for `status` and `overview`."""
+    refusal's reason and next step, or, pushed by hand, the merge still to do (on github, through a PR); for `status`
+    (`subject` None: the commit subject whole) and `overview`."""
+    forge = p.cfg["forge"]
+    merge = THEN.get(forge, THEN["git"]).format(main=p.main) + " and merge it" * (forge == "github")
     return [f"held back for {age(time.time() - at)}, " + (f"pushed to {on}, not merged" if on else "not pushed")
-            + f": {b} ({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:60]}): "
-            + (f"merge it into {p.main}" if on else why) for b, why, at, on in (held_now(p) if now is None else now)]
+            + f": {b} ({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:subject]}): "
+            + (merge if on else why) for b, why, at, on in (held_now(p) if now is None else now)]
 
 
 def age(seconds):

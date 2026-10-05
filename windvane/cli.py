@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import doctor, driver, install, jobs, phone, preflight, questions, watch
+from . import doctor, driver, install, jobs, net, phone, preflight, questions, watch
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, exe, find, toplevel
 from .queue import Queue
@@ -203,6 +203,7 @@ def parallel_arg(v):
 
 
 def cmd_status(a, p):
+    fetch_for_held(p)
     on = running(p)
     if a.line:
         held, last = held_count(p), (last_log(p) or [""])[0][11:]
@@ -219,7 +220,18 @@ def cmd_status(a, p):
         print(f"slot {slot}: {tid}")
     for tid, q in st.get("questions", {}).items():
         print(f"waiting on you: {tid}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
-    print("\n".join(held_text(p) + last_log(p, 12)))
+    print("\n".join(held_text(p, subject=None) + last_log(p, 12)))
+
+
+FETCH_S = 10  # seconds `status` gives its fetch: a slow remote costs a moment, never a hang
+
+
+def fetch_for_held(p):
+    """One quick, silent fetch when a held change was pushed by hand, so one merged on the remote meanwhile (squashed
+    too: `held_here`) drops off `status` without waiting for a run; no network otherwise, and a failed fetch leaves
+    the local view as it was."""
+    if any(on for *_, on in driver.held_now(p)):
+        net.call(["git", "fetch", "-q", p.remote], p.main_root(), FETCH_S, {**os.environ, "GIT_TERMINAL_PROMPT": "0"})
 
 
 # A log line about a held branch: `status --line` leaves it out, as the held count (or none, once it's gone) says more.
@@ -239,16 +251,16 @@ def held_count(p):
     return f"{n} held-back change{'s' * (n > 1)} {state}, " + (f"oldest {waited}" if n > 1 else f"for {waited}")
 
 
-def held_text(p):
-    """The held branches' lines and, after them, what happens next: a run retries only those not pushed, the user
-    merges those pushed by hand; nothing when none waits."""
+def held_text(p, subject=60):
+    """The held branches' lines (commit subjects cut at `subject`, or whole) and, after them, what happens next: a run
+    retries only those not pushed, the user merges those pushed by hand; nothing when none waits."""
     now = driver.held_now(p)
     if not now:
         return []
     pushed = sum(bool(on) for *_, on in now)
     after = ("each run's start tries these again" if not pushed else "listed until main has them" if pushed == len(now)
              else "each run's start tries those not pushed again; the others are listed until main has them")
-    return driver.held_lines(p, now) + [f"  ({after})"]
+    return driver.held_lines(p, now, subject) + [f"  ({after})"]
 
 
 def cmd_overview(a, p):
