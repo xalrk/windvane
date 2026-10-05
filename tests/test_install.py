@@ -1,7 +1,9 @@
+import atexit
 import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,8 +16,10 @@ sys.path.insert(0, str(REPO))
 
 from windvane import install, runner  # noqa: E402
 from windvane.install import add_keyword_hook  # noqa: E402
+from helpers import tmpdir  # noqa: E402
 
-RUNTIME = tempfile.mkdtemp()
+RUNTIME = tempfile.mkdtemp(prefix="windvane-runtime-")
+atexit.register(shutil.rmtree, RUNTIME, True)
 
 
 def hook(prompt, session=""):
@@ -40,7 +44,7 @@ class KeywordHook(unittest.TestCase):
         self.assertIsNotNone(hook("windvane status?", "s-2"))
 
     def test_settings_keep_other_hooks_and_get_it_once(self):
-        f = Path(tempfile.mkdtemp()) / "settings.json"
+        f = tmpdir(self) / "settings.json"
         f.write_text(json.dumps({"model": "opus", "hooks": {"Stop": [{"hooks": [{"type": "command",
                                                                                 "command": "x"}]}]}}))
         self.assertTrue(add_keyword_hook(f))
@@ -74,7 +78,7 @@ class Installed(unittest.TestCase):
     the standard-library build backend), and its `windvane` runs with no checkout around."""
 
     def test_venv_install_help_doctor_install_uninstall(self):
-        tmp = Path(tempfile.mkdtemp(prefix="windvane-venv-"))
+        tmp = tmpdir(self, "windvane-venv-")
         home, claude_dir = tmp / "home", tmp / "claude"
         env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp / "data"), "XDG_STATE_HOME": str(tmp / "state"),
                "XDG_CONFIG_HOME": str(tmp / "config"), "CLAUDE_CONFIG_DIR": str(claude_dir), "PIP_NO_INDEX": "1",
@@ -133,7 +137,7 @@ class Installed(unittest.TestCase):
 class Checkout(unittest.TestCase):
     def test_bin_runs_without_leaking_pythonpath(self):
         """What bin/windvane starts (sessions, checks, bg and heavy jobs) mustn't import the checkout's windvane."""
-        cfg = Path(tempfile.mkdtemp())
+        cfg = tmpdir(self)
         (cfg / "windvane").mkdir()
         (cfg / "windvane/machine.toml").write_text("busy = []\nmin_free_gb = 0\n")
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
@@ -148,7 +152,7 @@ class InstallInProcess(unittest.TestCase):
     """install/uninstall from a checkout, in a throwaway HOME and Claude config dir."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="windvane-inst-"))
+        self.tmp = tmpdir(self, "windvane-inst-")
         self.claude = self.tmp / "claude"
         env = {"HOME": str(self.tmp / "home"), "XDG_STATE_HOME": str(self.tmp / "state"),
                "CLAUDE_CONFIG_DIR": str(self.claude)}

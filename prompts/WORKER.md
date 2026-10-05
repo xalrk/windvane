@@ -45,6 +45,7 @@ with `sleep` loops: every poll re-reads your whole context.
 **Machine-heavy** commands (a game engine, a render, a big build) other runs may start too: run them only through
 `windvane heavy -- <command>` (or `windvane bg --heavy <name> <command...>`), which takes turns with every other
 heavy job on this machine. Other tickets may be running beside yours in their own worktrees: stay in yours.
+Scratch files go in `$TMPDIR` (this ticket's own, removed when it ends), never straight in `/tmp`.
 
 ## Decisions
 - **Engineering** calls the docs leave open (code layout, algorithms, test shape, tooling): make them, and say why in

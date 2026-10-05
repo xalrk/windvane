@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import actions
+from . import actions, scratch
 from .config import HOME
 from .util import append_jsonl, load_json, save_json
 
@@ -285,7 +285,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
            "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local",
            *lean_flags(p, role), "--settings", settings_json(allow, deny), "--append-system-prompt", system]
     started, parent = time.time(), os.environ.get(NEST)
-    extra = {NEST: raw.stem, TICKET: ticket, **(extra_env or {})}
+    extra = {NEST: raw.stem, TICKET: ticket, "TMPDIR": str(scratch.session_dir(p, ticket or label)),
+             **(extra_env or {})}
     if limits:
         extra.update(WINDVANE_STOP_AT=str(limits[0].timestamp()), WINDVANE_CAPS=f"{limits[1]:g},{limits[2]:g}")
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -345,6 +346,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         proc.stdout.close()
     code = proc.wait()
     kill_nested(p, raw.stem)  # killed with it, or left running by a Bash call that timed out
+    if not ticket:  # a ticket's scratch outlives its sessions (the driver's check, the next run) until it ends
+        scratch.drop(p, label)
     if mark:
         mark.unlink(missing_ok=True)
     end, error = ("killed", None) if killed else ending(final, code, noise)

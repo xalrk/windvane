@@ -6,7 +6,6 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -17,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from windvane import watch  # noqa: E402
+from helpers import tmpdir  # noqa: E402
 
 ANSI = re.compile(r"\033\[[0-9;]*m")
 
@@ -164,7 +164,7 @@ class NarrowedRules(unittest.TestCase):
 
 class Sweep(unittest.TestCase):
     def run_sweep(self, texts, *args):
-        state = Path(tempfile.mkdtemp())
+        state = tmpdir(self)
         (state / "runs").mkdir()
         events = [{"type": "system"}] + [{"type": "assistant", "message": {"content": [{"type": "text", "text": t}]}}
                                          for t in texts]
