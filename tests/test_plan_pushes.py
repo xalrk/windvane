@@ -47,8 +47,7 @@ class PlanPushes(unittest.TestCase):
         self.assertEqual(driver.plan(self.p, "make it great"), 0)
         title, msg = self.pushes[-1]
         self.assertEqual(title, "plan not pushed")
-        self.assertRegex(msg, r"^1 ticket kept only locally on plan-\S+ \(refused: the login or its permission"
-                              r"; log in again first\): push it by hand\.$")
+        self.assertRegex(msg, r"^1 ticket kept only locally on plan-\S+ \(login refused; run `gh auth login`, then push\)\.$")
         self.assertIn("plan: 1 ticket kept only locally on plan-", self.log())
 
     def test_a_hook_refusal_names_the_hook(self):
@@ -57,15 +56,15 @@ class PlanPushes(unittest.TestCase):
         hook.chmod(0o755)
         self.assertEqual(driver.plan(self.p, "make it great"), 0)
         self.assertEqual(self.pushes[-1][0], "plan not pushed")
-        self.assertIn("(refused by a hook or branch protection on the remote): push it by hand.", self.pushes[-1][1])
+        self.assertIn("(refused by a hook or branch rule; fix the rule or push to another branch).", self.pushes[-1][1])
 
     def test_a_refused_merge_says_why_too(self):
         self.refuse_with("ssh: connect to host github.com port 22: Connection timed out\n"
                          "fatal: Could not read from remote repository.\n")
         self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
         self.assertEqual(self.pushes[-1][0], "plan not merged")
-        self.assertRegex(self.pushes[-1][1], r"^1 ticket waits on the local branch plan-\S+ \(the network failed; "
-                                             r"try again later\): push it by hand\.$")
+        self.assertRegex(self.pushes[-1][1], r"^1 ticket waits on the local branch plan-\S+ \(network down; "
+                                             r"the next run pushes it again\)\.$")
 
     def test_one_ticket_is_singular_in_the_push_and_the_log(self):
         self.assertEqual(driver.plan(self.p, "make it great"), 1)
@@ -97,11 +96,9 @@ class Refusals(unittest.TestCase):
             with self.subTest(stderr=stderr[:40]):
                 self.assertIn(word, driver.push_refusal(stderr))
 
-    def test_anything_else_gives_its_first_line(self):
-        self.assertEqual(driver.push_refusal("To /tmp/r.git\nerror: src refspec x does not match any\n"
-                                             "error: failed to push some refs to '/tmp/r.git'\n"),
-                         "push failed: error: src refspec x does not match any")
-        self.assertEqual(driver.push_refusal(""), "push failed")
+    def test_anything_else_sends_to_the_log(self):
+        for stderr in ("To /tmp/r.git\nerror: src refspec x does not match any\n", ""):
+            self.assertEqual(driver.push_refusal(stderr), "push failed; see the windvane log")
 
 
 # A repo with 301 PRs: the old closed plan PR is past any `--limit 300` list, but `--head` finds it.
