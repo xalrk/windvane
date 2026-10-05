@@ -66,7 +66,8 @@ flatters a run that re-reads a big context.
 from the `min` column; no line without any. The average is over the tickets that ran a check (a ticket that only
 reused a pass isn't one). `cut off` counts checks that never finished: stopped by Ctrl-C or an error (their minutes so
 far count), or killed outright, a driver or a session's tool timeout, which leaves only the check's start row: it is
-timed from its start to its log's last write (each check has its own log), or 0 if the log is gone. A check that's
+timed from its start to its log's last write (each check has its own log; one that went quiet before the kill
+counts up to its last output), or 0 if the log is gone. A check that's
 still going is neither: `1 still running`. With `--by ticket`, `most check time: T-060, 4 runs, 31 min` follows (the
 ticket whose checks took longest), then `costliest wasted check: T-060, 18 min, cut off`: the longest check that
 failed or was cut off, the time that bought nothing; no line when every check passed.
