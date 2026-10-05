@@ -10,6 +10,7 @@ import subprocess
 import sys
 import textwrap
 import time
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -444,13 +445,15 @@ def cmd_stats(a, p):
         return periodic_stats(rows, a.days)
     swept = sum(r.get("groups") or 0 for r in rows if r.get("event") == "swept")
     checks = [r for r in rows if r.get("event") in ("check", "check-start")]
+    refusals = [r for r in rows if r.get("event") == "gh-refused"]
     rows = [r for r in rows if not r.get("event")]  # a periodic score, an outcome, a sweep, a check: not a session
     if not rows:
         print("no runs yet")
         check_stats(checks, a.by, p)
         orphans(swept)
+        guard_stats(refusals, a.by)
     else:
-        session_stats(a, p, rows, swept, checks)
+        session_stats(a, p, rows, swept, checks, refusals)
 
 
 def check_runs(p, checks):
@@ -510,7 +513,19 @@ def orphans(swept):
         print(f"orphaned process groups killed: {swept}")
 
 
-def session_stats(a, p, rows, swept=0, checks=()):
+def guard_stats(refusals, by):
+    """How often workers tried to start a workflow past `windvane ci` (the gh guard's `gh-refused` rows), and by
+    ticket the one that tried most: a ticket that keeps trying wants a workflow run its prompt doesn't give it."""
+    if not refusals:
+        return
+    top = ""
+    if by == "ticket":
+        name, n = Counter(r.get("ticket") or "no ticket" for r in refusals).most_common(1)[0]
+        top = f" (most: {name}, {n})"
+    print(f"gh guard refused: {plural(len(refusals), 'workflow start')}{top}")
+
+
+def session_stats(a, p, rows, swept=0, checks=(), refusals=()):
     agg = {}
     key = (lambda r: r.get("ticket") or r["role"]) if a.by == "ticket" else (lambda r: r["role"])
     for r in rows:
@@ -545,6 +560,7 @@ def session_stats(a, p, rows, swept=0, checks=()):
         print(f"died or killed: {plural(died + killed, 'run')} ({lost_parts(died, killed)}), "
               f"{k(lost)} weighted tokens, {100 * lost / max(1, total):.0f}% of all")
     orphans(swept)
+    guard_stats(refusals, a.by)
     est = sum(g["no_usd"] for g in agg.values())
     if est:
         note(f"(≥: {plural(est, 'run')} ended before {'its' if est == 1 else 'their'} result, so the API $ is "
