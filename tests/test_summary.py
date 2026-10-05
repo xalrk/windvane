@@ -64,7 +64,7 @@ class Summary(Base):
         pilot.merged = ["T-001", "T-002"]
         text = pilot.summary()
         self.assertIn("Merged under the critic's bar (out of revisions): T-001.\n", text)
-        self.assertIn("Provisional answers to check: T-002 Which colour? (built A: red).", text)
+        self.assertIn("Provisional answers to check: T-002 (built A: red).", text)
 
     def test_neither_list_without_cause(self):
         self.verdict("T-001", "accept", 7)  # accepted but never merged: nothing to read on main

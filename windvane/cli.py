@@ -152,6 +152,7 @@ def cmd_preflight(a, p):
     if not a.json:
         return ask_first(p, hours) if sys.stdin.isatty() else sys.exit("preflight: no terminal; use --json")
     qs = preflight.find(p, hours, Usage(p))
+    preflight.offered(p, qs)
     for x in qs:
         x["answer_with"] = f"windvane answer {x['id']} <letter, or your own words in quotes>"
     print(json.dumps(qs, indent=1))

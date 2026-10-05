@@ -15,7 +15,7 @@ from .config import slots
 from .driver import REVIEW_DENY
 from .held import land
 from .planner import pending_ids
-from .questions import BLOCK_RE, OPT_RE, blocks, give_answer, part
+from .questions import BLOCK_RE, OPT_RE, blocks, give_answer, note, part, qkey, shown
 from .queue import Queue
 from .runner import rules, run_claude
 from .util import git, gout, load_json, log, now, read_jsonl, save_json
@@ -53,22 +53,33 @@ def question(tid, q, body, kind, n):
             "built": built.group(1) if built else "", "change_at": built.group(2).strip() if built else ""}
 
 
-def provisionals(qtext):
-    """Provisional answers built without the user, as questions to ask again (ids `T-003.p1`)."""
+def provisionals(qtext, heading="Provisional", kind="provisional"):
+    """Provisional answers built without the user, as questions to ask again (ids `T-003.p1`); or, for ## Open,
+    questions left there that no run waits on (kind "stuck", ids `T-003.o1`): they block their ticket for good."""
     out, seen = [], {}
-    for tid, q, body in blocks(part(qtext, "Provisional")):
+    for tid, q, body in blocks(part(qtext, heading)):
         seen[tid] = seen.get(tid, 0) + 1
-        out.append(question(tid, q, body, "provisional", f"p{seen[tid]}"))
+        out.append(question(tid, q, body, kind, f"{kind[0]}{seen[tid]}"))
     return out
 
 
 def waiting(p, qtext):
-    """Questions already asked that still wait for the user: open phone questions, provisional answers."""
+    """Questions already asked that still wait for the user: open phone questions, and provisional answers not yet
+    offered at the desk (one skipped stays in `windvane status` and the run's last push, and `windvane answer` still
+    takes it)."""
     out = []
     for tid, q in load_json(p.state / "state.json", {}).get("questions", {}).items():
         out.append({"id": tid, "ticket": tid, "kind": "open", "question": q["q"], "context": "",
                     "options": q["opts"], "recommendation": q["rec"], "why": "", "built": "", "change_at": ""})
-    return out + provisionals(qtext)
+    offered = set(shown(p)["preflight"])
+    return out + [x for x in provisionals(qtext) if qkey(x) not in offered]
+
+
+def offered(p, qs):
+    """Provisional answers shown at the desk: preflight doesn't offer them again."""
+    keys = [qkey(x) for x in qs if x["kind"] == "provisional"]
+    if keys:
+        note(p, lambda s: s["preflight"].extend(k for k in keys if k not in s["preflight"]))
 
 
 def find(p, hours, usage=None, parallel=None):
@@ -110,8 +121,9 @@ def pending(p):
 
 
 def lookup(p, key):
-    """The question `key` names (`T-003.1`, or `T-003` when the ticket has just one): saved by preflight, or a
-    provisional answer on main (so `windvane answer` changes one after its ticket merged). None if not exactly one."""
+    """The question `key` names (`T-003.1`, or `T-003` when the ticket has just one): saved by preflight, a
+    provisional answer on main (so `windvane answer` changes one after its ticket merged), or a question under ## Open
+    on main. None if not exactly one."""
     def pick(qs):
         hit = [x for x in qs if x["id"].lower() == key.lower()]
         if not hit and "." not in key:  # a mistyped T-001.2 must not answer T-001.1
@@ -121,7 +133,8 @@ def lookup(p, key):
     if x:
         return x
     git(p.main_root(), "fetch", "-q", p.remote)
-    return pick(provisionals(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")))
+    qtext = gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")
+    return pick(provisionals(qtext)) or pick(provisionals(qtext, "Open", "stuck"))
 
 
 # ---------- recording answers
@@ -160,13 +173,14 @@ def answered_block(prov, x):
 def file_answers(qtext, answers):
     """QUESTIONS.md with each (question, letter, text) moved or added under ## Answered."""
     text = qtext or "# Questions for the user\n\n## Open\n\n## Provisional\n\n## Answered\n"
-    prov = part(text, "Provisional")
-    hits = {m.span(): m for x, *_ in answers if x["kind"] == "provisional" and (m := answered_block(prov, x))}
-    keep = prov
-    for (a, b) in sorted(hits, reverse=True):
-        keep = keep[:a] + keep[b:]
-    if hits:
-        text = text.replace(prov, keep, 1)
+    for heading, kind in (("Provisional", "provisional"), ("Open", "stuck")):
+        sec = part(text, heading)
+        hits = {m.span(): m for x, *_ in answers if x["kind"] == kind and (m := answered_block(sec, x))}
+        keep = sec
+        for (a, b) in sorted(hits, reverse=True):
+            keep = keep[:a] + keep[b:]
+        if hits:
+            text = text.replace(sec, keep, 1)
     if "\n## Answered" not in "\n" + text:
         text = text.rstrip("\n") + "\n\n## Answered\n"
     head, _, rest = text.partition("## Answered")
@@ -272,6 +286,7 @@ def ask(p, qs, inp=input, say=print):
     answers, stop = [], False
     for i, x in enumerate(qs, 1):
         say(show(x, i, len(qs)))
+        offered(p, [x])
         try:
             reply = inp(f"  answer ({'/'.join(sorted(x['options']))}, your own words, Enter skips, q skips the rest): ")
         except EOFError:

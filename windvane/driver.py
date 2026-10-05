@@ -1256,7 +1256,7 @@ class Pilot(Desk, Periodic):
                 self.log(f"{tid}: slot {slot}{beside}")
             self.start(slot, tid, kind, branches)
             while self.n == 1 and self.threads[-1].is_alive():
-                self.threads[-1].join(30)
+                self.threads[-1].join(NAP)
                 self.poll_questions()
 
     def self_update(self):
@@ -1384,7 +1384,7 @@ class Pilot(Desk, Periodic):
         names = lambda ids: "; ".join(map(self.name, ids)) or "none"
         crit = ", ".join(f"{t} {s:g}" for t, s in self.scores.items())
         under = [t for t in self.merged if (h := critic.history(p, t)) and h[-1].get("step") == "accept"]
-        picks = [(q["ticket"], q["question"], f"{q['built'] or '?'}: {q['option']}" if q["option"] else q["built"] or "?")
+        picks = [(q["ticket"], f"{q['built'] or '?'}: {q['option']}" if q["option"] else q["built"] or "?")
                  for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))]
         side = (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
                 f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else "")
@@ -1394,7 +1394,7 @@ class Pilot(Desk, Periodic):
                 + (f"Critic (/10): {crit}.\n" if crit else "") + side
                 + (f"Held for you (parked in QUEUE.md): {names(self.held)}.\n" if self.held else "")
                 + f"Waiting on you: {names(self.questions)}.\n"
-                + (f"Provisional answers to check: {'; '.join(f'{q[0]} {q[1]} (built {q[2]})' for q in picks[:6])}"
+                + (f"Provisional answers to check: {'; '.join(f'{q[0]} (built {q[1]})' for q in picks[:6])}"
                    + (f" and {len(picks) - 6} more" if len(picks) > 6 else "") + ". "
                    "To change one: windvane answer <ID> <letter>.\n" if picks else "")
                 + f"Failed: {names(self.failed)}.\n"

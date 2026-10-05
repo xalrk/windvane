@@ -116,6 +116,13 @@ if system.startswith("# windvane worker run"):
         sh("git", "add", "-A"); sh("git", "commit", "-qm", "question"); sh("git", "push", "-q", "-u", "origin", "HEAD")
         text = f"RESULT: BLOCKED {tid} Red or blue?"
     else:
+        if behaviour == "question" and "didn't answer" in prompt:  # its recommendation, moved to ## Provisional
+            q = open(".windvane/QUESTIONS.md").read()
+            block = re.search(rf"^### {tid}: .*?(?=^### |^## )", q, re.M | re.S)
+            if block:
+                q = q.replace(block.group(0), "", 1).replace("## Provisional\n", "## Provisional\n" + block.group(0)
+                                                             + "Built: A; to change it: colour.txt\n", 1)
+                open(".windvane/QUESTIONS.md", "w").write(q)
         if not resolve_only:
             sh("git", "add", "-A"); sh("git", "commit", "-qm", f"{tid}: build")
         sh("git", "push", "-q", "-u", "origin", "HEAD")
