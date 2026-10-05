@@ -155,7 +155,7 @@ class OwnBudget(Base):
     def test_ending_tells_its_own_budget_from_an_api_error(self):
         self.assertEqual(runner.ending({"subtype": "error_max_turns", "is_error": True}, 1, []),
                          ("budget", "max turns"))
-        self.assertEqual(runner.ending({"subtype": "error_max_budget_usd"}, 1, []), ("budget", "max budget usd"))
+        self.assertEqual(runner.ending({"subtype": "error_max_budget_usd"}, 1, []), ("budget", "dollar budget"))
         self.assertEqual(runner.ending({"subtype": "error_during_execution", "result": "boom"}, 1, [])[0], "error")
 
 

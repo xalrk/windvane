@@ -243,6 +243,9 @@ def settings_json(allow=(), deny=()):
     return json.dumps({"permissions": {"allow": list(allow), "deny": list(deny)}})
 
 
+OWN_LIMITS = {"error_max_turns": "max turns", "error_max_budget_usd": "dollar budget"}  # as the phone says them
+
+
 def ending(final, code, noise):
     """How a session ended, as (kind, error text): "ok"; "error" when the result event says the API or the CLI failed
     (overload, 5xx, not logged in); "budget" when the session spent its own budget (max turns, max dollars): the
@@ -253,7 +256,7 @@ def ending(final, code, noise):
         return "no result", f"no result event (exit {code})" + (f": {why}" if why else "")
     sub = final.get("subtype") or "success"
     if sub.startswith("error_max_"):
-        return "budget", sub.removeprefix("error_").replace("_", " ")
+        return "budget", OWN_LIMITS.get(sub, sub.removeprefix("error_").replace("_", " "))
     if final.get("is_error") or sub != "success":
         why = " ".join(str(final.get("result") or final.get("errors") or "").split())
         why = re.sub(r'\{.*"message":\s*"([^"]*)".*\}', r"\1", why)[:300] or f"exit {code}"  # the API's JSON body

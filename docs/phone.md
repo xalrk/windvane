@@ -45,7 +45,19 @@ Acme: paused
 5h 75% · week 40%. Resuming at 14:00.
 
 Acme windvane stopped
+Why: deadline.
+Merged: Phone notifications that work for anyone (T-015).
+Waiting on you: none.
+Failed: none.
+Set aside: Retry with backoff (T-016) (hit its max turns).
+5h 31% · week 12%.
 ```
+
+A **Set aside** push says which limit a ticket's run hit and where to change it: the `ticket_hours` time box, its
+max turns (windvane sets none, so it's the Claude CLI's default or the project's Claude settings in `.claude/`), or its
+dollar budget. The summary lists every set-aside ticket with why, including one stopped at the deadline mid-run,
+which the next run resumes. A `setup` that fails is quoted up to 60 characters; a deadline reached during setup reads
+"deadline reached during setup; nothing ran".
 
 A **question** push carries buttons for options A and B and **Answer on computer**. Tap a letter to answer; options
 C to E are typed as the letter. "Answer on computer" tells the run to leave the question for `windvane answer`

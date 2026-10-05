@@ -17,6 +17,7 @@ from helpers import Sandbox  # noqa: E402
 from test_hangs import alive  # noqa: E402
 from test_pipeline import args  # noqa: E402
 
+NOTHING_RAN = "deadline reached during setup; nothing ran"
 FIX = "raise `setup_minutes` in config.toml or fix the setup"
 
 
@@ -57,7 +58,7 @@ class SetupLimits(unittest.TestCase):
         self.assertIsNone(pilot.halt)
         self.assertEqual([t for t, _ in self.pushes], ["windvane stopped"])  # no "couldn't start", no started
         self.assertTrue(self.pushes[0][1].startswith(f"Why: {why}."))
-        self.assertNotIn("setup", self.pushes[0][1])
+        self.assertNotIn("setup `", self.pushes[0][1])  # a stop, not a failed setup
         self.assertFalse(alive(int(self.pidfile.read_text())))
         self.assertFalse(p.work_dir.exists())  # half-made: the next start sets it up afresh
         self.assertIn("cut short", (p.state / "autopilot.log").read_text())
@@ -79,14 +80,14 @@ class SetupLimits(unittest.TestCase):
         self.assertFalse(ready)
         self.assertGreater(took, 1.5)
         self.assertLess(took, 6)
-        self.assert_stopped_not_failed(p, pilot, "deadline")
+        self.assert_stopped_not_failed(p, pilot, NOTHING_RAN)
 
     def test_a_deadline_moved_during_setup_ends_it_too(self):
         def sooner(p):
             (p.state / "DEADLINE").write_text((now() - timedelta(seconds=1)).isoformat())
         p, pilot, ready, took = self.run_setup(during=sooner)
         self.assertLess(took, 5)
-        self.assert_stopped_not_failed(p, pilot, "deadline")
+        self.assert_stopped_not_failed(p, pilot, NOTHING_RAN)
 
     def test_a_timed_out_setup_says_how_to_fix_it_once(self):
         p, pilot, ready, took = self.run_setup(minutes=0.02)
