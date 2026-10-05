@@ -83,6 +83,12 @@ def log(p, msg, echo=True):
         f.write(line + "\n")
 
 
+def last_log(p, n=1):
+    """The log's last `n` lines (None: all of them)."""
+    f = p.state / "autopilot.log"
+    return f.read_text().splitlines()[-n if n else 0:] if f.exists() else []
+
+
 def push(title, msg, prio=3, tags="", buttons=()):
     """A phone push (censored first), when there's a phone: see phone.py. Silently nothing without one."""
     from . import phone
