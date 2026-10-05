@@ -399,13 +399,14 @@ class WithTheDriver(PhoneTest):
 
     def test_stop_from_the_phone_stops_the_run(self):
         pilot = driver.Pilot(self.p, args())
-        orig = pilot.poll_questions
+        orig = pilot.pick
 
-        def stop_then_poll():
+        def stop_then_pick(free):
             if not any(m.get("title") == "Stop" for m in self.pushes()):
                 self.phone_sends("stop")
-            orig()
-        pilot.poll_questions = stop_then_poll
+                self.until(lambda: phone.pump() or (self.p.state / "STOP").exists())
+            return orig(free)
+        pilot.pick = stop_then_pick
         pilot.run(now() + timedelta(hours=1))
         self.assertEqual(pilot.merged, ["T-001"])  # the ticket picked in that pass ends; T-002 never starts
         self.assertEqual(len(self.worker_prompts()), 1)

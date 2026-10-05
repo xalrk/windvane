@@ -76,7 +76,7 @@ class Titles(unittest.TestCase):
         titles, asks = self.sent()
         self.assert_named_once(titles + asks, "Sandbox")
         for want in ("Sandbox windvane started", "Sandbox windvane stopped", "Sandbox: Done: do T-001 (T-001)",
-                     "Sandbox: No answer: do T-001 (T-001)", "Sandbox: Provisional: do T-002 (T-002)",
+                     "Sandbox: No answer: do T-001 (T-001)", "Sandbox: Done: do T-002 (T-002)",
                      "Sandbox: Failed: do T-003 (T-003)"):
             self.assertIn(want, titles)
         self.assertTrue(asks[0].startswith("Sandbox: do T-001 (T-001): Red or blue?"), asks)

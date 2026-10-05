@@ -182,17 +182,21 @@ Recommendation: A, because large uploads on mobile often need the longer window.
 What happens next depends on the time:
 - **Normally**, the worker stops `BLOCKED`, the question goes to your phone (if set up), and the ticket waits while
   others run. Answer with a tap, or at the desk with `windvane answer T-007 B` (or free text in quotes). With no
-  answer in `answer_wait` minutes, the next run builds the recommendation and marks it provisional.
+  answer in `answer_wait` minutes, the next run builds the recommendation and marks it provisional. Each question
+  reaches the phone once: when the ticket merges, its Done push names the answer built in one line.
 - **In a quiet time** (see [configuration](configuration.md#quiet-times)) nobody is asked: the worker builds its
   recommendation at once, records it under `## Provisional` with what to change to pick another option, and lists it
-  in the pull request. When the quiet time ends, the phone gets one list of the provisional answers to review.
+  in the pull request. Its Done push spells the question out, since you never saw it; when the quiet time ends,
+  the phone gets a list of any provisional answers no push has shown yet (none: no list).
 - Questions marked `Waits for the user:` (spending money, assets of unclear licence, undoing merged work) are never
   answered by default: they are asked even in a quiet time, and wait for you.
 
 **Preflight.** When `windvane run` starts in a terminal, a light session reads the tickets likely to run before the
 deadline and lists the product calls they will predictably need, so you can answer them before you leave.
 `windvane preflight` runs it on its own; `run --no-preflight` skips it. Answers go under `## Answered` on `main`
-and into that ticket's worker prompt.
+and into that ticket's worker prompt. Provisional answers are offered here once; one you skip stays in
+`windvane status` and the run's last push, and `windvane answer` still changes it. `windvane answer` also takes a
+question left under `## Open` on `main` that no run waits on (it would block its ticket for good).
 
 ## Where things live
 

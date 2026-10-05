@@ -152,6 +152,7 @@ def cmd_preflight(a, p):
     if not a.json:
         return ask_first(p, hours) if sys.stdin.isatty() else sys.exit("preflight: no terminal; use --json")
     qs = preflight.find(p, hours, Usage(p))
+    preflight.offered(p, qs)
     for x in qs:
         x["answer_with"] = f"windvane answer {x['id']} <letter, or your own words in quotes>"
     print(json.dumps(qs, indent=1))
@@ -214,6 +215,9 @@ def cmd_status(a, p):
         print(f"slot {slot}: {tid}")
     for tid, q in st.get("questions", {}).items():
         print(f"waiting on you: {tid}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
+    for q in questions.provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")):
+        print(f"provisional: {q['ticket']}: {q['question']} Built {q['built'] or '?'}"
+              + (f": {q['option']}" if q["option"] else "") + f". To change: windvane answer {q['ticket']} <letter>")
     print("\n".join(held_text(p, subject=None) + last_log(p, 12)))
 
 

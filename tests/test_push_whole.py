@@ -73,8 +73,7 @@ class PushWhole(unittest.TestCase):
         picks = [{"ticket": "T-001", "question": REASON, "built": "A", "option": REASON}]
         self.patch(driver, "provisional", lambda text: picks)
         self.pilot(worktree=True).merged_ok("T-001", "", self.s.git("rev-parse", "HEAD"))
-        self.assert_whole("Done", reason=False)
-        self.assert_whole("Provisional")
+        self.assert_whole("Done")  # a provisional answer the user never saw comes with its question
 
     def test_failed_keeps_the_reason_then_the_next_step(self):
         self.patch(net, "online", lambda: True)

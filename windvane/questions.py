@@ -125,3 +125,31 @@ def give_answer(p, tid, option=None, text=None):
 def phone_answer(p, tid):
     """"ANSWER <letter>\t<text>", "LATER" or "" from the phone."""
     return phone.answer(p.qid(tid))
+
+
+# ---------- what the user was shown (`shown.json` in the state dir): each question reaches them once
+
+def qkey(q):
+    return f"{q['ticket']}: {q['question']}"
+
+
+def shown(p):
+    """{"asked": {ticket: [questions sent to the phone]}, "pushed": [keys of provisional answers pushed],
+    "preflight": [keys of provisional answers offered at the desk]}."""
+    return {"asked": {}, "pushed": [], "preflight": [], **load_json(p.state / "shown.json", {})}
+
+
+def note(p, change):
+    """Load the record, let `change` edit it, save it."""
+    s = shown(p)
+    change(s)
+    save_json(p.state / "shown.json", s)
+
+
+def unseen(picks, asked):
+    """The provisional answers in `picks` whose question the user never got. A worker may reword a question as it
+    moves it to ## Provisional, so each sent question no pick matches word for word stands for one unmatched pick;
+    with more unmatched picks than such questions, which is which can't be told, so all of them are spelled out."""
+    left = [a for a in asked if a not in {q["question"] for q in picks}]
+    out = [q for q in picks if q["question"] not in asked]
+    return [] if len(out) <= len(left) else out

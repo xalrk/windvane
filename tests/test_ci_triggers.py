@@ -141,7 +141,7 @@ class DoctorOnWorkflows(unittest.TestCase):
         # lint 1 + test 2 x 3 + 1 include = 8 jobs a run; a PR and a merge push = 16 a ticket.
         self.assertRegex(out, r"WARNING +\.github/workflows/test\.yml runs on push and pull_request: about 16 hosted "
                               r"jobs a ticket \(8 a run, for its PR and again "
-                              r"for its merge\)  -> keep only "
+                              r"for its merge\) +-> keep only "
                               r"`on: workflow_dispatch` and run it by hand \(`gh workflow run test\.yml`\)")
 
     def test_inline_triggers_and_a_push_only_workflow(self):
