@@ -1,6 +1,7 @@
 """T-065: a reopened plan PR claims its ids again; `status` and `overview` show held-back branches (the phone's
 status counts them); `push_held`'s push puts what still needs the user first, under a title that says so."""
 import json
+import re
 import subprocess
 import sys
 import unittest
@@ -22,7 +23,8 @@ case "$*" in
 esac
 exit 0
 """
-HOOK_WHY = "refused by a hook or branch rule; fix the rule or push to another branch"
+HOOK_WHY = ("refused by a hook or branch rule; change the rule, or push it by hand with `git push origin {b}:{b}-b` "
+            "and merge it into main")
 
 
 class ReopenedPlans(Base):
@@ -79,9 +81,10 @@ class HeldInStatus(Base):
         for cmd in (["status"], ["overview"]):
             with self.subTest(cmd=cmd):
                 out = self.windvane(*cmd)
-                self.assertRegex(out, rf"(?i)held back, not pushed: {branch} \(Plan: 1 ticket.*\): {HOOK_WHY}\n"
+                self.assertRegex(out, rf"(?i)held back for under an hour, not pushed: {branch} \(Plan: 1 ticket.*\): "
+                                      rf"{re.escape(HOOK_WHY.format(b=branch))}\n"
                                       r"  \(each run's start tries these again\)")
-        self.assertIn("1 held-back change not pushed", self.windvane("status", "--line"))
+        self.assertIn("1 held-back change not pushed, for under an hour", self.windvane("status", "--line"))
 
     def test_nothing_when_none_is_held(self):
         driver.plan(self.p, "make it great")  # pushed fine
@@ -99,7 +102,7 @@ class HeldInStatus(Base):
         self.refusal = None
         self.assertEqual(driver.push_held(self.p), 0)
         self.assertEqual(len(driver.held_lines(self.p)), 1)
-        self.assertIn(HOOK_WHY, driver.held_lines(self.p)[0])
+        self.assertIn(HOOK_WHY.format(b=self.local()), driver.held_lines(self.p)[0])
 
 
 class HeldPush(Base):

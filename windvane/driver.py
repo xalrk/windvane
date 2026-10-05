@@ -1514,7 +1514,7 @@ def push_branch(p, cd, branch, tries=2):
             return branch
     git(cd, "branch", "-f", branch, "HEAD")
     log(p, f"push to {branch} refused ({' '.join(res.stderr.split())[:200]}); kept only locally on {branch}")
-    why = push_refusal(res.stderr, p.cfg["forge"])
+    why = push_refusal(res.stderr, p.cfg["forge"], branch, p.remote, p.main)
     hold(p, branch, "push", why)
     return f"the local branch {branch} ({why})"
 
@@ -1522,14 +1522,26 @@ def push_branch(p, cd, branch, tries=2):
 def hold(p, branch, how, why=""):
     """Note a branch a failed push kept locally, for `push_held`: "push" it, or "land" it (a merge stays a merge).
     Only branches noted here are ever pushed again, so a user's own copy of a closed plan never comes back. The
-    refusal's reason goes beside it (held_why.json, the newest wins), for `status` to show while it waits."""
+    refusal's reason goes beside it (held_why.json, the newest wins) with when it was first held, for `status` to show
+    while it waits."""
     held = load_json(p.state / "held.json", {})
     if held.get(branch) != "land":
         held = {**held, branch: how}
-        save_json(p.state / "held.json", held)
-    if why:
-        reasons = load_json(p.state / "held_why.json", {})
-        save_json(p.state / "held_why.json", {b: w for b, w in {**reasons, branch: why}.items() if b in held})
+    old = held_note(load_json(p.state / "held_why.json", {}).get(branch))
+    save_held(p, held, {branch: {"why": why or old.get("why", ""), "at": old.get("at") or int(time.time())}})
+
+
+def held_note(note):
+    """A held_why.json entry as {"why", "at"}: one written before T-072 is the reason alone, with no time."""
+    return note if isinstance(note, dict) else {"why": note or ""}
+
+
+def save_held(p, held, notes=None):
+    """Write held.json and, in the same step, drop the reasons of branches no longer in it (adding `notes`), so no
+    stale reason outlives its branch."""
+    save_json(p.state / "held.json", held)
+    reasons = {**load_json(p.state / "held_why.json", {}), **(notes or {})}
+    save_json(p.state / "held_why.json", {b: w for b, w in reasons.items() if b in held})
 
 
 # What a refused push's stderr says, first match wins, with its next step: a login problem is fixed by logging in, a
@@ -1539,7 +1551,8 @@ REFUSALS = (
     ("login refused; {login} and the next run pushes it",
      re.compile(r"authentication failed|permission denied|permission to .* denied|could not read username|"
                 r"terminal prompts disabled|invalid username or password|\b403\b", re.I)),
-    ("refused by a hook or branch rule; fix the rule or push to another branch",
+    ("refused by a hook or branch rule; change the rule, or push it by hand with `git push {remote} {branch}:{branch}-b` "
+     "and {then}",
      re.compile(r"hook declined|protected branch|GH00\d|GH013|rule violation|remote rejected", re.I)),
     ("network down; the next run pushes it again",
      re.compile(r"could not resolve|timed out|connection (refused|reset)|network is unreachable|unable to access|"
@@ -1548,14 +1561,18 @@ REFUSALS = (
 
 
 LOGIN = {"github": "run `gh auth login`", "git": "check your login to the remote"}
+# After a hand push: windvane counts the branch as pushed and stops tracking it, so the user lands it.
+THEN = {"github": "open a PR from it", "git": "merge it into {main}"}
 
 
-def push_refusal(stderr, forge="git"):
+def push_refusal(stderr, forge="git", branch="BRANCH", remote="origin", main="main"):
     """A short reason for a refused push and its next step, from git's stderr: auth, hook, network; anything else
-    sends the user to the log, which `push_branch` gave git's own words (a raw git line reads badly on a phone)."""
+    sends the user to the log, which `push_branch` gave git's own words (a raw git line reads badly on a phone).
+    A hook's step names the command for `branch` on `remote`: under another name it counts as pushed (`held_here`)."""
     for why, pattern in REFUSALS:
         if pattern.search(stderr):
-            return why.format(login=LOGIN.get(forge, LOGIN["git"]))
+            return why.format(login=LOGIN.get(forge, LOGIN["git"]), branch=branch, remote=remote,
+                              then=THEN.get(forge, THEN["git"]).format(main=main))
     return "push failed; see the windvane log"
 
 
@@ -1630,13 +1647,13 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
 def held_branches(p):
     """The branches `hold` noted that still wait: unmerged and on no remote branch (pushing one by hand under another
     name counts as pushed), with no PR on github (one pushed by hand, its PR closed and branch deleted, stays
-    closed). Notes for any other branch are dropped."""
+    closed). Notes and reasons for any other branch are dropped."""
     held, root = load_json(p.state / "held.json", {}), p.main_root()
     waiting = {b: how for b, how in held_here(p, held).items()
                if not (p.cfg["forge"] == "github" and net.sh(root, "gh", "pr", "list", "--head", b, "--state", "all",
                                                                 "--json", "number", "-q", ".[].number"))}
-    if waiting != held:
-        save_json(p.state / "held.json", waiting)
+    if waiting != held or set(load_json(p.state / "held_why.json", {})) - set(waiting):
+        save_held(p, waiting)
     return waiting
 
 
@@ -1649,13 +1666,32 @@ def held_here(p, held):
     return {b: how for b, how in held.items() if b in unmerged and not gout(root, "branch", "-r", "--contains", b)}
 
 
+def held_now(p):
+    """(branch, the last refusal's reason and next step, when it was held) for each held branch still waiting; read
+    only (no `gh`, no write: `held_branches` prunes at the next run's start). One held before T-072 has no time
+    noted: its last commit's date stands in."""
+    reasons, out = load_json(p.state / "held_why.json", {}), []
+    for b in held_here(p, load_json(p.state / "held.json", {})):  # no git call when none is held
+        note = held_note(reasons.get(b))
+        at = note.get("at") or int(gout(p.main_root(), "log", "-1", "--format=%ct", b) or time.time())
+        out.append((b, note["why"] or "push failed; see the windvane log", at))
+    return out
+
+
 def held_lines(p):
-    """One line per held branch with the last refusal's reason and next step, for `status` and `overview`; read
-    only (no `gh`, no write: `held_branches` prunes at the next run's start)."""
-    reasons = load_json(p.state / "held_why.json", {})
-    return [f"held back, not pushed: {b} ({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:60]}): "
-            f"{reasons.get(b) or 'push failed; see the windvane log'}"
-            for b in held_here(p, load_json(p.state / "held.json", {}))]
+    """One line per held branch with how long it has waited, the last refusal's reason and next step, for `status`
+    and `overview`."""
+    return [f"held back for {age(time.time() - at)}, not pushed: {b} "
+            f"({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:60]}): {why}" for b, why, at in held_now(p)]
+
+
+def age(seconds):
+    """ "under an hour", "5 hours", "3 days": how long something has waited, in a phone line's words."""
+    hours = int(seconds // 3600)
+    if hours < 1:
+        return "under an hour"
+    n, unit = (hours, "hour") if hours < 24 else (hours // 24, "day")
+    return f"{n} {unit}{'s' * (n > 1)}"
 
 
 def push_held(p):
@@ -1708,7 +1744,7 @@ def push_one_held(p, cd, branch, how):
         log(p, f"{branch}: still not pushed{where.removeprefix(f'the local branch {branch}')}")
         return ""
     git(p.main_root(), "branch", "-D", branch)
-    save_json(p.state / "held.json", {b: h for b, h in load_json(p.state / "held.json", {}).items() if b != branch})
+    save_held(p, {b: h for b, h in load_json(p.state / "held.json", {}).items() if b != branch})
     no_pr = not to_land and p.cfg["forge"] == "github" and where == branch
     how = (("merged" if landed else "not merged; merge it by hand") if to_land
            else "pushed; no PR opened, open one by hand" if no_pr else "pushed")

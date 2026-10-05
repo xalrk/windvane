@@ -57,7 +57,8 @@ class PlanPushes(unittest.TestCase):
         hook.chmod(0o755)
         self.assertEqual(driver.plan(self.p, "make it great"), 0)
         self.assertEqual(self.pushes[-1][0], "plan not pushed")
-        self.assertIn("(refused by a hook or branch rule; fix the rule or push to another branch).", self.pushes[-1][1])
+        self.assertRegex(self.pushes[-1][1], r"\(refused by a hook or branch rule; change the rule, or push it by hand "
+                                             r"with `git push origin (plan-\S+):\1-b` and merge it into main\)\.$")
 
     def test_a_refused_merge_says_why_too(self):
         self.refuse_with("ssh: connect to host github.com port 22: Connection timed out\n"

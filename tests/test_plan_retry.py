@@ -101,8 +101,9 @@ class HeldPlans(Base):
             self.assertEqual(self.git_pushes, 2 + run)
         self.assertEqual(len(self.pushes), told)  # no phone push for a refusal the user already heard
         self.assertEqual(self.local(), branch)
-        self.assertEqual(self.log().count(f"{branch}: still not pushed (refused by a hook or branch rule; fix the "
-                                          "rule or push to another branch)"), 2)
+        self.assertEqual(self.log().count(f"{branch}: still not pushed (refused by a hook or branch rule; change the "
+                                          f"rule, or push it by hand with `git push origin {branch}:{branch}-b` and "
+                                          "merge it into main)"), 2)
 
     def test_a_held_merge_plan_is_landed(self):
         self.refusal = NETWORK
@@ -169,13 +170,13 @@ class HeldPlans(Base):
 class Refusals(Base):
     def test_each_refusal_names_its_own_next_step(self):
         for stderr, step in ((AUTH, "check your login to the remote and the next run pushes it"),
-                             (HOOK, "fix the rule or push to another branch"),
+                             (HOOK, "-b` and merge it into main"),
                              (NETWORK, "the next run pushes it again"), (OTHER, "push failed; see the windvane log")):
             with self.subTest(step=step):
                 self.refusal = stderr
                 self.assertEqual(driver.plan(self.p, "make it great"), 0)
                 self.assertIn(f"{step}).", self.pushes[-1][1])
-                self.assertNotIn("by hand", self.pushes[-1][1])
+                self.assertEqual("by hand" in self.pushes[-1][1], stderr == HOOK)  # only a hook needs a hand push
         self.assertIn("src refspec x does not match any", self.log())  # git's own words stay in the log
 
     def test_on_github_the_login_step_is_gh(self):

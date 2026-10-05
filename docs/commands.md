@@ -47,7 +47,7 @@ Options of `windvane run`:
 
 | Command | What it does |
 |---|---|
-| `windvane status [--line]` | Running or not, the slots, questions waiting for you, a `held back, not pushed:` line per change a refused push kept on a local branch (with why and what to do), the log's tail. `--line`: one line, with the held-back count. |
+| `windvane status [--line]` | Running or not, the slots, questions waiting for you, a `held back for <age>, not pushed:` line per change a refused push kept on a local branch (with why and what to do), the log's tail. `--line`: one line, with the held-back count and the oldest one's age. |
 | `windvane overview` | Where the project stands: tickets merged, underway, not started; critic scale health; held-back changes, as in `status`; then `overview_extra`'s output. |
 | `windvane watch [-n 30] [-o 6]` | Follow the running sessions live: what each says, the commands it runs, their output (`-o` lines each, 0 hides output). |
 | `windvane stats [--days 7] [--by role\|ticket] [--wide]` | Tokens, turns and minutes per role or ticket, from the ledger, costliest first by weighted tokens (cache reads and output priced in), in 100 columns (`--wide` adds each run's starting context and what each turn re-reads, wider than 100 columns); runs that died or were killed for time, orphaned process groups killed, and by ticket the outcome and the cost per merged ticket with and without overhead. See [Token efficiency](tokens.md). |

@@ -205,9 +205,7 @@ def cmd_status(a, p):
     on = running(p)
     if a.line:
         last = (last_log(p) or [""])[0][11:]
-        held = len(driver.held_lines(p))
-        extra = "".join(f". {x}" for x in (held and f"{held} held-back change{'s' * (held > 1)} not pushed",
-                                           actions.line(p), f"Last: {last}" if last else "") if x)
+        extra = "".join(f". {x}" for x in (held_count(p), actions.line(p), f"Last: {last}" if last else "") if x)
         print(f"{p.display}: autopilot {'running' if on else 'off'}{extra}")
         return
     print(f"autopilot: {('running in tmux ' + p.tmux if in_tmux(p) else 'running') if on else 'not running'}")
@@ -220,6 +218,15 @@ def cmd_status(a, p):
     for tid, q in st.get("questions", {}).items():
         print(f"waiting on you: {tid}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
     print("\n".join(held_text(p) + last_log(p, 12)))
+
+
+def held_count(p):
+    """The phone's held-back count and how long the oldest has waited; "" when none waits."""
+    held = [at for _, _, at in driver.held_now(p)]
+    if not held:
+        return ""
+    n, waited = len(held), driver.age(time.time() - min(held))
+    return f"{n} held-back change{'s' * (n > 1)} not pushed, " + (f"oldest {waited}" if n > 1 else f"for {waited}")
 
 
 def held_text(p):
