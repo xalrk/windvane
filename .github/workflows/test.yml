@@ -1,4 +1,5 @@
-# The test suite on every supported Python. Standard library only: nothing to install.
+# The test suite on every supported Python, and on macOS once (no /proc there: the sweep reads start times from `ps`).
+# Standard library only: nothing to install.
 # Runs on main and on pull requests, not on every branch push: the autopilot pushes its ticket branches often.
 name: tests
 
@@ -14,12 +15,16 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: macos-latest
+            python: "3.13"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
