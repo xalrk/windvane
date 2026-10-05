@@ -24,7 +24,7 @@ import time
 import traceback
 from datetime import datetime, timedelta
 
-from . import actions, critic, net, phone, renumber, selfupdate
+from . import actions, critic, net, phone, renumber, scratch, selfupdate
 from .renumber import OLD_NUMBERS, said
 from .desk import Desk
 from .held import author_ident, push_held
@@ -796,6 +796,7 @@ class Pilot(Desk, Periodic):
             if branch and git(wd, "merge-base", "--is-ancestor", branch, p.upstream).returncode == 0:
                 git(wd, "branch", "-q", "-D", branch)  # -d's own test would use the deleted remote branch
         self.merged.append(tid)
+        scratch.drop(p, tid)
         with self.lock:  # this attempt is still running: its time so far counts too
             ran = self.spent.pop(tid, 0) + time.time() - self.began.get(tid, time.time())
         self.minutes.append(round(ran / 60, 2))
@@ -817,6 +818,7 @@ class Pilot(Desk, Periodic):
 
     def fail(self, tid, why):
         self.skip.add(tid)
+        scratch.drop(self.p, tid)
         self.failed.append(tid)
         self.approved.pop(tid, None)
         self.log(f"{tid}: FAILED: {why}")
@@ -1135,7 +1137,16 @@ class Pilot(Desk, Periodic):
                     self.spent[tid] = self.spent.get(tid, 0) + ran
                 self.beside.discard(tid)  # a later attempt alone doesn't count its conflicts against parallel
             self.save()
+            self.clean_tmp()
             self.wake.set()
+
+    def clean_tmp(self):
+        """Between tickets: what tests and sessions leaked into the temp dir, before it fills (tmpfs inodes)."""
+        with self.lock:
+            running = set(self.running)
+        dirs, n = scratch.clean(self.p, running)
+        if dirs:
+            self.log(f"removed {dirs} leftover temp dir{'s' * (dirs > 1)} ({n} files)")
 
     def loop(self):
         p = self.p
@@ -1284,6 +1295,7 @@ class Pilot(Desk, Periodic):
         swept = sweep_nested(p)  # under the lock: no live run owns them
         if swept:
             self.log(f"killed {swept} process group{'s' * (swept > 1)} left running by an earlier run's sessions")
+        self.clean_tmp()
         ready, crashed = False, None
         try:
             ready = self.rules_ok() and self.prepare(0)  # before any session or push: a bad rule or a failed setup

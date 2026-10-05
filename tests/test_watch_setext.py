@@ -3,7 +3,6 @@ sizes rules with `watch.beside`, flags rules cut short as well as too long, and 
 import importlib.util
 import subprocess
 import sys
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -14,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from windvane import watch  # noqa: E402
+from helpers import tmpdir  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location("watch_sweep", ROOT / "tools" / "watch-sweep.py")
 sweep = importlib.util.module_from_spec(SPEC)
@@ -49,7 +49,7 @@ class Setext(unittest.TestCase):
 
 class SweepOnItsOwn(unittest.TestCase):
     def sweep(self, *args):
-        state = Path(tempfile.mkdtemp())
+        state = tmpdir(self)
         return subprocess.run([sys.executable, str(ROOT / "tools" / "watch-sweep.py"), str(state), *args],
                               capture_output=True, text=True)
 
@@ -86,7 +86,7 @@ class RuleCutShort(unittest.TestCase):
         short = lambda out, r, tables, cols: 3
         out = StringIO()
         with mock.patch.object(watch, "rule_width", short), redirect_stdout(out):
-            self.assertEqual(sweep.main([tempfile.mkdtemp(), "--widths", "120"]), 1)
+            self.assertEqual(sweep.main([str(tmpdir(self)), "--widths", "120"]), 1)
         self.assertIn("synthetic:1 @120: rule short of text (3)", out.getvalue())
 
     def test_beside_is_what_rule_width_sizes_by(self):

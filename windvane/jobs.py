@@ -14,6 +14,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import scratch
 from .config import exe
 from .runner import NEST, TICKET
 from .util import append_jsonl, gout, now, read_jsonl
@@ -88,6 +89,8 @@ def run_logged(p, ticket, cmd, cwd, log):
     `HEARTBEAT` even when the check went quiet."""
     start = time.time()
     code = None
+    t = ticket or os.environ.get(TICKET)  # a ticket's check gets its scratch dir as TMPDIR, as its sessions do
+    env = {**os.environ, **({"TMPDIR": str(scratch.session_dir(p, t))} if t else {})}
     try:
         with log.open("w") as f:
             fcntl.flock(f, fcntl.LOCK_EX)  # blocking: `running` may hold a momentary shared probe
@@ -98,9 +101,9 @@ def run_logged(p, ticket, cmd, cwd, log):
                     code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
                                            "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd,
                                           stdout=f, stderr=subprocess.STDOUT,
-                                          env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])}).returncode
+                                          env={**env, "PYTHONPATH": str(Path(__file__).parents[1])}).returncode
                 else:
-                    code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT).returncode
+                    code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT, env=env).returncode
             finally:
                 beat.set()
     finally:

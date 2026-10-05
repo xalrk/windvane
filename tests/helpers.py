@@ -1,9 +1,11 @@
 """Test helpers: a throwaway project repo with a bare remote, and an environment that can't reach the real phone
 or the real Claude (PATH holds only a fake `claude` and the system's bin dirs)."""
 import os
+import shutil
 import subprocess
 import tempfile
 import textwrap
+import weakref
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -198,11 +200,23 @@ emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01,
 '''
 
 
+def tmpdir(test, prefix="windvane-"):
+    """A temp dir removed when `test` ends, passed or failed: every check runs the suite on four Pythons, and a dir
+    leaked per run once took all of /tmp's inodes."""
+    d = Path(tempfile.mkdtemp(prefix=prefix))
+    test.addCleanup(shutil.rmtree, d, ignore_errors=True)
+    return d
+
+
 class Sandbox:
     """A project with a bare `origin`, `.windvane/` set up for forge git, and an isolated environment."""
 
     def __init__(self, config_extra=""):
         self.tmp = Path(tempfile.mkdtemp(prefix="windvane-test-"))
+        # removed by close(), or when it's collected or the run ends: a setUp that fails after this never calls close
+        self.rm = weakref.finalize(self, shutil.rmtree, str(self.tmp), True)
+        (self.tmp / "tmp").mkdir()  # the temp dir of everything it runs, and of the test's own tempfile calls
+        self.old_tempdir, tempfile.tempdir = tempfile.tempdir, str(self.tmp / "tmp")
         self.remote = self.tmp / "remote.git"
         self.root = self.tmp / "proj"
         self.bin = self.tmp / "bin"
@@ -213,7 +227,7 @@ class Sandbox:
         (self.bin / "windvane").symlink_to(REPO / "bin/windvane")
         self.env = {"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.tmp / "home"),
                     "XDG_STATE_HOME": str(self.tmp / "state"), "XDG_CONFIG_HOME": str(self.tmp / "config"),
-                    "WINDVANE_SELF_UPDATE": "0",
+                    "WINDVANE_SELF_UPDATE": "0", "TMPDIR": str(self.tmp / "tmp"),
                     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "FAKE_LOG": str(self.tmp / "calls.jsonl")}
         self.old_env = dict(os.environ)
@@ -225,7 +239,6 @@ class Sandbox:
             os.environ.pop(k)
         from windvane import net
         net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage
-        import shutil
         assert shutil.which("claude") == str(fake) and not shutil.which("notify"), "tests must not reach the real tools"
         self.git("init", "-q", "--bare", "-b", "main", str(self.remote), cwd=self.tmp)
         self.root.mkdir()
@@ -269,4 +282,5 @@ class Sandbox:
         phone.use(None)  # the next test's pushes name its own project
         os.environ.clear()
         os.environ.update(self.old_env)
-        subprocess.run(["rm", "-rf", str(self.tmp)])
+        tempfile.tempdir = self.old_tempdir
+        self.rm()

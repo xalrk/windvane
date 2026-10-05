@@ -554,9 +554,11 @@ class Heavy(unittest.TestCase):
     def test_runs_the_command_and_nests_without_deadlock(self):
         import os
         import subprocess
+        import shutil
         import tempfile
         from windvane import heavy
         env_tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, env_tmp, True)
         old = dict(os.environ)
         os.environ.update({"XDG_RUNTIME_DIR": env_tmp, "XDG_CONFIG_HOME": env_tmp})
         try:

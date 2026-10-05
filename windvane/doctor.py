@@ -9,8 +9,9 @@ import shutil
 import subprocess
 import sys
 
-from . import actions, heavy, install, phone, runner
+from . import actions, heavy, install, phone, runner, scratch
 from .config import CHECKOUT
+from .util import load_json
 
 # The triggers that run a workflow on its own for every autopilot ticket: its PR and the merge push to main.
 AUTO_TRIGGERS = ("push", "pull_request", "pull_request_target")
@@ -223,10 +224,40 @@ def checks(p=None):
     settings = install.claude_dir() / "settings.json"
     add(install.has_keyword_hook(settings, any_copy=True), False, f"the mention hook in {settings}",
         "windvane install")
+    return out + tmp_warnings(p)
+
+
+def tmp_scope(p):
+    """(the project whose session dirs count too, or None; its running tickets, which keep theirs)."""
+    if p is None or not getattr(p, "exists", False) or not getattr(p, "state", None):
+        return None, set()
+    return p, set(load_json(p.state / "state.json", {}).get("running", {}))
+
+
+def tmp_warnings(p=None):
+    """The temp dir nearly full (a full tmpfs stops every command), and windvane's leftovers in it, biggest first."""
+    out, tmp = [], scratch.root()
+    try:
+        inodes, space = scratch.fullness(tmp)
+    except OSError:
+        inodes = space = 0
+    if max(inodes, space) > scratch.FULL:
+        out.append(("warn", f"the temp dir {tmp} is {inodes:.0f}% full of inodes and {space:.0f}% of space: when "
+                    "either is full, no command runs", "remove what fills it; windvane doctor --clean removes "
+                    "windvane's own leftovers"))
+    left = scratch.leftovers(*tmp_scope(p))
+    if left:
+        big = ", ".join(f"{d.name} ({n} files)" for d, n, _ in left[:3])
+        out.append(("warn", f"{len(left)} leftover windvane temp dirs, {sum(n for _, n, _ in left)} files "
+                    f"(biggest: {big})", "windvane doctor --clean"))
     return out
 
 
-def main(p=None):
+def main(p=None, clean=False):
+    if clean:
+        dirs, n = scratch.clean(*tmp_scope(p))
+        print(f"removed {dirs} leftover windvane temp dirs ({n} files) from {scratch.root()}"
+              + (f" and {p.state / 'tmp'}" if tmp_scope(p)[0] else ""))
     rows = checks(p)
     width = max(len(what) for level, what, _ in rows if level != "warn")  # a long warning mustn't push every fix out
     label = {"ok": "ok      ", "need": "MISSING ", "optional": "optional", "warn": "WARNING "}
