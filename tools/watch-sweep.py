@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Render every assistant message in a state dir's session logs the way `windvane watch` does, at a few widths, and
 report what a renderer change broke: lines wider than the width, crashes, Markdown markers left in the text, and a
-`---` rule wider than every other line. Each message is checked whole and as `watch` prints it, clipped; a finding
-only the clip has is marked `clipped`. After the logs come a few built-in messages (`synthetic:<n>`) with what the
-logs may lack, such as rules beside tables; --no-synthetic leaves them out.
+`---` rule wider than both blocks beside it or, short of the width, narrower than both. Each message is checked whole
+and as `watch` prints it, clipped; a finding only the clip has is marked `clipped`. After the logs come a few
+built-in messages (`synthetic:<n>`) with what the logs may lack, such as rules beside tables; --no-synthetic leaves
+them out. With no logs (a fresh checkout), only those are checked.
 
   watch-sweep.py STATE_DIR [--widths 60,80,120] [--show] [--no-synthetic]
 
@@ -11,7 +12,7 @@ It reads `STATE_DIR/runs/*.jsonl` and never runs `claude`. Findings are printed 
 kind; the rendered line itself only with --show, since it may hold paths or names. Code (spans and fenced blocks)
 is skipped for markers: a marker there is what was typed.
 
-Exit status: 0 clean, 1 findings, 2 no logs to read.
+Exit status: 0 clean, 1 findings, 2 nothing to check (no logs and --no-synthetic).
 """
 import argparse
 import json
@@ -34,12 +35,14 @@ PROSE = "Some **bold** prose with `code` that runs on long enough to wrap at eve
 NARROW = "| Name | Value |\n|---|---|\n| alpha | 1 |\n| beta | 22 |"
 WIDE = "\n".join(["| " + " | ".join(f"Column {k}" for k in range(8)) + " |", "|" + "---|" * 8]
                  + ["| " + " | ".join(f"row {r} cell {k}" for k in range(8)) + " |" for r in range(3)])
-SYNTHETIC = [  # rules beside what they're sized from; the session logs had none
+SYNTHETIC = [  # rules beside what they're sized from, and setext headings; the session logs had none
     PROSE + "\n\nIn short:\n\n---\n\n" + NARROW + "\n\n---\n\n" + PROSE,
     NARROW + "\n\n---\n\n" + NARROW.replace("alpha", "a much longer name"),
     WIDE + "\n\n---\n\n" + PROSE,
     "---\n\n" + PROSE + "\n\n" + NARROW + "\n\n---",
-    PROSE + "\n---\n" + NARROW + "\n---\nDone.",  # no blank lines: each rule still stops at the other
+    "- " + PROSE + "\n---\n" + NARROW + "\n---\nDone.",  # no blank lines after a list or table: rules, each
+    # stopping at the other
+    "A **setext** heading with `code`\n---\n" + PROSE + "\nand its second line\n===\n\n---\n\n" + NARROW,
 ]
 
 
@@ -68,7 +71,7 @@ def check(text, cols):
             clipped = watch.clip_rendered(parts, watch.TEXT_LINES, color).split("\n")
         except Exception:
             return [("crash", traceback.format_exc().strip().splitlines()[-1])]
-        seen = problems(whole, color, cols) + rule_past_text(parts)
+        seen = problems(whole, color, cols) + rule_misfits(parts, cols)
         found += seen + [("clipped " + kind, line) for kind, line in problems(clipped, color, cols) if (kind, line)
                          not in seen]
     return list(dict.fromkeys(found))  # once each, though both colourings may find it
@@ -87,26 +90,20 @@ def problems(lines, color, cols):
     return found
 
 
-def rule_past_text(parts):
-    """A finding for each `---` rule (a block of one line of nothing but ─) wider than every line of the block just
-    above it and just below it, past blank lines and up to another rule: it runs on past what it parts. A table's or
-    records' own rules are inside their block, so they're not checked."""
-    plain = [[ANSI.sub("", line) for line, _ in b] for b in parts]
-    is_rule = [len(b) == 1 and set(b[0]) == {"─"} for b in plain]
+def rule_misfits(parts, cols=0):
+    """A finding for each `---` rule (a block of one line of nothing but ─) wider than every line of the blocks
+    `watch.beside` it (it runs on past what it parts), or narrower than the widest line on each side while short of
+    `cols` (cut short). The blocks are taken whole, tables or not: either way is a misfit. A table's or records'
+    own rules are inside their block, so they're not checked."""
+    rules = {i for i, b in enumerate(parts) if len(b) == 1 and set(ANSI.sub("", b[0][0])) == {"─"}}
     found = []
-    for i, b in enumerate(plain):
-        if not is_rule[i]:
-            continue
-        near = []
-        for step in (-1, 1):
-            j = i + step
-            while 0 <= j < len(plain) and plain[j] == [""]:
-                j += step
-            while 0 <= j < len(plain) and plain[j] != [""] and not is_rule[j]:
-                near += [watch.width(line) for line in plain[j]]
-                j += step
-        if near and watch.width(b[0]) > max(near):
-            found.append((f"rule past text ({watch.width(b[0])})", b[0]))
+    for i in sorted(rules):
+        rule = ANSI.sub("", parts[i][0][0])
+        w, (above, below) = watch.width(rule), watch.beside(parts, i, rules)
+        if above + below and w > max(above + below):
+            found.append((f"rule past text ({w})", rule))
+        elif above and below and w < min(max(above), max(below)) and not (cols and w >= cols):
+            found.append((f"rule short of text ({w})", rule))
     return found
 
 
@@ -120,10 +117,11 @@ def main(argv=None):
     a = ap.parse_args(argv)
     widths = [int(w) for w in a.widths.split(",")]
     msgs = list(messages(a.state))
-    if not msgs:
-        print(f"no assistant messages in {a.state / 'runs'}")
-        return 2
     extra = [(f"synthetic:{n}", text) for n, text in enumerate(SYNTHETIC, 1)] if a.synthetic else []
+    if not msgs:
+        print(f"no assistant messages in {a.state / 'runs'}" + ("" if extra else ": nothing to check"))
+        if not extra:
+            return 2
     counts = {}
     for place, text in msgs + extra:
         for cols in widths:
