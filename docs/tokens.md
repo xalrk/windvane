@@ -39,6 +39,7 @@ critic         79           ·   366    1,125k     5,394k    197k    2,929k   14
 planner         3           ·    55      193k     1,903k     49k      674k    2.90     9
 preflight       2           ·     2       26k        18k      1k       38k    0.11     0
 checks: 71 runs, 203 min (5.8 min a ticket checked), 9 failed, 2 cut off, 40 reused a pass
+costliest wasted check: T-060, 18 min, cut off
 died or killed: 1 run (1 died, 0 killed for time), 948k weighted tokens, 3% of all
 ```
 
@@ -66,11 +67,14 @@ flatters a run that re-reads a big context.
 from the `min` column; no line without any. The average is over the tickets that ran a check (a ticket that only
 reused a pass isn't one). `cut off` counts checks that never finished: stopped by Ctrl-C or an error (their minutes so
 far count), or killed outright, a driver or a session's tool timeout, which leaves only the check's start row: it is
-timed from its start to its log's last write (each check has its own log; one that went quiet before the kill
-counts up to its last output), or 0 if the log is gone. A check that's
-still going is neither: `1 still running`. With `--by ticket`, `most check time: T-060, 4 runs, 31 min` follows (the
-ticket whose checks took longest), then `costliest wasted check: T-060, 18 min, cut off`: the longest check that
-failed or was cut off, the time that bought nothing; no line when every check passed.
+timed from its start to its log's last write (each check has its own log, touched about once a minute while it
+runs, so even a silent hang counts to within a minute of its kill), or 0 if the log is gone. A check that's still
+going is neither: `1 still running`. Then `costliest wasted check: T-060, 18 min, cut off`: the longest check that
+failed or was cut off, the time that bought nothing; no line when every check passed. With `--by ticket`,
+`most check time: T-060, 4 runs, 31 min` comes before it (the ticket whose checks took longest).
+
+Check logs (`state/checks/`) are pruned when a check starts: a passed check's log after 3 days, any after 3 weeks,
+but never one still running or one of the 5 newest that failed or were cut off.
 
 The `died or killed` line is what outages, crashes and hung sessions cost: their runs' weighted tokens, and their
 share of all. `orphaned process groups killed: N` follows when a run killed process groups a dead driver's sessions

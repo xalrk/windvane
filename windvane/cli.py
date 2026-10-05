@@ -486,8 +486,8 @@ def cmd_stats(a, p):
 def check_runs(p, checks):
     """(the checks that ran, reused passes, checks still running). Ran: the end rows that didn't reuse a pass, plus
     a start row no end row matches (same ticket and start) whose check isn't running any more: it was killed, and
-    counts as cut off like an end row with `finished: false`, timed from its start to its log's last write (0 with
-    no log)."""
+    counts as cut off like an end row with `finished: false`, timed from its start to its log's last write (the
+    check's heartbeat keeps that within a minute of the kill; 0 with no log)."""
     ends = [r for r in checks if r.get("event") == "check"]
     ended = {(r["ticket"], r.get("start")) for r in ends}
     open_ = [r for r in checks if r.get("event") == "check-start" and (r["ticket"], r.get("start")) not in ended]
@@ -508,8 +508,8 @@ def killed_minutes(p, start_row):
 
 def check_stats(checks, by, p):
     """What the check costs: its runs and minutes, per ticket that ran one, and the failed, cut off, reused and still
-    running ones (only when there are some); by ticket, the ticket whose checks took longest and the longest check
-    that bought nothing (failed or cut off). Not in the table: a check spends time, not tokens."""
+    running ones (only when there are some); the longest check that bought nothing (failed or cut off), and by ticket,
+    the ticket whose checks took longest. Not in the table: a check spends time, not tokens."""
     if not checks:
         return
     ran, reused, live = check_runs(p, checks)
@@ -528,11 +528,11 @@ def check_stats(checks, by, p):
     if by == "ticket" and per:
         top = max(per, key=lambda t: (per[t][1], per[t][0]))
         print(f"most check time: {top}, {plural(per[top][0], 'run')}, {m(per[top][1])} min")
-        wasted = [r for r in ran if not r.get("passed") and (r.get("minutes") or 0) > 0]
-        if wasted:
-            w = max(wasted, key=lambda r: r["minutes"])
-            print(f"costliest wasted check: {w['ticket']}, {m(w['minutes'])} min, "
-                  + ("cut off" if w.get("finished") is False else "failed"))
+    wasted = [r for r in ran if not r.get("passed") and (r.get("minutes") or 0) > 0]
+    if wasted:
+        w = max(wasted, key=lambda r: r["minutes"])
+        print(f"costliest wasted check: {w['ticket']}, {m(w['minutes'])} min, "
+              + ("cut off" if w.get("finished") is False else "failed"))
 
 
 def orphans(swept):

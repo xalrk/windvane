@@ -10,14 +10,25 @@ import itertools
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 from .config import exe
 from .runner import NEST, TICKET
-from .util import append_jsonl, gout, now
+from .util import append_jsonl, gout, now, read_jsonl
 
 _LOGS = itertools.count(1)  # a check log's number in this process
+# A running check touches its log this often (seconds): `stats` times a killed check by its log's last write, so a
+# check that hung without output would otherwise count as nearly free; this bounds the error to one interval.
+HEARTBEAT = 60
+# How long check logs are kept (seconds), pruned at each check's start, since every check writes its own log: a
+# passed check's log is rarely opened once its ticket moves on, so it goes after a few days; any log after a few
+# weeks, when no ticket still running needs it. The newest failed or cut-off logs stay whatever their age: the
+# last failure is the log someone opens.
+KEEP_PASSED = 3 * 86400
+KEEP_ANY = 21 * 86400
+KEEP_FAILED = 5
 
 
 def tree_key(p, cwd):
@@ -48,6 +59,7 @@ def check(p, cwd, quiet=False, ticket=None):
         return True, f"CHECK PASSED (reused the pass from {(passes / key).read_text().strip()} for this tree)", None
     logs = p.state / "checks"
     logs.mkdir(parents=True, exist_ok=True)
+    prune(p, logs)
     log = logs / log_name()
     code, mins = run_logged(p, ticket, cmd, cwd, log)
     if code == 0:
@@ -71,19 +83,26 @@ def run_logged(p, ticket, cmd, cwd, log):
     with the same `start`, written on the way out even for an exception or Ctrl-C (`finished: false`, the minutes
     so far). Both rows, because only the start row survives a kill and only the end row knows the minutes. The log
     stays locked while the check runs (the kernel drops the lock on a kill), so `running` tells a check still going
-    from one cut off."""
+    from one cut off; the start row is written only once it's locked, or `stats` could catch it unlocked and call a
+    check that just started cut off. A heartbeat touches the log while the check runs, so a kill is timed within
+    `HEARTBEAT` even when the check went quiet."""
     start = time.time()
-    ledger(p, ticket, {"start": round(start, 3), "log": log.name}, event="check-start")
     code = None
     try:
         with log.open("w") as f:
             fcntl.flock(f, fcntl.LOCK_EX)  # blocking: `running` may hold a momentary shared probe
-            if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
-                code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
-                                       "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd, stdout=f,
-                                      stderr=subprocess.STDOUT, env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])}).returncode
-            else:
-                code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT).returncode
+            ledger(p, ticket, {"start": round(start, 3), "log": log.name}, event="check-start")
+            beat = heartbeat(log)
+            try:
+                if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
+                    code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
+                                           "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd,
+                                          stdout=f, stderr=subprocess.STDOUT,
+                                          env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])}).returncode
+                else:
+                    code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT).returncode
+            finally:
+                beat.set()
     finally:
         mins = (time.time() - start) / 60
         ledger(p, ticket, {"minutes": round(mins, 2), "passed": code == 0, "reused": False, "start": round(start, 3),
@@ -91,16 +110,68 @@ def run_logged(p, ticket, cmd, cwd, log):
     return code, mins
 
 
+def heartbeat(log):
+    """Touch `log` every `HEARTBEAT` seconds from a daemon thread (it dies with the process, as a kill should leave
+    the log's time) until the returned event is set."""
+    stop = threading.Event()
+
+    def beat():
+        while not stop.wait(HEARTBEAT):
+            try:
+                os.utime(log)
+            except OSError:  # the log was removed: nothing to time
+                pass
+
+    threading.Thread(target=beat, daemon=True).start()
+    return stop
+
+
+def locked(path):
+    """Whether a check still holds `path`'s lock; a log that can't be opened isn't (OSError is the caller's)."""
+    with path.open("rb") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+    return False
+
+
 def running(p, start_row):
     """Whether the check a `check-start` row names is still running: its log is still locked."""
     try:
-        with (p.state / "checks" / start_row.get("log", "")).open("rb") as f:
-            fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
-    except BlockingIOError:
-        return True
+        return locked(p.state / "checks" / start_row.get("log", ""))
     except OSError:  # no log: a row from before logs were named
-        pass
-    return False
+        return False
+
+
+def passed_logs(p):
+    """The logs of checks that passed, by the ledger: a start row names the log, its end row (same ticket and start)
+    says how it went. A log no row names (a check at the desk, for no ticket) counts as not passed."""
+    rows = read_jsonl(p.state / "ledger.jsonl")
+    ok = {(r.get("ticket"), r.get("start")) for r in rows if r.get("event") == "check" and r.get("passed")}
+    return {r["log"] for r in rows if r.get("event") == "check-start" and "log" in r
+            and (r.get("ticket"), r.get("start")) in ok}
+
+
+def prune(p, logs, clock=time.time):
+    """Delete check logs past their keep (`KEEP_PASSED`, `KEEP_ANY`), but never a locked one (its check runs) or
+    one of the `KEEP_FAILED` newest that didn't pass. Never fails the check it runs for: a file it can't read or
+    delete stays, and anything else wrong skips the prune."""
+    try:
+        passed = passed_logs(p)
+        files = sorted(logs.glob("*.log"))  # names sort by start time
+        keep = set([f for f in files if f.name not in passed][-KEEP_FAILED:])
+        t = clock()
+        for f in files:
+            try:
+                if (f in keep or t - f.stat().st_mtime < (KEEP_PASSED if f.name in passed else KEEP_ANY)
+                        or locked(f)):
+                    continue
+                f.unlink()
+            except OSError:
+                pass
+    except Exception as e:  # noqa: BLE001 - a prune is housekeeping: the check must still run
+        print(f"check logs not pruned: {e}", file=sys.stderr)
 
 
 def tail(path, n=40):
