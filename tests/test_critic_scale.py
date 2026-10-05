@@ -147,12 +147,11 @@ class CheckRates(unittest.TestCase):
         self.assertIn("checks, yes on the first head / on any head, of the tickets that touched them:", stats)
         self.assertIn("  works 2   shown      10/10 10/10 yes on every ticket: sharpen it\n", stats)
         self.assertIn("  works 5   safe        5/10 10/10\n", stats)
-        self.assertIn("  works 10  class       0/10  0/10 never yes: lower it\n", stats)
+        self.assertIn("  works 10  class       0/10  0/10\n", stats, "a 10 is rare by design (T-055)")
         self.assertNotIn("collapsed", stats)
         self.assertNotIn("cap checks answered", stats)
         over = self.run_cli(cli.cmd_overview)
-        self.assertIn("Critic checks, last 10 tickets: works.shown yes on every ticket: sharpen it; works.class never "
-                      "yes: lower it.\n", over)
+        self.assertIn("Critic checks, last 10 tickets: works.shown yes on every ticket: sharpen it.\n", over)
 
     def test_overview_says_once_that_an_old_scale_is_the_old_kind(self):
         self.s.write(".windvane/CRITIC.md", "# Scale\n- **works**: 2: happy path. 5: the CLI. 8: failure paths.\n")

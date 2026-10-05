@@ -116,9 +116,9 @@ def cells(row):
 
 def table(rows, rule, color, cols=0):
     """Rows padded to aligned columns (`:--:` centres, `--:` right-aligns), the header bold, a rule under it, as
-    (line, counts) pairs. A table wider than `cols` narrows its widest columns and wraps their cells, with a rule
-    between rows so a wrapped row stays one row; the terminal would otherwise wrap it to column 0. One that can't fit
-    with every column 4 wide stays as it is."""
+    (line, counts) pairs. A table wider than `cols` narrows its widest columns and wraps their cells, the terminal
+    would otherwise wrap it to column 0; a rule on each side of a row that wrapped keeps it one row. One that can't
+    fit with every column 4 wide becomes records (see `records`)."""
     aligns = [("^" if a.startswith(":") else ">") if a.endswith(":") else "<" for a in cells(rule)]
     grid = [[inline(x, frozenset({"b"}) if r == 0 else frozenset()) for x in cells(row)] for r, row in enumerate(rows)]
     n = max(len(r) for r in grid)
@@ -127,14 +127,17 @@ def table(rows, rule, color, cols=0):
     natural = list(widths)
     while cols and sum(widths) + 3 * (n - 1) > cols and max(widths) > 4:
         widths[widths.index(max(widths))] -= 1
-    if cols and sum(widths) + 3 * (n - 1) > cols:  # can't fit even narrowed: wrapping would only garble it
-        widths = natural
+    if cols and sum(widths) + 3 * (n - 1) > cols:
+        return records(rows, color, cols)
     aligns += ["<"] * n
     bar = (" │ ", frozenset({"dim"}))
     dim_rule = lambda: (paint([("─┼─".join("─" * w for w in widths), frozenset({"dim"}))], color), False)
-    out = []
+    out, tall = [], False
     for r, row in enumerate(grid):
         parts = [wrap(segs, widths[k], least=1) for k, segs in enumerate(row)]
+        if r > 1 and (tall or max(len(p) for p in parts) > 1):  # rows of one line each need no rule between them
+            out.append(dim_rule())
+        tall = max(len(p) for p in parts) > 1
         for j in range(max(len(p) for p in parts)):
             line = []
             for k, p in enumerate(parts):
@@ -144,9 +147,31 @@ def table(rows, rule, color, cols=0):
                 pad = [(" " * (gap - left), frozenset())] if k < n - 1 else []
                 line += ([bar] if k else []) + [(" " * left, frozenset())] + segs + pad
             out.append((paint(line, color), True))
-        if r == 0 or widths != natural and r < len(grid) - 1:
+        if r == 0:
             out.append(dim_rule())
     return out
+
+
+def records(rows, color, cols):
+    """A table too wide for `cols` even with narrow columns, as one record per body row: a `header: value` line per
+    cell (the header dim), the value wrapped under itself, and a dim rule between records. Squeezed further, every
+    cell would wrap to a few letters a line."""
+    dim = frozenset({"dim"})
+    head = cells(rows[0])
+    if len(rows) == 1:
+        return [(paint(l, color), True) for x in head for l in wrap(inline(x, frozenset({"b"})), cols, least=1)]
+    recs = []
+    for row in rows[1:]:
+        vals = cells(row)
+        lines = []
+        for k in range(max(len(head), len(vals))):
+            name, val = (head[k] if k < len(head) else ""), (vals[k] if k < len(vals) else "")
+            label = inline(name, dim) + [(":" + (" " if val else ""), dim)] if name else []
+            lead = [(" " * (width(name) + 2), frozenset())] if name else ()
+            lines += wrap(label + inline(val), cols, lead, least=1)
+        recs.append([(paint(l, color), True) for l in lines])
+    rule = (paint([("─" * min(cols, 40), dim)], color), False)
+    return [line for i, rec in enumerate(recs) for line in ([rule] if i else []) + rec]
 
 
 def wrap(segs, cols, lead=(), least=20):
