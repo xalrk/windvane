@@ -596,7 +596,8 @@ class Pilot(Desk, Periodic):
         if r.returncode == 0 and not gout(cd, "status", "--porcelain"):
             self.stash_failed.discard(why)
             self.log(f"{why}: stashed the checkout's uncommitted changes as \"{msg}\"")
-            push("your changes were stashed", whole("Your uncommitted changes were stashed before ", why, ".", log=self.log)
+            push("your changes were stashed",
+                 whole("Your uncommitted changes were stashed before ", why, ".", log=self.log)
                  + f"\ngit stash list: {msg}", 3, "package")
             return True
         err = (r.stderr.strip() or "?").splitlines()[0] if r.returncode else "changes were left after it"
@@ -1380,8 +1381,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
                 why = f"the driver was killed ({signal.Signals(-rc).name})"
                 log(p, f"{why}; not restarted: its sessions may still be running in the worktrees")
-                push("windvane stopped", whole("Why: ", why, ". Not restarted.", log=lambda m: log(p, m)) + "\nIts sessions may still be "
-                     "running in the worktrees.", 4, "rotating_light", ("Status=status",))
+                push("windvane stopped", whole("Why: ", why, ". Not restarted.", log=lambda m: log(p, m))
+                     + "\nIts sessions may still be running in the worktrees.", 4, "rotating_light", ("Status=status",))
             return rc  # its own end (a stop, the deadline, the queue, a failed setup), or a kill
         why = info["error"]
         try:

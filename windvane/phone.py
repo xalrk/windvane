@@ -52,7 +52,7 @@ def whole(head, free, tail="", *, log):
             end = free.rfind(" ", 0, MOST) if " " in free[1:MOST] else MOST
         free = free[:end].rstrip(" ,;:.") + " (the rest is in the log)"
     free = " ".join(free.split())
-    free = free.rstrip(".") if tail[:1] in ".;:,)" else free
+    free = free.rstrip(".") if tail.startswith((".", ";", ":", ",", ")")) else free
     return head + free + tail
 
 

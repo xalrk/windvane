@@ -151,6 +151,10 @@ class Bound(unittest.TestCase):
         self.assertEqual(phone.whole("Why: ", "it  broke.\n", ".", log=lines.append), "Why: it broke.")
         self.assertEqual(lines, [])
 
+    def test_text_with_no_tail_keeps_its_own_full_stop(self):
+        self.assertEqual(phone.whole("", "It broke.", log=[].append), "It broke.")
+        self.assertEqual(phone.whole("git said: ", "fatal: bad thing.", "", log=[].append), "git said: fatal: bad thing.")
+
 
 if __name__ == "__main__":
     unittest.main()
