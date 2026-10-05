@@ -25,7 +25,7 @@ Make it work from a clean clone, or prepare what it needs in `setup`.
 
 **A ticket was set aside.**
 The push and the log say why: reviews kept asking for changes (`review_rounds`), runs kept running out of time
-(`partials`), one run hit `ticket_hours` or its max turns, or its sessions kept dying. The work so far is on the ticket's branch. Usually the ticket is too big or too vague:
+(`partials`), one run hit `ticket_hours`, its max turns (set by the Claude CLI or the project's `.claude/` settings, not windvane) or its dollar budget, or its sessions kept dying. The work so far is on the ticket's branch. Usually the ticket is too big or too vague:
 split it or sharpen "Done when", then run again; the next worker resumes the branch.
 
 **The run paused (`paused ... Resuming at 14:00`).**
