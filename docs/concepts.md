@@ -192,4 +192,5 @@ On this machine only, under `~/.local/state/windvane/<name>/`:
 | `ledger.jsonl` | tokens, turns and minutes per session, which `windvane stats` reads |
 | `critic.jsonl`, `critic/<ID>/` | the critic's verdicts, and each ticket's evidence pack |
 | `quiet.txt` | quiet times |
+| `held.json`, `closed_plans.json` | changes kept on a local branch to land when pushed again; plan branches whose PRs were closed |
 | `work/`, `ci/`, `plan/` | worktrees: the sessions', the driver's checks and merges, the planner's (`work-1/`, `ci-1/` and so on for extra slots) |

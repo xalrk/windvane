@@ -59,7 +59,9 @@ class LimitPushes(Base):
         pilot.run(now() + timedelta(hours=2))
         self.assertIn("T-001", pilot.skip)
         self.assertEqual(self.aside(), [("Set aside: do T-001 (T-001)",
-                                         "Its run hit its max turns. Split the ticket. Its branch is kept.")])
+                                         "Its run hit its max turns. windvane sets none, so it's the Claude CLI's (its "
+                                         "default, or the project's Claude settings in .claude/): raise it there, or "
+                                         "split the ticket. Its branch is kept.")])
 
     def test_a_run_out_of_its_time_box_pushes_the_limit_and_the_knob(self):
         os.environ["FAKE_HANG"] = str(self.s.tmp / "streamed")

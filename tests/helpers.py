@@ -49,7 +49,8 @@ if hang and system.startswith(os.environ.get("FAKE_HANG_ROLE", "")):
 if os.environ.get("FAKE_ERROR_FOR") and re.search(os.environ["FAKE_ERROR_FOR"], prompt.split("\n")[0]):
     step = "error"  # FAKE_ERROR_FOR: a regex on the prompt's first line ("Ticket T-001.", "Critique T-001.")
 if os.environ.get("FAKE_MAX_TURNS") and system.startswith(os.environ["FAKE_MAX_TURNS"]):
-    emit({"type": "result", "subtype": "error_max_turns", "is_error": True, "num_turns": 5, "result": ""})
+    emit({"type": "result", "subtype": os.environ.get("FAKE_LIMIT", "error_max_turns"), "is_error": True, "num_turns": 5,
+          "result": ""})  # FAKE_LIMIT: which of its own limits it hit
     sys.exit(1)
 if step == "error":
     emit({"type": "result", "subtype": "success", "is_error": True, "num_turns": 1,
