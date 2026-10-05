@@ -62,14 +62,16 @@ why and what to do:
 - "push failed; see the windvane log": the log (`windvane status`) has git's own words.
 
 Each run (and each `windvane plan`) tries such a branch once more at its start, and one push ("1 held-back change
-pushed") says where those that went through are now; while it still fails, only the log says so. The local branch
+pushed") says where those that went through are now; one that still needs you (not merged, no PR) comes first, under
+"... pushed, not merged". While it still fails, `windvane status` and `overview` list it with the newest reason
+("held back, not pushed: ..."), and the phone's `status` counts it. The local branch
 goes once the remote has it. Only branches windvane kept this way are pushed again: not your own `plan-...` copies, nor
 one you pushed by hand.
 
 **A plan PR I closed holds ticket ids.**
 It doesn't: a plan branch whose PRs were all closed frees its ids and is remembered in
-`~/.local/state/windvane/<name>/closed_plans.json`, so it isn't looked up again. Its branch is kept. If you reopen
-that PR, delete its line there, or a newer plan may reuse its ids.
+`~/.local/state/windvane/<name>/closed_plans.json`, so it isn't looked up again. Its branch is kept. Reopen that PR
+and the next plan notices (one list of open PRs) and keeps its ids.
 
 **`gh` errors on a GitHub project.**
 Run `gh auth status`. Workers open pull requests and the driver merges them with `gh`; it needs push and merge rights
