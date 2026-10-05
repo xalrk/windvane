@@ -235,8 +235,23 @@ def cmd_overview(a, p):
         if c["accepted"]:
             line += f" {c['accepted']} passed only by running out of revisions."
         lines.append(line)
-        lines.append(critic_mod.collapsed(recs) or "")
+    lines.append(check_line(p, recs))
     print("\n".join(filter(None, lines + overview_extra(p))))
+
+
+def check_line(p, recs):
+    """overview's word on the critic's scale: the checks that stopped telling tickets apart, or, for an old numeric
+    scale, how to convert it (the driver never edits a project's scale itself)."""
+    if not p.critic["enabled"] or not (p.root / p.rubric_rel).is_file():
+        return ""
+    lad = critic_mod.rubric(p, p.root)
+    if not lad:
+        return (f"Critic scale is the old numeric kind; to convert it, rewrite {p.rubric_rel} as ladders of yes/no "
+                f"checks, like {HOME / 'templates/CRITIC.md'}.")
+    rates = critic_mod.rates(recs)
+    said = [f"{d}.{cid} {a}" for d, cs in lad.items() for _, cid, _ in cs
+            if cid in rates and (a := critic_mod.advice(*rates[cid]))]
+    return f"Critic checks, last 10 tickets: {'; '.join(said)}." if said else ""
 
 
 def overview_extra(p, limit=30, most=15):
@@ -538,12 +553,21 @@ def critic_stats(a, p):
     print(f"needed revisions: {c['revised']} of {n}")
     print(f"exactly on the pass mark: {c['final_on_bar']} of {n} final scores, {c['on_bar']} of {c['verdicts']} verdicts")
     print(f"passed only by running out of revisions (accept): {c['accepted']} of {n}")
-    print(f"cap checks answered: {c['checked']} of {c['verdicts']} verdicts; a hit cap lowered the score in "
-          f"{c['capped']}")
-    if collapse := critic_mod.collapsed(recs):
-        print(collapse)
+    lad = critic_mod.rubric(p, p.root)
+    if not lad:
+        print(f"cap checks answered: {c['checked']} of {c['verdicts']} verdicts; a hit cap lowered the score in "
+              f"{c['capped']}")
     for t, rs in c["tickets"]:
         print(f"  {t:8} {' → '.join(g(r['score']) for r in rs):14} {rs[-1].get('step', '')}")
+    rates = critic_mod.rates(recs, a.last)
+    if lad and rates:
+        print("checks, yes on the first head / on any head, of the tickets that touched them:")
+        for d, cs in lad.items():
+            for r, cid, _ in cs:
+                if cid in rates:
+                    first, ever, k = rates[cid]
+                    print(f"  {d + ' ' + g(r):9} {cid:10} {first:>2}/{k:<2} {ever:>2}/{k:<2} "
+                          f"{critic_mod.advice(first, ever, k)}".rstrip())
 
 
 def critic_since(p, when):

@@ -1,12 +1,15 @@
 """The critic: a fresh, read-only session that judges what a ticket's change gives the people who use the project,
-0 to 10 on the project's own scale (`.windvane/CRITIC.md`), harshly. The code reviewer comes after it; the critic
-judges the outcome.
+on the project's own scale (`.windvane/CRITIC.md`), harshly. The code reviewer comes after it; the critic judges the
+outcome.
 
 The worker leaves an evidence pack in `<state>/critic/<ID>/`: `notes.md` (line 1 `User-facing: yes` or
 `User-facing: no (<why>)`, then what a user now gets and measured numbers) and up to a few images (screenshots,
 contact sheets). It runs `windvane critic <ID>` and follows the last line, `CRITIC STEP`: pass (lowest dimension >=
 pass mark), scope (under it, but nothing this ticket can fix), revise, rethink (the first dimension under the floor:
-the approach is wrong), accept (out of revisions). The critic scores blind; only the driver knows the bar. Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed `windvane plan`.
+the approach is wrong), accept (out of revisions). A scale written as ladders of yes/no checks (T-054) has the critic
+answer the checks and the driver work out the score; an old numeric scale has the critic write the numbers. Either
+way the critic never sees the bar. Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed
+`windvane plan`.
 """
 import hashlib
 import re
@@ -23,6 +26,11 @@ CRITIC_RE = re.compile(r"CRITIC: (\S+) ((?:[\w-]+=(?:\d+(?:\.\d+)?|-)[ \t]+)+?)f
 DIM_RE = re.compile(r"([\w-]+)=(\d+(?:\.\d+)?|-)")
 CAP_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?([\w-]+)[ \t]*(?:<=|≤)[ \t]*(\d+(?:\.\d+)?)`?[^:\n]*:[ \t*_]*(yes|no)\b",
                     re.I | re.M)
+NEW_RE = re.compile(r"CRITIC: (\S+) fixes=(\d+)[ \t]*(.*)")
+HEAD_RE = re.compile(r"^#{2,}[ \t]+`?([\w-]+)")
+RUNG_RE = re.compile(r"^[ \t]*[-*][ \t]*(\d+(?:\.\d+)?)[ \t]+`?([\w-]+)`?[ \t]*:[ \t]*(.+)$")
+ANSWER_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?(?:[\w-]+(?:\.|[ \t]+(?=\d)))?(?:\d+(?:\.\d+)?[ \t]+)?([\w-]+)`?[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
+                       r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$", re.I)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
 DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]
@@ -30,7 +38,7 @@ DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch
 NEXT = {
     "pass": "Meets the bar. Go on to the check; put the critique in the PR body under \"Critic\".",
     "scope": "Under the bar, but nothing this ticket can fix. Go on; put the critique in the PR body under \"Critic\".",
-    "revise": ("Fix every \"Fix in this ticket\" point, refresh the pack, and run `windvane critic {tid}` again "
+    "revise": ("Fix every failed check and \"Fix in this ticket\" point, refresh the pack, and run `windvane critic {tid}` again "
                "(revision {n} of {max}). Don't run the check until the critic lets it go."),
     "rethink": ("Under {floor}: the approach itself is wrong. Rethink it as the critique says, don't patch it; refresh "
                 "the pack and run `windvane critic {tid}` again (revision {n} of {max})."),
@@ -75,7 +83,75 @@ def verdict(text):
                 return m.group(1), dims, int(m.group(3)), m.group(4)
         if m := OLD_RE.search(line):
             return m.group(2), {"score": float(m.group(1))}, int(m.group(3)), m.group(4)
+        if m := NEW_RE.search(line):  # a ladder's line: the driver scores the checks
+            return m.group(1), {}, int(m.group(2)), m.group(3)
     return None
+
+
+def ladder(text):
+    """A scale written as ladders: {dimension: [(rung, check id, question)]}, in the scale's order, rungs low to
+    high; {} for an old numeric scale. A dimension is a `## <name>` heading and its checks are `- <rung> <id>:
+    <question>` lines under it."""
+    out, dim = {}, None
+    for line in (text or "").splitlines():
+        if m := HEAD_RE.match(line):
+            dim = m.group(1).lower()
+        elif dim and (m := RUNG_RE.match(line)):
+            out.setdefault(dim, []).append((float(m.group(1)), m.group(2).lower(), m.group(3).strip()))
+    return {d: sorted(cs, key=lambda c: c[0]) for d, cs in out.items()}
+
+
+def rubric(p, cwd):
+    f = Path(cwd) / p.rubric_rel
+    return ladder(f.read_text()) if f.is_file() else {}
+
+
+def answers(text):
+    """The critic's answers before its CRITIC line: {check id or dimension: (answer, evidence)}, the answer `yes`,
+    `no`, `scope` (`no (out of scope: <why>)`, the why kept as evidence) or `-` (a dimension the ticket doesn't
+    touch). A check may be named `safe`, `works.safe`, `5 safe` or `works 5 safe`: the critic reads all of those in
+    the scale, the calibration and `overview`. The first answer to an id wins: the Checks block comes first, and a
+    later follow-up line that happens to read `safe: no ...` mustn't overturn it."""
+    out = {}
+    for line in (text or "").rsplit("CRITIC:", 1)[0].splitlines():
+        if m := ANSWER_RE.match(line):
+            a = "scope" if m.group(3) else m.group(2).lower()
+            why = re.sub(r"^\s*out of scope\b[:,\s]*", "", m.group(3) or "", flags=re.I)
+            out.setdefault(m.group(1).lower(), (a, "; ".join(filter(None, [why.strip(), m.group(4).strip()]))[:200]))
+    return out
+
+
+def climb(lad, ans, bar):
+    """Score a ladder from the critic's answers. A dimension's score is its highest rung whose checks and every lower
+    rung's are all `yes` (0 when its first rung fails); the ticket's is the lowest dimension. A check left unanswered
+    counts as `no`. A plain `no` on a rung up to the first one at or over the bar blocks: it holds the score under the
+    bar, so it goes back as a fix. `no (out of scope)` never blocks; it becomes a follow-up. A dimension answered `-`
+    is left out, except the first: every ticket promises something.
+    Returns ({dimension: score}, {check id: answer}, [blocking (dim, rung, id, question, evidence)],
+    [follow-ups], [unanswered ids])."""
+    dims, said, block, scoped, missing = {}, {}, [], [], []
+    for i, (d, cs) in enumerate(lad.items()):
+        if i and ans.get(d, ("",))[0] == "-":
+            continue
+        top = next((r for r, _, _ in cs if r >= bar), cs[-1][0])
+        score, held = 0.0, set()
+        for r, cid, q in cs:
+            a, ev = ans.get(cid, ("none", ""))
+            said[cid] = a
+            missing += [cid] * (a == "none")
+            if a != "yes":
+                held.add(r)
+                if a == "scope":
+                    scoped.append(f"{q} (out of scope: {ev or 'no reason given'})")
+                elif r <= top:
+                    block.append((d, r, cid, q, ev or "unanswered"))
+        for r in sorted({r for r, _, _ in cs}):
+            if r in held:
+                break
+            score = r
+        dims[d] = score
+    return dims, said, block, scoped, missing
+
 
 
 def checks(text):
@@ -104,24 +180,26 @@ def capped(dims, caps):
     return out, was
 
 
-def step(p, dims, fixes, revs):
+def step(p, dims, fixes, revs, floor=None):
     """What a verdict leads to. The critic never sees the bar (T-022: shown it, it decided pass or fail first and
     wrote the matching number); the driver compares here. Open "Fix in this ticket" points block a pass whatever the
     score (a ticket once passed at 8 while its critique still named a crash race in its own
     code). Only the first dimension, whether the ticket works at all, can call for a rethink: a wording problem
-    means revise."""
+    means revise. A ladder passes its own `floor`, its first rung: a failed safety check on works 5 holds the score
+    at 2, which is a fix, not a wrong approach."""
     c = p.critic
     if fixes == 0:
         return "pass" if min(dims.values()) >= c["pass"] else "scope"
     if revs >= c["revisions"]:
         return "accept"
-    return "revise" if next(iter(dims.values())) >= c["floor"] else "rethink"
+    return "revise" if next(iter(dims.values())) >= (c["floor"] if floor is None else floor) else "rethink"
 
 
 def unscored(critique):
     """An earlier critique without its score lines, so a revision is judged afresh, not as "last time +1"."""
     return "\n".join(l for l in critique.splitlines()
-                     if not re.match(r"\s*(Scores?:|CRITIC:|Nearest anchor:|Capped by the driver:)", l) and not CAP_RE.match(l)).strip()
+                     if not re.match(r"\s*(Scores?:|CRITIC:|Nearest anchor:|Capped by the driver:|Unanswered)", l)
+                     and not CAP_RE.match(l) and not ANSWER_RE.match(l)).strip()
 
 
 def beyond(critique):
@@ -139,7 +217,7 @@ def followups(p):
     latest = {r.get("ticket"): r for r in recs[last + 1:] if r.get("critique")}  # dicts keep first-seen order
     seen, out = set(), []
     for r in latest.values():
-        for b in beyond(r.get("critique")):
+        for b in beyond(r.get("critique")) + r.get("scoped", []):
             if b.lower() not in seen:
                 seen.add(b.lower())
                 out.append((r.get("ticket"), b))
@@ -172,39 +250,33 @@ def calibration(recs, bar, last=10):
     }
 
 
-def collapsed(recs, last=10, least=5):
-    """One line when the scale stopped measuring anything, else None. Over the last `last` tickets scored (at least
-    `least` of them): half or more of their first scores on one value, or every verdict's score but one in ten set by
-    its fix count alone. The first self-run did both: 8 of its last 10 first scores were 8, and 0 fixes always meant
-    8, 1 fix 7, so the score only repeated the fix list. Only verdicts on the newest scale count: a recalibration
-    starts afresh."""
-    now = next((r.get("scale") for r in reversed(recs) if r.get("score") is not None), None)
-    c = calibration([r for r in recs if r.get("scale") == now], None, last)
-    if not c or len(c["tickets"]) < least:
-        return None
-    n = lambda x: f"{x:g}"
-    first = c["first"]
-    top = statistics.mode(first)
-    if 2 * first.count(top) >= len(first):
-        return (f"Critic scale collapsed: {first.count(top)} of {len(first)} first scores are {n(top)}; "
-                "recalibrate at the desk")
-    by = {}
-    for _, rs in c["tickets"]:
-        for r in rs:
-            by.setdefault(effective(r), []).append(r["score"])
-    guess = {f: statistics.mode(xs) for f, xs in by.items()}
-    hits = sum(xs.count(guess[f]) for f, xs in by.items())
-    if len(set(guess.values())) > 1 and c["verdicts"] - hits <= c["verdicts"] // 10:
-        rule = ", ".join(f"{f} fix{'es' * (f != 1)}: {n(guess[f])}" for f in sorted(guess))
-        return (f"Critic scale collapsed: the fix count sets the score ({rule}) in {hits} of {c['verdicts']} "
-                "verdicts; recalibrate at the desk")
-    return None
+def rates(recs, last=10):
+    """Each check's answers over the last `last` tickets the critic answered checks for: {check id: (tickets whose
+    first verdict said yes, tickets where any verdict did, tickets that touched it)}. The first verdict shows whether
+    the check tells a weak first head from a good one; any verdict, whether a revision can reach it at all."""
+    by, latest = {}, {}
+    for i, r in enumerate(recs):
+        if r.get("answers") and r.get("ticket") != "PLAN":
+            by.setdefault(r["ticket"], []).append(r)
+            latest[r["ticket"]] = i
+    out = {}
+    for t in sorted(by, key=latest.get)[-last:]:
+        rs = by[t]
+        for cid in rs[0]["answers"]:
+            first, ever, n = out.get(cid, (0, 0, 0))
+            out[cid] = (first + (rs[0]["answers"][cid] == "yes"),
+                        ever + any(r["answers"].get(cid) == "yes" for r in rs), n + 1)
+    return out
 
 
-def effective(r):
-    """The fix count the step used: a hit cap counts as a fix even when the critic's own list was empty. Read from
-    `hits` too, so records from before `effective` was stored group right."""
-    return r.get("effective", max(r.get("fixes", 0), len(r.get("hits") or [])))
+def advice(first, ever, n, least=5):
+    """What to do about a check, from its rates, once `least` tickets touched it: one that every first head passes
+    can't tell good work from weak, and one no head ever passes only holds every score down."""
+    if n < least:
+        return ""
+    if first == n:
+        return "yes on every ticket: sharpen it"
+    return "never yes: lower it" if ever == 0 else ""
 
 
 def spread(xs):
@@ -215,13 +287,19 @@ def spread(xs):
 
 
 def scale(p, cwd):
-    """A short hash of the project's scale files: verdicts on an older scale don't count toward `collapsed`."""
+    """A short hash of the project's scale files, so verdicts can be told apart by the scale they were given on."""
     text = "".join(f.read_text() for rel in (p.rubric_rel, p.calibration_rel) if (f := Path(cwd) / rel).is_file())
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
 def system_prompt(p, cwd):
+    """The critic's rules, the scale and the calibration. An old numeric scale swaps in the numeric rules' sections
+    (`prompts/CRITIC-numeric.md`), so a ladder project's critic never reads them."""
     parts = [(HOME / "prompts/CRITIC.md").read_text()]
+    if not rubric(p, cwd):
+        split = lambda t: re.split(r"(?m)^(?=## )", t)
+        new = {x.split("\n", 1)[0]: x.rstrip() + "\n\n" for x in split((HOME / "prompts/CRITIC-numeric.md").read_text())}
+        parts = ["".join(new.get(x.split("\n", 1)[0], x) for x in split(parts[0])).rstrip() + "\n"]
     for rel, head in ((p.rubric_rel, "# This project's scale"), (p.calibration_rel, "# The user's calibration")):
         f = Path(cwd) / rel
         if f.is_file():
@@ -268,6 +346,11 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     if not v or p.norm(v[0]) != tid:
         return None, text or "The critic ended without a verdict."
     _, dims, fixes, gist = v
+    lad = rubric(p, cwd)
+    if lad:
+        return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n)
+    if not dims:
+        return None, text
     caps, anchor = checks(text)
     dims, was = capped(dims, caps)
     hits = [f"{d}<={c:g}" for d, c, hit in caps if hit]
@@ -281,6 +364,33 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
              "step": step(p, dims, max(fixes, len(hits)), n),
              "critique": critique, "scale": scale(p, cwd), "checks": len(caps),
              "hits": hits, "capped": was, "anchor": anchor}
+    append_jsonl(p.state / "critic.jsonl", entry)
+    return entry, critique
+
+
+def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
+    """judge's ending on a ladder: the driver scores the critic's check answers (`climb`), and the failed checks under
+    the bar join its "Fix in this ticket" points. A reply that answers no check at all is no verdict: counting every
+    check as `no` would send good work back for the critic's own slip."""
+    ans = answers(text)
+    if not any(cid in ans for cs in lad.values() for _, cid, _ in cs):
+        return None, text or "The critic answered none of the scale's checks."
+    dims, said, block, scoped, missing = climb(lad, ans, p.critic["pass"])
+    eff = fixes + len(block)
+    scores = " ".join(f"{d}={dims[d]:g}" if d in dims else f"{d}=-" for d in lad)
+    head, _, _ = text.rpartition("CRITIC:")
+    critique = head[max(0, head.find("Checks:")):].rstrip()
+    if block:
+        critique += "\nFailed checks under the bar (fix these too):\n" + "\n".join(
+            f"- {d}.{cid} (rung {r:g}) failed: {q} ({ev})" for d, r, cid, q, ev in block)
+    if missing:
+        critique += f"\nUnanswered, counted as no: {', '.join(missing)}"
+    critique += f"\nCRITIC: {tid} {scores} fixes={eff} {gist}"
+    entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
+             "dims": dims, "fixes": fixes, "effective": eff, "revisions": n, "gist": gist[:200],
+             "step": step(p, dims, eff, n, floor=next(iter(lad.values()))[0][0]),
+             "critique": critique, "scale": scale(p, cwd), "answers": said,
+             "failed": [cid for _, _, cid, _, _ in block], "scoped": scoped, "unanswered": missing}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
 

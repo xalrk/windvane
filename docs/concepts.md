@@ -120,30 +120,33 @@ the project can see (a refactor, test tooling) is declared `User-facing: no` and
 checks that claim.
 
 **The scale** is `.windvane/CRITIC.md`, written per project: who uses it, what best in class looks like, and two to
-four dimensions, each with what a 2, a 5 and an 8 look like. The first dimension is always whether the ticket works
-at all. The critic scores each dimension it can judge; the ticket's score is the lowest.
+four dimensions, each a ladder of rungs (say 2, 5, 8, 10) with a few yes/no checks on each (`- 5 safe: no known way
+it crashes or loses work`). The first dimension is always whether the ticket works at all. The critic answers every
+check of each dimension the ticket touches, `yes`, `no` or `no (out of scope: <why>)`, with a clause of evidence,
+and never writes a number: a dimension's score is its highest rung whose checks and every lower rung's are all
+`yes`, and the ticket's is the lowest dimension. A check left unanswered counts as `no`, and the log names it. (A
+scale without rungs still works the old way, the critic writing the numbers; `overview` says how to convert it.)
 
 **The verdict** splits its points into "Fix in this ticket" and "Beyond this ticket". The critic never sees the pass
-mark; the driver turns its scores into the worker's next step:
+mark; the driver turns the score into the worker's next step. A plain `no` on a rung up to the first one at or over
+the mark becomes a fix; `no (out of scope)` becomes a follow-up instead:
 
 | Step | When | The worker |
 |---|---|---|
 | `pass` | lowest dimension ≥ `pass` | goes on to the check |
 | `scope` | under the mark, but nothing this ticket can fix | goes on; the points go in the PR |
-| `revise` | under the mark, with fixes listed | fixes them and asks again, up to `revisions` times |
-| `rethink` | the first dimension under `floor` | rethinks the approach |
+| `revise` | failed checks or fixes listed | fixes them and asks again, up to `revisions` times |
+| `rethink` | the first dimension's first rung fails (old scales: under `floor`) | rethinks the approach |
 | `accept` | out of revisions | goes on, score recorded |
 
 "Beyond this ticket" points go in the pull request and feed the next `windvane plan`.
 
-**Calibration.** A scale whose scores all land on the pass mark measures nothing. `.windvane/CALIBRATION.md` holds
-your own verdicts where you disagreed with the critic (date, ticket, its score, yours, why); every critic reads it.
-It can also name **caps** (`works<=5`: a known crash, lost work or wedge): the critic answers each, yes or no, and
-names the anchor it sits nearest before it scores; a cap answered yes lowers that dimension and counts as a fix.
-`windvane stats --critic` shows how scores spread over recent tickets: first and final scores, revisions, how many
-sit exactly on the pass mark. Once five tickets are scored on the current scale, the driver checks for a
-**collapsed scale** (half the recent first scores share one value, or the number of fixes alone predicts the score)
-and reports it once per run in the log, on the phone, and in `overview` until the scale is changed.
+**Calibration.** A check every ticket passes, or none ever does, measures nothing. `.windvane/CALIBRATION.md` holds
+your own verdicts where you disagreed with the critic (date, ticket, its answer, yours, why) and anchors as check
+answers ("T-004: `safe: no`"); every critic reads it. `windvane stats --critic` shows how scores spread over recent
+tickets (first and final scores, revisions, how many sit exactly on the pass mark) and each check's yes rate over the
+last 10 tickets, on first heads and on any head; it and `overview` name a check `yes` on every ticket ("sharpen
+it") and one never `yes` ("lower it"). Each verdict's answers are kept in `critic.jsonl`.
 
 ## Questions and quiet times
 
