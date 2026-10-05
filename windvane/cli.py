@@ -223,7 +223,7 @@ def cmd_status(a, p):
 
 
 # A log line about a held branch: `status --line` leaves it out, as the held count (or none, once it's gone) says more.
-HELD_LOG = re.compile(r"kept only locally on |: still not pushed")
+HELD_LOG = re.compile(r"kept only locally on |the local branch |: still not pushed")
 
 
 def held_count(p):

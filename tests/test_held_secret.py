@@ -105,6 +105,8 @@ class HeldSecret(Base):
         self.s.git("merge", "-q", f"origin/{branch}-b")
         self.s.git("push", "-q", "origin", "main")
         self.assertNotIn("held", self.windvane("status"))
+        self.assertIn("on the local branch", self.log().splitlines()[-1])  # the plan's own line, stale once merged
+        self.assertEqual(self.windvane("status", "--line"), "Sandbox: autopilot off\n")
         self.assertEqual(driver.held_branches(self.p), {})
         self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {})
         self.assertEqual(json.loads((self.p.state / "held_why.json").read_text()), {})
