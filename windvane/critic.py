@@ -422,7 +422,8 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
     eff = fixes + len(block)
     scores = " ".join(f"{d}={dims[d]:g}" if d in dims else f"{d}=-" for d in lad)
     head, _, _ = text.rpartition("CRITIC:")
-    critique = head[max(0, head.find("Checks:")):].rstrip()
+    starts = [m.start() for m in (CHECKS_RE.search(head), LISTS_RE.search(head)) if m]
+    critique = head[min(starts, default=0):].rstrip()  # from the Checks block, or a list the critic put before it
     if block:
         critique += "\nFailed checks under the bar (fix these too):\n" + "\n".join(
             f"- {d}.{cid} (rung {r:g}) failed: {q} ({ev})" for d, r, cid, q, ev in block)

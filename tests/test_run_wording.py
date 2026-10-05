@@ -3,6 +3,7 @@ push fits one phone line, a critic that keeps skipping a check is named in `over
 order keeps its answers."""
 import argparse
 import io
+import os
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -100,6 +101,26 @@ class ReorderedReply(unittest.TestCase):
                 "- safe: yes, restarts\nFix in this ticket:\n- none\nCRITIC: T-001 fixes=0 clear")
         ans = critic.answers(text)
         self.assertEqual({k: v[0] for k, v in ans.items()}, {"shown": "yes", "safe": "yes"})
+
+    def test_a_fix_list_before_the_checks_block_reaches_the_worker(self):
+        s = Sandbox()
+        self.addCleanup(s.close)
+        s.write(".windvane/config.toml", s.root.joinpath(".windvane/config.toml").read_text()
+                .replace("enabled = false", "enabled = true"))
+        s.write(".windvane/CRITIC.md", "# Scale\n## works\n- 2 shown: shown.\n- 5 safe: no crash.\n")
+        s.publish("critic on, as ladders")
+        s.git("switch", "-q", "-c", "t-001-x")
+        p = Project(s.root)
+        notes = p.state / "critic" / "T-001" / "notes.md"
+        notes.parent.mkdir(parents=True)
+        notes.write_text("User-facing: yes\nfaster\n")
+        os.environ["FAKE_CRITIC_TEXT"] = ("Fix in this ticket:\n- the push is two lines long\nChecks:\n"
+                                          "- shown: yes, a transcript\n- safe: yes, restarts\nGood.\n"
+                                          "CRITIC: {tid} fixes=1 long push")
+        self.addCleanup(os.environ.pop, "FAKE_CRITIC_TEXT", None)
+        entry, critique = critic.judge(p, "T-001", s.root)
+        self.assertEqual((entry["dims"], entry["unanswered"]), ({"works": 5}, []))
+        self.assertTrue(critique.startswith("Fix in this ticket:\n- the push is two lines long\nChecks:"), critique)
 
     def test_no_checks_line_keeps_the_old_rule(self):
         text = "- shown: yes, a transcript\nBeyond this ticket:\n- safe: yes\nCRITIC: T-001 fixes=0 ok"

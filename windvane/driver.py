@@ -493,6 +493,7 @@ class Pilot(Desk, Periodic):
         if not m or self.p.norm(m.group(2)) != tid:
             return self.unfinished_run(tid, branch)
         self.unfinished.discard(tid)
+        self.stopped = [t for t in self.stopped if t != tid]  # a deadline moved later let it finish after all
         status, rest = m.group(1), m.group(3).strip()
         if status == "PARTIAL":
             self.partials[tid] = self.partials.get(tid, 0) + 1
