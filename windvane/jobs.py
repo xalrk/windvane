@@ -164,24 +164,33 @@ def prune(p, logs, clock=time.time):
     """Delete check logs past their keep (`KEEP_PASSED`, `KEEP_ANY`), but never a locked one (its check runs) or
     one of the `KEEP_FAILED` newest that didn't pass. A killed check's log gets the end row it never wrote first, so
     `stats` doesn't time its hang at 0 once the log is gone. Never fails the check it runs for: a file it can't read
-    or delete stays, and anything else wrong skips the prune."""
+    or delete stays, and anything else wrong skips the prune. One prune at a time (another slot's check may start
+    alongside): two would both close the same killed check, counting its minutes twice."""
     try:
-        passed, killed = outcomes(p)
-        files = sorted(logs.glob("*.log"))  # names sort by start time
-        keep = set([f for f in files if f.name not in passed][-KEEP_FAILED:])
-        t = clock()
-        for f in files:
+        with (logs / ".prune.lock").open("w") as lock:
             try:
-                if (f in keep or t - f.stat().st_mtime < (KEEP_PASSED if f.name in passed else KEEP_ANY)
-                        or locked(f)):
-                    continue
-                if f.name in killed:
-                    close(p, killed[f.name], f)
-                f.unlink()
-            except OSError:
-                pass
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:  # another check is pruning right now
+                return
+            prune_logs(p, logs, clock())
     except Exception as e:  # noqa: BLE001 - a prune is housekeeping: the check must still run
         print(f"check logs not pruned (the check runs anyway): {e}", file=sys.stderr)
+
+
+def prune_logs(p, logs, t):
+    """`prune`'s work, under its lock."""
+    passed, killed = outcomes(p)
+    files = sorted(logs.glob("*.log"))  # names sort by start time
+    keep = set([f for f in files if f.name not in passed][-KEEP_FAILED:])
+    for f in files:
+        try:
+            if f in keep or t - f.stat().st_mtime < (KEEP_PASSED if f.name in passed else KEEP_ANY) or locked(f):
+                continue
+            if f.name in killed:
+                close(p, killed[f.name], f)
+            f.unlink()
+        except OSError:
+            pass
 
 
 def close(p, start_row, log):

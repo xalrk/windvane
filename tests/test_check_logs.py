@@ -137,6 +137,16 @@ class Prune(Check):
         self.assertEqual([(r["finished"], r["passed"], r["start"]) for r in end], [(False, False, start)])
         self.assertEqual(end[0]["at"], self.starts()[0]["at"])  # dated as it happened
 
+    def test_one_prune_at_a_time(self):
+        """A check starting while another slot's check prunes skips its prune, so a killed log is closed once."""
+        old = self.log("20260901-old-passed", 4, True)
+        with (self.logs / ".prune.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.assertTrue(self.run_check(lambda out: 0)[0])
+            self.assertTrue(old.exists())
+        self.assertTrue(self.run_check(lambda out: 0)[0])
+        self.assertFalse(old.exists())
+
     def test_a_file_it_cannot_read_or_delete_does_not_fail_the_check(self):
         """Both are old passed logs, so the prune tries them (first: names sort by time) and must go on past them."""
         self.log("20260801-a-directory", 4, True).unlink()
