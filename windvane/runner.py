@@ -265,7 +265,7 @@ def ending(final, code, noise):
 
 
 def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=None, stop_if=None, ticket="",
-               limits=None):
+               limits=None, extra_env=None):
     """Run one headless session to its end. `stop_if()` returns a reason to kill it (deadline, usage cap);
     `limits` (kill time, 5-hour cap, weekly cap) passes the same rule on to sessions started inside this one.
     Returns (final text, why it was stopped or None, why it failed or None): a failure is the session's own
@@ -282,7 +282,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
            "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local",
            *lean_flags(p, role), "--settings", settings_json(allow, deny), "--append-system-prompt", system]
     started, parent = time.time(), os.environ.get(NEST)
-    extra = {NEST: raw.stem}
+    extra = {NEST: raw.stem, **(extra_env or {})}
     if limits:
         extra.update(WINDVANE_STOP_AT=str(limits[0].timestamp()), WINDVANE_CAPS=f"{limits[1]:g},{limits[2]:g}")
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,

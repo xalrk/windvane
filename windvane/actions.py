@@ -1,19 +1,25 @@
 """The month's GitHub Actions minutes, counted from the run history, and the cap windvane keeps them under.
 
 windvane is the only thing that spends the user's Actions minutes, so it counts them itself instead of asking the
-billing API (which needs gh's `user` scope): every job of every run created this calendar month (UTC) in the login's
-repos, each rounded up to the minute, times 10 on macOS runners and 2 on Windows ones; self-hosted runners are free.
+billing API (which needs gh's `user` scope): every job that started this calendar month (UTC) in the login's repos,
+whichever month its run was created in (a re-run is billed when it runs), each rounded up to the minute, times 10 on macOS runners and 2 on Windows ones; self-hosted runners are free.
 A desk count done this way matched GitHub's own figure. A running job counts up to now, a cancelled one up to its end.
 
 Off unless `.windvane/config.toml` sets `actions_minutes` (the plan's monthly minutes); `actions_cap` (0.9) is the
 share of them windvane never goes past: `windvane ci` refuses a workflow whose estimate would, and at or over it the
-driver adds `[skip ci]` to the commits it pushes.
+driver adds `[skip ci]` to the commits it pushes, and so do the workers' own (`worker_git`).
 """
+import fcntl
 import json
 import math
+import os
+import shlex
+import shutil
 import threading
 import time
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from . import net
 from .config import user_dir
@@ -21,9 +27,16 @@ from .util import load_json, log, push, run, save_json
 
 MULT = (("self-hosted", 0), ("macos", 10), ("windows", 2))  # the first label that matches sets the rate
 FRESH_S = 600  # a total this young is reused: status and every merge would otherwise list every repo's runs again
+WAIT_S = 120  # how long a driver waits on another's count before giving up on it
+RERUN_DAYS = 31  # GitHub re-runs a run up to 30 days after it was created; one more for clock slack
 SKIP = "[skip ci]"
-# Denied to worker sessions: workflows start only through `windvane ci`, which runs gh itself, past these rules.
-DENY = ["Bash(gh workflow run *)", "Bash(gh workflow enable *)", "Bash(gh run rerun *)"]
+# Denied to worker sessions: workflows start only through `windvane ci`, which runs gh itself, past these rules. They
+# cover gh's own commands (with flags before the verb too) and the REST endpoints that start, re-run or turn one on;
+# a method flag on an /actions/ path is denied whatever it does, as a worker has no call to write there.
+DENY = [*(f"Bash(gh {verb}*)" for verb in ("workflow run", "workflow enable", "run rerun")),
+        "Bash(gh workflow * run *)", "Bash(gh workflow * enable *)", "Bash(gh run * rerun*)",
+        "Bash(gh api *dispatches*)", "Bash(gh api *rerun*)", "Bash(gh api */enable*)",
+        *(f"Bash(gh api *{a}*{b}*)" for flag in ("-X", "--method") for a, b in ((flag, "/actions/"), ("/actions/", flag)))]
 
 
 def cache_file():
@@ -88,10 +101,12 @@ def pages(cd, path, key, stop=lambda item: False):
         n += 1
 
 
-def run_minutes(cd, repo, run, now):
-    """A run's billed minutes, every attempt's jobs (a re-run is billed again)."""
+def run_minutes(cd, repo, run, now, whole=False):
+    """A run's minutes billed this month (or in all, `whole`): every attempt's jobs (a re-run is billed again) that
+    started this month, so a run created last month and re-run now counts only its new jobs."""
     jobs = pages(cd, f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=all", "jobs")
-    return None if jobs is None else sum(job_minutes(j, now) for j in jobs)
+    return None if jobs is None else sum(job_minutes(j, now) for j in jobs
+                                         if whole or month(stamp(j.get("started_at")) or now) == month(now))
 
 
 def repos(cd):
@@ -101,8 +116,9 @@ def repos(cd):
 
 
 def billed(cd, cache, repo, run, now):
-    """{repo, id, workflow, minutes} for a run: from the cache once it finished, else fetched (and cached if done)."""
-    key = f"{repo}#{run['id']}"
+    """{repo, id, workflow, minutes} for a run: from the cache once it finished, else fetched (and cached if done).
+    Keyed by attempt too: a re-run keeps its run's id, and its new jobs must be fetched."""
+    key = f"{repo}#{run['id']}#{run.get('run_attempt') or 1}"
     if key in cache["runs"]:
         return cache["runs"][key]
     mins = run_minutes(cd, repo, run, now)
@@ -122,22 +138,73 @@ def load(now):
     return cache
 
 
+@contextmanager
+def locked(wait=None):
+    """The count's lock, next to the cache: two projects' drivers starting together would otherwise make the same gh
+    calls twice and the last one's cache would win. Yields whether it was got within `wait` seconds."""
+    path = cache_file().with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    give_up = time.time() + (WAIT_S if wait is None else wait)
+    with path.open("a") as fh:
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.time() >= give_up:
+                    yield False
+                    return
+                time.sleep(0.2)
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def this_month(run, m, now):
+    """Whether a run may have jobs billed in month `m`: created in it, or re-run in it (its latest attempt's start)."""
+    return any(run.get(k) and month(stamp(run[k])) == m for k in ("created_at", "run_started_at", "updated_at"))
+
+
 def count(cd, now=None, max_age=FRESH_S):
-    """{"used": minutes billed this month, "at": when} or None when the count failed. A finished run is fetched once
-    and kept in the cache; running ones are fetched each time."""
+    """{"used": minutes billed this month, "at": when} or None when the count failed. One count at a time across
+    drivers: one that finds a count in flight waits for it and reads its total. A finished run is fetched once and
+    kept in the cache; running ones are fetched each time."""
     now = now or datetime.now(timezone.utc)
-    m, cache = month(now), load(now)
-    if cache.get("total") and time.time() - cache["total"]["at"] < max_age:
-        return cache["total"]
+    asked = time.time()
+    if (fresh := cached_total(now, max_age)) is not None:
+        return fresh
+    with locked() as got:
+        cache = load(now)
+        total = cache.get("total")
+        if total and (total["at"] >= asked or time.time() - total["at"] < max_age):
+            return total  # counted by another driver while this one waited
+        if not got:
+            return None
+        return count_now(cd, cache, now)
+
+
+def cached_total(now, max_age):
+    total = load(now).get("total")
+    return total if total and time.time() - total["at"] < max_age else None
+
+
+def count_now(cd, cache, now):
     names = repos(cd)
     if names is None:
         return None
-    used = 0
+    m, used = month(now), 0
+    first = datetime.strptime(m, "%Y-%m").replace(tzinfo=timezone.utc)
+    oldest = (first - timedelta(days=RERUN_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")  # GitHub's own format: compares as text
     for repo in names:
-        # Newest first, until last month's: the API's `created` filter stops at 1,000 runs, this doesn't.
+        # Newest created first, back to the oldest run that can still be re-run this month. The runs list filters by
+        # `created` only (and stops at 1,000 runs then), not by when a run last ran, so last month's runs are read
+        # here and only those whose latest attempt started this month are fetched.
         runs = pages(cd, f"repos/{repo}/actions/runs", "workflow_runs",
-                     lambda run: month(stamp(run.get("created_at")) or now) < m)
+                     lambda run: (run.get("created_at") or oldest) < oldest)
         for run in runs if runs is not None else [None]:
+            if run and not this_month(run, m, now):
+                continue
             done = run and billed(cd, cache, repo, run, now)
             if not done:
                 return None
@@ -178,10 +245,7 @@ def estimate(cd, repo, file, now=None):
     runs = (page or {}).get("workflow_runs") or []
     if not runs:
         return None
-    cache = load(now)
-    done = billed(cd, cache, repo, runs[0], now)
-    save_json(cache_file(), cache)
-    return done and done["minutes"]
+    return run_minutes(cd, repo, runs[0], now, whole=True)
 
 
 def cap_minutes(p):
@@ -220,6 +284,7 @@ def over_cap(p, cd=None):
 
 
 logged = set()  # the projects whose log has said "at the cap" in this process: once a run, not once a commit
+asked = set()  # the projects whose log has said their workers are asked for [skip ci], their hooks being their own
 
 
 def tag(p, msg, cd=None):
@@ -237,6 +302,43 @@ def tag(p, msg, cd=None):
         push("Actions minutes at the cap", f"{line(p)} used this month (cap {cap_minutes(p):,}). windvane adds "
              f"{SKIP} to its commits and `windvane ci` refuses workflows until the month ends.", 4, "warning")
     return f"{msg} {SKIP}"
+
+
+def worker_git(p, wd):
+    """(environment, prompt line) for a worker session. At or over the cap its own commits carry `[skip ci]` too,
+    through a prepare-commit-msg hook given in git's environment config, never the repo's config (the user's checkout
+    shares it). A project with its own core.hooksPath keeps it, and the prompt asks for the tag instead."""
+    if not over_cap(p, wd):
+        return {}, ""
+    if run(["git", "config", "core.hooksPath"], wd).stdout.strip():
+        if p.name not in asked:
+            asked.add(p.name)
+            log(p, f"GitHub Actions at the cap and core.hooksPath is the project's: workers are asked for {SKIP}")
+        return {}, f"The month's GitHub Actions minutes are at the cap: end each commit message's first line with {SKIP}."
+    n = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
+    return {"GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": "core.hooksPath",
+            f"GIT_CONFIG_VALUE_{n}": str(skip_hooks(p, wd))}, ""
+
+
+def skip_hooks(p, wd):
+    """A hooks folder in the state dir: the repo's own hooks linked in, and a prepare-commit-msg that runs the repo's
+    own (if any) and then adds `[skip ci]` to the first line."""
+    own = Path(wd, run(["git", "rev-parse", "--git-common-dir"], wd).stdout.strip(), "hooks").resolve()
+    folder = p.state / "skip-ci-hooks"
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    for hook in own.iterdir() if own.is_dir() else ():
+        if hook.suffix != ".sample" and hook.name != "prepare-commit-msg" and os.access(hook, os.X_OK):
+            (folder / hook.name).symlink_to(hook)
+    first = own / "prepare-commit-msg"
+    script = folder / "prepare-commit-msg"
+    script.write_text("#!/bin/sh\n# windvane: the month's GitHub Actions minutes are at the cap\n"
+                      + (f'{shlex.quote(str(first))} "$@" || exit $?\n' if os.access(first, os.X_OK) else "")
+                      + f"grep -qF '{SKIP}' \"$1\" && exit 0\n"
+                      f"{{ printf '%s {SKIP}\\n' \"$(sed -n 1p \"$1\")\"; sed 1d \"$1\"; }} > \"$1.windvane\" "
+                      '&& mv "$1.windvane" "$1"\n')
+    script.chmod(0o755)
+    return folder
 
 
 def ci(p, name="", ref="", dry=False):

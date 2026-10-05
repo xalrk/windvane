@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 
-from . import heavy, install, phone, runner
+from . import actions, heavy, install, phone, runner
 from .config import CHECKOUT
 
 # The triggers that run a workflow on its own for every autopilot ticket: its PR and the merge push to main.
@@ -75,20 +75,55 @@ def _value(lines, key, indent=None):
     return "", []
 
 
+def _split(flow):
+    """A flow collection's (`[..]` or `{..}`) items, split at its own commas, not those nested or quoted; None when
+    it isn't one closed on this line."""
+    if not flow or flow[0] + flow[-1] not in ("[]", "{}"):
+        return None
+    items, depth, quote, item = [], 0, "", ""
+    for ch in flow[1:-1]:
+        if quote:
+            quote = "" if ch == quote else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+        elif ch == "," and not depth:
+            items, item = items + [item], ""
+            continue
+        item += ch
+    return [x.strip() for x in items + [item] if x.strip()]
+
+
 def _list_len(inline, block):
-    """How many items a YAML list has, inline (`[a, b]`) or as `- item` lines."""
-    if inline.startswith("["):
-        return len([x for x in inline.strip("[]").split(",") if x.strip()])
-    return 1 if inline else sum(line.startswith("-") for line in _top(block))
+    """How many items a YAML list has, inline (`[a, b]`) or as `- item` lines; None when it's neither (an
+    expression like `${{ fromJSON(..) }}`, or a list spread over lines)."""
+    if inline:
+        items = _split(inline) if inline.startswith("[") else None
+        return None if items is None else len(items)
+    return sum(line.startswith("-") for line in _top(block))
 
 
 def _matrix_jobs(job):
     """How many jobs one job of a workflow starts: its matrix's axes multiplied, plus `include`, minus `exclude`
-    (an `include` that only extends a combination is counted as one more job: this errs high)."""
-    _, matrix = _value(job, "matrix")
+    (an `include` that only extends a combination is counted as one more job: this errs high). None when the matrix
+    can't be read here."""
+    inline, matrix = _value(job, "matrix")
+    if inline:
+        pairs = _split(inline) if inline.startswith("{") else None
+        if pairs is None:
+            return None
+        lists = [(k.strip().strip("'\""), v.strip()) for k, _, v in (x.partition(":") for x in pairs)]
+    else:
+        lists = [(key, _value(matrix, key, _indent(matrix[0]))) for line in _top(matrix)
+                 if (key := (m := re.match(r"['\"]?([\w-]+)['\"]?\s*:", line)) and m.group(1))]
     axes, extra = [], 0
-    for key in [m.group(1) for line in _top(matrix) if (m := re.match(r"['\"]?([\w-]+)['\"]?\s*:", line))]:
-        n = _list_len(*_value(matrix, key, _indent(matrix[0])))
+    for key, value in lists:
+        n = _list_len(*value) if isinstance(value, tuple) else _list_len(value, [])
+        if n is None:
+            return None
         if key in ("include", "exclude"):
             extra += n if key == "include" else -n
         else:
@@ -97,21 +132,30 @@ def _matrix_jobs(job):
 
 
 def workflow_runs(text):
-    """(the triggers in AUTO_TRIGGERS a workflow has, the jobs one run of it starts), from the plain YAML GitHub's
-    own examples use: a reading good enough to warn on, without a YAML library."""
+    """(the triggers in AUTO_TRIGGERS a workflow has, the jobs one run of it starts or None when they can't be
+    counted), from the plain YAML GitHub's own examples use: a reading good enough to warn on, without a YAML
+    library."""
     lines = [line.rstrip() for line in text.splitlines()]
     inline, block = _value(lines, "on", 0)
     names = re.findall(r"[\w-]+", inline) if inline else [re.match(r"-?\s*['\"]?([\w-]*)", line).group(1)
                                                            for line in _top(block)]
     _, jobs = _value(lines, "jobs", 0)
     starts = [i for i, line in enumerate(jobs) if _indent(line) == _indent(jobs[0])] + [len(jobs)]
-    return [t for t in AUTO_TRIGGERS if t in names], sum(_matrix_jobs(jobs[a:b]) for a, b in zip(starts, starts[1:]))
+    counts = [_matrix_jobs(jobs[a:b]) for a, b in zip(starts, starts[1:])]
+    return [t for t in AUTO_TRIGGERS if t in names], sum(counts) if counts and None not in counts else None
 
 
-def ci_warnings(root):
+def ci_warnings(root, p=None):
     """(what, fix) per workflow in root that runs by itself on every push or PR: on an autopilot project that is a
-    hosted run for each ticket's PR and again for its merge, which can use up a month's Actions minutes in days."""
-    out = []
+    hosted run for each ticket's PR and again for its merge, which can use up a month's Actions minutes in days. With
+    an Actions budget set (project `p`), the warning says those are the capped minutes."""
+    out, b = [], actions.budget(p) if p else None
+    spends = ""
+    if b:
+        total = actions.cached()
+        spends = (f"; it spends the capped minutes of the Actions budget ({actions.fmt(b[0])} min, cap "
+                  f"{actions.cap_minutes(p):,}; " + (f"{actions.fmt(total['used'])} counted this month)" if total
+                                                     else "not counted yet this month)"))
     folder = root / ".github/workflows"
     for f in sorted(folder.glob("*.y*ml")) if folder.is_dir() else []:
         try:
@@ -123,8 +167,8 @@ def ci_warnings(root):
             runs = ("for its PR and again for its merge" if on_pr and on_push else "for its PR" if on_pr
                     else "for its merge")
             jobs_said = (f"about {jobs * (on_pr + on_push)} hosted jobs a ticket ({jobs} a run, {runs})" if jobs
-                         else f"hosted jobs on every ticket, {runs} (doctor can't count them in this YAML)")
-            out.append((f"{f.relative_to(root)} runs on {' and '.join(triggers)}: {jobs_said}",
+                         else f"some hosted jobs on every ticket, {runs} (doctor can't count them in this YAML)")
+            out.append((f"{f.relative_to(root)} runs on {' and '.join(triggers)}: {jobs_said}{spends}",
                         f"keep only `on: workflow_dispatch` and run it by hand (`gh workflow run {f.name}`); "
                         "test every version on this machine in the check instead"))
     return out
@@ -157,7 +201,7 @@ def checks(p=None):
         add(not bad, True, "[permissions] rules in config.toml" + (f": {'; '.join(bad)}" if bad else ""),
             "fix them: Tool or Tool(specifier), in lists under <role>_allow / <role>_deny")
     if p and getattr(p, "root", None):
-        out += [("warn", what, fix) for what, fix in ci_warnings(p.root)]
+        out += [("warn", what, fix) for what, fix in ci_warnings(p.root, p)]
     github = bool(p and p.exists and p.cfg["forge"] == "github")
     why = "this project's forge is github" if github else "for projects with forge = github"
     has_gh = bool(shutil.which("gh"))
