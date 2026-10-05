@@ -20,6 +20,7 @@ from helpers import Sandbox  # noqa: E402
 from test_pipeline import args  # noqa: E402
 
 DEAF = "trap '' TERM; sleep 600"  # a whole group that ignores SIGTERM (sleep inherits the ignored signal)
+CHILD = "sleep 600 & wait"  # a sleep of its own under the shell on any sh: bash runs a last `sleep` in its place
 
 
 def alive(pgid):
@@ -28,6 +29,33 @@ def alive(pgid):
         return True
     except ProcessLookupError:
         return False
+
+
+def zombies_only(pgid):
+    """Whether every process left in the group has ended and only waits to be reaped (state Z in /proc); False
+    without /proc, so the caller waits for the reaping instead."""
+    if not Path("/proc/self/stat").exists():
+        return False
+    states = []
+    for d in Path("/proc").iterdir():
+        try:
+            fields = (d / "stat").read_text().rsplit(")", 1)[1].split()  # after "(comm)", which may hold spaces
+        except (OSError, IndexError):
+            continue
+        if int(fields[2]) == pgid:
+            states.append(fields[0])
+    return all(s == "Z" for s in states)
+
+
+def killed(pgid, within=5):
+    """Whether nothing of the group runs any more, waiting up to `within` s: SIGKILL ends its children at once, but
+    they're orphans that init reaps a moment later, and until then `killpg` still finds them as zombies."""
+    end = time.monotonic() + within
+    while alive(pgid) and not zombies_only(pgid):
+        if time.monotonic() > end:
+            return False
+        time.sleep(0.05)
+    return True
 
 
 class Hangs(unittest.TestCase):
@@ -73,7 +101,7 @@ class Hangs(unittest.TestCase):
     def test_a_hung_setup_is_killed_and_fails_the_start_loudly(self):
         pidfile = self.s.tmp / "setup.pid"
         cfg = self.s.root / ".windvane/config.toml"
-        cfg.write_text(f'setup = "echo installing; echo $$ > {pidfile}; sleep 600"\nsetup_minutes = 0.02\n'
+        cfg.write_text(f'setup = "echo installing; echo $$ > {pidfile}; {CHILD}"\nsetup_minutes = 0.02\n'
                        + cfg.read_text())
         self.s.publish("setup")
         p = Project(self.s.root)
@@ -81,7 +109,7 @@ class Hangs(unittest.TestCase):
         t = time.time()
         self.assertFalse(pilot.run(now() + timedelta(minutes=15)))
         self.assertLess(time.time() - t, 30)
-        self.assertFalse(alive(int(pidfile.read_text())))  # its whole group, the sleep too
+        self.assertTrue(killed(int(pidfile.read_text())))  # its whole group, the sleep too
         self.assertIn("timed out after 0.02 min", pilot.stop_reason)
         self.assertEqual([t for t, _ in self.pushes], ["windvane couldn't start"])
         self.assertIn("timed out after 0.02 min", self.pushes[0][1])
@@ -100,9 +128,9 @@ class Hangs(unittest.TestCase):
             return ""
         t = time.monotonic()
         with self.assertRaises(KeyboardInterrupt):
-            util.run_limited(f"echo $$ > {pidfile}; sleep 600", self.s.tmp, now() + timedelta(minutes=5), stop=ctrl_c)
+            util.run_limited(f"echo $$ > {pidfile}; {CHILD}", self.s.tmp, now() + timedelta(minutes=5), stop=ctrl_c)
         self.assertLess(time.monotonic() - t, 3)
-        self.assertFalse(alive(int(pidfile.read_text())))
+        self.assertTrue(killed(int(pidfile.read_text())))  # the sleep too
 
     def test_setup_minutes_must_be_a_positive_number(self):
         cfg = self.s.root / ".windvane/config.toml"
