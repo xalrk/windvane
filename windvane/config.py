@@ -28,6 +28,8 @@ DEFAULTS = {
     "remote": "origin",
     "main": "main",
     "forge": "github",  # github: PRs through gh; git: the driver merges and pushes to main itself
+    # GitHub Actions minutes a month (0: not counted) and the share of them windvane never passes (`windvane ci`)
+    "actions_minutes": 0, "actions_cap": 0.9,
     "check": "",  # the project's CI command, run by `windvane check` (empty: no check)
     "setup": "",  # run once in a fresh worktree (e.g. "npm ci"); failing stops the run
     "setup_minutes": 20,  # a setup still running then is killed and fails (a hung `npm ci` never wedges a run)
@@ -174,6 +176,15 @@ def setup_minutes(v, where=""):
     return v
 
 
+def actions_budget(c):
+    """`actions_minutes` and `actions_cap`, checked at once: a typo here would let `windvane ci` spend unchecked."""
+    m, cap = c["actions_minutes"], c["actions_cap"]
+    if isinstance(m, bool) or not isinstance(m, (int, float)) or m < 0:
+        raise SystemExit(f"windvane: actions_minutes = {m!r} in config.toml: use your plan's monthly minutes (0: off)")
+    if isinstance(cap, bool) or not isinstance(cap, (int, float)) or not 0 < cap <= 1:
+        raise SystemExit(f"windvane: actions_cap = {cap!r} in config.toml: use a share above 0, at most 1 (0.9: 90%)")
+
+
 def toplevel(start=None):
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=start or os.getcwd(), capture_output=True,
                        text=True)
@@ -199,6 +210,7 @@ class Project:
         self.critic = c["critic"]
         self.ap = c["autopilot"]
         setup_minutes(c["setup_minutes"])
+        actions_budget(c)
         self.periodic = periodic(c.get("periodic", []))
         self.perms, self.perm_problems = permissions(c["permissions"], self.periodic)
         self.append_only = rules(c.get("append_only", []))
