@@ -40,7 +40,7 @@ from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
-CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
+CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
@@ -200,6 +200,7 @@ class Pilot(Desk, Periodic):
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.skip, self.merged, self.failed = set(), [], []
         self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
+        self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
         self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
@@ -478,12 +479,11 @@ class Pilot(Desk, Periodic):
                 self.set_aside_limit(tid, f"the {self.a.ticket_hours:g}-hour limit for one run",
                                      "Split the ticket, or raise ticket_hours.")
             elif killed == "time":  # the run ends in minutes: its summary says so, and the next run resumes it
-                self.aside[tid] = "stopped at the deadline mid-run; the next run resumes its branch"
+                self.stopped += [tid] * (tid not in self.stopped)
                 self.log(f"{tid}: the worker run was stopped at the deadline")
             elif killed == "max turns":  # out of its own turns or budget: the ticket's doing, like the time box
-                self.set_aside_limit(tid, "its max turns", "windvane sets none, so it's the Claude CLI's (its "
-                                     "default, or the project's Claude settings in .claude/): raise it there, or "
-                                     "split the ticket.")
+                self.set_aside_limit(tid, "its max turns", "Raise the Claude CLI's max turns (.claude/ settings), "
+                                     "or split the ticket.")
             elif killed.startswith("max ") or killed == "dollar budget":
                 self.set_aside_limit(tid, f"its {killed}", "Split the ticket.")
             return
@@ -493,6 +493,7 @@ class Pilot(Desk, Periodic):
         if not m or self.p.norm(m.group(2)) != tid:
             return self.unfinished_run(tid, branch)
         self.unfinished.discard(tid)
+        self.stopped = [t for t in self.stopped if t != tid]  # a deadline moved later let it finish after all
         status, rest = m.group(1), m.group(3).strip()
         if status == "PARTIAL":
             self.partials[tid] = self.partials.get(tid, 0) + 1
@@ -1413,6 +1414,7 @@ class Pilot(Desk, Periodic):
                    + (f" and {len(picks) - 6} more" if len(picks) > 6 else "") + ". "
                    "To change one: windvane answer <ID> <letter>.\n" if picks else "")
                 + f"Failed: {names(self.failed)}.\n"
+                + (f"Stopped at the deadline (resumes next run): {names(self.stopped)}.\n" if self.stopped else "")
                 + "".join(f"Set aside: {self.name(t)} ({why}).\n" for t, why in self.aside.items())
                 + (f"{self.usage.text()}." if self.usage.five is not None else "")
                 + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else ""))

@@ -254,8 +254,9 @@ def cmd_overview(a, p):
 
 
 def check_line(p, recs):
-    """overview's word on the critic's scale: the checks that stopped telling tickets apart, or, for an old numeric
-    scale, how to convert it (the driver never edits a project's scale itself)."""
+    """overview's word on the critic's scale: the checks that stopped telling tickets apart or that it keeps leaving
+    unanswered, or, for an old
+    numeric scale, how to convert it (the driver never edits a project's scale itself)."""
     if not p.critic["enabled"] or not (p.root / p.rubric_rel).is_file():
         return ""
     lad = critic_mod.rubric(p, p.root)
@@ -265,8 +266,10 @@ def check_line(p, recs):
     rates = critic_mod.rates(recs)
     said = [f"{d}.{cid} {a}" for d, cs in lad.items() for r, cid, _ in cs
             if cid in rates and (a := critic_mod.advice(*rates[cid], top=r == cs[-1][0]))]
+    gaps = [f"Critic left {cid} unanswered in {k} of the last {n}: check its wording in {p.rubric_rel} or "
+            f"prompts/CRITIC.md." for cid, k, n in critic_mod.unanswered(recs)]
     return "\n".join(filter(None, [shared_line(p, lad),
-                                    f"Critic checks, last 10 tickets: {'; '.join(said)}." if said else ""]))
+                                    f"Critic checks, last 10 tickets: {'; '.join(said)}." if said else "", *gaps]))
 
 
 def shared_line(p, lad):

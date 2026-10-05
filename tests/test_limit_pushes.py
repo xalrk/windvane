@@ -47,8 +47,8 @@ class SummaryAside(Base):
         pilot.run(now() + timedelta(seconds=4))  # well inside the last 5 minutes
         self.assertNotIn("T-001", pilot.skip)  # no change to what is set aside: the next run resumes it
         self.assertEqual(self.aside(), [])
-        self.assertIn("Set aside: do T-001 (T-001) (stopped at the deadline mid-run; the next run resumes its branch).",
-                      self.summary())
+        self.assertIn("\nStopped at the deadline (resumes next run): do T-001 (T-001).\n", self.summary())
+        self.assertNotIn("Set aside", self.summary())
 
     def test_no_set_aside_line_when_nothing_was(self):
         self.pilot().run(now() + timedelta(hours=2))

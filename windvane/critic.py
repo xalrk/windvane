@@ -32,6 +32,7 @@ RUNG_RE = re.compile(r"^[ \t]*[-*][ \t]*(\d+(?:\.\d+)?)[ \t]+`?([\w-]+)`?[ \t]*:
 ANSWER_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?(?:[\w-]+(?:\.|[ \t]+(?=\d)))?(?:\d+(?:\.\d+)?[ \t]+)?([\w-]+)`?[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
                        r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$", re.I)
 LISTS_RE = re.compile(r"^[ \t#*_-]*(?:fix in|beyond) this ticket\b", re.I | re.M)
+CHECKS_RE = re.compile(r"^[ \t#*_]*Checks[*_]*:[*_]*[ \t]*\n?", re.I | re.M)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
 DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]
@@ -132,10 +133,15 @@ def answers(text):
     `no`, `scope` (`no (out of scope: <why>)`, the why kept as evidence) or `-` (a dimension the ticket doesn't
     touch). A check may be named `safe`, `works.safe`, `5 safe` or `works 5 safe`: the critic reads all of those in
     the scale, the calibration and `overview`. The first answer to an id wins: the Checks block comes first, and a
-    later follow-up line that happens to read `safe: no ...` mustn't overturn it. Only the lines above the "Fix in
-    this ticket" / "Beyond this ticket" lists count, so a follow-up never answers a check the Checks block left out."""
+    later follow-up line that happens to read `safe: no ...` mustn't overturn it. Only the Checks block counts, up
+    to the "Fix in this ticket" / "Beyond this ticket" lists after it, so a follow-up never answers a check the block
+    left out, and a reply that puts a list or its verdict first keeps its answers. With no `Checks:` line, the
+    lines above the first list count."""
     out = {}
-    body = LISTS_RE.split((text or "").rsplit("CRITIC:", 1)[0], 1)[0]
+    body = (text or "").rsplit("CRITIC:", 1)[0]
+    if m := CHECKS_RE.search(body):
+        body = body[m.end():]
+    body = LISTS_RE.split(body, 1)[0]
     for line in body.splitlines():
         if m := ANSWER_RE.match(line):
             a = "scope" if m.group(3) else m.group(2).lower()
@@ -292,6 +298,18 @@ def rates(recs, last=10):
     return out
 
 
+def unanswered(recs, last=10, least=3):
+    """Check ids the critic left unanswered in `least` or more of its last `last` verdicts: [(id, times, verdicts)].
+    Each counts as `no` and can send work back, so the same id again and again points at the check's wording or the
+    critic's prompt, not at the tickets."""
+    rs = [r for r in recs if "unanswered" in r and r.get("ticket") != "PLAN"][-last:]
+    n = {}
+    for r in rs:
+        for cid in dict.fromkeys(r["unanswered"]):
+            n[cid] = n.get(cid, 0) + 1
+    return [(cid, k, len(rs)) for cid, k in sorted(n.items(), key=lambda x: -x[1]) if k >= least]
+
+
 def advice(first, ever, n, top=False, least=5):
     """What to do about a check, from its rates, once `least` tickets touched it: one that every first head passes
     can't tell good work from weak, and one no head ever passes only holds every score down. Except the `top` rung
@@ -404,7 +422,8 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
     eff = fixes + len(block)
     scores = " ".join(f"{d}={dims[d]:g}" if d in dims else f"{d}=-" for d in lad)
     head, _, _ = text.rpartition("CRITIC:")
-    critique = head[max(0, head.find("Checks:")):].rstrip()
+    starts = [m.start() for m in (CHECKS_RE.search(head), LISTS_RE.search(head)) if m]
+    critique = head[min(starts, default=0):].rstrip()  # from the Checks block, or a list the critic put before it
     if block:
         critique += "\nFailed checks under the bar (fix these too):\n" + "\n".join(
             f"- {d}.{cid} (rung {r:g}) failed: {q} ({ev})" for d, r, cid, q, ev in block)
