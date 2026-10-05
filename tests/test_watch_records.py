@@ -177,7 +177,7 @@ class Sweep(unittest.TestCase):
         r = self.run_sweep(["# Title\nSome **bold** and `**literal**` text.", ten_columns(),
                             "```\nprint('**not a marker**')\n```"])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(r.stdout, "3 messages + 4 synthetic at widths 60,80,120: clean\n")
+        self.assertEqual(r.stdout, "3 messages + 5 synthetic at widths 60,80,120: clean\n")
 
     def test_leftover_markers_are_reported_with_their_place(self):
         r = self.run_sweep(["fine", "a stray ** and an unclosed `tick"], "--widths", "60")
@@ -185,7 +185,7 @@ class Sweep(unittest.TestCase):
         self.assertIn("20261004-000000-T-001.jsonl:3 @60: marker bold **\n", r.stdout)
         self.assertIn("20261004-000000-T-001.jsonl:3 @60: marker backtick\n", r.stdout)
         self.assertNotIn("stray", r.stdout, "the rendered line only with --show")
-        self.assertTrue(r.stdout.endswith("2 messages + 4 synthetic at widths 60: 1 marker backtick, 1 marker bold **\n"), r.stdout)
+        self.assertTrue(r.stdout.endswith("2 messages + 5 synthetic at widths 60: 1 marker backtick, 1 marker bold **\n"), r.stdout)
         shown = self.run_sweep(["a stray ** and an unclosed `tick"], "--show").stdout
         self.assertIn("\n    a stray ** and an unclosed `tick\n", shown)
 

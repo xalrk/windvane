@@ -39,6 +39,7 @@ SYNTHETIC = [  # rules beside what they're sized from; the session logs had none
     NARROW + "\n\n---\n\n" + NARROW.replace("alpha", "a much longer name"),
     WIDE + "\n\n---\n\n" + PROSE,
     "---\n\n" + PROSE + "\n\n" + NARROW + "\n\n---",
+    PROSE + "\n---\n" + NARROW + "\n---\nDone.",  # no blank lines: each rule still stops at the other
 ]
 
 
@@ -67,7 +68,7 @@ def check(text, cols):
             clipped = watch.clip_rendered(parts, watch.TEXT_LINES, color).split("\n")
         except Exception:
             return [("crash", traceback.format_exc().strip().splitlines()[-1])]
-        seen = problems(whole, color, cols) + rule_past_text(whole)
+        seen = problems(whole, color, cols) + rule_past_text(parts)
         found += seen + [("clipped " + kind, line) for kind, line in problems(clipped, color, cols) if (kind, line)
                          not in seen]
     return list(dict.fromkeys(found))  # once each, though both colourings may find it
@@ -86,24 +87,26 @@ def problems(lines, color, cols):
     return found
 
 
-def rule_past_text(lines):
-    """A finding for each line of nothing but ─ (a `---` rule, or a table's or records' own) wider than every line
-    beside it (the block just above it and just below, past any blank lines): it runs on past what it parts."""
-    plain = [ANSI.sub("", line) for line in lines]
+def rule_past_text(parts):
+    """A finding for each `---` rule (a block of one line of nothing but ─) wider than every line of the block just
+    above it and just below it, past blank lines and up to another rule: it runs on past what it parts. A table's or
+    records' own rules are inside their block, so they're not checked."""
+    plain = [[ANSI.sub("", line) for line, _ in b] for b in parts]
+    is_rule = [len(b) == 1 and set(b[0]) == {"─"} for b in plain]
     found = []
-    for i, p in enumerate(plain):
-        if not p or set(p) != {"─"}:
+    for i, b in enumerate(plain):
+        if not is_rule[i]:
             continue
         near = []
         for step in (-1, 1):
             j = i + step
-            while 0 <= j < len(plain) and not plain[j]:
+            while 0 <= j < len(plain) and plain[j] == [""]:
                 j += step
-            while 0 <= j < len(plain) and plain[j]:
-                near.append(watch.width(plain[j]))
+            while 0 <= j < len(plain) and plain[j] != [""] and not is_rule[j]:
+                near += [watch.width(line) for line in plain[j]]
                 j += step
-        if near and watch.width(p) > max(near):
-            found.append((f"rule past text ({watch.width(p)})", p))
+        if near and watch.width(b[0]) > max(near):
+            found.append((f"rule past text ({watch.width(b[0])})", b[0]))
     return found
 
 

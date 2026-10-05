@@ -290,8 +290,9 @@ def blocks(text, color, cols=0):
         else:
             add(inline(line))
         i += 1
-    for r in rules:
-        out[r] = [(paint([("─" * rule_width(out, r, tables, cols), dim)], color), False)]
+    widths = [rule_width(out, r, tables, cols) for r in rules]  # all before any is drawn, which would hide it
+    for r, w in zip(rules, widths):
+        out[r] = [(paint([("─" * w, dim)], color), False)]
     return out
 
 

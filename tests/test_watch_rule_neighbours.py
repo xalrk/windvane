@@ -55,6 +55,10 @@ class RuleNeighbours(unittest.TestCase):
         self.assertEqual(rule_widths(text), [40, 40])
         self.assertEqual(rule_widths(TABLE + "\n\n---\n\n" + PROSE + "\n\n---\n\n" + TABLE), [119, 40])
 
+    def test_rules_with_no_blank_lines_stop_at_each_other(self):
+        self.assertEqual(rule_widths(PROSE + "\n---\n" + TABLE + "\n---\nDone."), [40, 40])
+        self.assertEqual(rule_widths(TABLE + "\n---\n" + PROSE + "\n---\n" + TABLE), [119, 40])
+
     def test_prose_far_away_doesnt_count(self):
         text = PROSE + "\n\nnear\n\n---\n\nafter"
         self.assertEqual(rule_widths(text), [len("after")])
@@ -80,7 +84,7 @@ class SweepSynthetic(unittest.TestCase):
 
     def test_the_synthetic_messages_are_clean_at_every_width(self):
         r = self.run_sweep()
-        self.assertEqual((r.returncode, r.stdout), (0, "1 messages + 4 synthetic at widths 60,80,120: clean\n"))
+        self.assertEqual((r.returncode, r.stdout), (0, "1 messages + 5 synthetic at widths 60,80,120: clean\n"))
         self.assertEqual(self.run_sweep("--no-synthetic").stdout, "1 messages at widths 60,80,120: clean\n")
 
     def test_a_rule_sized_from_the_whole_message_is_named_by_its_synthetic_number(self):
@@ -96,10 +100,14 @@ class SweepSynthetic(unittest.TestCase):
         self.assertTrue(out.getvalue().startswith("synthetic:1 @120: rule past text (116)\n"), out.getvalue())
 
     def test_a_rule_wider_than_both_neighbours_is_a_finding(self):
-        lines = ["wide " * 10, "", "short", "", "─" * 30, "", "tiny"]
-        self.assertEqual(sweep.rule_past_text(lines), [("rule past text (30)", "─" * 30)])
-        self.assertEqual(sweep.rule_past_text(["─" * 40]), [], "nothing beside it")
-        self.assertEqual(sweep.rule_past_text(["ab │ c", "───┼──", "ab │ c"]), [])
+        block = lambda *lines: [(line, True) for line in lines]
+        blank, rule = block(""), block("─" * 30)
+        parts = [block("wide " * 10), blank, block("short"), blank, rule, blank, block("tiny")]
+        self.assertEqual(sweep.rule_past_text(parts), [("rule past text (30)", "─" * 30)])
+        self.assertEqual(sweep.rule_past_text([block("wide " * 10), rule, block("short"), rule, block("tiny")]),
+                         [("rule past text (30)", "─" * 30)], "the second stops at the first")
+        self.assertEqual(sweep.rule_past_text([block("─" * 40)]), [], "nothing beside it")
+        self.assertEqual(sweep.rule_past_text([block("a long record line", "─" * 18, "short")]), [], "records' own")
 
 
 if __name__ == "__main__":
