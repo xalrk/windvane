@@ -160,6 +160,7 @@ class Pilot(Desk, Periodic):
         # `began` is when each running attempt started, `spent` the seconds a ticket's finished attempts ran.
         self.limit, self.peak, self.conflicts, self.beside = self.n, 1, 0, set()
         self.began, self.spent = {}, {}
+        self.tmp_full = False  # pushed that the temp dir is nearly full, and it hasn't dropped back under the bar
         self.minutes = s.get("minutes", [])
         # Self-update between tickets (`selfupdate`): the install it pulls (None: off, as in the tests) and how the
         # driver restarts itself when its own code changed.
@@ -1193,6 +1194,22 @@ class Pilot(Desk, Periodic):
         dirs, n = scratch.clean(self.p, running)
         if dirs:
             self.log(f"removed {dirs} leftover temp dir{'s' * (dirs > 1)} ({n} files)")
+        self.warn_tmp_full()
+
+    def warn_tmp_full(self):
+        """One push when the temp dir is nearly full even after cleaning (nobody runs doctor at 3am), and another
+        only once it has dropped back under the bar and filled again."""
+        try:
+            inodes, space = scratch.fullness()
+        except OSError:
+            return
+        full = max(inodes, space) > scratch.FULL
+        if full and not self.tmp_full:
+            msg = (f"{scratch.root()} is {inodes:.0f}% full of inodes and {space:.0f}% of space after windvane "
+                   "removed its leftovers: the rest isn't windvane's. When either is full, no command runs.")
+            self.log(msg)
+            push("Temp dir nearly full", msg, 4, "warning")
+        self.tmp_full = full
 
     def loop(self):
         p = self.p

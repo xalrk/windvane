@@ -102,6 +102,10 @@ Once the last good count is over a day old, the phone's line marks it stale and 
 until a recount succeeds. A recount that waited on another project's driver counting isn't a failure and isn't
 logged.
 
+**A push says "Temp dir nearly full".**
+windvane has already removed its own leftovers (and the `tmpXXXXXXXX` dirs older tests leaked, once a day old); see
+what's left with `du --inodes -s /tmp/* | sort -n | tail`, and remove what you don't need before it stops every command.
+
 **No pushes arrive on the phone.**
 `windvane doctor` checks the phone. Make sure the app is subscribed to the topic `windvane phone setup` showed (and
 to the right server, if you use your own). `windvane phone setup` again sends a test push.
