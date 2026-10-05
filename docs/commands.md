@@ -68,6 +68,7 @@ These are what the autopilot's sessions call; you rarely need them yourself.
 
 | Command | What it does |
 |---|---|
+| `windvane ci [workflow] [--ref <branch>] [--dry-run]` | Start a GitHub Actions workflow (default: the repo's only one) on the current branch, only if this month's minutes plus its last run's stay within `actions_cap`; prints what's used and what's left. `--dry-run` counts and says, but starts nothing. |
 | `windvane check [--lines 60]` | Run the project's check, reusing a pass recorded for the same git tree. |
 | `windvane critic <ticket>` | Have the critic judge a ticket's evidence pack, and print the worker's next step. |
 | `windvane bg [--heavy] <name> <command...>` | Start a long command in the background (under the heavy lock with `--heavy`). |

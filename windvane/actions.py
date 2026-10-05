@@ -151,17 +151,20 @@ def cached():
 
 
 def workflow(cd, repo, name):
-    """(the workflow's file name, its path) for a name, file name or path; with no name, the repo's only active one.
-    Raises ValueError with what to pass instead."""
+    """The repo's workflow (`name`, `path`, `state`) for a name, file name or path; with no name, its only one (or
+    only active one). Raises ValueError with what to pass instead."""
     flows = (api(cd, f"repos/{repo}/actions/workflows?per_page=100") or {}).get("workflows") or []
-    active = [w for w in flows if w.get("state") == "active"]
-    pick = [w for w in active if name in (w.get("name"), w.get("path"), w.get("path", "").rsplit("/", 1)[-1])] \
-        if name else active
+    pick = [w for w in flows if not name or name in (w.get("name"), w.get("path"), base(w))]
+    if len(pick) > 1:
+        pick = [w for w in pick if w.get("state") == "active"] or pick
     if len(pick) != 1:
-        names = ", ".join(w["path"].rsplit("/", 1)[-1] for w in active) or "none"
-        raise ValueError(f"{'no' if not pick else 'more than one'} active workflow"
-                         f"{f' named {name!r}' if name else ''} in {repo} (active: {names})")
-    return pick[0]["path"].rsplit("/", 1)[-1], pick[0]["path"]
+        raise ValueError(f"{'no' if not pick else 'more than one'} workflow{f' named {name!r}' if name else ''} in "
+                         f"{repo}; name one of: {', '.join(map(base, flows)) or 'none'}")
+    return pick[0]
+
+
+def base(w):
+    return w.get("path", "").rsplit("/", 1)[-1]
 
 
 def estimate(cd, repo, file, now=None):
@@ -237,22 +240,26 @@ def ci(p, name="", ref="", dry=False):
     if not repo:
         print("windvane ci: no GitHub repo here (or gh is missing, logged out or offline)")
         return 1
+    b = budget(p)
+    total = b and count(cd, max_age=60)
+    if b and not total:
+        print("windvane ci: couldn't count this month's Actions minutes (gh missing, logged out or offline), so no "
+              "workflow starts")
+        return 1
+    if b:
+        cap, used = cap_minutes(p), math.ceil(total["used"])
+        print(f"Actions this month: {used:,} of {fmt(b[0])} min used; the cap is {cap:,} ({b[1]:.0%}), "
+              f"{max(0, cap - used):,} left.")
+    else:
+        print("No Actions budget set (actions_minutes in .windvane/config.toml): the minutes aren't counted.")
     try:
-        file, path = workflow(cd, repo, name)
+        flow = workflow(cd, repo, name)
     except ValueError as e:
         print(f"windvane ci: {e}")
         return 1
-    b = budget(p)
+    file = base(flow)
     if b:
-        total = count(cd, max_age=60)
-        if not total:
-            print("windvane ci: couldn't count this month's Actions minutes (gh missing, logged out or offline), so "
-                  "no workflow starts")
-            return 1
-        cap, used = cap_minutes(p), math.ceil(total["used"])
         est = estimate(cd, repo, file)
-        print(f"Actions this month: {used:,} of {fmt(b[0])} min used; the cap is {cap:,} ({b[1]:.0%}), "
-              f"{max(0, cap - used):,} left.")
         print(f"{file}: its last finished run billed {est:,} min." if est is not None else
               f"{file}: no finished run to estimate from; counted as 0 min.")
         est = est or 0
@@ -261,8 +268,10 @@ def ci(p, name="", ref="", dry=False):
                   "machine, or leave it to the user.")
             return 1
         print(f"After it, about {cap - used - est:,} min left under the cap.")
-    else:
-        print("No Actions budget set (actions_minutes in .windvane/config.toml): the minutes aren't counted.")
+    if flow.get("state") != "active":
+        print(f"{file} is {flow.get('state', 'not active').replace('_', ' ')} on GitHub, so it can't start; "
+              "turning it back on is the user's call.")
+        return 1
     ref = ref or run(["git", "symbolic-ref", "-q", "--short", "HEAD"], cd).stdout.strip()
     cmd = ["gh", "workflow", "run", file, *(["--ref", ref] if ref else [])]
     if dry:
@@ -272,5 +281,5 @@ def ci(p, name="", ref="", dry=False):
     if r.returncode:
         print(f"windvane ci: gh workflow run failed: {' '.join((r.stderr or r.stdout).split())[:300]}")
         return 1
-    print(f"Started {path} on {ref or 'the default branch'}.")
+    print(f"Started {file} on {ref or 'the default branch'}.")
     return 0
