@@ -47,7 +47,8 @@ class PlanPushes(unittest.TestCase):
         self.assertEqual(driver.plan(self.p, "make it great"), 0)
         title, msg = self.pushes[-1]
         self.assertEqual(title, "plan not pushed")
-        self.assertRegex(msg, r"^1 ticket kept only locally on plan-\S+ \(login refused; run `gh auth login`, then push\)\.$")
+        self.assertRegex(msg, r"^1 ticket kept only locally on plan-\S+ \(login refused; check your login to the "
+                              r"remote and the next run pushes it\)\.$")
         self.assertIn("plan: 1 ticket kept only locally on plan-", self.log())
 
     def test_a_hook_refusal_names_the_hook(self):

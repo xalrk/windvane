@@ -1484,14 +1484,23 @@ def push_branch(p, cd, branch, tries=2):
             return branch
     git(cd, "branch", "-f", branch, "HEAD")
     log(p, f"push to {branch} refused ({' '.join(res.stderr.split())[:200]}); kept only locally on {branch}")
-    return f"the local branch {branch} ({push_refusal(res.stderr)})"
+    hold(p, branch, "push")
+    return f"the local branch {branch} ({push_refusal(res.stderr, p.cfg['forge'])})"
+
+
+def hold(p, branch, how):
+    """Note a branch a failed push kept locally, for `push_held`: "push" it, or "land" it (a merge stays a merge).
+    Only branches noted here are ever pushed again, so a user's own copy of a closed plan never comes back."""
+    held = load_json(p.state / "held.json", {})
+    if held.get(branch) != "land":
+        save_json(p.state / "held.json", {**held, branch: how})
 
 
 # What a refused push's stderr says, first match wins, with its next step: a login problem is fixed by logging in, a
 # hook or branch protection by changing the rule or the branch (pushing again alone fails the same way), the network
 # by waiting: the next run pushes what was held back (`push_held`).
 REFUSALS = (
-    ("login refused; run `gh auth login`, then push",
+    ("login refused; {login} and the next run pushes it",
      re.compile(r"authentication failed|permission denied|permission to .* denied|could not read username|"
                 r"terminal prompts disabled|invalid username or password|\b403\b", re.I)),
     ("refused by a hook or branch rule; fix the rule or push to another branch",
@@ -1502,12 +1511,15 @@ REFUSALS = (
 )
 
 
-def push_refusal(stderr):
+LOGIN = {"github": "run `gh auth login`", "git": "check your login to the remote"}
+
+
+def push_refusal(stderr, forge="git"):
     """A short reason for a refused push and its next step, from git's stderr: auth, hook, network; anything else
     sends the user to the log, which `push_branch` gave git's own words (a raw git line reads badly on a phone)."""
     for why, pattern in REFUSALS:
         if pattern.search(stderr):
-            return why
+            return why.format(login=LOGIN.get(forge, LOGIN["git"]))
     return "push failed; see the windvane log"
 
 
@@ -1523,13 +1535,12 @@ def is_local(where):
 def land(p, cd, branch, title, body, commit=True, tries=2):
     """Put the driver's own change in `cd` (staged, or committed when `commit` is off) on main: through a merged PR on
     github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is). One kept on a local
-    branch is noted in held.json, so the next run lands it rather than only pushing it."""
+    branch is noted as one to land when pushed again."""
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
     ok, where = _land(p, cd, branch, title, body, tries)
     if is_local(where):
-        held = load_json(p.state / "held.json", [])
-        save_json(p.state / "held.json", sorted(set(held) | {branch}))
+        hold(p, branch, "land")
     return ok, where
 
 
@@ -1578,22 +1589,18 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
         return _plan(p, goal, use_followups, usage, stop_if, merge, max_new)
 
 
-# The driver's own branches a failed push may keep locally (plans, periodic changes, desk answers), by name and by
-# the subject of the commit it made, so a user's own `plan-x` branch is never pushed for them.
-HELD = {"plan-": "Plan: ", "periodic-": "Periodic: ", "answers-": "Answers at the desk: "}
-
-
 def held_branches(p):
-    """Local branches of the driver's own, unmerged and on no remote branch (pushing one by hand under another name
-    counts as pushed)."""
-    root, held = p.main_root(), []
-    for b in gout(root, "branch", "--no-merged", p.upstream, "--format=%(refname:short)", "--list",
-                  *(f"{prefix}*" for prefix in HELD)).split():
-        subject = gout(root, "log", "-1", "--format=%s", b)
-        if (subject.startswith(next(v for k, v in HELD.items() if b.startswith(k)))
-                and not gout(root, "branch", "-r", "--contains", b)):
-            held.append(b)
-    return held
+    """The branches `hold` noted that still wait: unmerged and on no remote branch (pushing one by hand under another
+    name counts as pushed), with no PR on github (one pushed by hand, its PR closed and branch deleted, stays
+    closed). Notes for any other branch are dropped."""
+    held, root = load_json(p.state / "held.json", {}), p.main_root()
+    unmerged = set(gout(root, "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split())
+    waiting = {b: how for b, how in held.items() if b in unmerged and not gout(root, "branch", "-r", "--contains", b)
+               and not (p.cfg["forge"] == "github" and net.sh(root, "gh", "pr", "list", "--head", b, "--state", "all",
+                                                                 "--json", "number", "-q", ".[].number"))}
+    if waiting != held:
+        save_json(p.state / "held.json", waiting)
+    return waiting
 
 
 def push_held(p):
@@ -1611,7 +1618,7 @@ def push_held(p):
         branches = held_branches(p)
         if branches:
             ensure_worktree(p, p.plan_dir, setup=False)
-        pushed = list(filter(None, (push_one_held(p, p.plan_dir, b) for b in branches)))
+        pushed = list(filter(None, (push_one_held(p, p.plan_dir, b, how) for b, how in branches.items())))
         if branches:
             clean_detach(p, p.plan_dir, p.upstream)
         if pushed:  # one push for them all
@@ -1619,13 +1626,12 @@ def push_held(p):
         return len(pushed)
 
 
-def push_one_held(p, cd, branch):
+def push_one_held(p, cd, branch, how):
     """Where `branch` went, as a line for the phone; "" when it stays local."""
     if not clean_detach(p, cd, branch):
         return ""
     title, body = gout(cd, "log", "-1", "--format=%s"), gout(cd, "log", "-1", "--format=%b")
-    held = load_json(p.state / "held.json", [])
-    to_land = branch in held or not branch.startswith("plan-")  # a desk plan without --merge only pushes
+    to_land = how == "land"  # a desk plan without --merge only pushes
     if to_land:
         landed, where = land(p, cd, branch, title, body, commit=False, tries=1)
     else:
@@ -1637,7 +1643,7 @@ def push_one_held(p, cd, branch):
         log(p, f"{branch}: still not pushed{where.removeprefix(f'the local branch {branch}')}")
         return ""
     git(p.main_root(), "branch", "-D", branch)
-    save_json(p.state / "held.json", [b for b in held if b != branch])
+    save_json(p.state / "held.json", {b: h for b, h in load_json(p.state / "held.json", {}).items() if b != branch})
     how = ("merged" if landed else "not merged; merge it by hand") if to_land else "pushed"
     log(p, f"{branch}: held back, now on {where}, {how}")
     return f"{title}: on {where}, {how}."

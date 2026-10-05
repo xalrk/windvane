@@ -54,7 +54,8 @@ Start it again. Unfinished tickets are resumed from their branches and worktrees
 **"plan not pushed" (or "not merged") with a local branch.**
 A plan, periodic change or desk answer whose push was refused waits on a local branch (`plan-...`), and the push says
 why and what to do:
-- "login refused; run `gh auth login`, then push": log in again; the next run or `windvane plan` pushes it.
+- "login refused; run `gh auth login` and the next run pushes it" (off GitHub: "check your login to the remote"):
+  once you're logged in, the next run or `windvane plan` pushes it.
 - "refused by a hook or branch rule; fix the rule or push to another branch": pushing again fails the same way until
   the rule changes; `git push origin plan-...:some-other-name` by hand counts as pushed.
 - "network down; the next run pushes it again": nothing to do.
@@ -62,7 +63,8 @@ why and what to do:
 
 Each run (and each `windvane plan`) tries such a branch once more at its start, and one push ("1 held-back change
 pushed") says where those that went through are now; while it still fails, only the log says so. The local branch
-goes once the remote has it.
+goes once the remote has it. Only branches windvane kept this way are pushed again: not your own `plan-...` copies, nor
+one you pushed by hand.
 
 **A plan PR I closed holds ticket ids.**
 It doesn't: a plan branch whose PRs were all closed frees its ids and is remembered in

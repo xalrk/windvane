@@ -137,13 +137,29 @@ class HeldPlans(Base):
         self.s.git("add", "-A")
         self.s.git("commit", "-qm", "my plan")
         self.s.git("switch", "-q", "main")
+        # a copy of a driver plan the user checked out, its PR closed and its remote branch deleted
+        self.s.git("switch", "-q", "-c", "plan-20261001-000000")
+        self.s.ticket("T-009")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-qm", "Plan: 1 ticket (rejected)")
+        self.s.git("switch", "-q", "main")
+        self.assertEqual(driver.push_held(self.p), 0)
+        self.assertEqual(self.remote(), "")
+        self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {})  # its note goes too
+
+    def test_one_pushed_by_hand_whose_pr_was_closed_stays_closed(self):
+        self.github()
+        (self.s.bin / "gh").write_text("#!/bin/sh\ncase \"$*\" in *\"pr list --head plan-\"*) echo 12;; esac\n")
+        self.refusal = NETWORK
+        driver.plan(self.p, "make it great")
+        self.refusal = None  # the user pushed it, closed its PR #12 and deleted the branch
         self.assertEqual(driver.push_held(self.p), 0)
         self.assertEqual(self.remote(), "")
 
 
 class Refusals(Base):
     def test_each_refusal_names_its_own_next_step(self):
-        for stderr, step in ((AUTH, "run `gh auth login`, then push"),
+        for stderr, step in ((AUTH, "check your login to the remote and the next run pushes it"),
                              (HOOK, "fix the rule or push to another branch"),
                              (NETWORK, "the next run pushes it again"), (OTHER, "push failed; see the windvane log")):
             with self.subTest(step=step):
@@ -152,6 +168,12 @@ class Refusals(Base):
                 self.assertIn(f"{step}).", self.pushes[-1][1])
                 self.assertNotIn("by hand", self.pushes[-1][1])
         self.assertIn("src refspec x does not match any", self.log())  # git's own words stay in the log
+
+    def test_on_github_the_login_step_is_gh(self):
+        self.github()
+        self.refusal = AUTH
+        driver.plan(self.p, "make it great")
+        self.assertIn("(login refused; run `gh auth login` and the next run pushes it).", self.pushes[-1][1])
 
 
 class ClosedPlans(Base):
