@@ -458,7 +458,7 @@ def session_stats(a, p, rows, swept=0):
     died, killed = (sum(g[f] for g in agg.values()) for f in ("died", "killed"))
     if died or killed:
         lost, total = sum(g["lost_w"] for g in agg.values()), sum(g["w"] for g in agg.values())
-        print(f"died or killed: {plural(died + killed, 'run')} ({died} died, {killed} killed for time), "
+        print(f"died or killed: {plural(died + killed, 'run')} ({lost_parts(died, killed)}), "
               f"{k(lost)} weighted tokens, {100 * lost / max(1, total):.0f}% of all")
     orphans(swept)
     est = sum(g["no_usd"] for g in agg.values())
@@ -472,6 +472,14 @@ def session_stats(a, p, rows, swept=0):
              "each turn re-reads, base plus what the run has added.)")
     else:
         note("(--wide adds base and cached/turn: the context each run starts with and each turn re-reads.)")
+
+
+def lost_parts(died, killed):
+    """The lost runs' kinds, naming only those that happened: "died" alone, or "2 died, 1 killed for time" when both
+    did (a "0 killed" on the usual ledger is noise)."""
+    if not (died and killed):
+        return "died" if died else "killed for time"
+    return f"{died} died, {killed} killed for time"
 
 
 def k(n):
@@ -738,7 +746,7 @@ def main(argv=None):
     s = sub.add_parser("stats", help="tokens per role or ticket, from the ledger")
     s.add_argument("--days", type=float, default=7)
     s.add_argument("--by", choices=("role", "ticket"), default="role")
-    s.add_argument("--wide", action="store_true", help="add the context columns: base and cached/turn")
+    s.add_argument("--wide", action="store_true", help="add the context columns, base and cached/turn: wider than 100 columns")
     s.add_argument("--critic", action="store_true", help="the spread of the critic's scores instead")
     s.add_argument("--periodic", action="store_true", help="the scores [[periodic]] sessions gave, oldest first")
     s.add_argument("--last", type=int, default=10, help="with --critic: over the last N tickets (default 10)")
