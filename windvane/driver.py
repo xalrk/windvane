@@ -29,7 +29,7 @@ from .renumber import OLD_NUMBERS, said
 from .desk import Desk
 from .held import author_ident, push_held
 from .periodic import Periodic
-from .phone import lead
+from .phone import whole
 from .planner import plan
 from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
@@ -196,7 +196,7 @@ class Pilot(Desk, Periodic):
 
     def name(self, tid):
         t = self.queue.titles.get(tid, "") if hasattr(self, "queue") else ""
-        return f"{t[:45]} ({tid})" if t else tid
+        return f"{t} ({tid})" if t else tid
 
     def end(self):
         """The run's deadline, live: `windvane deadline` moves it by writing DEADLINE in the state dir, and every
@@ -321,10 +321,10 @@ class Pilot(Desk, Periodic):
         why = "Other sessions worked, so it's this ticket's doing."
         hit = next(((text, fix) for text, fix in SELF_INFLICTED if text in error.lower()), None)
         if hit:  # the fix leads: the error's own words rarely say what to do
-            body = (lead(died, hit[0], f". {hit[1]}", log=self.log)
+            body = (whole(died, hit[0], f". {hit[1]}", log=self.log)
                     + f"\nThe error: {' '.join(error.split())}\nBranch kept, run goes on. {why}")
         else:
-            body = lead(died, error, ". Branch kept, run goes on.") + f"\n{why}"
+            body = whole(died, error, ". Branch kept, run goes on.", log=self.log) + f"\n{why}"
         push(f"Set aside: {self.name(tid)}", body, 4, "warning")
 
     def set_aside_limit(self, tid, limit, fix):
@@ -333,7 +333,7 @@ class Pilot(Desk, Periodic):
         self.skip.add(tid)
         self.aside[tid] = f"hit {limit}"
         self.log(f"{tid}: the run hit {limit}; set aside")
-        push(f"Set aside: {self.name(tid)}", lead("Hit ", limit, f". {fix} Branch kept.", log=self.log), 3, "hourglass")
+        push(f"Set aside: {self.name(tid)}", whole("Hit ", limit, f". {fix} Branch kept.", log=self.log), 3, "hourglass")
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
@@ -595,16 +595,16 @@ class Pilot(Desk, Periodic):
         if r.returncode == 0 and not gout(cd, "status", "--porcelain"):
             self.stash_failed.discard(why)
             self.log(f"{why}: stashed the checkout's uncommitted changes as \"{msg}\"")
-            push("your changes were stashed", lead("Your uncommitted changes were stashed before ", why, ".")
+            push("your changes were stashed", whole("Your uncommitted changes were stashed before ", why, ".")
                  + f"\ngit stash list: {msg}", 3, "package")
             return True
-        err = (r.stderr.strip() or "?").splitlines()[0][:200] if r.returncode else "changes were left after it"
+        err = (r.stderr.strip() or "?").splitlines()[0] if r.returncode else "changes were left after it"
         first = why not in self.stash_failed
         if first or not then:  # a wait tries again every STASH_WAIT seconds: logged once
             self.log(f"{why}: {'waits' if then else 'skipped'}: couldn't stash the checkout's changes ({err})")
         if first:
             self.stash_failed.add(why)
-            push("checkout not cleaned", lead("Commit or stash your checkout's changes: ",
+            push("checkout not cleaned", whole("Commit or stash your checkout's changes: ",
                                               then or why + " was skipped", ".")
                  + f"\nwindvane couldn't stash them, and deleted nothing. git said: {err}", 4, "warning")
         return False
@@ -826,7 +826,7 @@ class Pilot(Desk, Periodic):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
-        push(f"Failed: {self.name(tid)}", lead("", why, ". Branch kept, run goes on."), 4, "x")
+        push(f"Failed: {self.name(tid)}", whole("", why, ". Branch kept, run goes on.", log=self.log), 4, "x")
 
     # ---------- questions
 
@@ -896,8 +896,8 @@ class Pilot(Desk, Periodic):
                                       f"{self.a.answer_wait:g} minutes: build your recommendation ({q['rec']}), and "
                                       "move the question to ## Provisional with its `Built:` line.")
                 self.log(f"{tid}: no answer in {self.a.answer_wait:g} min; building {q['rec']}")
-                opt = q["opts"].get(q["rec"], "")[:300]
-                push(f"No answer: {self.name(tid)}", lead(f"Going with {q['rec']}: ", opt, ".")
+                opt = q["opts"].get(q["rec"], "")
+                push(f"No answer: {self.name(tid)}", whole(f"Going with {q['rec']}: ", opt, ".")
                      + f"\nTo change it later: windvane answer {tid} <letter>.", 3, "hourglass")
             else:
                 continue
@@ -911,7 +911,7 @@ class Pilot(Desk, Periodic):
         end, err = quiet_now(self.p)
         if err and getattr(self, "quiet_err_sent", None) != err:  # once, not on every pass; again after a fix
             self.log(f"quiet times ignored: {err}; asking as usual")
-            push("quiet times ignored", lead("", err, "; asking as usual till it's fixed.")
+            push("quiet times ignored", whole("", err, "; asking as usual till it's fixed.", log=self.log)
                  + "\n`windvane quiet` shows the format.", 3, "warning")
         self.quiet_err_sent = err
         if not end:  # only money, licence and merged-work questions ask in a quiet time
@@ -1071,9 +1071,9 @@ class Pilot(Desk, Periodic):
             if e.cut:  # stop_check gives the stop or the deadline as the run's reason
                 self.log(str(e))
                 return False
-            last = e.lines[-1][:200] if e.lines else "no output"
+            last = e.lines[-1] if e.lines else "no output"
             fix = "; raise `setup_minutes` in config.toml or fix the setup" if e.killed == TIMED_OUT else ""
-            self.halt = f"setup {e.how}{fix}: {last} (it ran {e.ran})"  # the fix first: the push's line is cut
+            self.halt = f"setup {e.how}{fix}: {last} (it ran {e.ran})"  # the fix first: the error may run long
             self.log(str(e))
             log(self.p, "\n".join(["its last lines:", *e.lines]), echo=False)  # the terminal showed them already
             return False
@@ -1322,7 +1322,7 @@ class Pilot(Desk, Periodic):
                 rest = "Merged:" + summary.split("\nMerged:", 1)[1]  # past the why, which may run on to a 2nd line
                 save_json(p.state / "crash.json", {"error": crashed, "summary": rest})
             elif not ready and self.halt:  # just why, once: nothing ran, so the summary's other lines say nothing
-                push("windvane couldn't start", lead("", self.halt[0].upper() + self.halt[1:], "."), 4, "warning")
+                push("windvane couldn't start", whole("", self.halt[0].upper() + self.halt[1:], ".", log=self.log), 4, "warning")
             else:
                 push("windvane stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                      "checkered_flag", ("Usage=usage",))
@@ -1338,11 +1338,11 @@ class Pilot(Desk, Periodic):
         names = lambda ids: "; ".join(map(self.name, ids)) or "none"
         crit = ", ".join(f"{t} {s:g}" for t, s in self.scores.items())
         under = [t for t in self.merged if (h := critic.history(p, t)) and h[-1].get("step") == "accept"]
-        picks = [(q["ticket"], q["question"], f"{q['built'] or '?'}: {q['option'][:60]}" if q["option"] else q["built"] or "?")
+        picks = [(q["ticket"], q["question"], f"{q['built'] or '?'}: {q['option']}" if q["option"] else q["built"] or "?")
                  for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))]
         side = (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
                 f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else "")
-        return (lead("Why: ", self.stop_reason, ".") + f"\nMerged: {names(self.merged)}.\n"
+        return (whole("Why: ", self.stop_reason, ".", log=self.log) + f"\nMerged: {names(self.merged)}.\n"
                 + (f"Merged under the critic's bar (out of revisions): {names(under)}.\n" if under else "")
                 + (f"Desk PRs merged: {', '.join('#' + n for n in self.desk_merged)}.\n" if self.desk_merged else "")
                 + (f"Critic (/10): {crit}.\n" if crit else "") + side
@@ -1377,7 +1377,7 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
                 why = f"the driver was killed ({signal.Signals(-rc).name})"
                 log(p, f"{why}; not restarted: its sessions may still be running in the worktrees")
-                push("windvane stopped", lead("Why: ", why, ". Not restarted.") + "\nIts sessions may still be "
+                push("windvane stopped", whole("Why: ", why, ". Not restarted.") + "\nIts sessions may still be "
                      "running in the worktrees.", 4, "rotating_light", ("Status=status",))
             return rc  # its own end (a stop, the deadline, the queue, a failed setup), or a kill
         why = info["error"]
@@ -1391,14 +1391,15 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
                 else asked() or ("deadline" if now() >= deadline else None))
         if not stop:
             log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour")
-            push("windvane restarted", lead("The driver crashed: ", why,
-                                            f". Restart {len(crashes)} of {RESTARTS} this hour.")
+            push("windvane restarted", whole("The driver crashed: ", why,
+                                            f". Restart {len(crashes)} of {RESTARTS} this hour.",
+                                            log=lambda m: log(p, m))
                  + f"\nIt goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
             sleep(RESTART_PAUSE)
             stop = asked()
         if stop:
             log(p, f"driver crashed ({why}); not restarted: {stop}")
-            push("windvane stopped", lead("Why: the driver crashed (", why, f"); not restarted: {stop}.",
+            push("windvane stopped", whole("Why: the driver crashed (", why, f"); not restarted: {stop}.",
                                           log=lambda m: log(p, m)) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             return rc

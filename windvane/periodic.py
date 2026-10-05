@@ -313,8 +313,13 @@ class Periodic:
         if quiet_now(p)[0]:
             self.log(f"{name}: quiet time, no question; the tickets are held")
             return "hold"
-        which = "; ".join(f"{t} {titles.get(t, '')[:60]}".strip() for t in tickets)
-        which = which if len(which) <= 400 else which[:399] + "…"
+        which = []  # whole titles (a cut one reads as a typo) while they fit a push; the rest counted
+        for t in tickets:
+            if len("; ".join(which)) > phone.MOST // 2:
+                which.append(f"and {n - len(which)} more")
+                break
+            which.append(f"{t} {titles.get(t, '')}".strip())
+        which = "; ".join(which)
         sent = phone.ask(qid, f"{name} wrote {n} ticket{'s' * (n != 1)}: {which}. Queue them? "
                          f"No answer in {self.a.answer_wait:g} min: hold.", [o for _, o in ASK_LAND])
         if not sent:

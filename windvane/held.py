@@ -5,7 +5,7 @@ import re
 import time
 
 from . import actions, net
-from .phone import lead
+from .phone import whole
 from .util import git, gout, load_json, log, push, save_json
 from .worktree import clean_detach, ensure_worktree
 
@@ -97,7 +97,7 @@ def push_refusal(stderr, forge="git", branch="BRANCH", remote="origin", main="ma
 def secret_at(stderr):
     """Where GitHub's push protection found the secret (its `path:` lines) and, when it isn't one, the page that
     allows it (its unblock URL), for the secret's step; empty parts when the stderr names neither. The URL stays
-    whole (a cut one doesn't open): `lead` moves what passes the lock screen to the next line."""
+    whole: a cut one doesn't open."""
     paths = list(dict.fromkeys(re.findall(r"^remote:\s+path:\s*(\S+)", stderr, re.M)))
     url = re.search(r"https://\S+/unblock-secret/\S+", stderr)
     return {"where": " in " + ", ".join(f"`{x}`" for x in paths[:3]) + " and more" * (len(paths) > 3) if paths else "",
@@ -118,7 +118,7 @@ def local_push(where, kept):
     branch's name would push them past the lock screen), then `kept` with the branch's name."""
     m = re.fullmatch(r"the local branch (\S+) \((.*)\)", where, re.S)
     branch, why = m.groups() if m else (where, "")
-    return lead("", why[:1].upper() + why[1:], ".") + f"\n{kept} {branch}."
+    return whole("", why[:1].upper() + why[1:], ".") + f"\n{kept} {branch}."
 
 
 def land(p, cd, branch, title, body, commit=True, tries=2):
@@ -294,5 +294,5 @@ def push_one_held(p, cd, branch, how):
     how = (("merged" if landed else "not merged; merge it by hand") if to_land
            else "pushed; no PR opened, open one by hand" if no_pr else "pushed")
     log(p, f"{branch}: held back, now on {where}, {how}")
-    first = lead("", title, f": on {where}, {how}.", whole=False, log=lambda m: log(p, m))
+    first = whole("", title, f": on {where}, {how}.", log=lambda m: log(p, m))
     return first, no_pr or (to_land and not landed)

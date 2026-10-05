@@ -36,30 +36,24 @@ HELP = ("status: each project's status\noverview: where each project stands\nusa
 SERVICE = "windvane-phone.service"
 
 
-LOCK_SCREEN = 90  # characters of a push's body a phone's lock-screen preview shows
+MOST = 1500  # characters of free text one push carries; ntfy takes 4,096 bytes for the whole message
 
 
-def lead(head, free, tail="", whole=True, log=None):
-    """A push's first line: `head`, the free text `free` (an error, a reason, an option) cut with … so the line fits
-    LOCK_SCREEN, then `tail`, which carries the next step. The cut-off rest follows on the next line (`whole`), so
-    the point is on the lock screen and nothing is lost once the push is opened. A `head` and `tail` too long on their
-    own can't fit: the push still goes out, and `log` (stderr without one) gets a line so it doesn't pass unseen."""
-    if len(head) + len(tail) > LOCK_SCREEN:
-        msg = f"push's first line over {LOCK_SCREEN} characters before its free text: {head + '…' + tail!r}"
-        (log or (lambda m: print(m, file=sys.stderr)))(msg)
-    free = " ".join(str(free).split())
-    free = free.rstrip(".") if tail.startswith(".") else free
-    room = LOCK_SCREEN - len(head) - len(tail)
-    if len(free) <= room:
-        return head + free + tail
-    cut = free[:max(room - 1, 0)]
-    if " " in cut[-15:]:  # at a word's end, not inside one
-        cut = cut.rsplit(" ", 1)[0]
-    if cut.count("`") % 2:  # nor inside a command, which the user may copy
-        cut = cut[:cut.rindex("`")]
-    stop = "." * tail.startswith(".")  # "…" ends the line's sentence; the cut-off rest gets the full stop
-    rest = f"\n…{free[len(cut):].lstrip()}{stop}" if whole else ""
-    return head + cut.rstrip(" ,;:(") + "…" + tail.removeprefix(stop) + rest
+def whole(head, free, tail="", log=None):
+    """`head`, the free text `free` (an error, a reason, an option) whole, then `tail`, the next step: one sentence in
+    reading order, with one full stop. ntfy wraps a long line, so nothing is cut to fit a lock screen: a cut word
+    reads as a typo and a "…" hides the point. Only free text past MOST (a 5,000-character error) is cut, at its last
+    sentence or line end (a word end without one), and `log` (stderr without one) gets it whole."""
+    free = str(free).strip()
+    if len(free) > MOST:
+        (log or (lambda m: print(m, file=sys.stderr)))(f"push cut at a sentence end; the whole text: {free}")
+        end = max(free.rfind(". ", 0, MOST) + 1, free.rfind("\n", 0, MOST))
+        if end <= MOST // 2:  # no sentence end late enough: a word end, or a bare cut in one long token
+            end = free.rfind(" ", 0, MOST) if " " in free[1:MOST] else MOST
+        free = free[:end].rstrip(" ,;:.") + " (the rest is in the log)"
+    free = " ".join(free.split())
+    free = free.rstrip(".") if tail[:1] in ".;:,)" else free
+    return head + free + tail
 
 
 def conf_path():
