@@ -297,7 +297,7 @@ def blocks(text, color, cols=0):
 
 def rule_width(out, cols):
     """A `---` rule as wide as the message's widest line, at most `cols`: a table draws its rules at its own width,
-    so a rule beside it then matches them, and none runs on into empty terminal past the text. Piped (no `cols`), or
+    so a rule matches them when the table is the widest thing, and none runs on into empty terminal past the text. Piped (no `cols`), or
     with nothing but rules, it is 40 as before."""
     widest = max((width(ANSI.sub("", line)) for b in out if b for line, _ in b), default=0)
     return min(cols, widest or 40) if cols else 40
