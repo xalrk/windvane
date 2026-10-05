@@ -80,7 +80,7 @@ the order), and **open** otherwise. `windvane queue` shows all three.
    to the minute, macOS x10, Windows x2; finished attempts cached in the state dir, one count at a time across
    projects) and keeps them under `actions_cap` (90%): a session starts a workflow only through `windvane ci`,
    which refuses one whose last run's minutes would pass the cap. Workers can't start, re-run or enable one
-   themselves (`gh workflow run`, `gh run rerun`, the `gh api` dispatch, re-run and enable endpoints are denied). At
+   themselves (a `gh` guard first on their PATH refuses it, see [Safety](safety.md#workflows-run-only-by-hand)). At
    or over the cap the driver's merges and commits and the workers' own commits carry `[skip ci]` (through a git hook
    given only to the worker session, never your repo's config, that checks the last count at each commit: counts
    run in the background, so no session waits on one), and your phone hears of it once that month. `status` and

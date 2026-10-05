@@ -18,6 +18,7 @@ system = args[args.index("--append-system-prompt") + 1] if "--append-system-prom
 emit = lambda ev: print(json.dumps(ev), flush=True)
 emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {
     "five_hour": {"utilization": float(os.environ.get("FAKE_FIVE", "0.1")), "resetsAt": 0}, "seven_day": {"utilization": 0.2}}}})
+sh = lambda *c: subprocess.run(c, capture_output=True, text=True).stdout.strip()
 log = os.environ.get("FAKE_LOG")
 if log:
     with open(log, "a") as f:
@@ -25,8 +26,11 @@ if log:
         flags = [a for a in args if a not in (prompt, system)]
         f.write(json.dumps({"system": system[:40], "prompt": prompt, "deny": deny, "flags": flags,
                             "tool_ms": os.environ.get("BASH_DEFAULT_TIMEOUT_MS"),
-                            "ticket_env": os.environ.get("WINDVANE_TICKET")}) + "\n")
-sh = lambda *c: subprocess.run(c, capture_output=True, text=True).stdout.strip()
+                            "ticket_env": os.environ.get("WINDVANE_TICKET"),
+                            # the gh the Bash tool would run: after the session's env file, as Claude Code does
+                            "gh": os.environ.get("CLAUDE_ENV_FILE") and sh(  # a bash only when there's a file
+                                "bash", "-c", '. "$CLAUDE_ENV_FILE"; command -v gh')})
+                + "\n")
 # FAKE_FAIL: what each session does in turn (ok, error, crash, quiet = no RESULT line); a trailing * repeats the last
 steps, step = os.environ.get("FAKE_FAIL", "").split(","), ""
 if steps[0] and system:
