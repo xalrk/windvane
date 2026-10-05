@@ -54,9 +54,10 @@ class Records(unittest.TestCase):
         self.assertEqual([k for _, k in block], [set(r) != {"─"} for r, _ in block])
 
 
-STATS = ("Totals by run:\n\n| Ticket | Role | Turns | Fresh in | Output | Cache read | Cost | Minutes | Result | Branch |\n"
-         + "|---" * 10 + "|\n" + "\n".join(f"| T-04{i} | worker | 41 | 12k | 9k | 2.1M | $3.10 | 22 | READY | t-04{i}-x |"
-                                          for i in range(3)))
+STATS = "\n".join(["Totals by run:", "",
+                   "| Ticket | Role | Turns | Fresh in | Output | Cache read | Cost | Minutes | Result | Branch |",
+                   "|---" * 10 + "|"]
+                  + [f"| T-04{i} | worker | 41 | 12k | 9k | 2.1M | $3.10 | 22 | READY | t-04{i}-x |" for i in range(3)])
 
 
 def watched(text, color=False):
