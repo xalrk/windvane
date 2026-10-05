@@ -297,10 +297,13 @@ def tag(p, msg, cd=None):
     if p.name not in logged:
         logged.add(p.name)
         log(p, f"GitHub Actions at the cap ({line(p)}, cap {cap_minutes(p):,}): the driver's commits carry {SKIP}")
-    cache = load(None)
-    if cache.get("warned") != cache["month"]:
-        cache["warned"] = cache["month"]
-        save_json(cache_file(), cache)
+    with locked() as got:  # under the count's lock, so this write can't drop a total another driver just saved
+        cache = load(None)
+        warn = got and cache.get("warned") != cache["month"]
+        if warn:
+            cache["warned"] = cache["month"]
+            save_json(cache_file(), cache)
+    if warn:
         push("Actions minutes at the cap", f"{line(p)} used this month (cap {cap_minutes(p):,}). windvane adds "
              f"{SKIP} to its commits and `windvane ci` refuses workflows until the month ends.", 4, "warning")
     return f"{msg} {SKIP}"
@@ -326,7 +329,7 @@ def skip_hooks(p, wd):
     """A hooks folder in the state dir: the repo's own hooks linked in, and a prepare-commit-msg that runs the repo's
     own (if any) and then adds `[skip ci]` to the first line."""
     own = Path(wd, run(["git", "rev-parse", "--git-common-dir"], wd).stdout.strip(), "hooks").resolve()
-    folder = p.state / "skip-ci-hooks"
+    folder = p.state / "skip-ci-hooks" / Path(wd).resolve().name  # one per worktree: parallel slots rebuild their own
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
     for hook in own.iterdir() if own.is_dir() else ():

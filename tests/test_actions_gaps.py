@@ -1,6 +1,6 @@
-"""The Actions budget's gaps (T-064): re-runs counted in the month they ran, a cached run's new attempt fetched, workers
-unable to start workflows through `gh api`, their own commits tagged `[skip ci]` at the cap, one count at a time
-across drivers, and doctor's flow-style matrix. All through the fake `gh` of test_actions_budget (never the real one)."""
+"""The Actions budget's gaps (T-064): re-runs counted in the month they ran, a cached run's new attempt fetched,
+workers unable to start workflows through `gh api`, their own commits tagged `[skip ci]` at the cap, one count at a
+time across drivers, and doctor's flow-style matrix. All through test_actions_budget's fake `gh`, never the real one."""
 import json
 import os
 import sys
@@ -101,6 +101,21 @@ class Gaps(unittest.TestCase):
         self.assertEqual([g["used"] for g in got], [1, 1])
         self.assertEqual(len(self.gh_calls("repo list")), 1)
         self.assertEqual(len(self.gh_calls("/jobs")), 1)
+
+    def test_a_count_that_cant_get_the_lock_gives_up_and_the_cap_falls_back_on_the_last_count(self):
+        p = self.project()
+        self.add(1, [job(60)])
+        save_json(actions.cache_file(), {"month": actions.month(), "runs": {}, "total": {"used": 95, "at": 0}})
+        self.addCleanup(setattr, actions, "WAIT_S", actions.WAIT_S)
+        actions.WAIT_S = 0.3
+        with actions.locked() as got:  # another driver's count, stuck
+            self.assertTrue(got)
+            started = time.time()
+            self.assertIsNone(actions.count(self.s.root))
+            self.assertLess(time.time() - started, 2)
+            self.assertTrue(actions.over_cap(p))  # 95 of 100 counted before, cap 90
+        self.assertEqual(self.gh_calls(), [])
+        self.assertFalse(actions.over_cap(p))  # with the lock free, it counts again: 1 min
 
     # Workers
 
