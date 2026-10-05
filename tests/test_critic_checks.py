@@ -176,6 +176,16 @@ class Ladder(unittest.TestCase):
                                            "because the pack says so)"])
         self.assertIn(("T-054", entry["scoped"][0]), critic.followups(self.p))
 
+    def test_the_old_failure_a_score_under_the_bar_that_never_went_back(self):
+        """T-040 went on as `scope` three times at works 7 with nothing listed to fix, though each critique said a
+        cut-off playtest loses its milestone. The same judgement as answers goes back by itself."""
+        (self.s.root / ".windvane/CRITIC.md").unlink()
+        old, _ = Checks.judge(self, PLAIN.replace("works=8 clear=7", "works=7 clear=8"), "T-040")
+        self.assertEqual((old["score"], old["step"]), (7, "scope"))
+        self.s.write(".windvane/CRITIC.md", LADDER)
+        new, _ = self.judge({**YES, "safe": "no, a cut-off playtest loses its milestone"}, "T-041")
+        self.assertEqual((new["score"], new["fixes"], new["step"], new["failed"]), (2, 0, "revise", ["safe"]))
+
     def test_a_free_form_fix_still_blocks(self):
         entry, _ = self.judge(YES, fixes=1)
         self.assertEqual((entry["score"], entry["step"], entry["effective"]), (8, "revise", 1))
