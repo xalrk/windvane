@@ -151,7 +151,7 @@ class AskOnce(unittest.TestCase):
 
     def wait_no_answer(self, pl):
         t0 = time.time()
-        while not self.holding("No answer") and time.time() - t0 < 20:
+        while not any(t.startswith("No answer") for t, _ in self.sent) and time.time() - t0 < 20:
             time.sleep(0.05)
         return time.time() - t0
 
