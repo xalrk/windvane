@@ -6,7 +6,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -49,6 +52,35 @@ class Records(unittest.TestCase):
     def test_rules_dont_count_toward_the_clip(self):
         block = watch.blocks(ten_columns(), False, 40)[0]
         self.assertEqual([k for _, k in block], [set(r) != {"─"} for r, _ in block])
+
+
+STATS = ("Totals by run:\n\n| Ticket | Role | Turns | Fresh in | Output | Cache read | Cost | Minutes | Result | Branch |\n"
+         + "|---" * 10 + "|\n" + "\n".join(f"| T-04{i} | worker | 41 | 12k | 9k | 2.1M | $3.10 | 22 | READY | t-04{i}-x |"
+                                          for i in range(3)))
+
+
+def watched(text, color=False):
+    """What `windvane watch` prints for one assistant message in a 42-column terminal."""
+    ev = {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+    out = StringIO()
+    with mock.patch.dict("os.environ", {"COLUMNS": "42"}), mock.patch.object(watch, "tty", color), \
+            redirect_stdout(out):
+        watch.show(ev, 6)
+    return out.getvalue()
+
+
+class Watched(unittest.TestCase):
+    def test_watch_shows_the_first_record_whole_then_clips(self):
+        out = watched(STATS)
+        rows = out.removeprefix("› ").rstrip("\n").split("\n")
+        self.assertTrue(all(watch.width(r) <= 40 for r in rows), rows)
+        self.assertEqual(rows[:4], ["Totals by run:", "", "Ticket: T-040", "Role: worker"])
+        self.assertIn("Branch: t-040-x", rows, "the first record whole")
+        self.assertRegex(rows[-1], r"^… \(\+\d+ lines\)$")
+        self.assertNotIn("T-042", out, "the clip still holds")
+        coloured = watched(STATS, True)
+        self.assertIn("\033[2mTicket: \033[0mT-040", coloured)
+        self.assertIn("\033[0m\n… (+", coloured, "a reset before the clip line")
 
 
 class NarrowedRules(unittest.TestCase):
