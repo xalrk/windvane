@@ -78,7 +78,7 @@ class Preflight(unittest.TestCase):
         self.assertIn("Answer: B (blue)", worker[0])
         self.assertFalse(self.asks.exists())  # never reached the phone
         self.assertIn("T-001", self.s.git("log", "origin/main", "--merges", "--format=%s"))
-        self.assertIn("preflight", [json.loads(l)["role"] for l in (self.p.state / "ledger.jsonl").read_text().splitlines()])
+        self.assertIn("preflight", [json.loads(l).get("role") for l in (self.p.state / "ledger.jsonl").read_text().splitlines()])
 
     def test_a_skipped_question_is_asked_on_the_phone_as_before(self):
         os.environ.update(FAKE_PREFLIGHT=QUESTION, FAKE_WORKER="question")

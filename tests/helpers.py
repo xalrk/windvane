@@ -24,7 +24,8 @@ if log:
         deny = json.loads(args[args.index("--settings") + 1])["permissions"]["deny"] if "--settings" in args else []
         flags = [a for a in args if a not in (prompt, system)]
         f.write(json.dumps({"system": system[:40], "prompt": prompt, "deny": deny, "flags": flags,
-                            "tool_ms": os.environ.get("BASH_DEFAULT_TIMEOUT_MS")}) + "\n")
+                            "tool_ms": os.environ.get("BASH_DEFAULT_TIMEOUT_MS"),
+                            "ticket_env": os.environ.get("WINDVANE_TICKET")}) + "\n")
 sh = lambda *c: subprocess.run(c, capture_output=True, text=True).stdout.strip()
 # FAKE_FAIL: what each session does in turn (ok, error, crash, quiet = no RESULT line); a trailing * repeats the last
 steps, step = os.environ.get("FAKE_FAIL", "").split(","), ""
@@ -214,7 +215,7 @@ class Sandbox:
         self.old_env = dict(os.environ)
         os.environ.clear()
         os.environ.update({**self.old_env, **self.env})
-        for k in ("WINDVANE_SESSION", "WINDVANE_STOP_AT", "WINDVANE_CAPS"):  # when the tests run inside a session
+        for k in ("WINDVANE_SESSION", "WINDVANE_TICKET", "WINDVANE_STOP_AT", "WINDVANE_CAPS"):  # when the tests run inside a session
             os.environ.pop(k, None)
         from windvane import net
         net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage

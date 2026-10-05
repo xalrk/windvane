@@ -436,12 +436,27 @@ def cmd_stats(a, p):
     if getattr(a, "periodic", False):
         return periodic_stats(rows, a.days)
     swept = sum(r.get("groups") or 0 for r in rows if r.get("event") == "swept")
-    rows = [r for r in rows if not r.get("event")]  # a periodic score, an outcome, a sweep: not a session
+    checks = [r for r in rows if r.get("event") == "check"]
+    rows = [r for r in rows if not r.get("event")]  # a periodic score, an outcome, a sweep, a check: not a session
     if not rows:
         print("no runs yet")
+        check_stats(checks)
         orphans(swept)
     else:
-        session_stats(a, p, rows, swept)
+        session_stats(a, p, rows, swept, checks)
+
+
+def check_stats(checks):
+    """What the check costs: its runs and minutes, per ticket checked, and the failed and reused ones (only when
+    there are some). Not in the table: a check spends time, not tokens."""
+    if not checks:
+        return
+    ran = [r for r in checks if not r.get("reused")]
+    mins = sum(r.get("minutes") or 0 for r in ran)
+    m = lambda x: f"{x:.0f}" if x >= 10 else f"{x:.1f}"
+    failed, reused = sum(not r.get("passed") for r in ran), len(checks) - len(ran)
+    print(f"checks: {plural(len(ran), 'run')}, {m(mins)} min ({mins / len({r['ticket'] for r in checks}):.1f} min a "
+          f"ticket)" + (f", {failed} failed" if failed else "") + (f", {reused} reused a pass" if reused else ""))
 
 
 def orphans(swept):
@@ -449,7 +464,7 @@ def orphans(swept):
         print(f"orphaned process groups killed: {swept}")
 
 
-def session_stats(a, p, rows, swept=0):
+def session_stats(a, p, rows, swept=0, checks=()):
     agg = {}
     key = (lambda r: r.get("ticket") or r["role"]) if a.by == "ticket" else (lambda r: r["role"])
     for r in rows:
@@ -477,6 +492,7 @@ def session_stats(a, p, rows, swept=0):
     stats_table(a.by, agg, outcome, wide)
     if outcome:
         stats_per_merged(agg, outcome)
+    check_stats(checks)
     died, killed = (sum(g[f] for g in agg.values()) for f in ("died", "killed"))
     if died or killed:
         lost, total = sum(g["lost_w"] for g in agg.values()), sum(g["w"] for g in agg.values())
@@ -493,7 +509,8 @@ def session_stats(a, p, rows, swept=0):
         note("(base: a run's first-turn context, \"-\" for runs logged before windvane kept it; cached/turn: what "
              "each turn re-reads, base plus what the run has added.)")
     else:
-        note("(--wide adds base and cached/turn: the context each run starts with and each turn re-reads.)")
+        note(f"(--wide, {len(stats_header(a.by, outcome, True))} columns, adds base and cached/turn: what a run "
+             "starts with and each turn re-reads.)")
 
 
 def lost_parts(died, killed):
@@ -519,15 +536,20 @@ def stats_table(by, agg, outcome, wide=False):
     """One line per role or ticket, the costliest (weighted) first. 100 columns at most by default; `wide` adds the
     context columns, for tuning prompts."""
     k1 = lambda n, d: f"{n / d / 1000:,.1f}k" if d else "-"
-    col = f" {'outcome':7}" if outcome else ""
-    more = f" {'base':>6} {'cached/turn':>11}" if wide else ""
-    print(f"{by:12}{col} {'runs':>4} {'died/killed':>11} {'turns':>5} {'fresh in':>9} {'cached in':>10} {'out':>7} "
-          f"{'weighted':>9} {'API $':>7} {'min':>5}{more}")
+    print(stats_header(by, outcome, wide))
     for name, g in sorted(agg.items(), key=lambda kv: -kv[1]["w"]):
         o = f" {outcome.get(name, '-'):7}" if outcome else ""
         more = f" {k1(g['base'], g['based']):>6} {k1(g['cache'], g['turns']):>11}" if wide else ""
-        print(f"{name[:12]:12}{o} {g['runs']:4} {g['died'] + g['killed']:11} {g['turns']:5} {k(g['in']):>9} "
+        print(f"{name[:12]:12}{o} {g['runs']:4} {g['died'] + g['killed'] or '·':>11} {g['turns']:5} {k(g['in']):>9} "
               f"{k(g['cache']):>10} {k(g['out']):>7} {k(g['w']):>9} {usd(g):>7} {g['min']:5.0f}{more}")
+
+
+def stats_header(by, outcome, wide):
+    """The table's header, whose length is its width: the --wide note says it."""
+    col = f" {'outcome':7}" if outcome else ""
+    more = f" {'base':>6} {'cached/turn':>11}" if wide else ""
+    return (f"{by:12}{col} {'runs':>4} {'died/killed':>11} {'turns':>5} {'fresh in':>9} {'cached in':>10} {'out':>7} "
+            f"{'weighted':>9} {'API $':>7} {'min':>5}{more}")
 
 
 def stats_per_merged(agg, outcome):

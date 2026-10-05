@@ -12,8 +12,8 @@ import time
 from pathlib import Path
 
 from .config import exe
-from .runner import NEST
-from .util import gout, now
+from .runner import NEST, TICKET
+from .util import append_jsonl, gout, now
 
 
 def tree_key(p, cwd):
@@ -24,7 +24,16 @@ def tree_key(p, cwd):
     return hashlib.sha1(f"{tree}\n{p.cfg['check']}".encode()).hexdigest() if tree else None
 
 
-def check(p, cwd, quiet=False):
+def ledger(p, ticket, mins, passed, reused=False):
+    """A check run for a ticket (the driver's, or a session's `windvane check`) as a ledger row, so `stats` can say
+    what checks cost; one at the desk, for no ticket, isn't counted."""
+    ticket = ticket or os.environ.get(TICKET)
+    if ticket:
+        append_jsonl(p.state / "ledger.jsonl", {"event": "check", "ticket": ticket, "minutes": round(mins, 2),
+                                                "passed": passed, "reused": reused})
+
+
+def check(p, cwd, quiet=False, ticket=None):
     """Run the project's check in `cwd`. Returns (passed, summary line, log path)."""
     cmd = p.cfg["check"]
     if not cmd:
@@ -32,6 +41,7 @@ def check(p, cwd, quiet=False):
     passes = p.state / "passes"
     key = tree_key(p, cwd)
     if key and (passes / key).exists():
+        ledger(p, ticket, 0, True, reused=True)
         return True, f"CHECK PASSED (reused the pass from {(passes / key).read_text().strip()} for this tree)", None
     logs = p.state / "checks"
     logs.mkdir(parents=True, exist_ok=True)
@@ -45,6 +55,7 @@ def check(p, cwd, quiet=False):
         else:
             code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT).returncode
     mins = (time.time() - start) / 60
+    ledger(p, ticket, mins, code == 0)
     if code == 0:
         if key and tree_key(p, cwd) == key:
             passes.mkdir(parents=True, exist_ok=True)

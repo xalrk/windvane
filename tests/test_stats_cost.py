@@ -97,7 +97,7 @@ class StatsCost(unittest.TestCase):
         out = self.cli("stats")
         r = self.rows(out)
         self.assertEqual(r["worker"][1:3], ["5", "1"])  # runs, died
-        self.assertEqual(r["planner"][1:3], ["1", "0"])
+        self.assertEqual(r["planner"][1:3], ["1", "·"])
         self.assertIn("died or killed: 1 run (", out)
 
     def critic_fixture(self):
