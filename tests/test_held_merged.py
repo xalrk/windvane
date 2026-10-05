@@ -88,7 +88,7 @@ class HeldMerged(Base):
         self.assertEqual(held.held_now(self.p), [])
         gout = held.gout
         self.addCleanup(setattr, held, "gout", gout)
-        held.gout = lambda cwd, *a: "" if a[0] == "cherry" else gout(cwd, *a)
+        held.gout = lambda cwd, *a: "" if a[0] in ("cherry", "merge-base") else gout(cwd, *a)
         self.assertEqual([b for b, *_ in held.held_now(self.p)], [branch])  # can't tell: still listed
 
     def test_a_change_main_lacks_stays_listed(self):
@@ -118,8 +118,8 @@ class HeldMerged(Base):
 
     def test_status_fetches_for_a_hand_pushed_change(self):
         self.hand_pushed_land()
-        self.assertEqual(self.status_calls(), [["git", "fetch", "-q", "origin"]])
-        self.assertEqual(self.status_calls(line=True), [["git", "fetch", "-q", "origin"]])
+        self.assertEqual(self.status_calls(), [["git", "fetch", "-q", "--prune", "origin"]])
+        self.assertEqual(self.status_calls(line=True), [["git", "fetch", "-q", "--prune", "origin"]])
 
     def test_a_failed_fetch_changes_nothing(self):
         branch = self.hand_pushed_land()
