@@ -56,17 +56,18 @@ A plan, periodic change or desk answer whose push was refused waits on a local b
 why and what to do:
 - "login refused; run `gh auth login` and the next run pushes it" (off GitHub: "check your login to the remote"):
   once you're logged in, the next run or `windvane plan` pushes it.
-- "refused by a hook or branch rule; fix the rule or push to another branch": pushing again fails the same way until
-  the rule changes; `git push origin plan-...:some-other-name` by hand counts as pushed.
+- "refused by a hook or branch rule; push it by hand with `git push origin plan-20261005-040000:plan-20261005-040000-b`,
+  or change the rule": the command names your branch and remote. Run it in your checkout; pushed under another name
+  counts as pushed. Without that, pushing again fails the same way until the rule changes.
 - "network down; the next run pushes it again": nothing to do.
 - "push failed; see the windvane log": the log (`windvane status`) has git's own words.
 
 Each run (and each `windvane plan`) tries such a branch once more at its start, and one push ("1 held-back change
 pushed") says where those that went through are now; one that still needs you (not merged, no PR) comes first, under
 "... pushed, not merged". While it still fails, `windvane status` and `overview` list it with the newest reason
-("held back, not pushed: ..."), and the phone's `status` counts it. The local branch
-goes once the remote has it. Only branches windvane kept this way are pushed again: not your own `plan-...` copies, nor
-one you pushed by hand.
+and how long it has waited ("held back for 3 days, not pushed: ..."), and the phone's `status` counts them with the
+oldest one's age ("2 held-back changes not pushed, oldest 3 days"). The local branch goes once the remote has it.
+Only branches windvane kept this way are pushed again: not your own `plan-...` copies, nor one you pushed by hand.
 
 **A plan PR I closed holds ticket ids.**
 It doesn't: a plan branch whose PRs were all closed frees its ids and is remembered in

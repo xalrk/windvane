@@ -86,8 +86,8 @@ class PlanSafety(unittest.TestCase):
         branch, files = self.local_plan()
         self.assertIn(".windvane/tickets/T-003.md", files)
         self.assertEqual(self.pushes, [("plan not merged", f"1 ticket waits on the local branch {branch} (refused "
-                                                           "by a hook or branch rule; fix the rule or push to another "
-                                                           "branch).")])
+                                                           "by a hook or branch rule; push it by hand with `git push "
+                                                           f"origin {branch}:{branch}-b`, or change the rule).")])
 
     def test_two_plans_in_the_same_minute_both_survive(self):
         orig = driver.now
