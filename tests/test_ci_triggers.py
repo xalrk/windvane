@@ -3,6 +3,7 @@
 import contextlib
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,8 @@ FAKE_PY = """#!/bin/sh
 [ "$1" = "--version" ] && {{ echo "fake {v}"; exit 0; }}
 [ "$(python3 --version)" = "fake {v}" ] || {{ echo "FAILED (python3 isn't me)"; exit 1; }}
 echo "args: $*"
+echo "tmp: $TMPDIR"
+: > "$TMPDIR/leaked-by-{v}"
 echo "Ran 3 tests in 0.1s"
 echo
 echo "{result}"
@@ -46,8 +49,10 @@ class CheckPythons(unittest.TestCase):
             exit_line = "exit 0" if result == "OK" else "exit 1"
             (bindir / f"python{v}").write_text(FAKE_PY.format(v=v, result=result, exit=exit_line))
             (bindir / f"python{v}").chmod(0o755)
+        self.tmp = bindir / "tmp"
+        self.tmp.mkdir()
         r = subprocess.run([str(SCRIPT), *args], capture_output=True, text=True, timeout=60,
-                           env={"PATH": str(bindir), "HOME": str(bindir)})
+                           env={"PATH": str(bindir), "HOME": str(bindir), "TMPDIR": str(self.tmp)})
         return r.stdout + r.stderr, r.returncode
 
     def test_a_missing_version_is_named_as_not_installed(self):
@@ -66,6 +71,15 @@ class CheckPythons(unittest.TestCase):
         self.assertIn("--- python3.14, the end of its output:\nargs: -m unittest discover -s tests -q\n", out)
         self.assertNotIn("--- python3.12", out)
         self.assertTrue(out.endswith("FAILED on: python3.14\n"), out)
+
+    def test_each_run_gets_a_temp_dir_of_its_own_and_leaves_nothing(self):
+        out, code = self.run_script("x", python3_11="FAILED", python3_12="FAILED")
+        self.assertEqual(code, 1)
+        dirs = re.findall(r"^tmp: (.*)$", out, re.M)
+        self.assertEqual(len(set(dirs)), 2, out)
+        for d in dirs:
+            self.assertRegex(d, rf"^{re.escape(str(self.tmp))}/windvane-check-\w+/tmp3\.1[12]$")
+        self.assertEqual(list(self.tmp.iterdir()), [])
 
     def test_arguments_go_to_unittest(self):
         out, code = self.run_script("tests.test_units", python3_11="FAILED")

@@ -209,4 +209,5 @@ On this machine only, under `~/.local/state/windvane/<name>/`:
 | `critic.jsonl`, `critic/<ID>/` | the critic's verdicts, and each ticket's evidence pack |
 | `quiet.txt` | quiet times |
 | `held.json`, `held_why.json`, `closed_plans.json` | changes kept on a local branch to land when pushed again, and why their push was refused; plan branches whose PRs were closed |
+| `tmp/<ID>/` | the `TMPDIR` of a ticket's sessions and checks, removed when it merges or fails; the driver also removes `windvane-*` dirs over an hour old that nothing uses from the machine's temp dir, at the start and between tickets |
 | `work/`, `ci/`, `plan/` | worktrees: the sessions', the driver's checks and merges, the planner's (`work-1/`, `ci-1/` and so on for extra slots) |

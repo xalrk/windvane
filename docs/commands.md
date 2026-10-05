@@ -8,7 +8,7 @@ options. Commands that read state (`status`, `queue`, `watch`, `stats` and so on
 | Command | What it does |
 |---|---|
 | `windvane init [dir] [--name N] [--check CMD] [--forge github\|git]` | Set windvane up in a repository: writes `.windvane/` (config, queue, questions, critic scale). |
-| `windvane doctor` | What this machine lacks for windvane (Claude Code logged in and new enough for the session flags, gh, tmux, the phone), with the fix for each. |
+| `windvane doctor [--clean]` | What this machine lacks for windvane (Claude Code logged in and new enough for the session flags, gh, tmux, the phone), with the fix for each; it warns when the temp dir is over 90% full (inodes or space) and names windvane's leftovers there, which `--clean` removes. |
 | `windvane install [--yes]` | Add the windvane skill and the mention hook to Claude Code, asking before each change. |
 | `windvane uninstall [--yes]` | Remove exactly what `install` added. |
 | `windvane phone setup [--server URL] [--no-service]` | Turn on pushes and questions on your phone through ntfy. See [Phone setup](phone.md). |

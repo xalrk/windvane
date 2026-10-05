@@ -29,6 +29,7 @@ if log:
         f.write(json.dumps({"system": system[:40], "prompt": prompt, "deny": deny, "flags": flags,
                             "tool_ms": os.environ.get("BASH_DEFAULT_TIMEOUT_MS"),
                             "ticket_env": os.environ.get("WINDVANE_TICKET"),
+                            "tmpdir": os.environ.get("TMPDIR"),
                             # the gh the Bash tool would run: after the session's env file, as Claude Code does
                             "gh": os.environ.get("CLAUDE_ENV_FILE") and sh(  # a bash only when there's a file
                                 "bash", "-c", '. "$CLAUDE_ENV_FILE"; command -v gh')})
@@ -215,8 +216,15 @@ class Sandbox:
         self.tmp = Path(tempfile.mkdtemp(prefix="windvane-test-"))
         # removed by close(), or when it's collected or the run ends: a setUp that fails after this never calls close
         self.rm = weakref.finalize(self, shutil.rmtree, str(self.tmp), True)
-        (self.tmp / "tmp").mkdir()  # the temp dir of everything it runs, and of the test's own tempfile calls
-        self.old_tempdir, tempfile.tempdir = tempfile.tempdir, str(self.tmp / "tmp")
+        self.old_env = dict(os.environ)
+        try:
+            self.setup(config_extra)
+        except BaseException:  # undone, or the next test runs in a half-made sandbox's environment
+            self.close()
+            raise
+
+    def setup(self, config_extra):
+        (self.tmp / "tmp").mkdir()  # the TMPDIR of everything it runs
         self.remote = self.tmp / "remote.git"
         self.root = self.tmp / "proj"
         self.bin = self.tmp / "bin"
@@ -230,7 +238,6 @@ class Sandbox:
                     "WINDVANE_SELF_UPDATE": "0", "TMPDIR": str(self.tmp / "tmp"),
                     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "FAKE_LOG": str(self.tmp / "calls.jsonl")}
-        self.old_env = dict(os.environ)
         os.environ.clear()
         os.environ.update({**self.old_env, **self.env})
         for k in ("WINDVANE_SESSION", "WINDVANE_TICKET", "WINDVANE_STOP_AT", "WINDVANE_CAPS"):  # when the tests run inside a session
@@ -277,10 +284,9 @@ class Sandbox:
         self.git("push", "-q", "origin", "main")
 
     def close(self):
+        os.environ.clear()
+        os.environ.update(self.old_env)
+        self.rm()
         from windvane import net, phone
         net.probe, net.waiter = None, None
         phone.use(None)  # the next test's pushes name its own project
-        os.environ.clear()
-        os.environ.update(self.old_env)
-        tempfile.tempdir = self.old_tempdir
-        self.rm()
