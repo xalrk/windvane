@@ -1514,7 +1514,7 @@ def push_branch(p, cd, branch, tries=2):
             return branch
     git(cd, "branch", "-f", branch, "HEAD")
     log(p, f"push to {branch} refused ({' '.join(res.stderr.split())[:200]}); kept only locally on {branch}")
-    why = push_refusal(res.stderr, p.cfg["forge"], branch, p.remote)
+    why = push_refusal(res.stderr, p.cfg["forge"], branch, p.remote, p.main)
     hold(p, branch, "push", why)
     return f"the local branch {branch} ({why})"
 
@@ -1551,7 +1551,8 @@ REFUSALS = (
     ("login refused; {login} and the next run pushes it",
      re.compile(r"authentication failed|permission denied|permission to .* denied|could not read username|"
                 r"terminal prompts disabled|invalid username or password|\b403\b", re.I)),
-    ("refused by a hook or branch rule; push it by hand with `git push {remote} {branch}:{branch}-b`, or change the rule",
+    ("refused by a hook or branch rule; change the rule, or push it by hand with `git push {remote} {branch}:{branch}-b` "
+     "and {then}",
      re.compile(r"hook declined|protected branch|GH00\d|GH013|rule violation|remote rejected", re.I)),
     ("network down; the next run pushes it again",
      re.compile(r"could not resolve|timed out|connection (refused|reset)|network is unreachable|unable to access|"
@@ -1560,15 +1561,18 @@ REFUSALS = (
 
 
 LOGIN = {"github": "run `gh auth login`", "git": "check your login to the remote"}
+# After a hand push: windvane counts the branch as pushed and stops tracking it, so the user lands it.
+THEN = {"github": "open a PR from it", "git": "merge it into {main}"}
 
 
-def push_refusal(stderr, forge="git", branch="BRANCH", remote="origin"):
+def push_refusal(stderr, forge="git", branch="BRANCH", remote="origin", main="main"):
     """A short reason for a refused push and its next step, from git's stderr: auth, hook, network; anything else
     sends the user to the log, which `push_branch` gave git's own words (a raw git line reads badly on a phone).
     A hook's step names the command for `branch` on `remote`: under another name it counts as pushed (`held_here`)."""
     for why, pattern in REFUSALS:
         if pattern.search(stderr):
-            return why.format(login=LOGIN.get(forge, LOGIN["git"]), branch=branch, remote=remote)
+            return why.format(login=LOGIN.get(forge, LOGIN["git"]), branch=branch, remote=remote,
+                              then=THEN.get(forge, THEN["git"]).format(main=main))
     return "push failed; see the windvane log"
 
 

@@ -56,9 +56,11 @@ A plan, periodic change or desk answer whose push was refused waits on a local b
 why and what to do:
 - "login refused; run `gh auth login` and the next run pushes it" (off GitHub: "check your login to the remote"):
   once you're logged in, the next run or `windvane plan` pushes it.
-- "refused by a hook or branch rule; push it by hand with `git push origin plan-20261005-040000:plan-20261005-040000-b`,
-  or change the rule": the command names your branch and remote. Run it in your checkout; pushed under another name
-  counts as pushed. Without that, pushing again fails the same way until the rule changes.
+- "refused by a hook or branch rule; change the rule, or push it by hand with
+  `git push origin plan-20261005-040000:plan-20261005-040000-b` and open a PR from it" (off GitHub: "and merge it into
+  main"): the command names your branch and remote; run it in your checkout. Pushed under another name counts as
+  pushed, so windvane stops listing it: landing it (the PR, or the merge) is then yours. Without either, pushing again
+  fails the same way until the rule changes.
 - "network down; the next run pushes it again": nothing to do.
 - "push failed; see the windvane log": the log (`windvane status`) has git's own words.
 

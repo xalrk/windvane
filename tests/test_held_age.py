@@ -3,6 +3,8 @@ same step; `status --line` says how long the oldest held-back change has waited 
 time noted, is aged by its branch's last commit)."""
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import time
@@ -38,9 +40,26 @@ class HeldAge(Base):
     def test_a_hook_refusal_names_the_push_with_branch_and_remote(self):
         [branch] = self.hold_plans(1)
         why = self.notes()[branch]["why"]
-        self.assertIn(f"push it by hand with `git push origin {branch}:{branch}-b`, or change the rule", why)
+        self.assertIn(f"change the rule, or push it by hand with `git push origin {branch}:{branch}-b` and merge it "
+                      "into main", why)
         self.assertIn(why, driver.held_lines(self.p)[0])
-        self.assertIn("`git push up x:x-b`", driver.push_refusal(HOOK, "git", "x", "up"))
+        self.assertIn("`git push up x:x-b` and open a PR from it", driver.push_refusal(HOOK, "github", "x", "up"))
+        self.assertIn("`git push up x:x-b` and merge it into trunk", driver.push_refusal(HOOK, "git", "x", "up", "trunk"))
+
+    def test_the_hints_push_gets_past_a_rule_on_the_branchs_name(self):
+        hook = self.s.remote / "hooks" / "pre-receive"  # refuses plan-* except a hand push's -b name
+        hook.write_text("#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/plan-*-b) ;; "
+                        "refs/heads/plan-*) exit 1;; esac; done\nexit 0\n")
+        hook.chmod(0o755)
+        driver.plan(self.p, "make it great")
+        branch = self.local()
+        self.assertIn("1 held-back change not pushed", self.windvane("status", "--line"))
+        cmd = re.search(r"`(git push [^`]+)`", self.notes()[branch]["why"]).group(1)
+        subprocess.run(shlex.split(cmd), cwd=self.s.root, check=True, capture_output=True)
+        self.assertIn(f"refs/heads/{branch}-b", self.remote())
+        self.assertNotIn("held", self.windvane("status", "--line"))  # pushed: the user lands it, as the hint said
+        self.assertEqual(driver.held_branches(self.p), {})
+        self.assertEqual(self.notes(), {})
 
     def test_held_branches_drops_a_merged_branchs_reason(self):
         merged, waiting = self.hold_plans(2)

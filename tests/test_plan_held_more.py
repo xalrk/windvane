@@ -23,7 +23,8 @@ case "$*" in
 esac
 exit 0
 """
-HOOK_WHY = "refused by a hook or branch rule; push it by hand with `git push origin {b}:{b}-b`, or change the rule"
+HOOK_WHY = ("refused by a hook or branch rule; change the rule, or push it by hand with `git push origin {b}:{b}-b` "
+            "and merge it into main")
 
 
 class ReopenedPlans(Base):
