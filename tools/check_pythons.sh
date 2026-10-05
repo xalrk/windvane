@@ -11,9 +11,9 @@ tmp=$(mktemp -d) || exit 2
 trap 'rm -rf "$tmp"' EXIT
 trap 'kill $(jobs -p) 2>/dev/null; exit 130' INT TERM
 
-ran="" skipped="" pids=""
+ran="" missing="" pids=""
 for v in $VERSIONS; do
-    exe=$(command -v "python$v") || { skipped="$skipped $v"; continue; }
+    exe=$(command -v "python$v") || { missing="$missing $v"; continue; }
     mkdir "$tmp/bin$v" && ln -s "$exe" "$tmp/bin$v/python3"
     PATH="$tmp/bin$v:$PATH" "$exe" -m unittest "$@" >"$tmp/log$v" 2>&1 &
     ran="$ran $v" pids="$pids $!"
@@ -33,7 +33,7 @@ for v in $failed; do
     echo "--- python$v, the end of its output:"
     tail -n 40 "$tmp/log$v"
 done
-[ -z "$skipped" ] || echo "skipped (not on PATH):$(printf ' python%s' $skipped)"
+[ -z "$missing" ] || echo "not installed:$(printf ' python%s' $missing)"
 if [ -n "$failed" ]; then
     echo "FAILED on:$(printf ' python%s' $failed)"
     exit 1
