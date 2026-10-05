@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import cli, driver  # noqa: E402
+from windvane import cli, driver, stats  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import append_jsonl, log, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -65,7 +65,7 @@ class StatsCost(unittest.TestCase):
         return {l.split()[0]: l.split() for l in out.splitlines()[1:] if l.startswith(("T-", "planner", "worker"))}
 
     def test_weights_price_each_kind_of_token(self):
-        self.assertEqual(cli.weighted(dict(input=100, cache_write=100, cache_read=1000, output=10)),
+        self.assertEqual(stats.weighted(dict(input=100, cache_write=100, cache_read=1000, output=10)),
                          100 + 125 + 100 + 50)
 
     def test_by_ticket_sorts_by_weighted_cost_and_shows_outcomes(self):
