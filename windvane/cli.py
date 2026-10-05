@@ -540,16 +540,24 @@ def orphans(swept):
         print(f"orphaned process groups killed: {swept}")
 
 
+# What the gh guard refused, by its row's kind; a row from before kinds were logged was a workflow start.
+GUARD_KINDS = {"workflow": ("workflow start", ""), "alias": ("alias change", ""),
+               "unread": ("unknown command", " (alias list unread)")}
+
+
 def guard_stats(refusals, by):
-    """How often workers tried to start a workflow past `windvane ci` (the gh guard's `gh-refused` rows), and by
-    ticket the one that tried most: a ticket that keeps trying wants a workflow run its prompt doesn't give it."""
+    """How often workers tried to start a workflow past `windvane ci` (the gh guard's `gh-refused` rows), each kind
+    of refusal by its own name, and by ticket the one that tried most: a ticket that keeps trying wants a workflow
+    run its prompt doesn't give it."""
     if not refusals:
         return
     top = ""
     if by == "ticket":
         name, n = Counter(r.get("ticket") or "no ticket" for r in refusals).most_common(1)[0]
         top = f" (most: {name}, {n})"
-    print(f"gh guard refused: {plural(len(refusals), 'workflow start')}{top}")
+    kinds = Counter(r.get("kind") if r.get("kind") in GUARD_KINDS else "workflow" for r in refusals)
+    parts = [plural(kinds[k], word) + why for k, (word, why) in GUARD_KINDS.items() if kinds[k]]
+    print(f"gh guard refused: {', '.join(parts)}{top}")
 
 
 def session_stats(a, p, rows, swept=0, checks=(), refusals=()):

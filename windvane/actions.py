@@ -459,14 +459,18 @@ def method(flags):
 
 
 def refused(a):
+    # What `a` would do that workers mustn't: "workflow" (start, re-run or enable one), "alias" (add an alias, which
+    # could hide one), or None.
     w, flags = parse(a)
     if w[:1] == ["workflow"] and w[1:2] in (["run"], ["enable"]) or w[:2] == ["run", "rerun"]:
-        return True
-    if w[:1] == ["alias"] and w[1:2] in (["set"], ["import"]):  # an alias could hide a refused command
-        return True
+        return "workflow"
+    if w[:1] == ["alias"] and w[1:2] in (["set"], ["import"]):
+        return "alias"
     paths = w[1:] if w[:1] == ["api"] else []  # gh api takes one; every word is checked, should a parse go wrong
-    return any(any(s in p for s in ("dispatches", "rerun", "/enable")) or "actions/" in p and method(flags) != "GET"
-               for p in paths)
+    if any(any(s in p for s in ("dispatches", "rerun", "/enable")) or "actions/" in p and method(flags) != "GET"
+           for p in paths):
+        return "workflow"
+    return None
 
 
 # gh's own commands: gh won't let an alias take one's name, so a call starting with one needs no alias lookup.
@@ -476,19 +480,23 @@ KNOWN = {"agent-task", "alias", "api", "attestation", "auth", "browse", "cache",
          "variable", "version", "workflow"}
 # A shell alias's text names a blocked command: the guard can't parse a shell line, so it errs on refusing.
 SHELL = re.compile(r"\bworkflow\b.*\b(run|enable)\b|dispatches|rerun|/enable", re.S)
+ALIAS_TIMEOUT = 5  # seconds
 
 
 def aliases():
     # The user's gh aliases, {name: expansion}, from the real gh's `alias list` (`name: expansion` lines, a value
-    # with quotes YAML-quoted). Read only when a call starts with a word gh doesn't know, so the usual call costs
-    # nothing more; a failed read means none.
+    # with quotes YAML-quoted), or None when it can't be read. Read afresh on every call that starts with a word gh
+    # doesn't know, so an alias added mid-session counts at once and the usual call costs nothing more. It reads a
+    # local file: a list that takes longer than a few seconds is as good as failed.
     try:
-        out = subprocess.run([REAL, "alias", "list"], capture_output=True, text=True, timeout=30,
+        out = subprocess.run([REAL, "alias", "list"], capture_output=True, text=True, timeout=ALIAS_TIMEOUT,
                              stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
-        return {}
+        return None
+    if out.returncode:
+        return None
     found = {}
-    for line in out.stdout.splitlines() if out.returncode == 0 else []:
+    for line in out.stdout.splitlines():
         name, sep, v = line.partition(":")
         v = v.strip()
         if v[:1] == v[-1:] == "'" and len(v) > 1:
@@ -520,24 +528,26 @@ def expand(exp, rest):
 
 
 def via_alias(a):
-    # The alias name when `a` starts with a user's alias whose expansion would be refused, else None. gh expands
-    # only the very first argument.
+    # The refusal's kind when `a` starts with a user's alias whose expansion would be refused, "unread" when it
+    # starts with a word gh doesn't know and the alias list can't be read (it could be such an alias), else None.
+    # gh expands only the very first argument.
     if not a or not REAL or a[0].startswith("-") or a[0] in KNOWN:
         return None
-    exp = aliases().get(a[0])
+    found = aliases()
+    if found is None:
+        return "unread"
+    exp = found.get(a[0])
     if exp is None:
         return None
     if exp.startswith("!"):
-        bad = SHELL.search(exp) or re.search(r"\bapi\b", exp) and "actions/" in exp
-    else:
-        bad = refused(expand(exp, a[1:]))
-    return a[0] if bad else None
+        return "workflow" if SHELL.search(exp) or re.search(r"\bapi\b", exp) and "actions/" in exp else None
+    return refused(expand(exp, a[1:]))
 
 
-def count(a):
+def count(a, kind):
     # One ledger row per refusal, so `windvane stats` shows how often workers try; a failed write changes nothing.
     try:
-        row = {"at": time.strftime("%Y-%m-%d %H:%M"), "event": "gh-refused",
+        row = {"at": time.strftime("%Y-%m-%d %H:%M"), "event": "gh-refused", "kind": kind,
                "ticket": os.environ.get("WINDVANE_TICKET", ""), "command": " ".join(parse(a)[0][:2])}
         with open(LEDGER, "a") as f:
             f.write(json.dumps(row) + "\n")
@@ -546,9 +556,16 @@ def count(a):
 
 
 a = sys.argv[1:]
-alias = None if refused(a) else via_alias(a)
-if alias or refused(a):
-    count(a)
+kind, alias = refused(a), None
+if not kind:
+    kind = via_alias(a)
+    alias = kind and a[0]
+if kind:
+    count(a, kind)
+    if kind == "unread":
+        sys.exit(f"windvane: `gh {a[0]}` isn't a gh command and gh's alias list couldn't be read (`gh alias list` "
+                 f"failed or took over {ALIAS_TIMEOUT} s), so it could be an alias that starts a workflow: refused. "
+                 "gh's own commands still work.")
     sys.exit("windvane: workers don't start, re-run or enable GitHub workflows (or add gh aliases"
              + (f"; `gh {alias}` is an alias for one" if alias else "")
              + "); `windvane ci [workflow]` starts one within the month's Actions minutes.")
