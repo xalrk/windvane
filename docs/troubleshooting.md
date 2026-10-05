@@ -54,13 +54,20 @@ Start it again. Unfinished tickets are resumed from their branches and worktrees
 **"plan not pushed" (or "not merged") with a local branch.**
 A plan, periodic change or desk answer whose push was refused waits on a local branch (`plan-...`), and the push says
 why and what to do:
+- "refused: it holds a secret (GitHub push protection); remove it from the branch's commit (`git commit --amend` on
+  `plan-...`), then the next run pushes it": GitHub's push protection found a token or key in the commit. Pushing it
+  by hand under another name fails the same way. In your checkout, `git switch` to that branch, take the secret out
+  of the file the refusal names, `git commit --amend -a`, and `git switch -` back; the next run pushes the cleaned
+  commit.
 - "login refused; run `gh auth login` and the next run pushes it" (off GitHub: "check your login to the remote"):
   once you're logged in, the next run or `windvane plan` pushes it.
 - "refused by a hook or branch rule; change the rule, or push it by hand with
   `git push origin plan-20261005-040000:plan-20261005-040000-b` and open a PR from it" (off GitHub: "and merge it into
   main"): the command names your branch and remote; run it in your checkout. Pushed under another name counts as
-  pushed, so windvane stops listing it: landing it (the PR, or the merge) is then yours. Without either, pushing again
-  fails the same way until the rule changes.
+  pushed, so windvane stops pushing it: landing it (the PR, or the merge) is then yours. A change meant to land on
+  main (a periodic report, a plan run with `--merge`) stays listed as "pushed to origin/plan-...-b, not merged" until
+  main has it (or, on GitHub, its PR is closed); a plain plan goes from the list at once. Without either, pushing
+  again fails the same way until the rule changes.
 - "network down; the next run pushes it again": nothing to do.
 - "push failed; see the windvane log": the log (`windvane status`) has git's own words.
 
@@ -68,7 +75,8 @@ Each run (and each `windvane plan`) tries such a branch once more at its start, 
 pushed") says where those that went through are now; one that still needs you (not merged, no PR) comes first, under
 "... pushed, not merged". While it still fails, `windvane status` and `overview` list it with the newest reason
 and how long it has waited ("held back for 3 days, not pushed: ..."), and the phone's `status` counts them with the
-oldest one's age ("2 held-back changes not pushed, oldest 3 days"). The local branch goes once the remote has it.
+oldest one's age ("2 held-back changes not pushed, oldest 3 days"; "pushed, not merged" for those you pushed by
+hand), in place of the log's last line. The local branch goes once the remote has it.
 Only branches windvane kept this way are pushed again: not your own `plan-...` copies, nor one you pushed by hand.
 
 **A plan PR I closed holds ticket ids.**

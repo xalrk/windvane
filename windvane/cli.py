@@ -205,8 +205,9 @@ def parallel_arg(v):
 def cmd_status(a, p):
     on = running(p)
     if a.line:
-        last = (last_log(p) or [""])[0][11:]
-        extra = "".join(f". {x}" for x in (held_count(p), actions.line(p), f"Last: {last}" if last else "") if x)
+        held, last = held_count(p), (last_log(p) or [""])[0][11:]
+        last = "" if held or HELD_LOG.search(last) else last  # the held count says it; or it's no longer held
+        extra = "".join(f". {x}" for x in (held, actions.line(p), f"Last: {last}" if last else "") if x)
         print(f"{p.display}: autopilot {'running' if on else 'off'}{extra}")
         return
     print(f"autopilot: {('running in tmux ' + p.tmux if in_tmux(p) else 'running') if on else 'not running'}")
@@ -221,19 +222,33 @@ def cmd_status(a, p):
     print("\n".join(held_text(p) + last_log(p, 12)))
 
 
+# A log line about a held branch: `status --line` leaves it out, as the held count (or none, once it's gone) says more.
+HELD_LOG = re.compile(r"kept only locally on |the local branch |: still not pushed")
+
+
 def held_count(p):
-    """The phone's held-back count and how long the oldest has waited; "" when none waits."""
-    held = [at for _, _, at in driver.held_now(p)]
+    """The phone's held-back count (pushed by hand but not merged counts too: it waits on the user) and how long the
+    oldest has waited; "" when none waits."""
+    held = driver.held_now(p)
     if not held:
         return ""
-    n, waited = len(held), driver.age(time.time() - min(held))
-    return f"{n} held-back change{'s' * (n > 1)} not pushed, " + (f"oldest {waited}" if n > 1 else f"for {waited}")
+    n, pushed = len(held), sum(bool(on) for *_, on in held)
+    waited = driver.age(time.time() - min(at for _, _, at, _ in held))
+    state = ("not pushed" if not pushed else "pushed, not merged" if pushed == n
+             else f"({n - pushed} not pushed, {pushed} pushed, not merged)")
+    return f"{n} held-back change{'s' * (n > 1)} {state}, " + (f"oldest {waited}" if n > 1 else f"for {waited}")
 
 
 def held_text(p):
-    """The held branches' lines and, after them, what happens next; nothing when none waits."""
-    lines = driver.held_lines(p)
-    return lines + ["  (each run's start tries these again)"] * bool(lines)
+    """The held branches' lines and, after them, what happens next: a run retries only those not pushed, the user
+    merges those pushed by hand; nothing when none waits."""
+    now = driver.held_now(p)
+    if not now:
+        return []
+    pushed = sum(bool(on) for *_, on in now)
+    after = ("each run's start tries these again" if not pushed else "listed until main has them" if pushed == len(now)
+             else "each run's start tries those not pushed again; the others are listed until main has them")
+    return driver.held_lines(p, now) + [f"  ({after})"]
 
 
 def cmd_overview(a, p):
