@@ -333,7 +333,8 @@ class Pilot(Desk, Periodic):
         self.skip.add(tid)
         self.aside[tid] = f"hit {limit}"
         self.log(f"{tid}: the run hit {limit}; set aside")
-        push(f"Set aside: {self.name(tid)}", whole("Hit ", limit, f". {fix} Branch kept.", log=self.log), 3, "hourglass")
+        push(f"Set aside: {self.name(tid)}", whole("Hit ", limit, f". {fix} Branch kept.", log=self.log), 3,
+             "hourglass")
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
@@ -1322,7 +1323,8 @@ class Pilot(Desk, Periodic):
                 rest = "Merged:" + summary.split("\nMerged:", 1)[1]  # past the why, which may run on to a 2nd line
                 save_json(p.state / "crash.json", {"error": crashed, "summary": rest})
             elif not ready and self.halt:  # just why, once: nothing ran, so the summary's other lines say nothing
-                push("windvane couldn't start", whole("", self.halt[0].upper() + self.halt[1:], ".", log=self.log), 4, "warning")
+                push("windvane couldn't start", whole("", self.halt[0].upper() + self.halt[1:], ".", log=self.log), 4,
+                     "warning")
             else:
                 push("windvane stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                      "checkered_flag", ("Usage=usage",))
