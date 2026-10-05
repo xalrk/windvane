@@ -33,7 +33,8 @@ from .phone import whole
 from .planner import plan
 from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
-from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
+from .questions import (answered, desk_answers, give_answer, mode, note, parts, phone_answer, provisional, qkey,
+                        quiet_now, section, shown, unseen)
 from .queue import Queue
 from .runner import Usage, over_caps, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
@@ -811,13 +812,26 @@ class Pilot(Desk, Periodic):
         self.log(f"{tid}: merged {sha[:7]} · {self.usage.text()}")
         push(f"Done: {self.name(tid)}", "Built, checked, reviewed and merged."
              + (f" Critic {score:g}/10." if score is not None else "") + f" {self.usage.text()}"
-             + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else ""), 2, "white_check_mark")
+             + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else "") + self.built_lines(tid),
+             2, "white_check_mark")
+
+    def built_lines(self, tid):
+        """The Done push's lines for the ticket's provisional answers. A question the phone already showed gets one
+        line without its text; only one built without the user ever seeing it (a quiet time) is spelled out. Either
+        way it counts as pushed: the end-of-quiet digest leaves it out."""
+        p = self.p
         picks = [q for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
                  if p.norm(q["ticket"]) == tid]
-        if picks:
-            push(f"Provisional: {self.name(tid)}", f"To change one: windvane answer {tid} <letter>, or tell a Claude "
-                 "session."
-                 + "".join(f"\n{q['question']} Built {q['built']}: {q['option']}" for q in picks), 3, "memo")
+        with self.lock:  # slots merge side by side
+            new = unseen(picks, shown(p)["asked"].get(tid, []))
+
+            def told(s):
+                s["pushed"] += [qkey(q) for q in picks if qkey(q) not in s["pushed"]]
+                s["asked"].pop(tid, None)
+            note(p, told)
+        how = f"to change: windvane answer {tid} <letter>."
+        return "".join(f"\n{q['question']} Built {q['built']} without asking you: {q['option']}; {how}" if q in new
+                       else f"\nBuilt {q['built']} for {tid}; {how}" for q in picks)
 
     def fail(self, tid, why):
         self.skip.add(tid)
@@ -866,6 +880,9 @@ class Pilot(Desk, Periodic):
         sent = phone.ask(self.p.qid(tid), f"{self.name(tid)}: {q['q']}{wait}", opts)
         if sent is None:
             self.log(f"{tid}: no phone; answer at the desk with `windvane answer {tid} <letter>`")
+        elif sent:  # the Done push then names it in one line, without the question
+            with self.lock:
+                note(self.p, lambda s: s["asked"].setdefault(tid, []).append(q["q"]))
         elif not sent:  # the next pass sends it again; the wait for an answer starts once it's out
             q["asked"] = None
             if not q.get("send_failed"):
@@ -923,12 +940,24 @@ class Pilot(Desk, Periodic):
             self.send_unsent()
         if self.was_quiet and not end:
             self.log("quiet time over")
-            picks = provisional(gout(self.p.main_root(), "show", f"{self.p.upstream}:{self.p.questions_rel}"))
-            if picks:
-                push(f"Review: {len(picks)} provisional answer{'s' * (len(picks) > 1)}",
-                     "To change one: windvane answer <ID> <letter>."
-                     + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in picks[:8]), 3, "memo")
+            self.digest()
         self.was_quiet = bool(end)
+
+    def digest(self):
+        """At a quiet time's end: the provisional answers no push has shown yet (a Done push or an earlier digest
+        has the rest), or nothing. The record keeps only those still provisional."""
+        p = self.p
+        picks = provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
+        with self.lock:
+            done = set(shown(p)["pushed"])
+            new = [q for q in picks if qkey(q) not in done]
+            told = {qkey(q) for q in new[:8]} | done  # past eight: the next digest
+            note(p, lambda s: s.update(pushed=[qkey(q) for q in picks if qkey(q) in told]))
+        if new:
+            push(f"Review: {len(new)} provisional answer{'s' * (len(new) > 1)}",
+                 "To change one: windvane answer <ID> <letter>."
+                 + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in new[:8])
+                 + (f"\nThe other {len(new) - 8} come with the next one." if len(new) > 8 else ""), 3, "memo")
 
     # ---------- the loop
 
@@ -1155,6 +1184,7 @@ class Pilot(Desk, Periodic):
         p = self.p
         while True:
             self.quiet_check()
+            self.poll_questions()  # every pass, busy slots or not: a question's wait runs out on time
             why = self.stop_check()
             if why:
                 self.stop_reason = why
@@ -1188,7 +1218,6 @@ class Pilot(Desk, Periodic):
                 self.desk_one(desk[0])
                 continue
             self.fetch()
-            self.poll_questions()
             self.queue = Queue(p)
             tid, kind, branches, slot = self.pick(free)
             if tid is not None and over:  # no more slots until the window allows; the running ones go on
@@ -1226,8 +1255,9 @@ class Pilot(Desk, Periodic):
                 beside = f", beside {', '.join(sorted(self.running))}" if self.running else ""
                 self.log(f"{tid}: slot {slot}{beside}")
             self.start(slot, tid, kind, branches)
-            if self.n == 1:
-                self.threads[-1].join()
+            while self.n == 1 and self.threads[-1].is_alive():
+                self.threads[-1].join(30)
+                self.poll_questions()
 
     def self_update(self):
         """Pulls the windvane install between tickets (nothing running) and, when the driver's own code changed,

@@ -95,7 +95,7 @@ def not_stashed(p, patch, s):
 def merged(p, patch, s):
     patch(driver, "provisional", picks)
     pilot(p, worktree=True).merged_ok("T-001", "", s.git("rev-parse", "HEAD"), renumbered=["T-002 to T-003"] * 20)
-    return {"Done": ("Built, checked, reviewed and merged.",), "Provisional": ("To change one: windvane answer T-001",)}
+    return {"Done": ("Built, checked, reviewed and merged.",)}
 
 
 def failed(p, patch, s):
