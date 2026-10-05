@@ -131,12 +131,13 @@ class DoctorOnWorkflows(unittest.TestCase):
     def test_inline_triggers_and_a_push_only_workflow(self):
         out, _ = self.doctor(**{"a.yaml": '"on": [push]\njobs:\n  build:\n    runs-on: x\n',
                                 "b.yml": "on: pull_request_target\njobs:\n  x:\n    runs-on: y\n"})
-        self.assertRegex(out, r"WARNING +\.github/workflows/a\.yaml runs on push: about 1 hosted jobs a ticket")
+        self.assertRegex(out, r"WARNING +\.github/workflows/a\.yaml runs on push: about 1 hosted jobs a ticket "
+                              r"\(1 a run, for its merge\)")
         self.assertRegex(out, r"WARNING +\.github/workflows/b\.yml runs on pull_request_target: about 1 ")
 
     def test_jobs_it_cant_count_are_not_called_zero(self):
         out, _ = self.doctor(**{"c.yml": "on: push\njobs: {build: {runs-on: x}}\n"})
-        self.assertIn("c.yml runs on push: hosted jobs for each ticket's PR and again for its merge (how many, ", out)
+        self.assertIn("c.yml runs on push: hosted jobs on every ticket, for its merge (doctor can't count them", out)
 
     def test_a_manual_only_workflow_and_this_repos_own_are_quiet(self):
         out, _ = self.doctor(**{"test.yml": ON_PUSH_AND_PR.replace(

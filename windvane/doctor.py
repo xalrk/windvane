@@ -119,10 +119,11 @@ def ci_warnings(root):
         except (OSError, UnicodeDecodeError):
             continue
         if triggers:
-            per_ticket = jobs * (("push" in triggers) + any(t.startswith("pull_request") for t in triggers))
-            jobs_said = (f"about {per_ticket} hosted jobs a ticket ({jobs} a run, for its PR and again for its merge)"
-                         if jobs else "hosted jobs for each ticket's PR and again for its merge (how many, doctor "
-                         "can't read from this YAML)")  # flow-style `jobs: {...}`, say
+            on_pr, on_push = any(t.startswith("pull_request") for t in triggers), "push" in triggers
+            runs = ("for its PR and again for its merge" if on_pr and on_push else "for its PR" if on_pr
+                    else "for its merge")
+            jobs_said = (f"about {jobs * (on_pr + on_push)} hosted jobs a ticket ({jobs} a run, {runs})" if jobs
+                         else f"hosted jobs on every ticket, {runs} (doctor can't count them in this YAML)")
             out.append((f"{f.relative_to(root)} runs on {' and '.join(triggers)}: {jobs_said}",
                         f"keep only `on: workflow_dispatch` and run it by hand (`gh workflow run {f.name}`); "
                         "test every version on this machine in the check instead"))
