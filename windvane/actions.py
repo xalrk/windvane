@@ -415,7 +415,7 @@ def skip_hooks(p, wd):
 # The worker's `gh`: the DENY rules see only the command as typed, so `env gh …`, a script or a subprocess get past
 # them; this sees every call. Standard library only, as it runs on whatever python ran the driver.
 GUARD_SCRIPT = r"""
-import os, sys
+import json, os, re, shlex, subprocess, sys, time
 SHORT = set("RXHfFqtp")  # gh's one-letter flags that take a value
 LONG = {"--repo", "--method", "--header", "--raw-field", "--field", "--input", "--jq", "--template", "--preview",
         "--hostname", "--cache"}
@@ -469,10 +469,89 @@ def refused(a):
                for p in paths)
 
 
+# gh's own commands: gh won't let an alias take one's name, so a call starting with one needs no alias lookup.
+KNOWN = {"agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "codespace", "completion", "config",
+         "copilot", "discussion", "extension", "gist", "gpg-key", "help", "issue", "label", "licenses", "org", "pr",
+         "preview", "project", "release", "repo", "ruleset", "run", "search", "secret", "skill", "ssh-key", "status",
+         "variable", "version", "workflow"}
+# A shell alias's text names a blocked command: the guard can't parse a shell line, so it errs on refusing.
+SHELL = re.compile(r"\bworkflow\b.*\b(run|enable)\b|dispatches|rerun|/enable", re.S)
+
+
+def aliases():
+    # The user's gh aliases, {name: expansion}, from the real gh's `alias list` (`name: expansion` lines, a value
+    # with quotes YAML-quoted). Read only when a call starts with a word gh doesn't know, so the usual call costs
+    # nothing more; a failed read means none.
+    try:
+        out = subprocess.run([REAL, "alias", "list"], capture_output=True, text=True, timeout=30,
+                             stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    found = {}
+    for line in out.stdout.splitlines() if out.returncode == 0 else []:
+        name, sep, v = line.partition(":")
+        v = v.strip()
+        if v[:1] == v[-1:] == "'" and len(v) > 1:
+            v = v[1:-1].replace("''", "'")
+        elif v[:1] == v[-1:] == '"' and len(v) > 1:
+            try:
+                v = json.loads(v)
+            except ValueError:
+                v = v[1:-1]
+        if sep and name.strip() and v:
+            found[name.strip()] = v
+    return found
+
+
+def expand(exp, rest):
+    # The args gh runs for a (non-shell) alias: $1... filled from the rest while the expansion has a "$" in it, the
+    # rest appended otherwise, as gh's ExpandAlias does.
+    extra = []
+    for i, x in enumerate(rest, 1):
+        if "$" in exp:
+            exp = exp.replace(f"${i}", x)
+        else:
+            extra.append(x)
+    try:
+        words = shlex.split(exp)
+    except ValueError:
+        words = exp.split()
+    return words + extra
+
+
+def via_alias(a):
+    # The alias name when `a` starts with a user's alias whose expansion would be refused, else None. gh expands
+    # only the very first argument.
+    if not a or not REAL or a[0].startswith("-") or a[0] in KNOWN:
+        return None
+    exp = aliases().get(a[0])
+    if exp is None:
+        return None
+    if exp.startswith("!"):
+        bad = SHELL.search(exp) or re.search(r"\bapi\b", exp) and "actions/" in exp
+    else:
+        bad = refused(expand(exp, a[1:]))
+    return a[0] if bad else None
+
+
+def count(a):
+    # One ledger row per refusal, so `windvane stats` shows how often workers try; a failed write changes nothing.
+    try:
+        row = {"at": time.strftime("%Y-%m-%d %H:%M"), "event": "gh-refused",
+               "ticket": os.environ.get("WINDVANE_TICKET", ""), "command": " ".join(parse(a)[0][:2])}
+        with open(LEDGER, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+
+
 a = sys.argv[1:]
-if refused(a):
-    sys.exit("windvane: workers don't start, re-run or enable GitHub workflows (or add gh aliases); "
-             "`windvane ci [workflow]` starts one within the month's Actions minutes.")
+alias = None if refused(a) else via_alias(a)
+if alias or refused(a):
+    count(a)
+    sys.exit("windvane: workers don't start, re-run or enable GitHub workflows (or add gh aliases"
+             + (f"; `gh {alias}` is an alias for one" if alias else "")
+             + "); `windvane ci [workflow]` starts one within the month's Actions minutes.")
 if not REAL:
     print("gh: not found (windvane's guard found no gh on PATH when the session started)", file=sys.stderr)
     sys.exit(127)
@@ -515,7 +594,7 @@ def gh_guard(p, wd):
     # sh starts it with this python: a shebang can't hold a path with spaces, nor one over 255 bytes (a deep venv)
     tmp.write_text(f"#!/bin/sh\n''''exec {shlex.quote(sys.executable)} \"$0\" \"$@\" # '''\n"
                    f"# {GUARD}: workers never start, re-run or enable a GitHub workflow.\n"
-                   f"REAL = {real_gh()!r}\n{GUARD_SCRIPT}")
+                   f"REAL = {real_gh()!r}\nLEDGER = {str(p.state / 'ledger.jsonl')!r}\n{GUARD_SCRIPT}")
     tmp.chmod(0o755)
     os.replace(tmp, folder / "gh")
     own = os.environ.get("CLAUDE_ENV_FILE")

@@ -74,7 +74,9 @@ failed or was cut off, the time that bought nothing; no line when every check pa
 
 The `died or killed` line is what outages, crashes and hung sessions cost: their runs' weighted tokens, and their
 share of all. `orphaned process groups killed: N` follows when a run killed process groups a dead driver's sessions
-left running (the ledger's `swept` rows); without any, there's no line.
+left running (the ledger's `swept` rows); without any, there's no line. `gh guard refused: N workflow starts` counts
+the times workers tried to start, re-run or enable a workflow past `windvane ci` (the ledger's `gh-refused` rows;
+`--by ticket` adds the ticket that tried most); none, no line.
 
 By ticket (`--by ticket`), with each ticket's outcome and what a merged ticket costs:
 
