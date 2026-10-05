@@ -364,6 +364,7 @@ def cmd_critic(a, p):
 def cmd_plan(a, p):
     need(p)
     goal = " ".join(a.goal) or p.cfg["goal"]
+    driver.push_held(p)
     try:
         n = driver.plan(p, goal, not a.no_followups, Usage(p), None, merge=a.merge, max_new=a.max, busy_raises=True)
     except driver.PlanBusy as e:

@@ -293,11 +293,13 @@ class Periodic:
         how = {"near": f"right after {anchor}" if anchor else "at the top", "next": "at the top",
                "end": "at the end", "hold": "held for the desk"}.get(land, "")
         what = f"{', '.join(tickets)}, {how}" if tickets else "no new tickets"
-        self.log(f"{title} ({what}) on {where}" + ("" if ok else ", not merged; merge it by hand"))
+        how = ", not merged" + ("" if where.startswith("the local branch ") else "; merge it by hand")
+        self.log(f"{title} ({what}) on {where}" + ("" if ok else how))
         if land == "hold":
             self.held += tickets
         if not ok:
-            push("periodic change not merged", f"{title}: waits on {where}; merge it by hand.", 4, "warning")
+            push("periodic change not merged", f"{title}: waits on {where}{how.removeprefix(', not merged')}.", 4,
+                 "warning")
 
     def ask_land(self, name, tickets, titles):
         """`land = "ask"`: one phone question, near / end / hold; waits up to `answer_wait` minutes (and never past

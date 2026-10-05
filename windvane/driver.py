@@ -1340,6 +1340,7 @@ class Pilot(Desk, Periodic):
             elif not ready:
                 self.stop_reason = self.halt or self.stop_check()
             if ready:
+                push_held(p)  # a plan a failed push kept locally, once a run: the network may be back
                 self.loop()
         except Exception as e:
             self.stop_reason = f"driver error: {e}"
@@ -1473,42 +1474,53 @@ def author_ident(p):
             if "<" in a else [])
 
 
-def push_branch(p, cd, branch):
-    """Push `cd`'s HEAD to `branch`, trying twice. When both fail, the commit stays on a local branch of that name, so
+def push_branch(p, cd, branch, tries=2):
+    """Push `cd`'s HEAD to `branch`, trying twice (or `tries` times). When all fail, the commit stays on a local branch of that name, so
     the next run's reset of `cd` can't lose paid-for work. Returns where it is: `branch`, or "the local branch ...
-    (why the push was refused)", so every push that names the place also tells whether pushing by hand will work."""
-    for _ in range(2):
+    (why the push was refused and what to do)", so every push that names the place also says the next step."""
+    for _ in range(tries):
         res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
         if res.returncode == 0:
             return branch
     git(cd, "branch", "-f", branch, "HEAD")
-    log(p, f"push to {branch} refused ({' '.join(res.stderr.split())[:200]}); "
-           f"kept only locally on {branch}: push it by hand")
-    return f"the local branch {branch} ({push_refusal(res.stderr)})"
+    log(p, f"push to {branch} refused ({' '.join(res.stderr.split())[:200]}); kept only locally on {branch}")
+    hold(p, branch, "push")
+    return f"the local branch {branch} ({push_refusal(res.stderr, p.cfg['forge'])})"
 
 
-# What a refused push's stderr says, first match wins: a login problem is fixed by logging in, a hook or branch
-# protection by changing the rule or the branch, the network by waiting.
+def hold(p, branch, how):
+    """Note a branch a failed push kept locally, for `push_held`: "push" it, or "land" it (a merge stays a merge).
+    Only branches noted here are ever pushed again, so a user's own copy of a closed plan never comes back."""
+    held = load_json(p.state / "held.json", {})
+    if held.get(branch) != "land":
+        save_json(p.state / "held.json", {**held, branch: how})
+
+
+# What a refused push's stderr says, first match wins, with its next step: a login problem is fixed by logging in, a
+# hook or branch protection by changing the rule or the branch (pushing again alone fails the same way), the network
+# by waiting: the next run pushes what was held back (`push_held`).
 REFUSALS = (
-    ("refused: the login or its permission; log in again first",
+    ("login refused; {login} and the next run pushes it",
      re.compile(r"authentication failed|permission denied|permission to .* denied|could not read username|"
                 r"terminal prompts disabled|invalid username or password|\b403\b", re.I)),
-    ("refused by a hook or branch protection on the remote",
+    ("refused by a hook or branch rule; fix the rule or push to another branch",
      re.compile(r"hook declined|protected branch|GH00\d|GH013|rule violation|remote rejected", re.I)),
-    ("the network failed; try again later",
+    ("network down; the next run pushes it again",
      re.compile(r"could not resolve|timed out|connection (refused|reset)|network is unreachable|unable to access|"
                 r"early eof|could not read from remote", re.I)),
 )
 
 
-def push_refusal(stderr):
-    """A short reason for a refused push, from git's stderr: auth, hook, network, or "push failed: <first line>"."""
+LOGIN = {"github": "run `gh auth login`", "git": "check your login to the remote"}
+
+
+def push_refusal(stderr, forge="git"):
+    """A short reason for a refused push and its next step, from git's stderr: auth, hook, network; anything else
+    sends the user to the log, which `push_branch` gave git's own words (a raw git line reads badly on a phone)."""
     for why, pattern in REFUSALS:
         if pattern.search(stderr):
-            return why
-    lines = [l.strip() for l in stderr.splitlines() if l.strip() and not l.startswith("To ")
-             and "failed to push some refs" not in l]
-    return f"push failed: {lines[0][:120]}" if lines else "push failed"
+            return why.format(login=LOGIN.get(forge, LOGIN["git"]))
+    return "push failed; see the windvane log"
 
 
 def n_tickets(n, kind=""):
@@ -1520,13 +1532,21 @@ def is_local(where):
     return where.startswith("the local branch ")
 
 
-def land(p, cd, branch, title, body, commit=True):
+def land(p, cd, branch, title, body, commit=True, tries=2):
     """Put the driver's own change in `cd` (staged, or committed when `commit` is off) on main: through a merged PR on
-    github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is)."""
+    github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is). One kept on a local
+    branch is noted as one to land when pushed again."""
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
+    ok, where = _land(p, cd, branch, title, body, tries)
+    if is_local(where):
+        hold(p, branch, "land")
+    return ok, where
+
+
+def _land(p, cd, branch, title, body, tries):
     if p.cfg["forge"] == "github":
-        where = push_branch(p, cd, branch)
+        where = push_branch(p, cd, branch, tries)
         if is_local(where):
             return False, where
         pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title, "--body", body)
@@ -1545,7 +1565,7 @@ def land(p, cd, branch, title, body, commit=True):
         else:
             git(cd, "rebase", "--abort")
         if res.returncode:  # keep the paid-for work on its branch rather than drop it
-            return False, push_branch(p, cd, branch)
+            return False, push_branch(p, cd, branch, tries)
     return True, p.main
 
 
@@ -1569,6 +1589,67 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
         return _plan(p, goal, use_followups, usage, stop_if, merge, max_new)
 
 
+def held_branches(p):
+    """The branches `hold` noted that still wait: unmerged and on no remote branch (pushing one by hand under another
+    name counts as pushed), with no PR on github (one pushed by hand, its PR closed and branch deleted, stays
+    closed). Notes for any other branch are dropped."""
+    held, root = load_json(p.state / "held.json", {}), p.main_root()
+    unmerged = set(gout(root, "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split())
+    waiting = {b: how for b, how in held.items() if b in unmerged and not gout(root, "branch", "-r", "--contains", b)
+               and not (p.cfg["forge"] == "github" and net.sh(root, "gh", "pr", "list", "--head", b, "--state", "all",
+                                                                 "--json", "number", "-q", ".[].number"))}
+    if waiting != held:
+        save_json(p.state / "held.json", waiting)
+    return waiting
+
+
+def push_held(p):
+    """At a run's start and a desk plan's: push what a failed push kept on a local branch, one try each, landing
+    what was to land (held.json) and opening a plan's PR on github. A push still failing is logged only: the phone
+    heard why the first time. A pushed branch's local copy goes (the remote has it), or this would push it again
+    after its PR was closed and deleted. Returns how many were pushed; 0 while a plan runs (it uses the worktree)."""
+    p.state.mkdir(parents=True, exist_ok=True)
+    with open(p.state / "plan.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return 0
+        net.git(p.main_root(), "fetch", "-q", "--prune", p.remote)
+        branches = held_branches(p)
+        if branches:
+            ensure_worktree(p, p.plan_dir, setup=False)
+        pushed = list(filter(None, (push_one_held(p, p.plan_dir, b, how) for b, how in branches.items())))
+        if branches:
+            clean_detach(p, p.plan_dir, p.upstream)
+        if pushed:  # one push for them all
+            push(f"{len(pushed)} held-back change{'s' * (len(pushed) > 1)} pushed", "\n".join(pushed), 3, "memo")
+        return len(pushed)
+
+
+def push_one_held(p, cd, branch, how):
+    """Where `branch` went, as a line for the phone; "" when it stays local."""
+    if not clean_detach(p, cd, branch):
+        return ""
+    title, body = gout(cd, "log", "-1", "--format=%s"), gout(cd, "log", "-1", "--format=%b")
+    to_land = how == "land"  # a desk plan without --merge only pushes
+    if to_land:
+        landed, where = land(p, cd, branch, title, body, commit=False, tries=1)
+    else:
+        where = push_branch(p, cd, branch, tries=1)
+        if not is_local(where) and p.cfg["forge"] == "github":
+            where = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title,
+                           "--body", body[-6000:]) or where
+    if is_local(where):
+        log(p, f"{branch}: still not pushed{where.removeprefix(f'the local branch {branch}')}")
+        return ""
+    git(p.main_root(), "branch", "-D", branch)
+    save_json(p.state / "held.json", {b: h for b, h in load_json(p.state / "held.json", {}).items() if b != branch})
+    how = (("merged" if landed else "not merged; merge it by hand") if to_land
+           else "pushed; no PR opened, open one by hand" if p.cfg["forge"] == "github" and where == branch else "pushed")
+    log(p, f"{branch}: held back, now on {where}, {how}")
+    return f"{title}: on {where}, {how}."
+
+
 def pending_ids(p):
     """Ticket ids on unmerged remote `plan-*` and `periodic-*` branches: tickets whose PR is still open have claimed
     them, and so do local ones (a plan whose push was refused, waiting to be pushed by hand). A branch whose PR was
@@ -1588,15 +1669,22 @@ def pending_ids(p):
 
 def closed_prs(p, branches):
     """Which of `branches` have PRs that were all closed unmerged; none off github or without `gh` (every branch
-    counts). One query per branch rather than a list of recent PRs, so no limit drops an old closed plan."""
+    counts). One query per branch rather than a list of recent PRs, so no limit drops an old closed plan; a branch
+    found closed is remembered in closed_plans.json and never asked about again (each query takes ~0.8 s, and the
+    closed ones pile up, since their paid-for branches are kept). A closed PR reopened later isn't noticed: its ids
+    stay free for new tickets until its line is taken out of that file."""
     if p.cfg["forge"] != "github":
         return set()
-    closed = set()
-    for b in sorted(branches):
+    f = p.state / "closed_plans.json"
+    known = set(load_json(f, []))
+    closed = known & set(branches)
+    for b in sorted(set(branches) - known):
         states = set(net.sh(p.main_root(), "gh", "pr", "list", "--head", b, "--state", "all", "--json", "state",
                             "-q", ".[].state").split())
         if states == {"CLOSED"}:
             closed.add(b)
+    if closed != known:  # a deleted branch's line goes too
+        save_json(f, sorted(closed))
     return closed
 
 
@@ -1615,9 +1703,9 @@ def unmerged(p, n, where):
     """A plan that couldn't merge counts as none (so `run --replan` doesn't take it for new work), but the user
     hears where it waits: it was a paid planner session."""
     clean_detach(p, p.plan_dir, p.upstream)
-    how = "push it by hand" if is_local(where) else "merge it by hand"
-    log(p, f"plan: {n_tickets(n)} on {where}, not merged; {how}")
-    push("plan not merged", f"{n_tickets(n)} {'waits' if n == 1 else 'wait'} on {where}: {how}.", 4, "warning")
+    how = "" if is_local(where) else ": merge it by hand"  # a local branch's reason says what to do
+    log(p, f"plan: {n_tickets(n)} on {where}, not merged{how}")
+    push("plan not merged", f"{n_tickets(n)} {'waits' if n == 1 else 'wait'} on {where}{how}.", 4, "warning")
     return 0
 
 
@@ -1682,7 +1770,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
         where = push_branch(p, cd, branch)
         if is_local(where):
             clean_detach(p, cd, p.upstream)
-            kept = f"{n_tickets(n)} kept only locally on {where.removeprefix('the local branch ')}: push it by hand"
+            kept = f"{n_tickets(n)} kept only locally on {where.removeprefix('the local branch ')}"
             log(p, f"plan: {kept}")
             push("plan not pushed", f"{kept}.", 4, "warning")
             return 0

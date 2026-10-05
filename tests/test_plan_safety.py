@@ -61,7 +61,7 @@ class PlanSafety(unittest.TestCase):
         branch, files = self.local_plan()
         self.assertIn(".windvane/tickets/T-003.md", files)
         self.assertEqual(self.s.git("ls-remote", "--heads", "origin", "plan-*"), "")
-        self.assertIn(f"kept only locally on {branch}: push it by hand", self.log())
+        self.assertIn(f"plan: 1 ticket kept only locally on {branch} (refused by a hook", self.log())
         self.assertEqual(self.pushes[-1][0], "plan not pushed")
         self.assertIn(f"kept only locally on {branch}", self.pushes[-1][1])
         driver.plan(self.p, "more")  # the next plan resets the plan tree; the kept branch stays and holds its id
@@ -86,8 +86,8 @@ class PlanSafety(unittest.TestCase):
         branch, files = self.local_plan()
         self.assertIn(".windvane/tickets/T-003.md", files)
         self.assertEqual(self.pushes, [("plan not merged", f"1 ticket waits on the local branch {branch} (refused "
-                                                           "by a hook or branch protection on the remote): push it by "
-                                                           "hand.")])
+                                                           "by a hook or branch rule; fix the rule or push to another "
+                                                           "branch).")])
 
     def test_two_plans_in_the_same_minute_both_survive(self):
         orig = driver.now

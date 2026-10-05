@@ -51,6 +51,26 @@ don't count toward "two failed tickets in a row". An outage over 10 minutes is p
 **A run was killed (reboot, `stop --now`, closed terminal).**
 Start it again. Unfinished tickets are resumed from their branches and worktrees; nothing pushed is lost.
 
+**"plan not pushed" (or "not merged") with a local branch.**
+A plan, periodic change or desk answer whose push was refused waits on a local branch (`plan-...`), and the push says
+why and what to do:
+- "login refused; run `gh auth login` and the next run pushes it" (off GitHub: "check your login to the remote"):
+  once you're logged in, the next run or `windvane plan` pushes it.
+- "refused by a hook or branch rule; fix the rule or push to another branch": pushing again fails the same way until
+  the rule changes; `git push origin plan-...:some-other-name` by hand counts as pushed.
+- "network down; the next run pushes it again": nothing to do.
+- "push failed; see the windvane log": the log (`windvane status`) has git's own words.
+
+Each run (and each `windvane plan`) tries such a branch once more at its start, and one push ("1 held-back change
+pushed") says where those that went through are now; while it still fails, only the log says so. The local branch
+goes once the remote has it. Only branches windvane kept this way are pushed again: not your own `plan-...` copies, nor
+one you pushed by hand.
+
+**A plan PR I closed holds ticket ids.**
+It doesn't: a plan branch whose PRs were all closed frees its ids and is remembered in
+`~/.local/state/windvane/<name>/closed_plans.json`, so it isn't looked up again. Its branch is kept. If you reopen
+that PR, delete its line there, or a newer plan may reuse its ids.
+
 **`gh` errors on a GitHub project.**
 Run `gh auth status`. Workers open pull requests and the driver merges them with `gh`; it needs push and merge rights
 on the repository. Projects not on GitHub use `forge = "git"`.
