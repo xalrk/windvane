@@ -340,6 +340,9 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         if mark:
             mark.unlink(missing_ok=True)
         raise
+    finally:  # an unclosed pipe warns when collected, onto whatever stderr is then (a test's capture)
+        sel.close()
+        proc.stdout.close()
     code = proc.wait()
     kill_nested(p, raw.stem)  # killed with it, or left running by a Bash call that timed out
     if mark:
