@@ -35,6 +35,7 @@ class FakeNtfy:
 
     def __init__(self):
         self.msgs, self.cond = [], threading.Condition()
+        self.reading = threading.Event()  # a reader asked for messages: a listener started has taken its start time
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -56,6 +57,7 @@ class FakeNtfy:
                 topics = url.path.strip("/").split("/")[0].split(",")
                 q = urllib.parse.parse_qs(url.query)
                 since, poll = q.get("since", ["all"])[0], "poll" in q
+                fake.reading.set()
                 self.send_response(200)
                 self.end_headers()
                 with fake.cond:
@@ -274,8 +276,8 @@ class Replies(PhoneTest):
         t.start()
         self.addCleanup(t.join, 10)
         self.addCleanup(done.set)
-        time.sleep(0.3)
-        self.phone_sends("status")
+        self.assertTrue(self.ntfy.reading.wait(30), "the listener never opened its stream")
+        self.phone_sends("status")  # after `listen` took its start: sent sooner, it would be a stale command
         for _ in range(100):
             if any(m.get("title") == "Status" for m in self.pushes()):
                 break
@@ -300,39 +302,63 @@ class WithTheDriver(PhoneTest):
         self.addCleanup(setattr, driver, "NAP", driver.NAP)
         driver.NAP = 0.2
         pilot = driver.Pilot(self.p, args(answer_wait=60))
-        done = threading.Event()
+        done, napping, naps = threading.Event(), threading.Event(), []
         self.addCleanup(done.set)
+        nap = pilot.nap
 
-        def phone_user():  # taps B on each question while the run waits for it
+        def timed_nap(until, answers=False):  # each wait for an answer, and whether it ended before its minute
+            napping.set() if answers else None
+            nap(until, answers)
+            naps.append((answers, now() < until))
+            napping.clear()
+        pilot.nap = timed_nap
+
+        def phone_user():  # taps B on each question once the run is waiting for it
             pressed = set()
             while not done.is_set():
                 for m in self.pushes():
-                    if m.get("title", "").startswith("Question") and m["id"] not in pressed:
+                    if m.get("title", "").startswith("Question") and m["id"] not in pressed and napping.is_set():
                         pressed.add(m["id"])
                         self.press(m, "B")
                 time.sleep(0.1)
         threading.Thread(target=phone_user, daemon=True).start()
-        t = time.time()
         pilot.run(now() + timedelta(hours=1))
-        self.assertLess(time.time() - t, 30)  # the waiting run wakes for the answer, not after its minute's nap
+        waits = [early for answers, early in naps if answers]
+        self.assertTrue(waits and all(waits), naps)  # the waiting run wakes for the answer, not after its minute
         self.assertIn("option B (blue)", self.worker_prompts()[1])
         self.assertEqual(pilot.merged, ["T-001", "T-002"])
         self.assertTrue(any(m.get("title") == "Answer recorded" for m in self.pushes()))
 
     def test_a_tap_on_usage_doesnt_end_a_usage_pause(self):
+        """The pause runs until an hour from now; a tap on Usage once it's paused gets its reply while the pause goes
+        on, and only a stop ends it."""
         self.addCleanup(setattr, driver, "NAP", driver.NAP)
         driver.NAP = 0.2
         pilot = driver.Pilot(self.p, args())
-        pilot.deadline = now() + timedelta(hours=1)
-        pilot.usage.five, pilot.usage.five_reset = 90, time.time() - 120 + 4  # the pause lasts about 4 s
-        threading.Timer(1.2, self.phone_sends, ("usage",)).start()
-        t = time.time()
+        pilot.deadline = now() + timedelta(hours=3)
+        pilot.usage.five, pilot.usage.five_reset = 90, time.time() + 3600
         with mock.patch.object(Usage, "probe") as probe:
-            self.assertTrue(pilot.wait_for_reset())
-        self.assertGreater(time.time() - t, 3)  # the pause sleeps through the tap
-        self.assertTrue(any(m.get("title") == "Claude usage" for m in self.pushes()))  # yet the tap is answered
+            pause = threading.Thread(target=lambda: self.ok.append(pilot.wait_for_reset()), daemon=True)
+            self.ok = []
+            pause.start()
+            self.until(lambda: any(m.get("title", "").endswith(": paused") for m in self.pushes()))
+            self.phone_sends("usage")
+            self.until(lambda: any(m.get("title") == "Claude usage" for m in self.pushes()))  # the tap is answered
+            pause.join(1)  # a few naps' time to end, were the tap to end the pause
+            self.assertTrue(pause.is_alive(), "the tap ended the pause")
+            probe.assert_not_called()  # not on the tap
+            (self.p.state / "STOP").write_text("")
+            pause.join(30)
+        self.assertEqual(self.ok, [True])
         self.assertEqual(sum(m.get("title", "").endswith(": paused") for m in self.pushes()), 1)
-        probe.assert_called_once()  # when the pause ends, not on the tap
+        probe.assert_called_once()  # when the pause ends
+
+    def until(self, cond, wait=30):
+        """Polls `cond` until it holds: a loaded machine is slower, never a reason to fail."""
+        end = time.time() + wait
+        while not cond():
+            self.assertLess(time.time(), end, "timed out")
+            time.sleep(0.05)
 
     def test_a_stop_sent_between_runs_doesnt_stop_the_next(self):
         phone.mark_now()
