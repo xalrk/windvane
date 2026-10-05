@@ -81,7 +81,7 @@ class HeldPlans(Base):
         branch = self.local()
         self.assertTrue(branch)
         self.assertEqual(self.remote(), "")
-        self.assertIn("(network down; the next run pushes it again).", self.pushes[-1][1])
+        self.assertTrue(self.pushes[-1][1].startswith("Network down; the next run pushes it again.\n"))
         r = subprocess.run(["windvane", "-C", str(self.s.root), "run", "--for", "1h", "--parallel", "1",
                             "--no-preflight"], capture_output=True, text=True, timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr[-500:])
@@ -175,7 +175,7 @@ class Refusals(Base):
             with self.subTest(step=step):
                 self.refusal = stderr
                 self.assertEqual(driver.plan(self.p, "make it great"), 0)
-                self.assertIn(f"{step}).", self.pushes[-1][1])
+                self.assertIn(f"{step[1:]}.\n1 ticket kept only locally on ", self.pushes[-1][1])  # capitalized
                 self.assertEqual("by hand" in self.pushes[-1][1], stderr == HOOK)  # only a hook needs a hand push
         self.assertIn("src refspec x does not match any", self.log())  # git's own words stay in the log
 
@@ -183,7 +183,8 @@ class Refusals(Base):
         self.github()
         self.refusal = AUTH
         driver.plan(self.p, "make it great")
-        self.assertIn("(login refused; run `gh auth login` and the next run pushes it).", self.pushes[-1][1])
+        self.assertTrue(self.pushes[-1][1].startswith("Login refused; run `gh auth login` and the next run pushes "
+                                                      "it.\n"))
 
 
 class ClosedPlans(Base):
