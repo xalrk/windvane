@@ -31,6 +31,7 @@ HEAD_RE = re.compile(r"^#{2,}[ \t]+`?([\w-]+)")
 RUNG_RE = re.compile(r"^[ \t]*[-*][ \t]*(\d+(?:\.\d+)?)[ \t]+`?([\w-]+)`?[ \t]*:[ \t]*(.+)$")
 ANSWER_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?(?:[\w-]+(?:\.|[ \t]+(?=\d)))?(?:\d+(?:\.\d+)?[ \t]+)?([\w-]+)`?[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
                        r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$", re.I)
+LISTS_RE = re.compile(r"^[ \t#*_-]*(?:fix in|beyond) this ticket\b", re.I | re.M)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
 DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]
@@ -101,6 +102,26 @@ def ladder(text):
     return {d: sorted(cs, key=lambda c: c[0]) for d, cs in out.items()}
 
 
+def shared(lad):
+    """{check id: [dimensions]} for each id a ladder uses more than once. The critic answers by id alone, so
+    `answers()` can't tell two `safe` checks apart: both get the first answer. Reported, not fatal: the scale is the
+    project's file, and a typo there mustn't stop a run."""
+    dims = {}
+    for d, cs in lad.items():
+        for _, cid, _ in cs:
+            dims.setdefault(cid, []).append(d)
+    return {cid: ds for cid, ds in dims.items() if len(ds) > 1}
+
+
+def clip(text, n=200):
+    """`text` cut to at most `n` characters at a word boundary, with "…" when cut: a cut mid-word read as a typo in
+    the log ("Nothing shows the \"a few )")."""
+    if len(text) <= n:
+        return text
+    cut = text[:n - 1]
+    return (cut.rsplit(None, 1)[0] if " " in cut.strip() else cut).rstrip(" ,;:") + "…"
+
+
 def rubric(p, cwd):
     f = Path(cwd) / p.rubric_rel
     return ladder(f.read_text()) if f.is_file() else {}
@@ -111,13 +132,15 @@ def answers(text):
     `no`, `scope` (`no (out of scope: <why>)`, the why kept as evidence) or `-` (a dimension the ticket doesn't
     touch). A check may be named `safe`, `works.safe`, `5 safe` or `works 5 safe`: the critic reads all of those in
     the scale, the calibration and `overview`. The first answer to an id wins: the Checks block comes first, and a
-    later follow-up line that happens to read `safe: no ...` mustn't overturn it."""
+    later follow-up line that happens to read `safe: no ...` mustn't overturn it. Only the lines above the "Fix in
+    this ticket" / "Beyond this ticket" lists count, so a follow-up never answers a check the Checks block left out."""
     out = {}
-    for line in (text or "").rsplit("CRITIC:", 1)[0].splitlines():
+    body = LISTS_RE.split((text or "").rsplit("CRITIC:", 1)[0], 1)[0]
+    for line in body.splitlines():
         if m := ANSWER_RE.match(line):
             a = "scope" if m.group(3) else m.group(2).lower()
             why = re.sub(r"^\s*out of scope\b[:,\s]*", "", m.group(3) or "", flags=re.I)
-            out.setdefault(m.group(1).lower(), (a, "; ".join(filter(None, [why.strip(), m.group(4).strip()]))[:200]))
+            out.setdefault(m.group(1).lower(), (a, clip("; ".join(filter(None, [why.strip(), m.group(4).strip()])))))
     return out
 
 
@@ -162,7 +185,7 @@ def checks(text):
     body = (text or "").rsplit("CRITIC:", 1)[0]
     caps = [(d, float(n), a.lower() == "yes") for d, n, a in CAP_RE.findall(body)]
     m = ANCHOR_RE.search(body)
-    return caps, (m.group(1).strip()[:200] if m else "")
+    return caps, (clip(m.group(1).strip()) if m else "")
 
 
 def capped(dims, caps):
@@ -269,14 +292,16 @@ def rates(recs, last=10):
     return out
 
 
-def advice(first, ever, n, least=5):
+def advice(first, ever, n, top=False, least=5):
     """What to do about a check, from its rates, once `least` tickets touched it: one that every first head passes
-    can't tell good work from weak, and one no head ever passes only holds every score down."""
+    can't tell good work from weak, and one no head ever passes only holds every score down. Except the `top` rung
+    of its dimension: a 10 is meant to be rare (few tickets aim for one), so "never yes" there is the scale working,
+    and naming it in every `stats` and `overview` would bury the advice that matters. Left out, not reworded."""
     if n < least:
         return ""
     if first == n:
         return "yes on every ticket: sharpen it"
-    return "never yes: lower it" if ever == 0 else ""
+    return "never yes: lower it" if ever == 0 and not top else ""
 
 
 def spread(xs):
