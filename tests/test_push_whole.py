@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from windvane import driver, net, phone, planner  # noqa: E402
+from windvane.periodic import ticket_list  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
 from windvane.worktree import ensure_worktree  # noqa: E402
@@ -124,6 +125,13 @@ class Bound(unittest.TestCase):
     def test_one_long_line_without_sentences_is_cut_at_a_word_end(self):
         out = phone.whole("", "word " * 1000, log=[].append)
         self.assertTrue(out.endswith("word (the rest is in the log)"), out[-60:])
+
+    def test_a_periodic_question_lists_whole_titles_and_counts_the_rest(self):
+        self.assertEqual(ticket_list(["T-004", "T-005"], {"T-004": TITLE}), f"T-004 {TITLE}; T-005")
+        many = [f"T-{i:03}" for i in range(100, 120)]
+        out = ticket_list(many, dict.fromkeys(many, TITLE))
+        self.assertRegex(out, rf"^(T-\d+ {TITLE}; )+and \d+ more$")
+        self.assertLess(len(out), phone.MOST)
 
     def test_text_that_fits_logs_nothing_and_keeps_one_full_stop(self):
         lines = []
