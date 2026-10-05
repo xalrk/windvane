@@ -379,7 +379,7 @@ def critic_retry(p, sleep=time.sleep):
         if len(waits) >= p.ap["retries"] or sum(waits) + wait > CRITIC_WAIT:
             return False
         waits.append(wait)
-        print(f"The critic session died ({plain_error(error)}); retry {len(waits)} in {wait:g} min.", flush=True)
+        print(f"The critic session died ({plain_error(error)[:300]}); retry {len(waits)} in {wait:g} min.", flush=True)
         sleep(wait * 60)
         return True
     return retry

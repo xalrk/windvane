@@ -384,7 +384,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": None, "fixes": 0,
                  "revisions": n, "step": "unavailable", "gist": plain_error(error)[:200], "critique": ""}
         append_jsonl(p.state / "critic.jsonl", entry)
-        return entry, f"Critic unavailable ({plain_error(error)})."
+        return entry, f"Critic unavailable ({plain_error(error)[:300]})."  # the worker reads it
     v = verdict(text)
     if not v or p.norm(v[0]) != tid:
         return None, text or "The critic ended without a verdict."
