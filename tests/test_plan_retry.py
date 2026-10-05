@@ -126,6 +126,15 @@ class HeldPlans(Base):
         self.assertIn(", pushed", self.log())
         self.assertIn("on https://github.com/o/r/pull/7, pushed.", self.pushes[-1][1])
 
+    def test_a_pr_that_wont_open_says_so(self):
+        self.github()
+        (self.s.bin / "gh").write_text("#!/bin/sh\nexit 1\n")
+        self.refusal = NETWORK
+        driver.plan(self.p, "make it great")
+        self.refusal = None
+        self.assertEqual(driver.push_held(self.p), 1)
+        self.assertRegex(self.pushes[-1][1], r"on plan-\S+, pushed; no PR opened, open one by hand\.$")
+
     def test_only_the_drivers_own_unpushed_branches(self):
         self.refusal = NETWORK
         driver.plan(self.p, "make it great")

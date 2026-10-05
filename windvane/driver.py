@@ -1644,7 +1644,8 @@ def push_one_held(p, cd, branch, how):
         return ""
     git(p.main_root(), "branch", "-D", branch)
     save_json(p.state / "held.json", {b: h for b, h in load_json(p.state / "held.json", {}).items() if b != branch})
-    how = ("merged" if landed else "not merged; merge it by hand") if to_land else "pushed"
+    how = (("merged" if landed else "not merged; merge it by hand") if to_land
+           else "pushed; no PR opened, open one by hand" if p.cfg["forge"] == "github" and where == branch else "pushed")
     log(p, f"{branch}: held back, now on {where}, {how}")
     return f"{title}: on {where}, {how}."
 
