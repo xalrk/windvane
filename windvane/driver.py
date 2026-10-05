@@ -1728,12 +1728,12 @@ def held_now(p):
     return out
 
 
-def held_lines(p):
-    """One line per held branch with how long it has waited and where it is: the last refusal's reason and next step,
-    or, pushed by hand, the merge still to do; for `status` and `overview`."""
+def held_lines(p, now=None):
+    """One line per held branch (of `now`, `held_now`'s list) with how long it has waited and where it is: the last
+    refusal's reason and next step, or, pushed by hand, the merge still to do; for `status` and `overview`."""
     return [f"held back for {age(time.time() - at)}, " + (f"pushed to {on}, not merged" if on else "not pushed")
             + f": {b} ({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:60]}): "
-            + (f"merge it into {p.main}" if on else why) for b, why, at, on in held_now(p)]
+            + (f"merge it into {p.main}" if on else why) for b, why, at, on in (held_now(p) if now is None else now)]
 
 
 def age(seconds):

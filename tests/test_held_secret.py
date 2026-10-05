@@ -92,7 +92,8 @@ class HeldSecret(Base):
         branch = self.hand_pushed_land()
         status = self.windvane("status")
         self.assertIn(f"held back for under an hour, pushed to origin/{branch}-b, not merged: {branch} (Plan: ", status)
-        self.assertIn(": merge it into main", status)
+        self.assertIn(": merge it into main\n  (listed until main has them)\n", status)  # no retry promised
+        self.assertNotIn("tries these again", status)
         self.assertIn(f"Held back for under an hour, pushed to origin/{branch}-b, not merged", self.windvane("overview"))
         self.assertTrue(self.windvane("status", "--line").endswith(
             "autopilot off. 1 held-back change pushed, not merged, for under an hour\n"))
@@ -110,6 +111,15 @@ class HeldSecret(Base):
         self.assertEqual(driver.held_branches(self.p), {})
         self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {})
         self.assertEqual(json.loads((self.p.state / "held_why.json").read_text()), {})
+
+    def test_with_one_pushed_and_one_not_each_says_what_happens_next(self):
+        branch = self.hand_pushed_land()
+        driver.plan(self.p, "make it better")
+        line = self.windvane("status", "--line")
+        self.assertIn("2 held-back changes (1 not pushed, 1 pushed, not merged), oldest under an hour", line)
+        self.assertIn(f"pushed to origin/{branch}-b, not merged", self.windvane("status"))
+        self.assertIn("  (each run's start tries those not pushed again; the others are listed until main has them)",
+                      self.windvane("status"))
 
     def test_a_hand_pushed_push_change_is_still_dropped(self):
         self.refusal = HOOK

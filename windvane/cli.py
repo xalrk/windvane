@@ -234,14 +234,21 @@ def held_count(p):
         return ""
     n, pushed = len(held), sum(bool(on) for *_, on in held)
     waited = driver.age(time.time() - min(at for _, _, at, _ in held))
-    state = "not pushed" if not pushed else "pushed, not merged" if pushed == n else "not merged"
+    state = ("not pushed" if not pushed else "pushed, not merged" if pushed == n
+             else f"({n - pushed} not pushed, {pushed} pushed, not merged)")
     return f"{n} held-back change{'s' * (n > 1)} {state}, " + (f"oldest {waited}" if n > 1 else f"for {waited}")
 
 
 def held_text(p):
-    """The held branches' lines and, after them, what happens next; nothing when none waits."""
-    lines = driver.held_lines(p)
-    return lines + ["  (each run's start tries these again)"] * bool(lines)
+    """The held branches' lines and, after them, what happens next: a run retries only those not pushed, the user
+    merges those pushed by hand; nothing when none waits."""
+    now = driver.held_now(p)
+    if not now:
+        return []
+    pushed = sum(bool(on) for *_, on in now)
+    after = ("each run's start tries these again" if not pushed else "listed until main has them" if pushed == len(now)
+             else "each run's start tries those not pushed again; the others are listed until main has them")
+    return driver.held_lines(p, now) + [f"  ({after})"]
 
 
 def cmd_overview(a, p):
