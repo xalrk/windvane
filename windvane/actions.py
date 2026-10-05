@@ -8,7 +8,8 @@ A desk count done this way matched GitHub's own figure. A running job counts up 
 
 Off unless `.windvane/config.toml` sets `actions_minutes` (the plan's monthly minutes); `actions_cap` (0.9) is the
 share of them windvane never goes past: `windvane ci` refuses a workflow whose estimate would, and at or over it the
-driver adds `[skip ci]` to the commits it pushes, and so do the workers' own (`worker_git`).
+driver adds `[skip ci]` to the commits it pushes, and so do the workers' own (`worker_git`, decided at
+each commit from the cached count).
 """
 import fcntl
 import json
@@ -271,9 +272,27 @@ def line(p, total=None):
 
 
 def refresh(p):
-    """Recount in the background (the driver at its start): status and the phone only read the cache, never wait."""
-    if budget(p):
-        threading.Thread(target=count, args=(p.root,), daemon=True).start()
+    """Recount in the background (the driver at its start, every session at its end): status, the phone and worker
+    starts only read the cache, never wait. One background count per process at a time."""
+    if budget(p) and counting.acquire(blocking=False):
+        threading.Thread(target=refresh_now, args=(p.root,), daemon=True).start()
+
+
+counting = threading.Lock()
+
+
+def refresh_now(cd):
+    try:
+        count(cd)
+    finally:
+        counting.release()
+
+
+def cached_over_cap(p):
+    """Whether the cache says the cap is reached, with no count: a missing total or last month's counts as reached,
+    since a `[skip ci]` too many costs nothing. The worker's commit hook makes the same call in its own words."""
+    total = cached()
+    return not total or total["used"] >= cap_minutes(p)
 
 
 def over_cap(p, cd=None):
@@ -310,12 +329,17 @@ def tag(p, msg, cd=None):
 
 
 def worker_git(p, wd):
-    """(environment, prompt line) for a worker session. At or over the cap its own commits carry `[skip ci]` too,
-    through a prepare-commit-msg hook given in git's environment config, never the repo's config (the user's checkout
-    shares it). A project with its own core.hooksPath keeps it, and the prompt asks for the tag instead."""
-    if not over_cap(p, wd):
+    """(environment, prompt line) for a worker session. With a budget set its own commits get a prepare-commit-msg
+    hook, given in git's environment config, never the repo's config (the user's checkout shares it), that adds
+    `[skip ci]` when the cached total is at the cap at the time of each commit: a session runs for hours and the
+    month's count can cross the cap meanwhile. A project with its own core.hooksPath keeps it, and the prompt asks
+    for the tag instead when the cache says the cap is reached at the session's start. Never counts: starts don't
+    wait on gh."""
+    if not budget(p):
         return {}, ""
     if run(["git", "config", "core.hooksPath"], wd).stdout.strip():
+        if not cached_over_cap(p):
+            return {}, ""
         if p.name not in asked:
             asked.add(p.name)
             log(p, f"GitHub Actions at the cap and core.hooksPath is the project's: workers are asked for {SKIP}")
@@ -325,9 +349,18 @@ def worker_git(p, wd):
             f"GIT_CONFIG_VALUE_{n}": str(skip_hooks(p, wd))}, ""
 
 
+# The hook's test of the cache: exit 0 (no tag) only when this month's cached total is under the cap.
+UNDER = ("import json, sys, time\n"
+         "try:\n    c = json.load(open(sys.argv[1]))\nexcept (OSError, ValueError):\n    c = {}\n"
+         "t = c.get('total') or {}\n"
+         "ok = c.get('month') == time.strftime('%Y-%m', time.gmtime()) and t.get('used', 1e9) < int(sys.argv[2])\n"
+         "sys.exit(0 if ok else 1)\n")
+
+
 def skip_hooks(p, wd):
     """A hooks folder in the state dir: the repo's own hooks linked in, and a prepare-commit-msg that runs the repo's
-    own (if any) and then adds `[skip ci]` to the first line."""
+    own (if any) and then, unless the cached total is under the cap (written into it), adds `[skip ci]` to the first
+    line. It reads only the cache: no network in a git hook."""
     own = Path(wd, run(["git", "rev-parse", "--git-common-dir"], wd).stdout.strip(), "hooks").resolve()
     folder = p.state / "skip-ci-hooks" / Path(wd).resolve().name  # one per worktree: parallel slots rebuild their own
     shutil.rmtree(folder, ignore_errors=True)
@@ -337,9 +370,11 @@ def skip_hooks(p, wd):
             (folder / hook.name).symlink_to(hook)
     first = own / "prepare-commit-msg"
     script = folder / "prepare-commit-msg"
-    script.write_text("#!/bin/sh\n# windvane: the month's GitHub Actions minutes are at the cap\n"
+    script.write_text("#!/bin/sh\n# windvane: [skip ci] while the month's GitHub Actions minutes are at the cap\n"
                       + (f'{shlex.quote(str(first))} "$@" || exit $?\n' if os.access(first, os.X_OK) else "")
-                      + f"grep -qF '{SKIP}' \"$1\" && exit 0\n"
+                      + f"python3 -c {shlex.quote(UNDER)} {shlex.quote(str(cache_file()))} {cap_minutes(p)} "
+                      "2>/dev/null && exit 0\n"
+                      f"grep -qF '{SKIP}' \"$1\" && exit 0\n"
                       f"{{ printf '%s {SKIP}\\n' \"$(sed -n 1p \"$1\")\"; sed 1d \"$1\"; }} > \"$1.windvane\" "
                       '&& mv "$1.windvane" "$1"\n')
     script.chmod(0o755)

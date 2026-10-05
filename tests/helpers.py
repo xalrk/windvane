@@ -217,6 +217,8 @@ class Sandbox:
         os.environ.update({**self.old_env, **self.env})
         for k in ("WINDVANE_SESSION", "WINDVANE_TICKET", "WINDVANE_STOP_AT", "WINDVANE_CAPS"):  # when the tests run inside a session
             os.environ.pop(k, None)
+        for k in [k for k in os.environ if k.startswith("GIT_CONFIG_")]:  # a worker's [skip ci] hook, for one
+            os.environ.pop(k)
         from windvane import net
         net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage
         import shutil

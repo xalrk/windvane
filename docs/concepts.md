@@ -82,9 +82,10 @@ the order), and **open** otherwise. `windvane queue` shows all three.
    which refuses one whose last run's minutes would pass the cap. Workers can't start, re-run or enable one
    themselves (`gh workflow run`, `gh run rerun`, the `gh api` dispatch, re-run and enable endpoints are denied). At
    or over the cap the driver's merges and commits and the workers' own commits carry `[skip ci]` (through a git hook
-   given only to the worker session, never your repo's config), and your phone hears of it once that month. `status` and `overview` show
-   `Actions 1,983/2,000 min`. The count reads GitHub's run history, not its bill, so it can run a little under
-   GitHub's figure: keep the cap below 100%.
+   given only to the worker session, never your repo's config, that checks the last count at each commit: counts
+   run in the background, so no session waits on one), and your phone hears of it once that month. `status` and
+   `overview` show `Actions 1,983/2,000 min`. The count reads GitHub's run history, not its bill, so it can run a
+   little under GitHub's figure: keep the cap below 100%.
 4. **Reviewer.** A fresh read-only session with the diff, the ticket and the critic's verdict in its prompt. It
    approves or lists changes.
 5. **Merge.** The driver merges `main` into the ticket's head in its own worktree, runs the check again if `main`
