@@ -159,7 +159,7 @@ class Doctor(unittest.TestCase):
         self.assertNotIn("WARNING", self.doctor())
         self.assertRegex(self.doctor(fullness=(93.4, 20)), rf"WARNING +the temp dir {self.tmp} is 93% full of inodes "
                                                            r"and 20% of space.*-> remove what fills it")
-        for name, n in (("windvane-venv-x", 40), ("windvane-test-y", 2), ("windvane-inst-z", 9), ("windvane-a", 1)):
+        for name, n in (("windvane-venv-x", 40), ("windvane-test-y", 0), ("windvane-inst-z", 9)):
             d = self.tmp / name
             d.mkdir()
             for i in range(n):
@@ -169,10 +169,10 @@ class Doctor(unittest.TestCase):
         age(self.p.state / "tmp/T-004")
         (self.p.state / "state.json").write_text(json.dumps({"running": {"T-004": 0}}))  # still running: kept
         out = self.doctor()
-        self.assertIn("4 leftover windvane temp dirs, 56 files (biggest: windvane-venv-x (41 files), "
-                      "windvane-inst-z (10 files), windvane-test-y (3 files))  -> windvane doctor --clean", out)
+        self.assertIn("3 leftover windvane temp dirs, 52 files (biggest: windvane-venv-x (41 files), "
+                      "windvane-inst-z (10 files), windvane-test-y (1 file))  -> windvane doctor --clean", out)
         out = self.doctor(True)
-        self.assertIn(f"removed 4 leftover windvane temp dirs (56 files) from {self.tmp} and {self.p.state / 'tmp'}",
+        self.assertIn(f"removed 3 leftover windvane temp dirs (52 files) from {self.tmp} and {self.p.state / 'tmp'}",
                       out)
         self.assertNotIn("leftover windvane temp dirs,", out)
         self.assertTrue((self.p.state / "tmp/T-004").exists())

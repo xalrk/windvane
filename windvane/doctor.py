@@ -247,7 +247,7 @@ def tmp_warnings(p=None):
                     "windvane's own leftovers"))
     left = scratch.leftovers(*tmp_scope(p))
     if left:
-        big = ", ".join(f"{d.name} ({n} files)" for d, n, _ in left[:3])
+        big = ", ".join(f"{d.name} ({n} file{'s' * (n != 1)})" for d, n, _ in left[:3])
         out.append(("warn", f"{len(left)} leftover windvane temp dirs, {sum(n for _, n, _ in left)} files "
                     f"(biggest: {big})", "windvane doctor --clean"))
     return out
