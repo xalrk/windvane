@@ -215,6 +215,9 @@ def cmd_status(a, p):
         print(f"slot {slot}: {tid}")
     for tid, q in st.get("questions", {}).items():
         print(f"waiting on you: {tid}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
+    for q in questions.provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")):
+        print(f"provisional: {q['ticket']}: {q['question']} Built {q['built'] or '?'}"
+              + (f": {q['option']}" if q["option"] else "") + f". To change: windvane answer {q['ticket']} <letter>")
     print("\n".join(held_text(p, subject=None) + last_log(p, 12)))
 
 

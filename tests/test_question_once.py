@@ -109,8 +109,13 @@ class AskOnce(unittest.TestCase):
             qs = preflight.find(self.p, 0.1)
             preflight.ask(self.p, qs, inp=lambda prompt: "", say=said.append)  # Enter: skipped
         self.assertEqual(sum("Red or blue?" in s for s in said), 1, said)
-        x = preflight.lookup(self.p, "T-001")  # still answerable at the desk
+        x = preflight.lookup(self.p, "T-001")  # still answerable at the desk, and listed there
         self.assertEqual((x["kind"], x["question"]), ("provisional", "Red or blue?"))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cli.main(["-C", str(self.s.root), "status"])
+        self.assertIn("provisional: T-001: Red or blue? Built A: red. To change: windvane answer T-001 <letter>",
+                      out.getvalue())
 
     def test_answer_takes_an_open_question_no_run_waits_on(self):
         self.questions_md(open_=COLOUR)
