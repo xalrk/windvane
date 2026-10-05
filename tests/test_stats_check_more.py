@@ -58,6 +58,21 @@ class Unfinished(Base):
         self.assertIsInstance(end["minutes"], float)
         self.assertEqual(self.lines(), ["checks: 1 run, 0.0 min (0.0 min a ticket checked), 1 cut off"])
 
+    def test_a_check_still_running_isnt_cut_off(self):
+        seen, real = [], jobs.subprocess.run
+
+        def slow(cmd, *args, **kw):
+            if cmd[0] != "git":
+                seen.extend(self.lines())  # `stats` while the check runs
+            return real(cmd, *args, **kw)
+
+        with mock.patch.object(jobs.subprocess, "run", slow):
+            self.assertTrue(jobs.check(self.p, self.s.root, ticket="T-011")[0])
+        self.assertEqual(seen, ["checks: 0 runs, 0.0 min, 1 still running"])
+        self.assertEqual(self.lines(), ["checks: 1 run, 0.0 min (0.0 min a ticket checked)"])
+        self.add(event="check-start", ticket="T-011", start=1.0, log=read_jsonl(self.ledger)[0]["log"])
+        self.assertIn("1 cut off", self.lines()[0])  # its log is there but no longer locked: killed
+
     def test_a_finished_check_has_no_finished_flag_and_matches_its_start(self):
         os.environ["WINDVANE_TICKET"] = "T-010"
         self.addCleanup(os.environ.pop, "WINDVANE_TICKET", None)

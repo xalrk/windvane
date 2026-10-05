@@ -66,7 +66,7 @@ flatters a run that re-reads a big context.
 from the `min` column; no line without any. The average is over the tickets that ran a check (a ticket that only
 reused a pass isn't one). `cut off` counts checks that never finished: stopped by Ctrl-C or an error (their minutes so
 far count), or killed outright, a driver or a session's tool timeout, which leaves only the check's start row and no
-minutes, so the total is a floor. With `--by ticket`, `most check time: T-060, 4 runs, 31 min` follows: the ticket
+minutes, so the total is a floor. A check that's still going is neither: `1 still running`. With `--by ticket`, `most check time: T-060, 4 runs, 31 min` follows: the ticket
 whose checks took longest.
 
 The `died or killed` line is what outages, crashes and hung sessions cost: their runs' weighted tokens, and their
