@@ -37,6 +37,7 @@ BULLET = re.compile(r"(\s*)[-*+]\s+(.*)")
 NUMBERED = re.compile(r"(\s*)(\d+[.)])\s+(.*)")
 QUOTE = re.compile(r"\s*>\s?(.*)")
 TABLE_RULE = re.compile(r"\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+ANSI = re.compile(r"\033\[[0-9;]*m")
 TEXT_LINES = 12  # counted lines `watch` shows of one assistant message before it clips
 
 
@@ -245,8 +246,8 @@ def blocks(text, color, cols=0):
     """Assistant text as blocks of terminal lines, each line with whether it counts towards the clip: headings,
     lists, quotes, rules, fenced code and tables by line, the rest inline, wrapped to `cols` (0: not wrapped).
     A table is one block; blank lines and rules don't count. Code blocks get a dim gutter and their language, with
-    nothing inside them read as Markdown."""
-    lines, out, i, fence = text.split("\n"), [], 0, None
+    nothing inside them read as Markdown. Rules are drawn last, at `rule_width`."""
+    lines, out, i, fence, rules = text.split("\n"), [], 0, None, []
     dim = frozenset({"dim"})
 
     def add(segs, lead=()):
@@ -273,7 +274,8 @@ def blocks(text, color, cols=0):
         elif m := HEADING.match(line):
             add(inline(m.group(1), frozenset({"b", "h"})))
         elif RULE.match(line):
-            out.append([(paint([("─" * 40, dim)], color), False)])
+            rules.append(len(out))
+            out.append(None)
         elif m := BULLET.match(line):
             mark = "  " + m.group(1) + "• "
             add([(mark, frozenset())] + inline(m.group(2)), [(" " * len(mark), frozenset())])
@@ -287,7 +289,18 @@ def blocks(text, color, cols=0):
         else:
             add(inline(line))
         i += 1
+    rule = [(paint([("─" * rule_width(out, cols), dim)], color), False)]
+    for r in rules:
+        out[r] = rule
     return out
+
+
+def rule_width(out, cols):
+    """A `---` rule as wide as the message's widest line, at most `cols`: a table draws its rules at its own width,
+    so a rule matches them when the table is the widest thing, and none runs on into empty terminal past the text. Piped (no `cols`), or
+    with nothing but rules, it is 40 as before."""
+    widest = max((width(ANSI.sub("", line)) for b in out if b for line, _ in b), default=0)
+    return min(cols, widest or 40) if cols else 40
 
 
 def markdown(text, color, cols=0):
@@ -298,13 +311,14 @@ def markdown(text, color, cols=0):
 def clip_rendered(parts, n, color, more=4):
     """Whole blocks up to n counted lines. The block that crosses n is shown up to `more` lines past it, so a table
     that started shows rows and a wrapped paragraph its end. A clipped message ends with a reset, so no colour can
-    run on, and not on a blank line or a rule, which would part nothing from the next one shown."""
+    run on, and not on a blank line or a rule, which would part nothing from the next one shown. The first counted
+    line is always shown, even past n, so a message that opens with rules never shows as nothing but the marker."""
     shown, count, total = [], 0, sum(len(b) for b in parts)
     for b in parts:
-        if count >= n and any(k for _, k in b):
+        if count and count >= n and any(k for _, k in b):
             break
         for line, k in b:
-            if count + k > n + more:
+            if count and count + k > n + more:
                 break
             shown.append((line, k))
             count += k
