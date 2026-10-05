@@ -71,6 +71,10 @@ the order), and **open** otherwise. `windvane queue` shows all three.
 2. **Critic.** Started by the worker; scores the outcome (below).
 3. **Check.** The driver runs the project's `check` on the exact pushed head. A passing result is recorded per git
    tree, so the worker's own passing check is reused rather than run twice.
+   The check is the gate, on your machine, so hosted CI isn't needed: a workflow on `push` or `pull_request` runs
+   twice per ticket (its PR, its merge) and can use up a month's Actions minutes in days. Test other versions in the
+   check (windvane's own runs every Python 3.11 to 3.14 installed, `tools/check_pythons.sh`), keep workflows
+   `workflow_dispatch` only, and `windvane doctor` warns about any that run on their own.
 4. **Reviewer.** A fresh read-only session with the diff, the ticket and the critic's verdict in its prompt. It
    approves or lists changes.
 5. **Merge.** The driver merges `main` into the ticket's head in its own worktree, runs the check again if `main`

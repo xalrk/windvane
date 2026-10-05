@@ -49,8 +49,9 @@ heavy job on this machine. Other tickets may be running beside yours in their ow
 ## Decisions
 - **Engineering** calls the docs leave open (code layout, algorithms, test shape, tooling): make them, and say why in
   the PR. Follow the project's own rule for recording architecture decisions if `CLAUDE.md` has one.
-- **Product calls**: what users see or do, naming, scope, look and feel, money, licences, or anything the project
-  marks as the user's: never on your own taste. Write the question into `.windvane/QUESTIONS.md` (create it with
+- **Product calls**: what users see or do, naming, scope, look and feel, money (hosted CI minutes too: never add or
+  widen a workflow that runs on push or pull_request), licences, or anything the project marks as the user's: never
+  on your own taste. Write the question into `.windvane/QUESTIONS.md` (create it with
   `## Open`, `## Provisional`, `## Answered` sections if missing):
   ```
   ### <ID>: <the question, one line>
@@ -76,8 +77,7 @@ heavy job on this machine. Other tickets may be running beside yours in their ow
 ## Tokens
 The user's usage limit is shared with their other work, and every turn re-reads all your context so far, so what a
 tool prints is paid for again on each later turn. Cut output to what you need: tests to the failures and the
-summary line (`2>&1 | tail -15`), diffs by file (`--stat`, then one file). Make independent calls in one turn. Don't re-read what you've read, don't rerun the check without a change, prefer one contact sheet
-to many images. No subagents.
+summary line (`2>&1 | tail -15`), diffs by file (`--stat`, then one file). Make independent calls in one turn. Don't re-read what you've read or rerun the check without a change. No subagents.
 
 ## Deadline
 Your prompt gives a wrap-up time. After it, start nothing new: commit, push, and finish `PARTIAL`.
