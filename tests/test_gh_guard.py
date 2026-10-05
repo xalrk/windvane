@@ -6,11 +6,13 @@ import os
 import subprocess
 import sys
 import unittest
+from argparse import Namespace
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import actions  # noqa: E402
+from windvane import actions, driver  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_actions_budget import FAKE_GH  # noqa: E402
@@ -91,7 +93,7 @@ class Guard(unittest.TestCase):
 
     def worker_env(self):
         """The environment a worker session gets from the driver, guard included."""
-        return {**os.environ, **actions.gh_guard(self.p)}
+        return {**os.environ, **actions.gh_guard(self.p, self.s.root)}
 
     def sh(self, command, env=None):
         r = subprocess.run(["bash", "-c", command], cwd=self.s.root, capture_output=True, text=True,
@@ -128,16 +130,43 @@ class Guard(unittest.TestCase):
         self.assertEqual((code, out), (4, "real gh: pr view 12\n"))
 
     def test_the_guard_is_first_on_a_worker_sessions_path(self):
-        env = actions.gh_guard(self.p)
+        env = actions.gh_guard(self.p, self.s.root)
         first = Path(env["PATH"].split(os.pathsep)[0], "gh")
         self.assertTrue(actions.is_guard(first))
         self.assertEqual(first.parent, self.p.state / "gh-guard")
         code, out, err = self.sh("command -v gh")
         self.assertEqual(out.strip(), str(first))
 
+    def test_shell_setup_that_puts_the_real_gh_first_is_undone_by_the_env_file(self):
+        # Claude Code's Bash tool: the user's shell setup first, then CLAUDE_ENV_FILE, then the command
+        code, out, err = self.sh(f'PATH={self.real}:$PATH; . "$CLAUDE_ENV_FILE"; gh workflow run x')
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.calls(), [])
+
+    def test_the_users_own_env_file_is_still_sourced(self):
+        own = self.s.tmp / "own.env"
+        own.write_text("export OWN_ENV=yes\n")
+        os.environ["CLAUDE_ENV_FILE"] = str(own)
+        code, out, err = self.sh('. "$CLAUDE_ENV_FILE"; echo "$OWN_ENV"; command -v gh')
+        self.assertEqual(out.split(), ["yes", str(self.p.state / "gh-guard/gh")])
+
+    def test_the_driver_gives_a_worker_session_the_guard(self):
+        os.environ["FAKE_LOG"] = str(self.s.tmp / "claude.log")
+        os.environ["FAKE_FAIL"] = "quiet"
+        self.s.ticket("T-001")
+        self.s.publish()
+        pilot = driver.Pilot(self.p, Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0, answer_wait=10,
+                                               replan=0, goal="", parallel=1))
+        pilot.deadline = datetime.now() + timedelta(hours=1)
+        driver.ensure_worktree(self.p, pilot.wd, setup=False)
+        pilot.work("T-001", "new", [])
+        worker = [json.loads(x) for x in Path(os.environ["FAKE_LOG"]).read_text().splitlines()
+                  if json.loads(x)["system"].startswith("# windvane worker run")]
+        self.assertEqual([w["gh"] for w in worker], [str(self.p.state / "gh-guard/gh")])
+
     def test_a_guard_on_path_is_never_taken_for_the_real_gh(self):
-        os.environ.update(actions.gh_guard(self.p))  # a session nested in a worker's writes its own guard
-        nested = actions.gh_guard(self.p)["PATH"].split(os.pathsep)
+        os.environ.update(actions.gh_guard(self.p, self.s.root))  # a session nested in a worker's writes its own guard
+        nested = actions.gh_guard(self.p, self.s.root)["PATH"].split(os.pathsep)
         self.assertEqual(nested[0], nested[1])
         self.assertEqual(actions.real_gh(), str(self.real / "gh"))
         code, out, err = self.sh("gh run list")
@@ -146,7 +175,7 @@ class Guard(unittest.TestCase):
     def test_no_real_gh_says_so(self):
         path = os.environ["PATH"]
         os.environ["PATH"] = str(self.s.bin)  # no gh at all when the guard is written (not even the machine's)
-        actions.gh_guard(self.p)
+        actions.gh_guard(self.p, self.s.root)
         os.environ["PATH"] = path
         guard = self.p.state / "gh-guard"
         code, out, err = self.sh("gh pr view", {**os.environ, "PATH": f"{guard}{os.pathsep}{path}"})
@@ -156,7 +185,7 @@ class Guard(unittest.TestCase):
     def test_forge_git_has_no_guard(self):
         cfg = self.s.root / ".windvane/config.toml"
         cfg.write_text(cfg.read_text().replace('forge = "github"', 'forge = "git"'))
-        self.assertEqual(actions.gh_guard(Project(self.s.root)), {})
+        self.assertEqual(actions.gh_guard(Project(self.s.root), self.s.root), {})
 
     def test_claude_ci_inside_a_worker_still_reaches_the_real_gh(self):
         self.fake(FAKE_GH)

@@ -434,7 +434,7 @@ class Pilot(Desk, Periodic):
         pr = pr_for(p, branches[0]) if branches else ""
         known = self.answered(tid, ref)
         git_env, skip_line = actions.worker_git(p, wd)
-        session_env = {**git_env, **actions.gh_guard(p)}
+        session_env = {**git_env, **actions.gh_guard(p, wd)}
         prompt = "\n\n".join(filter(None, [
             f"Ticket {tid}. Follow the worker rules in your system prompt and end with the RESULT line.",
             f"## The ticket\n{ticket[:8000]}",

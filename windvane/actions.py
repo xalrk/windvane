@@ -465,10 +465,12 @@ def real_gh():
     return None
 
 
-def gh_guard(p):
+def gh_guard(p, wd):
     """Environment for a worker session: on forge github, PATH led by a `gh` that refuses to start, re-run or enable
     a workflow and passes everything else to the real gh, unchanged. On with or without a budget: workflows run only
-    by hand (`windvane ci`) is a rule of windvane, not of the budget."""
+    by hand (`windvane ci`) is a rule of windvane, not of the budget. The Bash tool runs the user's shell setup, which
+    may put another dir first; Claude Code sources CLAUDE_ENV_FILE after it, before each command, so the guard goes
+    first there too (after the user's own env file, if they set one)."""
     if p.cfg["forge"] != "github":
         return {}
     folder = p.state / "gh-guard"
@@ -478,7 +480,11 @@ def gh_guard(p):
                    f"REAL = {real_gh()!r}\n{GUARD_SCRIPT}")
     tmp.chmod(0o755)
     os.replace(tmp, folder / "gh")
-    return {"PATH": f"{folder}{os.pathsep}{os.environ.get('PATH', '')}"}
+    own = os.environ.get("CLAUDE_ENV_FILE")
+    env_file = folder / f"env-{Path(wd).resolve().name}"  # one per worktree: a session-start hook may append to it
+    env_file.write_text((f". {shlex.quote(own)}\n" if own else "")
+                        + f'export PATH={shlex.quote(str(folder))}"{os.pathsep}$PATH"\n')
+    return {"PATH": f"{folder}{os.pathsep}{os.environ.get('PATH', '')}", "CLAUDE_ENV_FILE": str(env_file)}
 
 
 def ci(p, name="", ref="", dry=False):
