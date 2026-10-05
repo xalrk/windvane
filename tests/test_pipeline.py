@@ -54,8 +54,8 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(self.s.git("rev-parse", "--abbrev-ref", "HEAD"), "main")
         roles = [c["system"].split(" run")[0] for c in self.calls() if c["system"]]  # not the usage probe
         self.assertEqual(roles, ["# windvane worker", "# windvane review"] * 2)
-        ledger = (self.p.state / "ledger.jsonl").read_text().splitlines()
-        self.assertEqual(len(ledger), 4)
+        ledger = [l for l in (self.p.state / "ledger.jsonl").read_text().splitlines() if '"event"' not in l]
+        self.assertEqual(len(ledger), 4)  # sessions; each ticket's checks are rows of their own
 
     def test_merge_that_doesnt_land_keeps_the_branches(self):
         hook = self.s.remote / "hooks" / "post-receive"  # accepts the push to main, then puts main back
@@ -132,7 +132,8 @@ class Pipeline(unittest.TestCase):
         self.assertFalse([t for t in self.pushes if t.startswith("Failed")])
         self.assertEqual(self.waits, [60] * 9)  # 3 minutes, then 6
         self.assertEqual(self.roles(), ["worker"] * 3 + ["review", "worker", "review"])
-        ends = [(r["end"], r["error"]) for r in map(json.loads, (self.p.state / "ledger.jsonl").read_text().splitlines())]
+        ends = [(r["end"], r["error"]) for r in map(json.loads, (self.p.state / "ledger.jsonl").read_text().splitlines())
+                if not r.get("event")]
         self.assertEqual(ends[0], ("error", "API Error: 529 Overloaded"))
         self.assertEqual(ends[1], ("no result", "no result event (exit 1): Error: socket hang up"))
         self.assertEqual(ends[2], ("ok", None))

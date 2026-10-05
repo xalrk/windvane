@@ -55,7 +55,7 @@ class Periodic(unittest.TestCase):
         order = [k if k == "periodic" else v for k, v in self.sessions()]
         self.assertEqual(order, ["T-001", "T-002", "periodic", "T-003"])  # once, after the 2nd merge only
         self.assertIn("playtest: PERIODIC: wrote a ticket", self.log())
-        roles = [json.loads(l)["role"] for l in (self.p.state / "ledger.jsonl").read_text().splitlines()]
+        roles = [json.loads(l).get("role") for l in (self.p.state / "ledger.jsonl").read_text().splitlines()]
         self.assertIn("periodic:playtest", roles)
 
     def test_skipped_when_the_deadline_is_nearer_than_its_minutes(self):

@@ -558,7 +558,7 @@ class Pilot(Desk, Periodic):
             return
         if not self.clean_wait(tid, f"checking {tid}"):
             return
-        ok, summary, logf = self.check_at(sha)
+        ok, summary, logf = self.check_at(sha, tid)
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
         if not ok:
             self.feedback[tid] = f"The check fails on {sha[:12]}: {summary}\n```\n{tail(logf, 40)}\n```"
@@ -674,11 +674,11 @@ class Pilot(Desk, Periodic):
                  "warning")
         return False
 
-    def check_at(self, rev):
+    def check_at(self, rev, ticket=None):
         cd = self.cd
         if not clean_detach(self.p, cd, rev):
             return False, f"couldn't check out {rev[:12]}", None
-        return check(self.p, cd)
+        return check(self.p, cd, ticket=ticket)
 
     def review(self, tid, branch, sha, res=None):
         """`res`: (approved head, diff, paths, tree) when the head only resolves a bounce off main: the reviewer
@@ -778,7 +778,7 @@ class Pilot(Desk, Periodic):
             if renumbered is not None:
                 self.log(f"{tid}: conflicted with {p.main} only in appended entries: {said(renumbered)}; resolved "
                          "without a worker run")
-            ok, summary, logf = check(p, cd)
+            ok, summary, logf = check(p, cd, ticket=tid)
             if not ok:
                 self.feedback[tid] = (f"Merged with the current {p.upstream}, your head {sha[:12]} fails the check: "
                                       f"{summary}\n```\n{tail(logf, 40)}\n```\nMerge {p.upstream} into your branch "
