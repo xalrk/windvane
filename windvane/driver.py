@@ -899,7 +899,8 @@ class Pilot(Desk, Periodic):
         picks = [q for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
                  if p.norm(q["ticket"]) == tid]
         if picks:
-            push(f"Provisional: {self.name(tid)}", f"To change one: windvane answer {tid} <letter>, or tell a Claude."
+            push(f"Provisional: {self.name(tid)}", f"To change one: windvane answer {tid} <letter>, or tell a Claude "
+                 "session."
                  + "".join(f"\n{q['question']} Built {q['built']}: {q['option']}" for q in picks), 3, "memo")
 
     def fail(self, tid, why):
@@ -983,9 +984,9 @@ class Pilot(Desk, Periodic):
                                       f"{self.a.answer_wait:g} minutes: build your recommendation ({q['rec']}), and "
                                       "move the question to ## Provisional with its `Built:` line.")
                 self.log(f"{tid}: no answer in {self.a.answer_wait:g} min; building {q['rec']}")
-                push(f"No answer: {self.name(tid)}", lead(f"Going with {q['rec']}: ", q["opts"].get(q["rec"], "")[:300],
-                                                          ".") + f"\nTo change it later: windvane answer {tid} <letter>.",
-                     3, "hourglass")
+                opt = q["opts"].get(q["rec"], "")[:300]
+                push(f"No answer: {self.name(tid)}", lead(f"Going with {q['rec']}: ", opt, ".")
+                     + f"\nTo change it later: windvane answer {tid} <letter>.", 3, "hourglass")
             else:
                 continue
             del self.questions[tid]
@@ -1406,7 +1407,8 @@ class Pilot(Desk, Periodic):
             self.log(summary.replace("\n", " "))
             if crashed and os.environ.get(SUPERVISED):  # `supervise` restarts it, or pushes why it doesn't
                 self.hand_over()
-                save_json(p.state / "crash.json", {"error": crashed, "summary": "Merged:" + summary.split("\nMerged:", 1)[1]})
+                rest = "Merged:" + summary.split("\nMerged:", 1)[1]  # past the why, which may run on to a 2nd line
+                save_json(p.state / "crash.json", {"error": crashed, "summary": rest})
             elif not ready and self.halt:  # just why, once: nothing ran, so the summary's other lines say nothing
                 push("windvane couldn't start", lead("", self.halt[0].upper() + self.halt[1:], "."), 4, "warning")
             else:
@@ -1477,7 +1479,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
                 else asked() or ("deadline" if now() >= deadline else None))
         if not stop:
             log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour")
-            push("windvane restarted", lead("The driver crashed: ", why, f". Restart {len(crashes)} of {RESTARTS} this hour.")
+            push("windvane restarted", lead("The driver crashed: ", why,
+                                            f". Restart {len(crashes)} of {RESTARTS} this hour.")
                  + f"\nIt goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
             sleep(RESTART_PAUSE)
             stop = asked()
