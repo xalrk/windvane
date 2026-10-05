@@ -59,8 +59,8 @@ class LimitPushes(Base):
         pilot.run(now() + timedelta(hours=2))
         self.assertIn("T-001", pilot.skip)
         self.assertEqual(self.aside(), [("Set aside: do T-001 (T-001)",
-                                         "Its run hit its max turns. Raise the Claude CLI's max turns (.claude/ "
-                                         "settings), or split the ticket. Its branch is kept.")])
+                                         "Hit its max turns. Raise max turns in .claude/ settings or split it. "
+                                         "Branch kept.")])
 
     def test_a_run_out_of_its_time_box_pushes_the_limit_and_the_knob(self):
         os.environ["FAKE_HANG"] = str(self.s.tmp / "streamed")
@@ -72,7 +72,7 @@ class LimitPushes(Base):
         self.assertIn("T-001", pilot.skip)
         [(title, msg)] = self.aside()
         self.assertEqual(title, "Set aside: do T-001 (T-001)")
-        self.assertIn("hour limit for one run. Split the ticket, or raise ticket_hours.", msg)
+        self.assertIn("hour limit for one run. Split it, or raise ticket_hours.", msg)
 
 
 class CrashPushes(Base):
