@@ -64,10 +64,14 @@ SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it read
 LOCK_SCREEN = 90  # characters of a push's body a phone's lock-screen preview shows
 
 
-def lead(head, free, tail="", whole=True):
+def lead(head, free, tail="", whole=True, log=None):
     """A push's first line: `head`, the free text `free` (an error, a reason, an option) cut with … so the line fits
     LOCK_SCREEN, then `tail`, which carries the next step. The cut-off rest follows on the next line (`whole`), so
-    the point is on the lock screen and nothing is lost once the push is opened."""
+    the point is on the lock screen and nothing is lost once the push is opened. A `head` and `tail` too long on their
+    own can't fit: the push still goes out, and `log` (stderr without one) gets a line so it doesn't pass unseen."""
+    if len(head) + len(tail) > LOCK_SCREEN:
+        msg = f"push's first line over {LOCK_SCREEN} characters before its free text: {head + '…' + tail!r}"
+        (log or (lambda m: print(m, file=sys.stderr)))(msg)
     free = " ".join(str(free).split())
     free = free.rstrip(".") if tail.startswith(".") else free
     room = LOCK_SCREEN - len(head) - len(tail)
@@ -410,10 +414,15 @@ class Pilot(Desk, Periodic):
         self.skip.add(tid)
         self.aside[tid] = f"its sessions kept dying: {error}"
         self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work")
-        fix = next((advice for text, advice in SELF_INFLICTED if text in error.lower()), "")
-        push(f"Set aside: {self.name(tid)}", lead(f"Sessions died {self.p.ap['retries'] + 1}×: ", error,
-                                                  ". Branch kept, run goes on.")
-             + f"\n{fix + ' ' if fix else ''}Other sessions worked, so it's this ticket's doing.", 4, "warning")
+        died = f"Sessions died {self.p.ap['retries'] + 1}×: "
+        why = "Other sessions worked, so it's this ticket's doing."
+        hit = next(((text, fix) for text, fix in SELF_INFLICTED if text in error.lower()), None)
+        if hit:  # the fix leads: the error's own words rarely say what to do
+            body = (lead(died, hit[0], f". {hit[1]}", log=self.log)
+                    + f"\nThe error: {' '.join(error.split())}\nBranch kept, run goes on. {why}")
+        else:
+            body = lead(died, error, ". Branch kept, run goes on.") + f"\n{why}"
+        push(f"Set aside: {self.name(tid)}", body, 4, "warning")
 
     def set_aside_limit(self, tid, limit, fix):
         """A worker run stopped at a limit of its own (the time box, max turns or budget): the ticket is too big for
@@ -421,7 +430,7 @@ class Pilot(Desk, Periodic):
         self.skip.add(tid)
         self.aside[tid] = f"hit {limit}"
         self.log(f"{tid}: the run hit {limit}; set aside")
-        push(f"Set aside: {self.name(tid)}", lead("Hit ", limit, f". {fix} Branch kept."), 3, "hourglass")
+        push(f"Set aside: {self.name(tid)}", lead("Hit ", limit, f". {fix} Branch kept.", log=self.log), 3, "hourglass")
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
@@ -1486,7 +1495,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             stop = asked()
         if stop:
             log(p, f"driver crashed ({why}); not restarted: {stop}")
-            push("windvane stopped", lead("Why: the driver crashed (", why, f"); not restarted: {stop}.") + "\n"
+            push("windvane stopped", lead("Why: the driver crashed (", why, f"); not restarted: {stop}.",
+                                          log=lambda m: log(p, m)) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             return rc
         args = selfupdate.restart_args(args, deadline)
@@ -1827,7 +1837,8 @@ def push_one_held(p, cd, branch, how):
     how = (("merged" if landed else "not merged; merge it by hand") if to_land
            else "pushed; no PR opened, open one by hand" if no_pr else "pushed")
     log(p, f"{branch}: held back, now on {where}, {how}")
-    return lead("", title, f": on {where}, {how}.", whole=False), no_pr or (to_land and not landed)
+    first = lead("", title, f": on {where}, {how}.", whole=False, log=lambda m: log(p, m))
+    return first, no_pr or (to_land and not landed)
 
 
 def pending_ids(p):
@@ -1894,7 +1905,8 @@ def unmerged(p, n, where):
     how = "" if is_local(where) else ": merge it by hand"  # a local branch's reason says what to do
     log(p, f"plan: {n_tickets(n)} on {where}, not merged{how}")
     waits = f"{n_tickets(n)} {'waits' if n == 1 else 'wait'} on"
-    body = lead(f"{waits} ", where, f"{how}.") if how else local_push(where, f"{waits} the local branch")
+    body = (lead(f"{waits} ", where, f"{how}.", log=lambda m: log(p, m)) if how
+            else local_push(where, f"{waits} the local branch"))
     push("plan not merged", body, 4, "warning")
     return 0
 
