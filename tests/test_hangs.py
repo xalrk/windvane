@@ -30,6 +30,17 @@ def alive(pgid):
         return False
 
 
+def dies(pgid, within=5):
+    """Whether the group is gone within a few seconds: a killed child stays a zombie, still in its group, until
+    whoever adopted it reaps it, which on a busy CI runner can take a moment."""
+    end = time.monotonic() + within
+    while alive(pgid):
+        if time.monotonic() > end:
+            return False
+        time.sleep(0.05)
+    return True
+
+
 class Hangs(unittest.TestCase):
     def setUp(self):
         self.s = Sandbox()
@@ -81,7 +92,7 @@ class Hangs(unittest.TestCase):
         t = time.time()
         self.assertFalse(pilot.run(now() + timedelta(minutes=15)))
         self.assertLess(time.time() - t, 30)
-        self.assertFalse(alive(int(pidfile.read_text())))  # its whole group, the sleep too
+        self.assertTrue(dies(int(pidfile.read_text())))  # its whole group, the sleep too
         self.assertIn("timed out after 0.02 min", pilot.stop_reason)
         self.assertEqual([t for t, _ in self.pushes], ["windvane couldn't start"])
         self.assertIn("timed out after 0.02 min", self.pushes[0][1])
@@ -102,7 +113,7 @@ class Hangs(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             util.run_limited(f"echo $$ > {pidfile}; sleep 600", self.s.tmp, now() + timedelta(minutes=5), stop=ctrl_c)
         self.assertLess(time.monotonic() - t, 3)
-        self.assertFalse(alive(int(pidfile.read_text())))
+        self.assertTrue(dies(int(pidfile.read_text())))
 
     def test_setup_minutes_must_be_a_positive_number(self):
         cfg = self.s.root / ".windvane/config.toml"
