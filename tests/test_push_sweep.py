@@ -1,7 +1,7 @@
 """T-090: every push call site test_push_fit.py drives, driven again with a 120-character ticket title and a
 120-character error, reason or fix text: each push carries the title and the text whole (T-093: no cut, no "…"),
-or whole()'s overflow line in the project log does. test_push_fit's short ticket name and 300-character error can't see a site that cuts or
-drops a long title, or one that keeps a long reason out of its push."""
+or whole()'s overflow line in the project log does. test_push_fit's short ticket name and 300-character error
+can't see a site that cuts or drops a long title, or one that keeps a long reason out of its push."""
 import sys
 import unittest
 from pathlib import Path
@@ -98,7 +98,8 @@ class PushSweep(unittest.TestCase):
                 with self.subTest(key):
                     said = " ".join(msg.split())
                     whole = [t for t in (TEXT, FIX) if t.rstrip(".") in said]
-                    self.assertTrue(whole or f"the whole text: {TEXT}" in log, f"neither the push nor the log has the text whole:\n{msg}")
+                    self.assertTrue(whole or f"the whole text: {TEXT}" in log,
+                                    f"neither the push nor the log has the text whole:\n{msg}")
 
     def test_a_sessions_api_error_is_pushed_by_its_message(self):
         """The sites a session's error reaches: its JSON body would fill the first line instead of the message."""

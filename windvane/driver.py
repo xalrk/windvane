@@ -63,6 +63,9 @@ SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it read
                   ("request too large", "Split the ticket, or trim what it reads."))
 
 
+REASON = 300  # characters of a session's error in a set-aside or stop reason
+
+
 def said_times(n):
     return f"{n} time{'s' * (n != 1)}"
 
@@ -283,20 +286,25 @@ class Pilot(Desk, Periodic):
             return False
         if aside:
             self.skip.add(tid)
-            self.aside[tid] = f"on trial: its sessions died ({plain_error(error)})"
+            self.aside[tid] = f"on trial: its sessions died ({self.said_error(error)})"
             self.log(f"  {label}: {own[0]} sessions died ({error}); set aside while another ticket runs: if its "
                      "session dies too, the run stops")
             return False
         wait = self.p.ap["retry_minutes"] * 2 ** (max(self.crashes, own[0] if own else 0) - 1)
         if self.crashes > n:
-            self.halt = f"{self.crashes} sessions in a row died ({plain_error(error)})"
+            self.halt = f"{self.crashes} sessions in a row died ({self.said_error(error)})"
         elif now() + timedelta(minutes=wait) >= self.end() - timedelta(minutes=self.a.min_slot):
-            self.halt = f"a session died ({plain_error(error)}), and there's no time left to retry it"
+            self.halt = f"a session died ({self.said_error(error)}), and there's no time left to retry it"
         if self.halt:
-            self.log(f"  {label}: {self.halt}" + (f"; the error: {error}" if plain_error(error) != error else ""))
+            self.log(f"  {label}: {self.halt}" + (f"; the error: {error}" if error not in self.halt else ""))
             return False
         self.log(f"  {label} died ({error}); retry {own[0] if own else self.crashes}/{n} in {wait:g} min")
         return self.backoff(wait)
+
+    def said_error(self, error):
+        """A session's error as a reason says it (the run summary's aside line, the stop reason): its API message, at
+        most REASON characters, since a summary carries a few of them in one push. The log keeps the whole text."""
+        return whole("", plain_error(error), log=self.log, most=REASON)
 
     def backoff(self, minutes):
         """A retry's backoff; False when a stop or the deadline came first."""
@@ -316,7 +324,7 @@ class Pilot(Desk, Periodic):
     def set_aside(self, tid, error):
         """A ticket whose own sessions keep dying while others' don't: the rest of the run goes on without it."""
         self.skip.add(tid)
-        self.aside[tid] = f"its sessions kept dying: {plain_error(error)}"
+        self.aside[tid] = f"its sessions kept dying: {self.said_error(error)}"
         self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work")
         error = plain_error(error)
         died = f"Sessions died {self.p.ap['retries'] + 1}×: "

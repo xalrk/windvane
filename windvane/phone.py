@@ -39,17 +39,17 @@ SERVICE = "windvane-phone.service"
 MOST = 1500  # characters of free text one push carries; ntfy takes 4,096 bytes for the whole message
 
 
-def whole(head, free, tail="", *, log):
+def whole(head, free, tail="", *, log, most=MOST):
     """`head`, the free text `free` (an error, a reason, an option) whole, then `tail`, the next step: one sentence in
     reading order, with one full stop. ntfy wraps a long line, so nothing is cut to fit a lock screen: a cut word
-    reads as a typo and a "…" hides the point. Only free text past MOST (a 5,000-character error) is cut, at its last
-    sentence or line end (a word end without one), and `log`, the project's log, gets it whole."""
+    reads as a typo and a "…" hides the point. Only free text past `most` (a 5,000-character error) is cut, at its
+    last sentence or line end (a word end without one), and `log`, the project's log, gets it whole."""
     free = str(free).strip()
-    if len(free) > MOST:
+    if len(free) > most:
         log(f"push cut at a sentence end; the whole text: {free}")
-        end = max(free.rfind(". ", 0, MOST) + 1, free.rfind("\n", 0, MOST))
-        if end <= MOST // 2:  # no sentence end late enough: a word end, or a bare cut in one long token
-            end = free.rfind(" ", 0, MOST) if " " in free[1:MOST] else MOST
+        end = max(free.rfind(". ", 0, most) + 1, free.rfind("\n", 0, most))
+        if end <= most // 2:  # no sentence end late enough: a word end, or a bare cut in one long token
+            end = free.rfind(" ", 0, most) if " " in free[1:most] else most
         free = free[:end].rstrip(" ,;:.") + " (the rest is in the log)"
     free = " ".join(free.split())
     free = free.rstrip(".") if tail.startswith((".", ";", ":", ",", ")")) else free

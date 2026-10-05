@@ -36,7 +36,8 @@ class PlainError(unittest.TestCase):
     def test_other_text_comes_back_as_it_is(self):
         for text in ("API Error: 529 Overloaded", "no result event (exit 1): Error: socket hang up",
                      'the reviewer said {"a": 1}', 'API Error: 400 {"type":"error","error":{"message":"cut sh',
-                     '{"type":"error","error":{"type":"api_error"}}', "API Error: 400 [1, 2]", ""):
+                     '{"type":"error","error":{"type":"api_error"}}', "API Error: 400 [1, 2]", "",
+                     "API Error: 400 " + '{"a":' * 100000):
             self.assertEqual(plain_error(text), text)
 
     def test_the_session_hands_back_the_whole_error_for_the_log(self):
@@ -65,6 +66,23 @@ class SaidByMessage(Base):
         [msg] = [m for t, m in self.pushes if t.startswith("Failed")]
         self.assertEqual(msg, f"API Error 400: {MESSAGE[:-1]}. Branch kept, run goes on.")
         self.assertIn(f"T-002: FAILED: {ENVELOPE}", (self.p.state / "autopilot.log").read_text())
+
+    def test_a_long_error_that_isnt_json_is_bounded_in_the_reason_and_the_summary(self):
+        page = ("<html><body>" + " ".join(f"Bad gateway, try {i} of the upstream." for i in range(200))
+                + "</body></html>")
+        self.assertGreater(len(page), 6000)
+        self.assertEqual(plain_error(page), page)
+        pilot = self.pilot()
+        pilot.set_aside("T-001", page)
+        reason = pilot.aside["T-001"]
+        self.assertLessEqual(len(reason), len("its sessions kept dying: ") + 300 + len(" (the rest is in the log)"))
+        self.assertTrue(reason.endswith(" (the rest is in the log)"), reason)
+        pilot.crashes = self.p.ap["retries"]  # one more death stops the run, with the error as its reason
+        with mock.patch.object(net, "online", lambda: True):
+            self.assertFalse(pilot.crashed("T-002", page))
+        pilot.stop_reason = pilot.halt
+        self.assertLess(len(pilot.summary().encode()), 1000)
+        self.assertIn(f"the whole text: {page}", (self.p.state / "autopilot.log").read_text())
 
 
 if __name__ == "__main__":

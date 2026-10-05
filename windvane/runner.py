@@ -263,7 +263,7 @@ def plain_error(text):
     start = text.find("{")
     try:
         body, end = json.JSONDecoder().raw_decode(text, start) if start >= 0 else (None, 0)
-    except ValueError:
+    except (ValueError, RecursionError):  # not JSON, or nested past Python's limit
         return text
     inner = body.get("error") if isinstance(body, dict) else None
     inner = inner if isinstance(inner, dict) else body if isinstance(body, dict) else {}
