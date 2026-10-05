@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import actions, driver  # noqa: E402
+from windvane import actions, driver, worktree  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_actions_budget import FAKE_GH  # noqa: E402
@@ -187,7 +187,7 @@ class Guard(unittest.TestCase):
         pilot = driver.Pilot(self.p, Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0, answer_wait=10,
                                                replan=0, goal="", parallel=1))
         pilot.deadline = datetime.now() + timedelta(hours=1)
-        driver.ensure_worktree(self.p, pilot.wd, setup=False)
+        worktree.ensure_worktree(self.p, pilot.wd, setup=False)
         pilot.work("T-001", "new", [])
         worker = [json.loads(x) for x in Path(os.environ["FAKE_LOG"]).read_text().splitlines()
                   if json.loads(x)["system"].startswith("# windvane worker run")]

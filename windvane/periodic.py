@@ -80,7 +80,7 @@ class Periodic:
     def periodic(self, e):
         """Run `e` and the entries its `then` chains to, one after another in the ci tree on current main, then
         land the tickets they wrote. Whatever else they changed is discarded with the tree."""
-        from .driver import clean_detach
+        from .worktree import clean_detach
         p, cd, done, prev = self.p, self.p.ci_dir, set(), None
         if cd == p.work_dir and any(self.owner.values()):
             self.periodic_ran(e, skipped=True)
@@ -136,7 +136,8 @@ class Periodic:
         """One periodic session: (its final reply, that plus the files it names), False when it was skipped before it
         started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
         it due, {group: its tickets}, named in its prompt."""
-        from .driver import pending_ids, rules
+        from .planner import pending_ids
+        from .runner import rules
         name, p = e["name"], self.p
         if not self.periodic_fits(e):
             return False
@@ -210,7 +211,7 @@ class Periodic:
         could clash with a plan's), the lines added at the end of existing tickets, and the lines added to QUEUE.md.
         Returns ({path: text}, the new ticket ids, (QUEUE.md as the chain found it, with only the lines added to it),
         {path: the lines added at its end}): the land replays the queue lines and the notes on main."""
-        from .driver import changed_paths
+        from .planner import changed_paths
         p, notes, logged = self.p, {}, 0
         keep = {f: (cd / f).read_text(errors="replace") for f in changed_paths(cd)
                 if f.startswith(p.tickets_rel + "/") and f.endswith(".md") and (cd / f).is_file()
@@ -245,7 +246,9 @@ class Periodic:
         it on a branch rather than overwrite that ticket. Notes go at the end of each ticket as main has it, unless it
         is done there (merged, or `done:`) or gone. The commit carries `reply` (the last session's, cut to 80 lines),
         so what it found already covered or chose not to ticket stays on record."""
-        from .driver import DIR, clean_detach, land as land_on_main
+        from .driver import DIR
+        from .held import land as land_on_main
+        from .worktree import clean_detach
         p = self.p
         base = gout(cd, "rev-parse", "HEAD")
         titles = {t: title_of(keep[f], t) for f in keep for t in [p.norm(Path(f).stem)] if t in tickets}

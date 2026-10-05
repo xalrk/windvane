@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import actions
+from .config import HOME
 from .util import append_jsonl, load_json, save_json
 
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
@@ -362,3 +363,10 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         "exit": code, "stream": raw.name})
     actions.refresh(p)  # the next worker start reads a fresh total from the cache, never waits on a count
     return result, killed, error
+
+
+def rules(p, name):
+    text = (HOME / "prompts" / name).read_text()
+    for k, v in {"{upstream}": p.upstream, "{remote}": p.remote, "{main}": p.main}.items():
+        text = text.replace(k, v)
+    return text

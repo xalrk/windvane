@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import cli, critic, driver  # noqa: E402
+from windvane import cli, critic, held, planner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import append_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -29,9 +29,9 @@ class PlanSafety(unittest.TestCase):
         self.s.publish()
         self.p = Project(self.s.root)
         self.pushes = []
-        orig = driver.push
-        driver.push = lambda title, msg="", *a, **k: self.pushes.append((title, msg))
-        self.addCleanup(setattr, driver, "push", orig)
+        for module in (held, planner):
+            self.addCleanup(setattr, module, "push", module.push)
+            module.push = lambda title, msg="", *a, **k: self.pushes.append((title, msg))
 
     def forge(self, name, gh=None):
         if gh:
@@ -57,14 +57,14 @@ class PlanSafety(unittest.TestCase):
 
     def test_refused_plan_push_keeps_a_local_branch_and_says_so(self):
         self.refuse_plan_pushes()
-        self.assertEqual(driver.plan(self.p, "make it great"), 0)
+        self.assertEqual(planner.plan(self.p, "make it great"), 0)
         branch, files = self.local_plan()
         self.assertIn(".windvane/tickets/T-003.md", files)
         self.assertEqual(self.s.git("ls-remote", "--heads", "origin", "plan-*"), "")
         self.assertIn(f"plan: 1 ticket kept only locally on {branch} (refused by a hook", self.log())
         self.assertEqual(self.pushes[-1][0], "plan not pushed")
         self.assertIn(f"\n1 ticket kept only locally on {branch}.", self.pushes[-1][1])
-        driver.plan(self.p, "more")  # the next plan resets the plan tree; the kept branch stays and holds its id
+        planner.plan(self.p, "more")  # the next plan resets the plan tree; the kept branch stays and holds its id
         self.assertIn(".windvane/tickets/T-003.md", self.s.git("ls-tree", "-r", "--name-only", branch).split())
         second = [b for b in self.s.git("branch", "--list", "plan-*", "--format=%(refname:short)").split()
                   if b != branch]
@@ -74,7 +74,7 @@ class PlanSafety(unittest.TestCase):
     def test_refused_push_on_github_opens_no_pr_and_never_claims_a_remote_branch(self):
         self.forge("github", "#!/bin/sh\necho \"$@\" >> \"$FAKE_LOG.gh\"\n")
         self.refuse_plan_pushes()
-        self.assertEqual(driver.plan(self.p, "make it great"), 0)
+        self.assertEqual(planner.plan(self.p, "make it great"), 0)
         self.assertIn(".windvane/tickets/T-003.md", self.local_plan()[1])
         gh = (Path(str(self.s.tmp / "calls.jsonl") + ".gh"))
         self.assertNotIn("pr create", gh.read_text() if gh.exists() else "")
@@ -82,7 +82,7 @@ class PlanSafety(unittest.TestCase):
     def test_refused_push_with_merge_tells_the_phone_its_local(self):
         self.forge("github", "#!/bin/sh\nexit 0\n")
         self.refuse_plan_pushes()
-        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.assertEqual(planner.plan(self.p, "make it great", merge=True), 0)
         branch, files = self.local_plan()
         self.assertIn(".windvane/tickets/T-003.md", files)
         self.assertEqual(self.pushes, [("plan not merged", "Refused by a hook or branch rule; change the rule, or push "
@@ -91,11 +91,11 @@ class PlanSafety(unittest.TestCase):
                                                            f"{branch}.")])
 
     def test_two_plans_in_the_same_minute_both_survive(self):
-        orig = driver.now
-        self.addCleanup(setattr, driver, "now", orig)
+        orig = planner.now
+        self.addCleanup(setattr, planner, "now", orig)
         for t in (datetime(2026, 10, 4, 9, 30, 5), datetime(2026, 10, 4, 9, 30, 5), datetime(2026, 10, 4, 9, 30, 41)):
-            driver.now = lambda t=t: t
-            self.assertEqual(driver.plan(self.p, "make it great"), 1)
+            planner.now = lambda t=t: t
+            self.assertEqual(planner.plan(self.p, "make it great"), 1)
         heads = self.s.git("ls-remote", "--heads", "origin", "plan-*")
         names = sorted(l.split("refs/heads/")[1] for l in heads.splitlines())
         self.assertEqual(names, ["plan-20261004-093005", "plan-20261004-093005-2", "plan-20261004-093041"])
@@ -117,14 +117,14 @@ class PlanSafety(unittest.TestCase):
         self.forge("github", "#!/bin/sh\ncase \"$*\" in *'--head plan-20260101-000000 '*) echo CLOSED;; "
                              "*'--head plan-20260102-000000 '*) printf 'OPEN\\nCLOSED\\n';; esac\nexit 0\n")
         self.s.git("fetch", "-q", "origin")
-        self.assertEqual(driver.pending_ids(self.p) - {"T-001", "T-002"}, {"T-004"})  # the open one holds its id
+        self.assertEqual(planner.pending_ids(self.p) - {"T-001", "T-002"}, {"T-004"})  # the open one holds its id
         self.assertEqual(self.s.git("ls-remote", "--heads", "origin", "plan-20260101-000000").count("plan-"), 1)
 
     def test_without_gh_every_unmerged_plan_branch_reserves_ids(self):
         self.open_plan_branch("plan-20260101-000000", "T-003")
         self.forge("github")  # no `gh` on the PATH
         self.s.git("fetch", "-q", "origin")
-        self.assertEqual(driver.pending_ids(self.p) - {"T-001", "T-002"}, {"T-003"})
+        self.assertEqual(planner.pending_ids(self.p) - {"T-001", "T-002"}, {"T-003"})
 
     def cmd_plan(self):
         out = io.StringIO()
@@ -138,7 +138,7 @@ class PlanSafety(unittest.TestCase):
             fcntl.flock(lock, fcntl.LOCK_EX)
             with self.assertRaises(SystemExit) as e:
                 self.cmd_plan()
-            self.assertEqual(driver.plan(self.p, "x", merge=True), 0)  # the driver's --replan path: as before
+            self.assertEqual(planner.plan(self.p, "x", merge=True), 0)  # the driver's --replan path: as before
         self.assertIn("another plan is running", str(e.exception.code))
         self.assertNotEqual(e.exception.code, 0)
 

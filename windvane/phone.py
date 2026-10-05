@@ -36,6 +36,32 @@ HELP = ("status: each project's status\noverview: where each project stands\nusa
 SERVICE = "windvane-phone.service"
 
 
+LOCK_SCREEN = 90  # characters of a push's body a phone's lock-screen preview shows
+
+
+def lead(head, free, tail="", whole=True, log=None):
+    """A push's first line: `head`, the free text `free` (an error, a reason, an option) cut with … so the line fits
+    LOCK_SCREEN, then `tail`, which carries the next step. The cut-off rest follows on the next line (`whole`), so
+    the point is on the lock screen and nothing is lost once the push is opened. A `head` and `tail` too long on their
+    own can't fit: the push still goes out, and `log` (stderr without one) gets a line so it doesn't pass unseen."""
+    if len(head) + len(tail) > LOCK_SCREEN:
+        msg = f"push's first line over {LOCK_SCREEN} characters before its free text: {head + '…' + tail!r}"
+        (log or (lambda m: print(m, file=sys.stderr)))(msg)
+    free = " ".join(str(free).split())
+    free = free.rstrip(".") if tail.startswith(".") else free
+    room = LOCK_SCREEN - len(head) - len(tail)
+    if len(free) <= room:
+        return head + free + tail
+    cut = free[:max(room - 1, 0)]
+    if " " in cut[-15:]:  # at a word's end, not inside one
+        cut = cut.rsplit(" ", 1)[0]
+    if cut.count("`") % 2:  # nor inside a command, which the user may copy
+        cut = cut[:cut.rindex("`")]
+    stop = "." * tail.startswith(".")  # "…" ends the line's sentence; the cut-off rest gets the full stop
+    rest = f"\n…{free[len(cut):].lstrip()}{stop}" if whole else ""
+    return head + cut.rstrip(" ,;:(") + "…" + tail.removeprefix(stop) + rest
+
+
 def conf_path():
     return user_dir("XDG_CONFIG_HOME", ".config") / "phone.toml"
 

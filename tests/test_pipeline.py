@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import critic, driver, jobs, runner  # noqa: E402
+from windvane import critic, driver, jobs, planner, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
@@ -185,7 +185,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(pilot.merged, [])
 
     def test_plan_writes_and_merges_tickets(self):
-        n = driver.plan(self.p, "make it great", merge=True)
+        n = planner.plan(self.p, "make it great", merge=True)
         self.assertEqual(n, 1)
         self.s.git("fetch", "-q", "origin")
         q = Queue(self.p)
@@ -195,10 +195,10 @@ class Pipeline(unittest.TestCase):
     def test_plan_that_writes_outside_windvane_is_discarded(self):
         import os
         os.environ["FAKE_PLAN_OUTSIDE"] = "1"
-        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.assertEqual(planner.plan(self.p, "make it great", merge=True), 0)
         self.s.git("fetch", "-q", "origin")
         self.assertNotIn("T-003", Queue(self.p).files)
-        self.assertEqual(driver.changed_paths(self.p.plan_dir), [])  # the plan worktree is clean again
+        self.assertEqual(planner.changed_paths(self.p.plan_dir), [])  # the plan worktree is clean again
 
     def config(self, **kw):
         """Rewrite the top of the project's config (e.g. isolate, forge) and publish it."""
@@ -213,7 +213,7 @@ class Pipeline(unittest.TestCase):
         self.s.git("switch", "-q", "-c", "mine")
         self.s.write("README", "my edit\n")
         self.s.write("notes.txt", "untracked\n")
-        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 1)
+        self.assertEqual(planner.plan(self.p, "make it great", merge=True), 1)
         self.assertEqual(self.s.git("rev-parse", "--abbrev-ref", "HEAD"), "mine")
         self.assertEqual((self.s.root / "README").read_text(), "my edit\n")
         self.assertEqual((self.s.root / "notes.txt").read_text(), "untracked\n")
@@ -228,7 +228,7 @@ class Pipeline(unittest.TestCase):
         self.s.git("commit", "-qm", "plan")
         self.s.git("push", "-q", "origin", "HEAD")
         self.s.git("switch", "-q", "main")
-        self.assertEqual(driver.plan(self.p, "make it great"), 1)
+        self.assertEqual(planner.plan(self.p, "make it great"), 1)
         prompt = [c["prompt"] for c in self.calls() if "planner" in c["system"]][0]
         self.assertIn("## Ids for new tickets, in order (at most 6)\nT-004, ", prompt)
 
@@ -239,7 +239,7 @@ class Pipeline(unittest.TestCase):
         gh.chmod(0o755)
         self.config(forge='"github"')
         pushes = self.pushes()
-        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.assertEqual(planner.plan(self.p, "make it great", merge=True), 0)
         self.assertEqual(pushes, ["plan not merged"])
         self.s.git("fetch", "-q", "origin")
         self.assertNotIn("T-003", Queue(self.p).files)
@@ -247,14 +247,14 @@ class Pipeline(unittest.TestCase):
         self.assertIn("not merged", (self.p.state / "autopilot.log").read_text())
 
     def pushes(self):
-        pushes, orig = [], driver.push
-        driver.push = lambda title, *a, **k: pushes.append(title)
-        self.addCleanup(setattr, driver, "push", orig)
+        pushes, orig = [], planner.push
+        planner.push = lambda title, *a, **k: pushes.append(title)
+        self.addCleanup(setattr, planner, "push", orig)
         return pushes
 
     def test_plan_replays_onto_a_main_that_moved(self):
         os.environ["FAKE_PLAN_MOVE_MAIN"] = "1"
-        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 1)
+        self.assertEqual(planner.plan(self.p, "make it great", merge=True), 1)
         self.s.git("fetch", "-q", "origin")
         self.assertIn("T-003", Queue(self.p).files)
         self.assertIn("moved", self.s.git("log", "origin/main", "--format=%s"))
@@ -265,7 +265,7 @@ class Pipeline(unittest.TestCase):
                         "exit 0\n")
         hook.chmod(0o755)
         pushes = self.pushes()
-        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.assertEqual(planner.plan(self.p, "make it great", merge=True), 0)
         self.assertEqual(pushes, ["plan not merged"])
         self.s.git("fetch", "-q", "origin")
         self.assertNotIn("T-003", Queue(self.p).files)
@@ -277,7 +277,7 @@ class Pipeline(unittest.TestCase):
         self.p.state.mkdir(parents=True, exist_ok=True)
         with open(self.p.state / "plan.lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+            self.assertEqual(planner.plan(self.p, "make it great", merge=True), 0)
         self.assertEqual([c for c in self.calls() if "planner" in c["system"]], [])
 
 

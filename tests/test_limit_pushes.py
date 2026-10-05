@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver, runner  # noqa: E402
+from windvane import driver, runner, worktree  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
 from test_hangs import alive  # noqa: E402
@@ -81,7 +81,7 @@ class SetupText(unittest.TestCase):
         self.assertEqual(len(quoted), 60)
         self.assertTrue(quoted.endswith("…"))
         self.assertTrue(long.startswith(quoted[:-1]))
-        self.assertEqual(driver.clip("make", 60), "make")
+        self.assertEqual(worktree.clip("make", 60), "make")
 
     def test_a_second_slots_setup_cut_short_mid_run_lets_the_first_finish(self):
         pid = self.s.tmp / "setup.pid"

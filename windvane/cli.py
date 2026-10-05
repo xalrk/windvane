@@ -16,7 +16,8 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import doctor, driver, install, jobs, net, phone, preflight, questions, watch
+from . import doctor, driver, install, jobs, net, phone, planner, preflight, questions, watch
+from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, exe, find, toplevel
 from .queue import Queue
@@ -230,7 +231,7 @@ def fetch_for_held(p):
     """One quick, silent fetch when a held change was pushed by hand, so one merged on the remote meanwhile (squashed
     too: `held_here`) drops off `status` without waiting for a run; no network otherwise, and a failed fetch leaves
     the local view as it was."""
-    if any(on for *_, on in driver.held_now(p)):
+    if any(on for *_, on in held_mod.held_now(p)):
         net.call(["git", "fetch", "-q", p.remote], p.main_root(), FETCH_S, {**os.environ, "GIT_TERMINAL_PROMPT": "0"})
 
 
@@ -241,11 +242,11 @@ HELD_LOG = re.compile(r"kept only locally on |the local branch |: still not push
 def held_count(p):
     """The phone's held-back count (pushed by hand but not merged counts too: it waits on the user) and how long the
     oldest has waited; "" when none waits."""
-    held = driver.held_now(p)
+    held = held_mod.held_now(p)
     if not held:
         return ""
     n, pushed = len(held), sum(bool(on) for *_, on in held)
-    waited = driver.age(time.time() - min(at for _, _, at, _ in held))
+    waited = held_mod.age(time.time() - min(at for _, _, at, _ in held))
     state = ("not pushed" if not pushed else "pushed, not merged" if pushed == n
              else f"({n - pushed} not pushed, {pushed} pushed, not merged)")
     return f"{n} held-back change{'s' * (n > 1)} {state}, " + (f"oldest {waited}" if n > 1 else f"for {waited}")
@@ -254,13 +255,13 @@ def held_count(p):
 def held_text(p, subject=60):
     """The held branches' lines (commit subjects cut at `subject`, or whole) and, after them, what happens next: a run
     retries only those not pushed, the user merges those pushed by hand; nothing when none waits."""
-    now = driver.held_now(p)
+    now = held_mod.held_now(p)
     if not now:
         return []
     pushed = sum(bool(on) for *_, on in now)
     after = ("each run's start tries these again" if not pushed else "listed until main has them" if pushed == len(now)
              else "each run's start tries those not pushed again; the others are listed until main has them")
-    return driver.held_lines(p, now, subject) + [f"  ({after})"]
+    return held_mod.held_lines(p, now, subject) + [f"  ({after})"]
 
 
 def cmd_overview(a, p):
@@ -420,12 +421,12 @@ def cmd_critic(a, p):
 def cmd_plan(a, p):
     need(p)
     goal = " ".join(a.goal) or p.cfg["goal"]
-    driver.push_held(p)
+    held_mod.push_held(p)
     try:
-        n = driver.plan(p, goal, not a.no_followups, Usage(p), None, merge=a.merge, max_new=a.max, busy_raises=True)
-    except driver.PlanBusy as e:
+        n = planner.plan(p, goal, not a.no_followups, Usage(p), None, merge=a.merge, max_new=a.max, busy_raises=True)
+    except planner.PlanBusy as e:
         raise SystemExit(f"windvane: {e}; try again when it's done")
-    print(f"{driver.n_tickets(n)} planned" + ("" if n else "; see the log: windvane status"))
+    print(f"{held_mod.n_tickets(n)} planned" + ("" if n else "; see the log: windvane status"))
 
 
 def cmd_new(a, p):

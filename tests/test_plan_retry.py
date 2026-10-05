@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import driver  # noqa: E402
+from windvane import held, net, planner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_plan_pushes import AUTH  # noqa: E402
@@ -37,11 +37,11 @@ class Base(unittest.TestCase):
         self.s.publish()
         self.p = Project(self.s.root)
         self.pushes, self.git_pushes = [], 0
-        orig = driver.push
-        driver.push = lambda title, msg="", *a, **k: self.pushes.append((title, msg))
-        self.addCleanup(setattr, driver, "push", orig)
+        for module in (held, planner):
+            self.addCleanup(setattr, module, "push", module.push)
+            module.push = lambda title, msg="", *a, **k: self.pushes.append((title, msg))
         self.refusal = None
-        orig_git = driver.net.git
+        orig_git = net.git
 
         def fake(cwd, *args):
             if args[0] == "push":
@@ -49,8 +49,8 @@ class Base(unittest.TestCase):
                 if self.refusal:
                     return subprocess.CompletedProcess(["git", *args], 128, "", self.refusal)
             return orig_git(cwd, *args)
-        driver.net.git = fake
-        self.addCleanup(setattr, driver.net, "git", orig_git)
+        net.git = fake
+        self.addCleanup(setattr, net, "git", orig_git)
 
     def log(self):
         return (self.p.state / "autopilot.log").read_text()
@@ -77,7 +77,7 @@ class Base(unittest.TestCase):
 class HeldPlans(Base):
     def test_a_plan_held_by_the_network_is_pushed_by_the_next_run(self):
         self.refusal = NETWORK
-        self.assertEqual(driver.plan(self.p, "make it great"), 0)
+        self.assertEqual(planner.plan(self.p, "make it great"), 0)
         branch = self.local()
         self.assertTrue(branch)
         self.assertEqual(self.remote(), "")
@@ -93,11 +93,11 @@ class HeldPlans(Base):
         hook = self.s.remote / "hooks" / "pre-receive"
         hook.write_text(REFUSE_PLAN)
         hook.chmod(0o755)
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         branch, told = self.local(), len(self.pushes)
         self.assertEqual(self.git_pushes, 2)  # the plan's own push tries twice
         for run in (1, 2):  # two runs' starts
-            self.assertEqual(driver.push_held(self.p), 0)
+            self.assertEqual(held.push_held(self.p), 0)
             self.assertEqual(self.git_pushes, 2 + run)
         self.assertEqual(len(self.pushes), told)  # no phone push for a refusal the user already heard
         self.assertEqual(self.local(), branch)
@@ -107,10 +107,10 @@ class HeldPlans(Base):
 
     def test_a_held_merge_plan_is_landed(self):
         self.refusal = NETWORK
-        driver.plan(self.p, "make it great", merge=True)
+        planner.plan(self.p, "make it great", merge=True)
         branch = self.local()
         self.refusal = None
-        self.assertEqual(driver.push_held(self.p), 1)
+        self.assertEqual(held.push_held(self.p), 1)
         self.s.git("fetch", "-q", "origin")
         self.assertIn(".windvane/tickets/T-002.md", self.s.git("ls-tree", "-r", "--name-only", "origin/main"))
         self.assertEqual(self.pushes[-1][0], "1 held-back change pushed")
@@ -120,9 +120,9 @@ class HeldPlans(Base):
     def test_a_held_plan_on_github_gets_its_pr(self):
         self.github()
         self.refusal = NETWORK
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         self.refusal = None
-        self.assertEqual(driver.push_held(self.p), 1)
+        self.assertEqual(held.push_held(self.p), 1)
         self.assertTrue([c for c in self.gh_calls() if c.startswith("pr create --head plan-")])
         self.assertIn(", pushed", self.log())
         self.assertIn("on https://github.com/o/r/pull/7, pushed.", self.pushes[-1][1])
@@ -131,17 +131,17 @@ class HeldPlans(Base):
         self.github()
         (self.s.bin / "gh").write_text("#!/bin/sh\nexit 1\n")
         self.refusal = NETWORK
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         self.refusal = None
-        self.assertEqual(driver.push_held(self.p), 1)
+        self.assertEqual(held.push_held(self.p), 1)
         self.assertRegex(self.pushes[-1][1], r"on plan-\S+, pushed; no PR opened, open one by hand\.$")
 
     def test_only_the_drivers_own_unpushed_branches(self):
         self.refusal = NETWORK
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         self.refusal = None
-        held = self.local()
-        self.s.git("push", "-q", "origin", f"{held}:refs/heads/by-hand")  # pushed by hand under another name
+        kept = self.local()
+        self.s.git("push", "-q", "origin", f"{kept}:refs/heads/by-hand")  # pushed by hand under another name
         self.s.git("switch", "-q", "-c", "plan-mine")  # the user's own branch
         self.s.write("x", "x\n")
         self.s.git("add", "-A")
@@ -153,7 +153,7 @@ class HeldPlans(Base):
         self.s.git("add", "-A")
         self.s.git("commit", "-qm", "Plan: 1 ticket (rejected)")
         self.s.git("switch", "-q", "main")
-        self.assertEqual(driver.push_held(self.p), 0)
+        self.assertEqual(held.push_held(self.p), 0)
         self.assertEqual(self.remote(), "")
         self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {})  # its note goes too
 
@@ -161,9 +161,9 @@ class HeldPlans(Base):
         self.github()
         (self.s.bin / "gh").write_text("#!/bin/sh\ncase \"$*\" in *\"pr list --head plan-\"*) echo 12;; esac\n")
         self.refusal = NETWORK
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         self.refusal = None  # the user pushed it, closed its PR #12 and deleted the branch
-        self.assertEqual(driver.push_held(self.p), 0)
+        self.assertEqual(held.push_held(self.p), 0)
         self.assertEqual(self.remote(), "")
 
 
@@ -174,7 +174,7 @@ class Refusals(Base):
                              (NETWORK, "the next run pushes it again"), (OTHER, "push failed; see the windvane log")):
             with self.subTest(step=step):
                 self.refusal = stderr
-                self.assertEqual(driver.plan(self.p, "make it great"), 0)
+                self.assertEqual(planner.plan(self.p, "make it great"), 0)
                 self.assertIn(f"{step[1:]}.\n1 ticket kept only locally on ", self.pushes[-1][1])  # capitalized
                 self.assertEqual("by hand" in self.pushes[-1][1], stderr == HOOK)  # only a hook needs a hand push
         self.assertIn("src refspec x does not match any", self.log())  # git's own words stay in the log
@@ -182,7 +182,7 @@ class Refusals(Base):
     def test_on_github_the_login_step_is_gh(self):
         self.github()
         self.refusal = AUTH
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         self.assertTrue(self.pushes[-1][1].startswith("Login refused; run `gh auth login` and the next run pushes "
                                                       "it.\n"))
 
@@ -196,8 +196,8 @@ class ClosedPlans(Base):
         self.s.git("commit", "-qm", "Plan: 1 ticket (old)")
         self.s.git("push", "-q", "origin", "HEAD")
         self.s.git("switch", "-q", "main")
-        self.assertEqual(driver.plan(self.p, "make it great"), 1)
-        self.assertEqual(driver.plan(self.p, "make it greater"), 1)
+        self.assertEqual(planner.plan(self.p, "make it great"), 1)
+        self.assertEqual(planner.plan(self.p, "make it greater"), 1)
         old = [c for c in self.gh_calls() if "--head plan-20250101-000000 " in c]
         self.assertEqual(len(old), 1)
         self.assertEqual(json.loads((self.p.state / "closed_plans.json").read_text()), ["plan-20250101-000000"])

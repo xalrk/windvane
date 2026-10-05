@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver  # noqa: E402
+from windvane import phone  # noqa: E402
 from test_set_aside import Base  # noqa: E402
 
 HEAD, TAIL = "Hit its max turns while working on " + "a very long ticket name " * 2, ", so split the ticket and trim it."
@@ -17,9 +17,9 @@ HEAD, TAIL = "Hit its max turns while working on " + "a very long ticket name " 
 
 class Overflow(unittest.TestCase):
     def test_a_head_and_tail_past_the_lock_screen_log_one_line_and_still_return_the_text(self):
-        self.assertGreater(len(HEAD + TAIL), driver.LOCK_SCREEN)
+        self.assertGreater(len(HEAD + TAIL), phone.LOCK_SCREEN)
         lines = []
-        out = driver.lead(HEAD, "x", TAIL, log=lines.append)
+        out = phone.lead(HEAD, "x", TAIL, log=lines.append)
         self.assertTrue(out.startswith(HEAD), out)
         self.assertIn(TAIL, out)
         self.assertEqual(len(lines), 1, lines)
@@ -28,12 +28,12 @@ class Overflow(unittest.TestCase):
     def test_without_a_hook_the_line_goes_to_stderr(self):
         err = io.StringIO()
         with redirect_stderr(err):
-            driver.lead(HEAD, "x", TAIL)
+            phone.lead(HEAD, "x", TAIL)
         self.assertEqual(len(err.getvalue().splitlines()), 1)
 
     def test_a_line_that_fits_logs_nothing(self):
         lines = []
-        driver.lead("Hit ", "max turns " * 20, ". Branch kept.", log=lines.append)
+        phone.lead("Hit ", "max turns " * 20, ". Branch kept.", log=lines.append)
         self.assertEqual(lines, [])
 
 
@@ -46,7 +46,7 @@ class SetAsideFix(Base):
         [(_, msg)] = self.aside()
         first, *rest = msg.split("\n")
         self.assertEqual(first, "Sessions died 4×: prompt is too long. Split the ticket, or trim what it reads.")
-        self.assertLessEqual(len(first), driver.LOCK_SCREEN)
+        self.assertLessEqual(len(first), phone.LOCK_SCREEN)
         self.assertIn(self.ERROR, "\n".join(rest))
         self.assertIn("Branch kept, run goes on.", "\n".join(rest))
 

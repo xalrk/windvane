@@ -6,6 +6,8 @@ windvane is an autopilot for Claude Code: a Python driver (`windvane/`) that run
 ## Read first
 `README.md` (How it works), `docs/concepts.md` and `docs/safety.md`, then only the modules your ticket touches.
 `windvane/driver.py` is the pipeline; `prompts/*.md` are the sessions' rules.
+Held-back changes (pushing, holding and landing the driver's own branches) live in `windvane/held.py`, the plan run
+in `windvane/planner.py`, the driver's worktrees in `windvane/worktree.py`.
 
 ## Hard rules
 - **Python 3.11+, standard library only.** It must run on a fresh machine with nothing but git, python3 and claude

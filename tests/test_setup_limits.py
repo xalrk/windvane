@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import driver  # noqa: E402
+from windvane import driver, phone, worktree  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -95,7 +95,7 @@ class SetupLimits(unittest.TestCase):
         self.assertEqual([t for t, _ in self.pushes], ["windvane couldn't start"])
         msg = self.pushes[0][1]
         self.assertTrue(msg.startswith("Setup timed out after 0.02 min; " + FIX), msg)  # the fix on the lock screen
-        self.assertLessEqual(len(msg.splitlines()[0]), driver.LOCK_SCREEN, msg)
+        self.assertLessEqual(len(msg.splitlines()[0]), phone.LOCK_SCREEN, msg)
         self.assertIn("\n…installing (it ran `echo installing;", msg)
         self.assertEqual(msg.count(FIX), 1)
         self.assertNotIn("Why:", msg)
@@ -113,8 +113,8 @@ class SetupLimits(unittest.TestCase):
 
     def test_short_path(self):
         p = Project(self.s.root)
-        self.assertEqual(driver.short_path(p, p.state / "work-1"), "work-1")
-        self.assertEqual(driver.short_path(p, Path("/elsewhere/deep/proj-ci")), "deep/proj-ci")
+        self.assertEqual(worktree.short_path(p, p.state / "work-1"), "work-1")
+        self.assertEqual(worktree.short_path(p, Path("/elsewhere/deep/proj-ci")), "deep/proj-ci")
 
 
 class PeriodicSetupMinutes(unittest.TestCase):

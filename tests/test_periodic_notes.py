@@ -6,7 +6,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import driver  # noqa: E402
+from windvane import driver, held  # noqa: E402
 from windvane.periodic import cut_lines  # noqa: E402
 from test_periodic_more import TRIAGE, Base  # noqa: E402
 
@@ -58,7 +58,7 @@ class Notes(Base):
         self.assertEqual(reply[-2:], ["… (125 lines cut)", "PERIODIC: wrote a ticket"])
 
     def test_a_notes_only_round_that_does_not_merge_says_so(self):
-        with mock.patch.object(driver, "land", return_value=(False, "periodic-x")), \
+        with mock.patch.object(held, "land", return_value=(False, "periodic-x")), \
                 mock.patch("windvane.periodic.push") as push:
             self.round("APPEND_NOTE=T-001")
         self.assertEqual(push.call_args[0][:2], ("periodic change not merged",
@@ -106,7 +106,7 @@ class Notes(Base):
         net = mock.MagicMock()
         net.sh.return_value = "https://github.com/o/r/pull/5"
         net.call.return_value.returncode = net.git.return_value.returncode = 0
-        with mock.patch.object(driver, "net", net):
+        with mock.patch.object(driver, "net", net), mock.patch.object(held, "net", net):
             self.pilot().periodic(self.p.periodic["triage"])
         create = next(c.args for c in net.sh.call_args_list if c.args[1:4] == ("gh", "pr", "create"))
         body = create[create.index("--body") + 1]

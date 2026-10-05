@@ -12,11 +12,14 @@ import sys
 from datetime import datetime, timedelta
 
 from .config import slots
-from .driver import REVIEW_DENY, clean_detach, ensure_worktree, land, pending_ids, rules
+from .driver import REVIEW_DENY
+from .held import land
+from .planner import pending_ids
 from .questions import BLOCK_RE, OPT_RE, blocks, give_answer, part
 from .queue import Queue
-from .runner import run_claude
+from .runner import rules, run_claude
 from .util import git, gout, load_json, log, now, read_jsonl, save_json
+from .worktree import clean_detach, ensure_worktree
 
 PREFLIGHT_RE = re.compile(r"^PREFLIGHT: (\d+|NONE)", re.M)
 # Read, Grep and Glob only: it runs in the user's checkout, and its prompt holds every text it needs.
