@@ -124,7 +124,8 @@ class DoctorOnWorkflows(unittest.TestCase):
         self.assertEqual(code, 0, out)  # a warning, not a gap: windvane still runs
         # lint 1 + test 2 x 3 + 1 include = 8 jobs a run; a PR and a merge push = 16 a ticket.
         self.assertRegex(out, r"WARNING +\.github/workflows/test\.yml runs on push and pull_request: about 16 hosted "
-                              r"jobs a ticket \(8 a run, for its PR and again for its merge\)  -> keep only "
+                              r"jobs a ticket \(8 a run, for its PR and again "
+                              r"for its merge\)  -> keep only "
                               r"`on: workflow_dispatch` and run it by hand \(`gh workflow run test\.yml`\)")
 
     def test_inline_triggers_and_a_push_only_workflow(self):
@@ -132,6 +133,10 @@ class DoctorOnWorkflows(unittest.TestCase):
                                 "b.yml": "on: pull_request_target\njobs:\n  x:\n    runs-on: y\n"})
         self.assertRegex(out, r"WARNING +\.github/workflows/a\.yaml runs on push: about 1 hosted jobs a ticket")
         self.assertRegex(out, r"WARNING +\.github/workflows/b\.yml runs on pull_request_target: about 1 ")
+
+    def test_jobs_it_cant_count_are_not_called_zero(self):
+        out, _ = self.doctor(**{"c.yml": "on: push\njobs: {build: {runs-on: x}}\n"})
+        self.assertIn("c.yml runs on push: hosted jobs for each ticket's PR and again for its merge (how many, ", out)
 
     def test_a_manual_only_workflow_and_this_repos_own_are_quiet(self):
         out, _ = self.doctor(**{"test.yml": ON_PUSH_AND_PR.replace(

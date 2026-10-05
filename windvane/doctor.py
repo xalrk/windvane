@@ -120,8 +120,10 @@ def ci_warnings(root):
             continue
         if triggers:
             per_ticket = jobs * (("push" in triggers) + any(t.startswith("pull_request") for t in triggers))
-            out.append((f"{f.relative_to(root)} runs on {' and '.join(triggers)}: about {per_ticket} hosted jobs a "
-                        f"ticket ({jobs} a run, for its PR and again for its merge)",
+            jobs_said = (f"about {per_ticket} hosted jobs a ticket ({jobs} a run, for its PR and again for its merge)"
+                         if jobs else "hosted jobs for each ticket's PR and again for its merge (how many, doctor "
+                         "can't read from this YAML)")  # flow-style `jobs: {...}`, say
+            out.append((f"{f.relative_to(root)} runs on {' and '.join(triggers)}: {jobs_said}",
                         f"keep only `on: workflow_dispatch` and run it by hand (`gh workflow run {f.name}`); "
                         "test every version on this machine in the check instead"))
     return out
