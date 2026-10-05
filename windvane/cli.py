@@ -436,27 +436,49 @@ def cmd_stats(a, p):
     if getattr(a, "periodic", False):
         return periodic_stats(rows, a.days)
     swept = sum(r.get("groups") or 0 for r in rows if r.get("event") == "swept")
-    checks = [r for r in rows if r.get("event") == "check"]
+    checks = [r for r in rows if r.get("event") in ("check", "check-start")]
     rows = [r for r in rows if not r.get("event")]  # a periodic score, an outcome, a sweep, a check: not a session
     if not rows:
         print("no runs yet")
-        check_stats(checks)
+        check_stats(checks, a.by)
         orphans(swept)
     else:
         session_stats(a, p, rows, swept, checks)
 
 
-def check_stats(checks):
-    """What the check costs: its runs and minutes, per ticket checked, and the failed and reused ones (only when
-    there are some). Not in the table: a check spends time, not tokens."""
+def check_runs(checks):
+    """The checks that ran (a reused pass didn't): the end rows, plus a start row no end row matches (same ticket
+    and start: the check was killed, so it has no minutes), counted as cut off like an end row with `finished:
+    false`."""
+    ends = [r for r in checks if r.get("event") == "check"]
+    ended = {(r["ticket"], r.get("start")) for r in ends}
+    killed = [{**r, "minutes": 0, "finished": False} for r in checks
+              if r.get("event") == "check-start" and (r["ticket"], r.get("start")) not in ended]
+    return [r for r in ends if not r.get("reused")] + killed, len(ends) - sum(not r.get("reused") for r in ends)
+
+
+def check_stats(checks, by="role"):
+    """What the check costs: its runs and minutes, per ticket that ran one, and the failed, cut off and reused ones
+    (only when there are some); by ticket, the ticket whose checks took longest. Not in the table: a check spends
+    time, not tokens."""
     if not checks:
         return
-    ran = [r for r in checks if not r.get("reused")]
+    ran, reused = check_runs(checks)
     mins = sum(r.get("minutes") or 0 for r in ran)
     m = lambda x: f"{x:.0f}" if x >= 10 else f"{x:.1f}"
-    failed, reused = sum(not r.get("passed") for r in ran), len(checks) - len(ran)
-    print(f"checks: {plural(len(ran), 'run')}, {m(mins)} min ({mins / len({r['ticket'] for r in checks}):.1f} min a "
-          f"ticket)" + (f", {failed} failed" if failed else "") + (f", {reused} reused a pass" if reused else ""))
+    cut = sum(r.get("finished") is False for r in ran)
+    failed = sum(not r.get("passed") for r in ran) - cut
+    per = {}
+    for r in ran:
+        t = per.setdefault(r["ticket"], [0, 0.0])
+        t[0] += 1
+        t[1] += r.get("minutes") or 0
+    print(f"checks: {plural(len(ran), 'run')}, {m(mins)} min" + (f" ({mins / len(per):.1f} min a ticket checked)"
+          if per else "") + (f", {failed} failed" if failed else "") + (f", {cut} cut off" if cut else "")
+          + (f", {reused} reused a pass" if reused else ""))
+    if by == "ticket" and per:
+        top = max(per, key=lambda t: (per[t][1], per[t][0]))
+        print(f"most check time: {top}, {plural(per[top][0], 'run')}, {m(per[top][1])} min")
 
 
 def orphans(swept):
@@ -492,7 +514,7 @@ def session_stats(a, p, rows, swept=0, checks=()):
     stats_table(a.by, agg, outcome, wide)
     if outcome:
         stats_per_merged(agg, outcome)
-    check_stats(checks)
+    check_stats(checks, a.by)
     died, killed = (sum(g[f] for g in agg.values()) for f in ("died", "killed"))
     if died or killed:
         lost, total = sum(g["lost_w"] for g in agg.values()), sum(g["w"] for g in agg.values())

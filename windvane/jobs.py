@@ -24,13 +24,12 @@ def tree_key(p, cwd):
     return hashlib.sha1(f"{tree}\n{p.cfg['check']}".encode()).hexdigest() if tree else None
 
 
-def ledger(p, ticket, mins, passed, reused=False):
+def ledger(p, ticket, row, event="check"):
     """A check run for a ticket (the driver's, or a session's `windvane check`) as a ledger row, so `stats` can say
     what checks cost; one at the desk, for no ticket, isn't counted."""
     ticket = ticket or os.environ.get(TICKET)
     if ticket:
-        append_jsonl(p.state / "ledger.jsonl", {"event": "check", "ticket": ticket, "minutes": round(mins, 2),
-                                                "passed": passed, "reused": reused})
+        append_jsonl(p.state / "ledger.jsonl", {"event": event, "ticket": ticket, **row})
 
 
 def check(p, cwd, quiet=False, ticket=None):
@@ -41,27 +40,41 @@ def check(p, cwd, quiet=False, ticket=None):
     passes = p.state / "passes"
     key = tree_key(p, cwd)
     if key and (passes / key).exists():
-        ledger(p, ticket, 0, True, reused=True)
+        ledger(p, ticket, {"minutes": 0, "passed": True, "reused": True})
         return True, f"CHECK PASSED (reused the pass from {(passes / key).read_text().strip()} for this tree)", None
     logs = p.state / "checks"
     logs.mkdir(parents=True, exist_ok=True)
     log = logs / f"{now():%Y%m%d-%H%M%S}.log"
-    start = time.time()
-    with log.open("w") as f:
-        if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
-            code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
-                                   "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd, stdout=f,
-                                  stderr=subprocess.STDOUT, env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])}).returncode
-        else:
-            code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT).returncode
-    mins = (time.time() - start) / 60
-    ledger(p, ticket, mins, code == 0)
+    code, mins = run_logged(p, ticket, cmd, cwd, log)
     if code == 0:
         if key and tree_key(p, cwd) == key:
             passes.mkdir(parents=True, exist_ok=True)
             (passes / key).write_text(f"{now():%Y-%m-%d %H:%M} ({gout(cwd, 'rev-parse', '--short', 'HEAD')})")
         return True, f"CHECK PASSED in {mins:.1f} min" + ("" if key else " (uncommitted changes: not recorded)"), log
     return False, f"CHECK FAILED (exit {code}) in {mins:.1f} min; log {log}", log
+
+
+def run_logged(p, ticket, cmd, cwd, log):
+    """Run the check into `log`, with a ledger row on each side, so a check that's cut off still counts: a
+    `check-start` row first (all a SIGKILL or a killed driver leaves; `stats` calls it cut off), then the end row
+    with the same `start`, written on the way out even for an exception or Ctrl-C (`finished: false`, the minutes
+    so far). Both rows, because only the start row survives a kill and only the end row knows the minutes."""
+    start = time.time()
+    ledger(p, ticket, {"start": round(start, 3)}, event="check-start")
+    code = None
+    try:
+        with log.open("w") as f:
+            if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
+                code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
+                                       "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd, stdout=f,
+                                      stderr=subprocess.STDOUT, env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])}).returncode
+            else:
+                code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT).returncode
+    finally:
+        mins = (time.time() - start) / 60
+        ledger(p, ticket, {"minutes": round(mins, 2), "passed": code == 0, "reused": False, "start": round(start, 3),
+                           **({} if code is not None else {"finished": False})})
+    return code, mins
 
 
 def tail(path, n=40):

@@ -90,7 +90,7 @@ class CheckStats(unittest.TestCase):
     def test_the_checks_line_sums_runs_minutes_failures_and_reuses(self):
         self.assertNotIn("checks:", self.cli("stats"))
         self.add_checks()
-        line = "checks: 3 runs, 15 min (7.5 min a ticket), 1 failed, 1 reused a pass\n"
+        line = "checks: 3 runs, 15 min (7.5 min a ticket checked), 1 failed, 1 reused a pass\n"
         self.assertIn(line, self.cli("stats"))
         self.assertIn(line, self.cli("stats", "--by", "ticket"))
 
@@ -98,7 +98,8 @@ class CheckStats(unittest.TestCase):
         before = self.cli("stats", "--by", "ticket")
         self.add_checks()
         after = self.cli("stats", "--by", "ticket")
-        self.assertEqual([l for l in after.splitlines() if not l.startswith("checks:")], before.splitlines())
+        self.assertEqual([l for l in after.splitlines() if not l.startswith(("checks:", "most check time:"))],
+                         before.splitlines())
 
     def test_a_zero_died_killed_cell_is_a_dot(self):
         rows = {l.split()[0]: l.split() for l in self.cli("stats", "--by", "ticket").splitlines()[1:]
