@@ -1,12 +1,24 @@
 """T-081: a `---` rule is sized from the blocks just above and below it, not from the whole message, so a rule
 beside a narrow table matches the table even when other prose fills the terminal."""
+import importlib.util
+import json
+import subprocess
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from windvane import watch  # noqa: E402
+
+SPEC = importlib.util.spec_from_file_location("watch_sweep", ROOT / "tools" / "watch-sweep.py")
+sweep = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(sweep)
 
 PROSE = "word " * 60  # wraps at the full width
 TABLE = "| Name | Value |\n|---|---|\n| " + "a" * 32 + " | 1 |"  # 40 columns drawn
@@ -55,6 +67,39 @@ class RuleNeighbours(unittest.TestCase):
         for text in (PROSE + "\n\n---\n\n" + TABLE, TABLE + "\n\n---\n\n" + PROSE):
             rules = [line for line in watch.markdown(text, False) if line and set(line) == {"─"}]
             self.assertEqual([len(r) for r in rules], [40])
+
+
+class SweepSynthetic(unittest.TestCase):
+    def run_sweep(self, *args):
+        state = Path(tempfile.mkdtemp())
+        (state / "runs").mkdir()
+        event = {"type": "assistant", "message": {"content": [{"type": "text", "text": "fine"}]}}
+        (state / "runs" / "20261005-000000-T-001.jsonl").write_text(json.dumps(event) + "\n")
+        return subprocess.run([sys.executable, str(ROOT / "tools" / "watch-sweep.py"), str(state), *args],
+                              capture_output=True, text=True)
+
+    def test_the_synthetic_messages_are_clean_at_every_width(self):
+        r = self.run_sweep()
+        self.assertEqual((r.returncode, r.stdout), (0, "1 messages + 4 synthetic at widths 60,80,120: clean\n"))
+        self.assertEqual(self.run_sweep("--no-synthetic").stdout, "1 messages at widths 60,80,120: clean\n")
+
+    def test_a_rule_sized_from_the_whole_message_is_named_by_its_synthetic_number(self):
+        whole = lambda out, r, tables, cols: min(cols, max(watch.width(watch.ANSI.sub("", line)) for b in out if b
+                                                          for line, _ in b))
+        state = Path(tempfile.mkdtemp())
+        (state / "runs").mkdir()
+        (state / "runs" / "x.jsonl").write_text(json.dumps(
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "fine"}]}}) + "\n")
+        out = StringIO()
+        with mock.patch.object(watch, "rule_width", whole), redirect_stdout(out):
+            self.assertEqual(sweep.main([str(state), "--widths", "120"]), 1)
+        self.assertTrue(out.getvalue().startswith("synthetic:1 @120: rule past text (116)\n"), out.getvalue())
+
+    def test_a_rule_wider_than_both_neighbours_is_a_finding(self):
+        lines = ["wide " * 10, "", "short", "", "─" * 30, "", "tiny"]
+        self.assertEqual(sweep.rule_past_text(lines), [("rule past text (30)", "─" * 30)])
+        self.assertEqual(sweep.rule_past_text(["─" * 40]), [], "nothing beside it")
+        self.assertEqual(sweep.rule_past_text(["ab │ c", "───┼──", "ab │ c"]), [])
 
 
 if __name__ == "__main__":

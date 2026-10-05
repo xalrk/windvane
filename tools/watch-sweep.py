@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Render every assistant message in a state dir's session logs the way `windvane watch` does, at a few widths, and
-report what a renderer change broke: lines wider than the width, crashes, and Markdown markers left in the text.
-Each message is checked whole and as `watch` prints it, clipped; a finding only the clip has is marked `clipped`.
+report what a renderer change broke: lines wider than the width, crashes, Markdown markers left in the text, and a
+`---` rule wider than every other line. Each message is checked whole and as `watch` prints it, clipped; a finding
+only the clip has is marked `clipped`. After the logs come a few built-in messages (`synthetic:<n>`) with what the
+logs may lack, such as rules beside tables; --no-synthetic leaves them out.
 
-  watch-sweep.py STATE_DIR [--widths 60,80,120] [--show]
+  watch-sweep.py STATE_DIR [--widths 60,80,120] [--show] [--no-synthetic]
 
 It reads `STATE_DIR/runs/*.jsonl` and never runs `claude`. Findings are printed as `file:line`, the width and the
 kind; the rendered line itself only with --show, since it may hold paths or names. Code (spans and fenced blocks)
@@ -28,6 +30,16 @@ FENCED = "\033[2m  │ \033[0m"  # how a line inside a fenced block starts, with
 MARKERS = [("bold **", re.compile(r"\*\*")), ("strike ~~", re.compile(r"~~")), ("backtick", re.compile(r"`")),
            ("link ](", re.compile(r"\]\(")), ("heading #", re.compile(r"^\s{0,3}#{1,6} ")),
            ("table rule", re.compile(r"^\s*\|?\s*:?-{3,}:?\s*\|"))]
+PROSE = "Some **bold** prose with `code` that runs on long enough to wrap at every width the sweep tries. " * 2
+NARROW = "| Name | Value |\n|---|---|\n| alpha | 1 |\n| beta | 22 |"
+WIDE = "\n".join(["| " + " | ".join(f"Column {k}" for k in range(8)) + " |", "|" + "---|" * 8]
+                 + ["| " + " | ".join(f"row {r} cell {k}" for k in range(8)) + " |" for r in range(3)])
+SYNTHETIC = [  # rules beside what they're sized from; the session logs had none
+    PROSE + "\n\nIn short:\n\n---\n\n" + NARROW + "\n\n---\n\n" + PROSE,
+    NARROW + "\n\n---\n\n" + NARROW.replace("alpha", "a much longer name"),
+    WIDE + "\n\n---\n\n" + PROSE,
+    "---\n\n" + PROSE + "\n\n" + NARROW + "\n\n---",
+]
 
 
 def messages(state):
@@ -55,7 +67,7 @@ def check(text, cols):
             clipped = watch.clip_rendered(parts, watch.TEXT_LINES, color).split("\n")
         except Exception:
             return [("crash", traceback.format_exc().strip().splitlines()[-1])]
-        seen = problems(whole, color, cols)
+        seen = problems(whole, color, cols) + rule_past_text(whole)
         found += seen + [("clipped " + kind, line) for kind, line in problems(clipped, color, cols) if (kind, line)
                          not in seen]
     return list(dict.fromkeys(found))  # once each, though both colourings may find it
@@ -74,26 +86,51 @@ def problems(lines, color, cols):
     return found
 
 
+def rule_past_text(lines):
+    """A finding for each line of nothing but ─ (a `---` rule, or a table's or records' own) wider than every line
+    beside it (the block just above it and just below, past any blank lines): it runs on past what it parts."""
+    plain = [ANSI.sub("", line) for line in lines]
+    found = []
+    for i, p in enumerate(plain):
+        if not p or set(p) != {"─"}:
+            continue
+        near = []
+        for step in (-1, 1):
+            j = i + step
+            while 0 <= j < len(plain) and not plain[j]:
+                j += step
+            while 0 <= j < len(plain) and plain[j]:
+                near.append(watch.width(plain[j]))
+                j += step
+        if near and watch.width(p) > max(near):
+            found.append((f"rule past text ({watch.width(p)})", p))
+    return found
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("state", type=Path)
     ap.add_argument("--widths", default="60,80,120")
     ap.add_argument("--show", action="store_true", help="print the offending rendered line too")
+    ap.add_argument("--synthetic", action=argparse.BooleanOptionalAction, default=True,
+                    help="check the built-in messages too (default: on)")
     a = ap.parse_args(argv)
     widths = [int(w) for w in a.widths.split(",")]
     msgs = list(messages(a.state))
     if not msgs:
         print(f"no assistant messages in {a.state / 'runs'}")
         return 2
+    extra = [(f"synthetic:{n}", text) for n, text in enumerate(SYNTHETIC, 1)] if a.synthetic else []
     counts = {}
-    for place, text in msgs:
+    for place, text in msgs + extra:
         for cols in widths:
             for kind, line in check(text, cols):
                 key = kind.split(" (")[0]
                 counts[key] = counts.get(key, 0) + 1
                 print(f"{place} @{cols}: {kind}" + (f"\n    {line}" if a.show else ""))
     summary = ", ".join(f"{n} {k}" for k, n in sorted(counts.items())) or "clean"
-    print(f"{len(msgs)} messages at widths {','.join(map(str, widths))}: {summary}")
+    more = f" + {len(extra)} synthetic" if extra else ""
+    print(f"{len(msgs)} messages{more} at widths {','.join(map(str, widths))}: {summary}")
     return 1 if counts else 0
 
 
