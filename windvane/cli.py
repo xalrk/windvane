@@ -19,7 +19,7 @@ from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, exe, find, toplevel
 from .queue import Queue
-from .runner import Usage, inherited_stop
+from .runner import Usage, inherited_stop, plain_error
 from .stats import cmd_stats, shared_line  # cmd_stats: main runs `stats` by its name
 from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 
@@ -379,7 +379,7 @@ def critic_retry(p, sleep=time.sleep):
         if len(waits) >= p.ap["retries"] or sum(waits) + wait > CRITIC_WAIT:
             return False
         waits.append(wait)
-        print(f"The critic session died ({error}); retry {len(waits)} in {wait:g} min.", flush=True)
+        print(f"The critic session died ({plain_error(error)}); retry {len(waits)} in {wait:g} min.", flush=True)
         sleep(wait * 60)
         return True
     return retry

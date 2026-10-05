@@ -134,7 +134,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(self.roles(), ["worker"] * 3 + ["review", "worker", "review"])
         ends = [(r["end"], r["error"]) for r in map(json.loads, (self.p.state / "ledger.jsonl").read_text().splitlines())
                 if not r.get("event")]
-        self.assertEqual(ends[0], ("error", "API Error: 529 Overloaded"))
+        self.assertEqual(ends[0], ("error", 'API Error: 529 {"type":"overloaded_error","message":"Overloaded"}'))  # whole
         self.assertEqual(ends[1], ("no result", "no result event (exit 1): Error: socket hang up"))
         self.assertEqual(ends[2], ("ok", None))
 
@@ -147,7 +147,7 @@ class Pipeline(unittest.TestCase):
     def test_sessions_that_keep_dying_stop_the_run_without_failing_tickets(self):
         pilot = self.pilot("error*")
         pilot.run(now() + timedelta(hours=1))
-        self.assertEqual(pilot.stop_reason, "4 sessions in a row died (API Error: 529 Overloaded)")
+        self.assertEqual(pilot.stop_reason, "4 sessions in a row died (API Error 529: Overloaded)")
         self.assertEqual((pilot.merged, pilot.failed), ([], []))
         self.assertEqual(self.roles(), ["worker"] * 4)
         self.assertEqual(self.pushes, ["windvane started", "windvane stopped"])

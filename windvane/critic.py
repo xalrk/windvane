@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import net
 from .config import HOME
-from .runner import run_claude
+from .runner import plain_error, run_claude
 from .util import append_jsonl, git, gout, load_json, read_jsonl
 
 OLD_RE = re.compile(r"CRITIC: (\d+(?:\.\d+)?)/10 (\S+) fixes=(\d+)[ \t]*(.*)")
@@ -382,9 +382,9 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
             break
     if error:
         entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": None, "fixes": 0,
-                 "revisions": n, "step": "unavailable", "gist": error[:200], "critique": ""}
+                 "revisions": n, "step": "unavailable", "gist": plain_error(error)[:200], "critique": ""}
         append_jsonl(p.state / "critic.jsonl", entry)
-        return entry, f"Critic unavailable ({error})."
+        return entry, f"Critic unavailable ({plain_error(error)})."
     v = verdict(text)
     if not v or p.norm(v[0]) != tid:
         return None, text or "The critic ended without a verdict."

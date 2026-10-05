@@ -21,6 +21,7 @@ from pathlib import Path
 from . import critic, phone
 from .questions import quiet_now
 from .queue import Queue, title as title_of
+from .runner import plain_error
 from .util import append_jsonl, git, gout, hhmm, last_match, now, push, run_limited
 
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
@@ -188,8 +189,8 @@ class Periodic:
             why = killed or error or "no PERIODIC line"
             self.log(f"{name}: no result ({why}); its changes are dropped")
             if killed != "stop now":  # the user stopped it: nothing to tell
-                what = f"it was cut off ({killed})" if killed else f"the session failed ({error[:150]})" if error \
-                    else "it ended without its PERIODIC line"
+                what = (f"it was cut off ({killed})" if killed else f"the session failed ({plain_error(error)[:150]})"
+                        if error else "it ended without its PERIODIC line")
                 self.periodic_failed(name, f"{what}; its changes were dropped.")
             return None
         self.log(f"{name}: PERIODIC: {m.group(1)}")

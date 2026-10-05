@@ -36,7 +36,7 @@ from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, note, parts, phone_answer, provisional, qkey,
                         quiet_now, section, shown, unseen)
 from .queue import Queue
-from .runner import Usage, over_caps, rules, run_claude, sweep_nested
+from .runner import Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
 from .worktree import TIMED_OUT, SetupFailed, clean_detach, ensure_worktree
 
@@ -283,17 +283,17 @@ class Pilot(Desk, Periodic):
             return False
         if aside:
             self.skip.add(tid)
-            self.aside[tid] = f"on trial: its sessions died ({error})"
+            self.aside[tid] = f"on trial: its sessions died ({plain_error(error)})"
             self.log(f"  {label}: {own[0]} sessions died ({error}); set aside while another ticket runs: if its "
                      "session dies too, the run stops")
             return False
         wait = self.p.ap["retry_minutes"] * 2 ** (max(self.crashes, own[0] if own else 0) - 1)
         if self.crashes > n:
-            self.halt = f"{self.crashes} sessions in a row died ({error})"
+            self.halt = f"{self.crashes} sessions in a row died ({plain_error(error)})"
         elif now() + timedelta(minutes=wait) >= self.end() - timedelta(minutes=self.a.min_slot):
-            self.halt = f"a session died ({error}), and there's no time left to retry it"
+            self.halt = f"a session died ({plain_error(error)}), and there's no time left to retry it"
         if self.halt:
-            self.log(f"  {label}: {self.halt}")
+            self.log(f"  {label}: {self.halt}" + (f"; the error: {error}" if plain_error(error) != error else ""))
             return False
         self.log(f"  {label} died ({error}); retry {own[0] if own else self.crashes}/{n} in {wait:g} min")
         return self.backoff(wait)
@@ -316,8 +316,9 @@ class Pilot(Desk, Periodic):
     def set_aside(self, tid, error):
         """A ticket whose own sessions keep dying while others' don't: the rest of the run goes on without it."""
         self.skip.add(tid)
-        self.aside[tid] = f"its sessions kept dying: {error}"
+        self.aside[tid] = f"its sessions kept dying: {plain_error(error)}"
         self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work")
+        error = plain_error(error)
         died = f"Sessions died {self.p.ap['retries'] + 1}×: "
         why = "Other sessions worked, so it's this ticket's doing."
         hit = next(((text, fix) for text, fix in SELF_INFLICTED if text in error.lower()), None)
@@ -847,7 +848,8 @@ class Pilot(Desk, Periodic):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
-        push(f"Failed: {self.name(tid)}", whole("", why, ". Branch kept, run goes on.", log=self.log), 4, "x")
+        push(f"Failed: {self.name(tid)}", whole("", plain_error(why), ". Branch kept, run goes on.", log=self.log), 4,
+             "x")
 
     # ---------- questions
 

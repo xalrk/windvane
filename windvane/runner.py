@@ -249,6 +249,33 @@ def settings_json(allow=(), deny=()):
 OWN_LIMITS = {"error_max_turns": "max turns", "error_max_budget_usd": "dollar budget"}  # as the phone says them
 
 
+# The API's error types and their HTTP codes, for an error body that comes with no code before it
+API_STATUS = {"invalid_request_error": 400, "authentication_error": 401, "permission_error": 403,
+              "not_found_error": 404, "request_too_large": 413, "rate_limit_error": 429, "api_error": 500,
+              "overloaded_error": 529}
+
+
+def plain_error(text):
+    """A session's error as a push or a status line says it: `API Error: 400 {"type":"error","error":{"message":
+    "…"}}`, or the same JSON with no prefix, becomes `API Error 400: …`, so the phone shows the API's message, not
+    its JSON. Any other text comes back as it is. The log keeps the whole text: only what's said is shortened."""
+    text = str(text)
+    start = text.find("{")
+    try:
+        body, end = json.JSONDecoder().raw_decode(text, start) if start >= 0 else (None, 0)
+    except ValueError:
+        return text
+    inner = body.get("error") if isinstance(body, dict) else None
+    inner = inner if isinstance(inner, dict) else body if isinstance(body, dict) else {}
+    message = inner.get("message")
+    prefix = re.search(r"API Error:?\s*(\d{3})?\s*$", text[:start])
+    if not isinstance(message, str) or not message.strip() or not (prefix or body.get("type") == "error"):
+        return text
+    code = (prefix and prefix.group(1)) or API_STATUS.get(inner.get("type"))
+    head = text[:prefix.start()] if prefix else text[:start]
+    return f"{head}API Error{f' {code}' if code else ''}: {' '.join(message.split())}{text[end:]}"
+
+
 def ending(final, code, noise):
     """How a session ended, as (kind, error text): "ok"; "error" when the result event says the API or the CLI failed
     (overload, 5xx, not logged in); "budget" when the session spent its own budget (max turns, max dollars): the
@@ -261,9 +288,8 @@ def ending(final, code, noise):
     if sub.startswith("error_max_"):
         return "budget", OWN_LIMITS.get(sub, sub.removeprefix("error_").replace("_", " "))
     if final.get("is_error") or sub != "success":
-        why = " ".join(str(final.get("result") or final.get("errors") or "").split())
-        why = re.sub(r'\{.*"message":\s*"([^"]*)".*\}', r"\1", why)[:300] or f"exit {code}"  # the API's JSON body
-        return "error", why if sub == "success" else f"{sub}: {why}"  # it reaches the phone: plain words only
+        why = " ".join(str(final.get("result") or final.get("errors") or "").split()) or f"exit {code}"
+        return "error", why if sub == "success" else f"{sub}: {why}"  # whole, for the log: plain_error() is for pushes
     return "ok", None
 
 
