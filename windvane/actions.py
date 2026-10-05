@@ -30,6 +30,7 @@ from .util import load_json, log, push, run, save_json
 
 MULT = (("self-hosted", 0), ("macos", 10), ("windows", 2))  # the first label that matches sets the rate
 FRESH_S = 600  # a total this young is reused: status and every merge would otherwise list every repo's runs again
+STALE_S = 24 * 3600  # a cached total older than this counts as unknown (so workers tag): its recounts are failing
 WAIT_S = 120  # how long a driver waits on another's count before giving up on it
 RERUN_DAYS = 31  # GitHub re-runs a run up to 30 days after it was created; one more for clock slack
 SKIP = "[skip ci]"
@@ -263,13 +264,16 @@ def fmt(n):
 
 
 def line(p, total=None):
-    """`Actions 1,983/2,000 min` for status and overview (with the count's time once it's over an hour old), or ""
+    """`Actions 1,983/2,000 min` for status and overview (with the count's time once it's over an hour old, and its
+    date when it's another day's), or ""
     with the budget off or nothing counted yet."""
     b = budget(p)
     total = total or (cached() if b else None)
     if not (b and total):
         return ""
-    when = time.strftime("%H:%M", time.localtime(total["at"]))
+    at = time.localtime(total["at"])
+    day = "" if at[:3] == time.localtime()[:3] else time.strftime("%b ", at) + f"{at.tm_mday} "
+    when = day + time.strftime("%H:%M", at)
     return f"Actions {fmt(total['used'])}/{fmt(b[0])} min" + f" (counted {when})" * (time.time() - total["at"] > 3600)
 
 
@@ -277,24 +281,45 @@ def refresh(p):
     """Recount in the background (the driver at its start, every session at its end): status, the phone and worker
     starts only read the cache, never wait. One background count per process at a time."""
     if budget(p) and counting.acquire(blocking=False):
-        threading.Thread(target=refresh_now, args=(p.root,), daemon=True).start()
+        threading.Thread(target=refresh_now, args=(p,), daemon=True).start()
 
 
 counting = threading.Lock()
 
 
-def refresh_now(cd):
+def refresh_now(p):
+    """The background count: a failure is one line in the project's log, not a thread's traceback on stderr."""
     try:
-        count(cd)
+        count(p.root)
+    except Exception as e:
+        log(p, f"actions: recount failed: {type(e).__name__}: {(str(e).splitlines() or [''])[0]}")
     finally:
         counting.release()
 
 
+def stale(total):
+    return time.time() - total["at"] > STALE_S
+
+
 def cached_over_cap(p):
-    """Whether the cache says the cap is reached, with no count: a missing total or last month's counts as reached,
-    since a `[skip ci]` too many costs nothing. The worker's commit hook makes the same call in its own words."""
+    """Whether the cache says the cap is reached, with no count: a missing total, last month's or a stale one counts
+    as reached, since a `[skip ci]` too many costs nothing while recounts that keep failing would otherwise leave an
+    old under-cap total standing all month. The worker's commit hook makes the same call in its own words."""
     total = cached()
-    return not total or total["used"] >= cap_minutes(p)
+    return not total or stale(total) or total["used"] >= cap_minutes(p)
+
+
+def say_stale(p):
+    """Once a run, when only the stale rule makes workers tag: the log says why, as nothing else would. Quiet while
+    this process's recount is in flight (a driver started after a weekend idle): it may yet succeed."""
+    total = cached()
+    if (p.name in stale_logged or counting.locked() or not total or not stale(total)
+            or total["used"] >= cap_minutes(p)):
+        return
+    stale_logged.add(p.name)
+    days = int((time.time() - total["at"]) // 86400)
+    log(p, f"Actions count is {days} day{'s' * (days != 1)} old (recounts failing: run `gh auth status`); "
+           f"workers' commits carry {SKIP}")
 
 
 def over_cap(p, cd=None):
@@ -308,6 +333,7 @@ def over_cap(p, cd=None):
 
 logged = set()  # the projects whose log has said "at the cap" in this process: once a run, not once a commit
 asked = set()  # the projects whose log has said their workers are asked for [skip ci], their hooks being their own
+stale_logged = set()  # the projects whose log has said their count is too old to trust
 
 
 def tag(p, msg, cd=None):
@@ -339,6 +365,7 @@ def worker_git(p, wd):
     wait on gh."""
     if not budget(p):
         return {}, ""
+    say_stale(p)
     if run(["git", "config", "core.hooksPath"], wd).stdout.strip():
         if not cached_over_cap(p):
             return {}, ""
@@ -351,11 +378,13 @@ def worker_git(p, wd):
             f"GIT_CONFIG_VALUE_{n}": str(skip_hooks(p, wd))}, ""
 
 
-# The hook's test of the cache: exit 0 (no tag) only when this month's cached total is under the cap.
+# The hook's test of the cache: exit 0 (no tag) only when this month's cached total is under the cap (argv 2) and
+# no older than STALE_S (argv 3).
 UNDER = ("import json, sys, time\n"
          "try:\n    c = json.load(open(sys.argv[1]))\nexcept (OSError, ValueError):\n    c = {}\n"
          "t = c.get('total') or {}\n"
          "ok = c.get('month') == time.strftime('%Y-%m', time.gmtime()) and t.get('used', 1e9) < int(sys.argv[2])\n"
+         "ok = ok and time.time() - t.get('at', 0) <= int(sys.argv[3])\n"
          "sys.exit(0 if ok else 1)\n")
 
 
@@ -374,7 +403,7 @@ def skip_hooks(p, wd):
     script = folder / "prepare-commit-msg"
     script.write_text("#!/bin/sh\n# windvane: [skip ci] while the month's GitHub Actions minutes are at the cap\n"
                       + (f'{shlex.quote(str(first))} "$@" || exit $?\n' if os.access(first, os.X_OK) else "")
-                      + f"python3 -c {shlex.quote(UNDER)} {shlex.quote(str(cache_file()))} {cap_minutes(p)} "
+                      + f"python3 -c {shlex.quote(UNDER)} {shlex.quote(str(cache_file()))} {cap_minutes(p)} {STALE_S} "
                       "2>/dev/null && exit 0\n"
                       f"grep -qF '{SKIP}' \"$1\" && exit 0\n"
                       f"{{ printf '%s {SKIP}\\n' \"$(sed -n 1p \"$1\")\"; sed 1d \"$1\"; }} > \"$1.windvane\" "
