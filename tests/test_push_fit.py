@@ -1,6 +1,6 @@
-"""T-079: every phone push leads with a line a lock screen shows whole (phone.LOCK_SCREEN characters) and that line
-holds its point. Each `push(` call in driver.py, held.py and planner.py is driven here through their own functions
-with a 300-character error or reason; a new call with no case here fails the coverage test, so it gets one."""
+"""T-079, T-093: every phone push leads with a line that holds its point, and carries its free text whole (no "…").
+Each `push(` call in driver.py, held.py and planner.py is driven here through their own functions with a
+300-character error or reason; a new call with no case here fails the coverage test, so it gets one."""
 import ast
 import json
 import signal
@@ -17,7 +17,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver, net, phone, planner  # noqa: E402
+from windvane import driver, net, planner  # noqa: E402
 from windvane import held as held_mod  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
@@ -262,7 +262,7 @@ class PushFit(unittest.TestCase):
             cls.driven = {site.__name__: drive(site) for site in SITES}
         return cls.driven
 
-    def test_each_push_leads_with_a_line_that_fits_and_holds_its_point(self):
+    def test_each_push_leads_with_a_line_that_holds_its_point(self):
         for name, (got, words) in self.results().items():
             with self.subTest(name):
                 self.assertIsInstance(words, dict, words)
@@ -270,7 +270,7 @@ class PushFit(unittest.TestCase):
                     self.assertTrue(any(t.startswith(key) for _, t, _ in got), (key, got))
                 for _, title, msg in got:
                     first = msg.split("\n", 1)[0]
-                    self.assertLessEqual(len(first), phone.LOCK_SCREEN, msg)
+                    self.assertNotIn("…", title + msg)
                     for key, need in words.items():
                         for w in need * title.startswith(key):
                             self.assertIn(w, first, msg)

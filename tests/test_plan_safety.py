@@ -86,7 +86,7 @@ class PlanSafety(unittest.TestCase):
         branch, files = self.local_plan()
         self.assertIn(".windvane/tickets/T-003.md", files)
         self.assertEqual(self.pushes, [("plan not merged", "Refused by a hook or branch rule; change the rule, or push "
-                                                           f"it by hand with…\n…`git push origin {branch}:{branch}-b` "
+                                                           f"it by hand with `git push origin {branch}:{branch}-b` "
                                                            f"and open a PR from it.\n1 ticket waits on the local branch "
                                                            f"{branch}.")])
 
