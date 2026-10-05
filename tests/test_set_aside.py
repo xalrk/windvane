@@ -83,8 +83,9 @@ class CrashPushes(Base):
         self.assertEqual(pilot.merged, ["T-002"])
         [(title, msg)] = self.aside()
         self.assertEqual(title, "Set aside: do T-001 (T-001)")
-        self.assertEqual(msg, f"Sessions died 4×: {TOO_LONG}. Branch kept, run goes on.\nSplit the ticket, or trim "
-                              "what it reads. Other sessions worked, so it's this ticket's doing.")
+        self.assertEqual(msg, "Sessions died 4×: prompt is too long. Split the ticket, or trim what it reads.\n"
+                              f"The error: {TOO_LONG}\nBranch kept, run goes on. Other sessions worked, so it's this "
+                              "ticket's doing.")
 
     def test_other_errors_keep_the_plain_text(self):
         pilot = self.pilot()
