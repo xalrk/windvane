@@ -12,6 +12,7 @@ import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -59,6 +60,8 @@ class Unread(unittest.TestCase):
         self.config = Path(os.environ["XDG_CONFIG_HOME"], "gh", "config.yml")
         self.config.parent.mkdir(parents=True, exist_ok=True)
         self.config.write_text("version: 1\ngit_protocol: https\naliases:\n    co: pr checkout\n")
+        os.environ["XDG_DATA_HOME"] = str(self.s.tmp / "data")  # where gh keeps extensions: the sandbox's, never yours
+        os.environ.pop("GH_DATA_DIR", None)
         cfg = self.s.root / ".windvane/config.toml"
         cfg.write_text(cfg.read_text().replace('forge = "git"', 'forge = "github"'))
         self.p = Project(self.s.root)
@@ -110,6 +113,32 @@ class Unread(unittest.TestCase):
         self.assertEqual(self.sh("gh pr view 1", FAKE_GH_LIST="fail")[:3], (0, "real gh: pr view 1\n", ""))
         self.assertEqual(self.sh("gh workflow run x.yml", FAKE_GH_LIST="fail")[0], 1)
         self.assertEqual(self.kinds(), [("unread", "wr ci.yml"), ("workflow", "workflow run")])
+
+    def said(self):
+        f = self.p.state / "autopilot.log"
+        return [x for x in f.read_text().splitlines() if "gh guard:" in x] if f.exists() else []
+
+    def test_an_installed_extension_passes_an_unread_list_and_the_log_says_once_a_run(self):
+        ext = Path(os.environ["XDG_DATA_HOME"], "gh", "extensions")
+        (ext / "gh-dash").mkdir(parents=True)
+        (ext / "gh-wr").write_text("")  # a file, not an installed extension
+        self.assertEqual(self.sh("gh dash", FAKE_GH_LIST="fail")[:3], (0, "real gh: dash\n", ""))
+        self.assertEqual(self.calls(), [["dash"]])
+        self.assertEqual((self.said(), self.kinds()), ([], []))  # passing isn't a refusal: nothing to say
+        self.assert_unread_refusal("fail", TIMEOUT)
+        self.assert_unread_refusal("fail", TIMEOUT)
+        said = self.said()
+        self.assertEqual(len(said), 1, said)
+        self.assertRegex(said[0], r"^\d{4}-\d\d-\d\d \d\d:\d\d gh guard: gh's alias list couldn't be read, .* run "
+                                  r"`gh alias list` to check it$")
+        self.assertEqual(self.kinds(), [("unread", "wr ci.yml")] * 2)  # each refusal still counted
+        self.assertEqual(self.sh("gh dash")[:2], (0, "real gh: dash\n"))  # a readable list: as before
+        with mock.patch.object(actions, "RUN", "next-run"):  # the next driver run says it again
+            self.env = {**os.environ, **actions.gh_guard(self.p, self.s.root)}
+        self.assert_unread_refusal("fail", TIMEOUT)
+        self.assertEqual(len(self.said()), 2, self.said())
+        self.assertEqual(sorted(x.name for x in (self.p.state / "gh-guard").glob("unread-said.*")),
+                         ["unread-said.next-run"])  # the old run's marker is gone
 
     def test_an_alias_written_to_the_gh_config_mid_session_is_refused_at_its_first_use(self):
         self.assertEqual(self.sh("gh wr ci.yml")[:3], (0, "real gh: wr ci.yml\n", ""))  # no such alias yet
