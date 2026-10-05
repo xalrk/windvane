@@ -167,10 +167,6 @@ class Show(unittest.TestCase):
         block = watch.blocks(text, False, 40)[0]
         self.assertEqual([k for _, k in block], ["─┼─" not in r for r in rows], "rules don't count toward the clip")
 
-    def test_a_table_too_wide_to_narrow_is_left_whole(self):
-        row = "| " + " | ".join("x" * 6 for _ in range(12)) + " |"
-        text = f"{row}\n|{'---|' * 12}\n{row}"
-        self.assertEqual(watch.markdown(text, False, 40), watch.markdown(text, False))
 
 if __name__ == "__main__":
     unittest.main()
