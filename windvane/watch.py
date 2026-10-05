@@ -247,7 +247,7 @@ def blocks(text, color, cols=0):
     lists, quotes, rules, fenced code and tables by line, the rest inline, wrapped to `cols` (0: not wrapped).
     A table is one block; blank lines and rules don't count. Code blocks get a dim gutter and their language, with
     nothing inside them read as Markdown. Rules are drawn last, at `rule_width`."""
-    lines, out, i, fence, rules = text.split("\n"), [], 0, None, []
+    lines, out, i, fence, rules, tables = text.split("\n"), [], 0, None, [], set()
     dim = frozenset({"dim"})
 
     def add(segs, lead=()):
@@ -269,6 +269,7 @@ def blocks(text, color, cols=0):
             while i < len(lines) and "|" in lines[i] and lines[i].strip():
                 rows.append(lines[i])
                 i += 1
+            tables.add(len(out))
             out.append(table(rows, rule, color, cols))
             continue
         elif m := HEADING.match(line):
@@ -289,17 +290,30 @@ def blocks(text, color, cols=0):
         else:
             add(inline(line))
         i += 1
-    rule = [(paint([("─" * rule_width(out, cols), dim)], color), False)]
-    for r in rules:
-        out[r] = rule
+    widths = [rule_width(out, r, tables, cols) for r in rules]  # all before any is drawn, which would hide it
+    for r, w in zip(rules, widths):
+        out[r] = [(paint([("─" * w, dim)], color), False)]
     return out
 
 
-def rule_width(out, cols):
-    """A `---` rule as wide as the message's widest line, at most `cols`: a table draws its rules at its own width,
-    so a rule matches them when the table is the widest thing, and none runs on into empty terminal past the text. Piped (no `cols`), or
-    with nothing but rules, it is 40 as before."""
-    widest = max((width(ANSI.sub("", line)) for b in out if b for line, _ in b), default=0)
+def rule_width(out, r, tables, cols):
+    """The rule at `out[r]` as wide as the widest line of the block just above it and the block just below it (a
+    table, a paragraph, a list: the entries up to a blank line or another rule), at most `cols`, so two rules in one
+    message can differ. Just above a table, prose above the rule doesn't count: the rule then lines up with the
+    table's own rules (or a wider table's above it) instead of running on past them. Piped (no `cols`), or with
+    nothing beside it, it is 40 as before."""
+    def neighbour(step):
+        j, found = r + step, []
+        while 0 <= j < len(out) and out[j] == [("", False)]:
+            j += step
+        while 0 <= j < len(out) and out[j] is not None and out[j] != [("", False)]:
+            found.append(j)
+            j += step
+        return found
+    above, below = neighbour(-1), neighbour(1)
+    if any(j in tables for j in below) and not any(j in tables for j in above):
+        above = []
+    widest = max((width(ANSI.sub("", line)) for j in above + below for line, _ in out[j]), default=0)
     return min(cols, widest or 40) if cols else 40
 
 
