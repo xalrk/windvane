@@ -92,6 +92,16 @@ and the next plan notices (one list of open PRs) and keeps its ids.
 Run `gh auth status`. Workers open pull requests and the driver merges them with `gh`; it needs push and merge rights
 on the repository. Projects not on GitHub use `forge = "git"`.
 
+**The log says "actions: recount failed", or the phone's `status` says "Actions ... (stale: counted Oct 3)".**
+With `actions_minutes` set, windvane recounts the month's Actions minutes through `gh` at each run's start and each
+session's end. When a `gh` call fails, the log says so once a run, naming the call and gh's own first line:
+"actions: recount failed: `gh api repos/me/proj/actions/runs`: To get started with GitHub CLI, please run: gh auth
+login (run `gh auth status`)". Other causes read "error connecting to api.github.com" (network) or "API rate limit
+exceeded" (wait an hour). Run `gh auth status` and log in again if it says so; the next recount fixes the count.
+Once the last good count is over a day old, the phone's line marks it stale and workers' commits carry `[skip ci]`
+until a recount succeeds. A recount that waited on another project's driver counting isn't a failure and isn't
+logged.
+
 **No pushes arrive on the phone.**
 `windvane doctor` checks the phone. Make sure the app is subscribed to the topic `windvane phone setup` showed (and
 to the right server, if you use your own). `windvane phone setup` again sends a test push.

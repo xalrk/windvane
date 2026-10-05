@@ -80,23 +80,40 @@ def job_minutes(job, now):
     return math.ceil(secs / 60) * rate(job.get("labels"))
 
 
-def api(cd, path):
-    """A GET through `gh api`, parsed; None when it fails (no gh, not logged in, no network)."""
+class GhFailed(Exception):
+    """A gh call the count needs failed: which one, and gh's first stderr line (not logged in, network, rate limit),
+    so the log can say why instead of the count just coming back empty."""
+    def __init__(self, what, r):
+        why = next((x.strip() for x in (r.stderr or "").splitlines() if x.strip()), f"exit {r.returncode}")
+        super().__init__(f"`{what}`: {why}" if r.returncode else f"`{what}`: not JSON")
+
+
+def get(cd, path):
+    """A GET through `gh api`, parsed; GhFailed when it fails (no gh, not logged in, no network)."""
     r = net.call(["gh", "api", path], cd)
+    what = "gh api " + path.split("?")[0]
+    if r.returncode != 0:
+        raise GhFailed(what, r)
     try:
-        return json.loads(r.stdout) if r.returncode == 0 else None
+        return json.loads(r.stdout)
     except ValueError:
+        raise GhFailed(what, r) from None
+
+
+def api(cd, path):
+    """`get`, None when it fails."""
+    try:
+        return get(cd, path)
+    except GhFailed:
         return None
 
 
 def pages(cd, path, key, stop=lambda item: False):
-    """Every item of a paged list (`key` in each page), 100 a page, up to the first for which `stop` is true; None
-    when a page fails."""
+    """Every item of a paged list (`key` in each page), 100 a page, up to the first for which `stop` is true;
+    GhFailed when a page fails."""
     out, n = [], 1
     while True:
-        page = api(cd, f"{path}{'&' if '?' in path else '?'}per_page=100&page={n}")
-        if page is None:
-            return None
+        page = get(cd, f"{path}{'&' if '?' in path else '?'}per_page=100&page={n}")
         items = page.get(key) or []
         for i, item in enumerate(items):
             if stop(item):
@@ -111,14 +128,15 @@ def run_minutes(cd, repo, run, now, whole=False):
     """A run's minutes billed this month (or in all, `whole`): every attempt's jobs (a re-run is billed again) that
     started this month, so a run created last month and re-run now counts only its new jobs."""
     jobs = pages(cd, f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=all", "jobs")
-    return None if jobs is None else sum(job_minutes(j, now) for j in jobs
-                                         if whole or month(stamp(j.get("started_at")) or now) == month(now))
+    return sum(job_minutes(j, now) for j in jobs if whole or month(stamp(j.get("started_at")) or now) == month(now))
 
 
 def repos(cd):
     """The login's repos, owner/name: the only place its minutes can go."""
     r = net.call(["gh", "repo", "list", "--limit", "1000", "--json", "nameWithOwner", "-q", ".[].nameWithOwner"], cd)
-    return r.stdout.split() if r.returncode == 0 else None
+    if r.returncode != 0:
+        raise GhFailed("gh repo list", r)
+    return r.stdout.split()
 
 
 def billed(cd, cache, repo, run, now):
@@ -128,8 +146,6 @@ def billed(cd, cache, repo, run, now):
     if key in cache["runs"]:
         return cache["runs"][key]
     mins = run_minutes(cd, repo, run, now)
-    if mins is None:
-        return None
     done = {"repo": repo, "id": run["id"], "workflow": run.get("path", ""), "minutes": mins}
     if run.get("status") == "completed":
         cache["runs"][key] = done
@@ -173,9 +189,17 @@ def this_month(run, m, now):
 
 
 def count(cd, now=None, max_age=FRESH_S):
-    """{"used": minutes billed this month, "at": when} or None when the count failed. One count at a time across
-    drivers: one that finds a count in flight waits for it and reads its total. A finished run is fetched once and
-    kept in the cache; running ones are fetched each time."""
+    """`recount`, None when a gh call failed."""
+    try:
+        return recount(cd, now, max_age)
+    except GhFailed:
+        return None
+
+
+def recount(cd, now=None, max_age=FRESH_S):
+    """{"used": minutes billed this month, "at": when}; None when another driver holds the count past WAIT_S, and
+    GhFailed when a gh call fails. One count at a time across drivers: one that finds a count in flight waits for it
+    and reads its total. A finished run is fetched once and kept in the cache; running ones are fetched each time."""
     now = now or datetime.now(timezone.utc)
     asked = time.time()
     if (fresh := cached_total(now, max_age)) is not None:
@@ -197,8 +221,6 @@ def cached_total(now, max_age):
 
 def count_now(cd, cache, now):
     names = repos(cd)
-    if names is None:
-        return None
     m, used = month(now), 0
     first = datetime.strptime(m, "%Y-%m").replace(tzinfo=timezone.utc)
     oldest = (first - timedelta(days=RERUN_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")  # GitHub's format: compares as text
@@ -208,13 +230,9 @@ def count_now(cd, cache, now):
         # here and only those whose latest attempt started this month are fetched.
         runs = pages(cd, f"repos/{repo}/actions/runs", "workflow_runs",
                      lambda run: (run.get("created_at") or oldest) < oldest)
-        for run in runs if runs is not None else [None]:
-            if run and not this_month(run, m, now):
-                continue
-            done = run and billed(cd, cache, repo, run, now)
-            if not done:
-                return None
-            used += done["minutes"]
+        for run in runs:
+            if this_month(run, m, now):
+                used += billed(cd, cache, repo, run, now)["minutes"]
     cache["total"] = {"used": used, "at": time.time()}
     save_json(cache_file(), cache)
     return cache["total"]
@@ -251,7 +269,10 @@ def estimate(cd, repo, file, now=None):
     runs = (page or {}).get("workflow_runs") or []
     if not runs:
         return None
-    return run_minutes(cd, repo, runs[0], now, whole=True)
+    try:
+        return run_minutes(cd, repo, runs[0], now, whole=True)
+    except GhFailed:
+        return None
 
 
 def cap_minutes(p):
@@ -265,14 +286,16 @@ def fmt(n):
 
 def line(p, total=None):
     """`Actions 1,983/2,000 min` for status and overview (with the count's time once it's over an hour old, and its
-    date when it's another day's), or ""
-    with the budget off or nothing counted yet."""
+    date when it's another day's; past STALE_S only the date, marked stale: workers tag), or "" with the budget off
+    or nothing counted yet."""
     b = budget(p)
     total = total or (cached() if b else None)
     if not (b and total):
         return ""
     at = time.localtime(total["at"])
     day = "" if at[:3] == time.localtime()[:3] else time.strftime("%b ", at) + f"{at.tm_mday} "
+    if stale(total):
+        return f"Actions {fmt(total['used'])}/{fmt(b[0])} min (stale: counted {time.strftime('%b ', at)}{at.tm_mday})"
     when = day + time.strftime("%H:%M", at)
     return f"Actions {fmt(total['used'])}/{fmt(b[0])} min" + f" (counted {when})" * (time.time() - total["at"] > 3600)
 
@@ -288,9 +311,16 @@ counting = threading.Lock()
 
 
 def refresh_now(p):
-    """The background count: a failure is one line in the project's log, not a thread's traceback on stderr."""
+    """The background count: a failure is one line in the project's log, not a thread's traceback on stderr. A failed
+    gh call is logged once a run, as recounts every session would repeat it; one held up by another driver's count
+    isn't a failure."""
     try:
-        count(p.root)
+        recount(p.root)
+    except GhFailed as e:
+        if p.name not in recount_logged:
+            recount_logged.add(p.name)
+            log(p, f"actions: recount failed: {e} (run `gh auth status`); "
+                   f"after a day without a count, workers' commits carry {SKIP}")
     except Exception as e:
         log(p, f"actions: recount failed: {type(e).__name__}: {(str(e).splitlines() or [''])[0]}")
     finally:
@@ -334,6 +364,7 @@ def over_cap(p, cd=None):
 logged = set()  # the projects whose log has said "at the cap" in this process: once a run, not once a commit
 asked = set()  # the projects whose log has said their workers are asked for [skip ci], their hooks being their own
 stale_logged = set()  # the projects whose log has said their count is too old to trust
+recount_logged = set()  # the projects whose log has said why their recount failed
 
 
 def tag(p, msg, cd=None):

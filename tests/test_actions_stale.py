@@ -34,6 +34,7 @@ class Stale(unittest.TestCase):
         actions.counting.release()
         actions.asked.clear()
         actions.stale_logged.clear()
+        actions.recount_logged.clear()
         self.s.close()
 
     def cache(self, used, age):
@@ -96,7 +97,7 @@ class Stale(unittest.TestCase):
     def test_status_shows_the_date_of_another_days_count(self):
         self.cache(10, 2 * 86400)
         day = time.localtime(time.time() - 2 * 86400)
-        self.assertIn(f"(counted {time.strftime('%b', day)} {day.tm_mday} ", actions.line(self.p))
+        self.assertIn(f"(stale: counted {time.strftime('%b', day)} {day.tm_mday})", actions.line(self.p))
         self.cache(10, 2 * 3600)
         if time.localtime(time.time() - 2 * 3600)[:3] == time.localtime()[:3]:  # not just past midnight
             self.assertRegex(actions.line(self.p), r"\(counted \d\d:\d\d\)$")
@@ -110,7 +111,7 @@ class Stale(unittest.TestCase):
 
         err = io.StringIO()
         boom = mock.Mock(side_effect=RuntimeError("gh exploded\nsecond line"))
-        with mock.patch.object(actions, "count", boom), mock.patch.object(threading, "Thread", thread), \
+        with mock.patch.object(actions, "recount", boom), mock.patch.object(threading, "Thread", thread), \
                 contextlib.redirect_stderr(err), contextlib.redirect_stdout(self.out):
             actions.refresh(self.p)
             made[0].join(10)  # past the thread's end, where an uncaught exception would be printed
@@ -119,7 +120,7 @@ class Stale(unittest.TestCase):
         self.assertEqual(len(failed), 1, self.log())
         self.assertTrue(failed[0].endswith("actions: recount failed: RuntimeError: gh exploded"), failed[0])
         again = mock.Mock(return_value=None)
-        with mock.patch.object(actions, "count", again):
+        with mock.patch.object(actions, "recount", again):
             actions.refresh(self.p)  # the lock was released, so this one runs
             self.assertTrue(actions.counting.acquire(timeout=10))
             actions.counting.release()
