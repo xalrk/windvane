@@ -1346,6 +1346,7 @@ class Pilot(Desk, Periodic):
                 continue
             self.fetch()
             self.queue = Queue(p)
+            busy = bool(self.running)  # a slot that ends during the pick still had its ticket held back: pick again
             tid, kind, branches, slot = self.pick(free)
             if tid is not None and over:  # no more slots until the window allows; the running ones go on
                 why = "usage limit reached" if self.usage.rejected else (
@@ -1359,7 +1360,7 @@ class Pilot(Desk, Periodic):
                 self.pause()
                 continue
             if tid is None:
-                if self.running:
+                if busy or self.running:
                     self.idle_note(self.waits)
                     self.pause()
                     continue

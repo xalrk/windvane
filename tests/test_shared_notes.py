@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -116,6 +117,26 @@ class Run(unittest.TestCase):
         pilot = self.run_pilot()
         self.assertIn(f"{pilot.merged[1]}: conflicts with main; back to the worker", self.log)
         self.assertEqual(len(self.workers()), 3)
+
+    def test_a_slot_ending_during_the_pick_doesnt_end_the_run(self):
+        """The pick holds back a running ticket; when its slot ends (bounced) before the loop looks again, the run
+        picks again rather than ending with "queue empty" and the bounced ticket left behind."""
+        os.environ["FAKE_NOTES"] = "append"
+        os.environ["FAKE_CONFLICT"] = "1"
+        pick = driver.Pilot.pick
+
+        def late(pilot, free):
+            got = pick(pilot, free)
+            until = time.time() + 30
+            while got[0] is None and pilot.running and time.time() < until:  # every slot ends meanwhile
+                time.sleep(0.05)
+            return got
+        driver.Pilot.pick = late
+        try:
+            pilot = self.run_pilot()
+        finally:
+            driver.Pilot.pick = pick
+        self.assertEqual(len(pilot.merged), 2)
 
 
 class Resolve(unittest.TestCase):
