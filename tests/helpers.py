@@ -294,8 +294,9 @@ class Sandbox:
             os.environ.pop(k, None)
         for k in [k for k in os.environ if k.startswith("GIT_CONFIG_")]:  # a worker's [skip ci] hook, for one
             os.environ.pop(k)
-        from windvane import net
+        from windvane import net, scratch
         net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage
+        self.fullness, scratch.fullness = scratch.fullness, lambda path=None: (10, 10)  # nor the real disk (a full one pushes)
         assert shutil.which("claude") == str(fake) and not shutil.which("notify"), "tests must not reach the real tools"
         self.git("init", "-q", "--bare", "-b", "main", str(self.remote), cwd=self.tmp)
         self.root.mkdir()
@@ -337,6 +338,7 @@ class Sandbox:
         os.environ.clear()
         os.environ.update(self.old_env)
         self.rm()
-        from windvane import net, phone
+        from windvane import net, phone, scratch
         net.probe, net.waiter = None, None
+        scratch.fullness = getattr(self, "fullness", scratch.fullness)
         phone.use(None)  # the next test's pushes name its own project
