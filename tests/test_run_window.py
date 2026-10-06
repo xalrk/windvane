@@ -2,6 +2,7 @@
 own with its own deadline, and `stop` ends the whole schedule. On a fake clock that the schedule's sleeps move."""
 import contextlib
 import io
+import os
 import sys
 import unittest
 from argparse import Namespace
@@ -37,6 +38,7 @@ class Clock:
 
 class RunWindow(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(os.chdir, os.getcwd())  # `run -C` moves this process into the sandbox
         self.s = Sandbox()
         self.p = Project(self.s.root)
         self.p.state.mkdir(parents=True, exist_ok=True)
