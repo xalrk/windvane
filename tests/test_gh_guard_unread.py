@@ -121,7 +121,10 @@ class Unread(unittest.TestCase):
     def test_an_installed_extension_passes_an_unread_list_and_the_log_says_once_a_run(self):
         ext = Path(os.environ["XDG_DATA_HOME"], "gh", "extensions")
         (ext / "gh-dash").mkdir(parents=True)
-        (ext / "gh-wr").write_text("")  # a file, not an installed extension
+        (ext / "gh-dash/gh-dash").write_text("#!/bin/sh\n")
+        (ext / "gh-dash/gh-dash").chmod(0o755)
+        (ext / "gh-wr").mkdir()  # no gh-wr executable in it: not an installed extension
+        (ext / "gh-co").write_text("")  # a file, not an extension's dir
         self.assertEqual(self.sh("gh dash", FAKE_GH_LIST="fail")[:3], (0, "real gh: dash\n", ""))
         self.assertEqual(self.calls(), [["dash"]])
         self.assertEqual((self.said(), self.kinds()), ([], []))  # passing isn't a refusal: nothing to say

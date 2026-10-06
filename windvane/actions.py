@@ -569,15 +569,16 @@ def aliases():
 
 
 def extensions():
-    # The user's installed gh extensions' names: the gh-NAME dirs (or links) in gh's data dir, read without running
-    # gh, so they pass when the alias list can't be read. gh won't let an alias take an extension's name.
+    # The user's installed gh extensions' names: the gh-NAME dirs (or links) in gh's data dir holding the gh-NAME
+    # executable gh runs, read without running gh, so they pass when the alias list can't be read. gh won't let an
+    # alias take an extension's name.
     env = os.environ
     d = env.get("GH_DATA_DIR") or env.get("XDG_DATA_HOME") and os.path.join(env["XDG_DATA_HOME"], "gh")
     if not d and os.name == "nt" and env.get("LOCALAPPDATA"):
         d = os.path.join(env["LOCALAPPDATA"], "GitHub CLI")
     d = os.path.join(d or os.path.join(os.path.expanduser("~"), ".local", "share", "gh"), "extensions")
     try:
-        return {n[3:] for n in os.listdir(d) if n.startswith("gh-") and os.path.isdir(os.path.join(d, n))}
+        return {n[3:] for n in os.listdir(d) if n.startswith("gh-") and os.access(os.path.join(d, n, n), os.X_OK)}
     except OSError:
         return set()
 
