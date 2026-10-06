@@ -110,6 +110,8 @@ worker is told it's unavailable and goes on, and no score is recorded.
 
 With `parallel = "auto"` (the default), windvane starts another ticket beside the running ones when all of these hold:
 - its `Touches:` line shares no file with a running ticket's (a directory covers every file under it);
+  a running ticket's files also include those its branch has already changed, committed or not, since a Touches
+  line written before the work can miss one (each merge logs the files its ticket changed outside its line);
 - it doesn't name a running ticket's id or one of the files that ticket touches, and isn't `Related:` to it;
 - the 5-hour usage window has room for one more: current usage plus the recent cost per ticket times the tickets
   running stays under `cap`;
