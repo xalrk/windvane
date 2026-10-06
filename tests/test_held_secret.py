@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import driver  # noqa: E402
+from windvane import held, planner, util  # noqa: E402
 from test_held_age import HOOK  # noqa: E402
 from test_plan_retry import Base  # noqa: E402
 
@@ -65,15 +65,15 @@ class HeldSecret(Base):
         return r.stdout
 
     def test_push_protection_says_remove_the_secret(self):
-        why = driver.push_refusal(SECRET, "github", "plan-x", "origin")
+        why = held.push_refusal(SECRET, "github", "plan-x", "origin")
         self.assertTrue(why.startswith(
             "refused: it holds a secret in `README.md:4` (GitHub push protection); remove it from the branch's commit "
             "(`git commit --amend` on `plan-x`), then the next run pushes it; "), why)  # the rest: T-082's test
         self.assertNotIn("-b", why)
-        self.assertIn("remove it", driver.push_refusal("remote: error: Secret scanning found a token", "git", "x"))
+        self.assertIn("remove it", held.push_refusal("remote: error: Secret scanning found a token", "git", "x"))
 
     def test_a_plain_rule_violation_keeps_the_hand_push(self):
-        why = driver.push_refusal(RULE, "github", "plan-x", "origin")
+        why = held.push_refusal(RULE, "github", "plan-x", "origin")
         self.assertIn("refused by a hook or branch rule; change the rule, or push it by hand with "
                       "`git push origin plan-x:plan-x-b` and open a PR from it", why)
         self.assertNotIn("secret", why)
@@ -81,7 +81,7 @@ class HeldSecret(Base):
     def hand_pushed_land(self):
         """A plan to merge a hook refused, then pushed by hand with the hint's command: its branch."""
         self.refusal = HOOK
-        driver.plan(self.p, "make it great", merge=True)
+        planner.plan(self.p, "make it great", merge=True)
         branch = self.local()
         self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {branch: "land"})
         why = json.loads((self.p.state / "held_why.json").read_text())[branch]["why"]
@@ -99,7 +99,7 @@ class HeldSecret(Base):
         self.assertTrue(self.windvane("status", "--line").endswith(
             "autopilot off. 1 held-back change pushed, not merged, for under an hour\n"))
         pushes = self.git_pushes
-        self.assertEqual(driver.push_held(self.p), 0)  # the user has it: not pushed again, still noted
+        self.assertEqual(held.push_held(self.p), 0)  # the user has it: not pushed again, still noted
         self.assertEqual(self.git_pushes, pushes)
         self.assertEqual(list(json.loads((self.p.state / "held.json").read_text())), [branch])
         self.assertIn("pushed, not merged", self.windvane("status", "--line"))
@@ -109,13 +109,13 @@ class HeldSecret(Base):
         self.assertNotIn("held", self.windvane("status"))
         self.assertIn("on the local branch", self.log().splitlines()[-1])  # the plan's own line, stale once merged
         self.assertEqual(self.windvane("status", "--line"), "Sandbox: autopilot off\n")
-        self.assertEqual(driver.held_branches(self.p), {})
+        self.assertEqual(held.held_branches(self.p), {})
         self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {})
         self.assertEqual(json.loads((self.p.state / "held_why.json").read_text()), {})
 
     def test_with_one_pushed_and_one_not_each_says_what_happens_next(self):
         branch = self.hand_pushed_land()
-        driver.plan(self.p, "make it better")
+        planner.plan(self.p, "make it better")
         line = self.windvane("status", "--line")
         self.assertIn("2 held-back changes (1 not pushed, 1 pushed, not merged), oldest under an hour", line)
         self.assertIn(f"pushed to origin/{branch}-b, not merged", self.windvane("status"))
@@ -124,22 +124,22 @@ class HeldSecret(Base):
 
     def test_a_hand_pushed_push_change_is_still_dropped(self):
         self.refusal = HOOK
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         branch = self.local()
         self.s.git("push", "-q", "origin", f"{branch}:{branch}-b")
-        self.assertEqual(driver.held_now(self.p), [])
+        self.assertEqual(held.held_now(self.p), [])
 
     def test_on_github_a_closed_pr_drops_it_and_an_open_one_keeps_it(self):
         self.github()
         branch = self.hand_pushed_land()
         for state, kept in (("OPEN", [branch]), ("CLOSED", [])):
             (self.s.bin / "gh").write_text(GH.format(head=f"{branch}-b", state=state))
-            self.assertEqual(driver.held_branches(self.p), {})  # never pushed again either way
+            self.assertEqual(held.held_branches(self.p), {})  # never pushed again either way
             self.assertEqual(list(json.loads((self.p.state / "held.json").read_text())), kept)
 
     def test_status_line_leaves_out_last_while_held_and_once_it_is_gone(self):
         self.refusal = HOOK
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         branch = self.local()
         line = self.windvane("status", "--line")
         self.assertIn("1 held-back change not pushed", line)
@@ -147,7 +147,7 @@ class HeldSecret(Base):
         self.s.git("push", "-q", "origin", f"{branch}:{branch}-b")  # no longer held: "kept only locally" is stale
         self.assertIn("kept only locally", self.log().splitlines()[-1])
         self.assertEqual(self.windvane("status", "--line"), "Sandbox: autopilot off\n")
-        driver.log(self.p, "T-001: worker run")
+        util.log(self.p, "T-001: worker run")
         self.assertRegex(self.windvane("status", "--line"), r"\. Last: \S+ T-001: worker run$")
 
 

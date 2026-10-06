@@ -21,6 +21,7 @@ from pathlib import Path
 from . import critic, phone
 from .questions import quiet_now
 from .queue import Queue, title as title_of
+from .runner import plain_error
 from .util import append_jsonl, git, gout, hhmm, last_match, now, push, run_limited
 
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
@@ -80,7 +81,7 @@ class Periodic:
     def periodic(self, e):
         """Run `e` and the entries its `then` chains to, one after another in the ci tree on current main, then
         land the tickets they wrote. Whatever else they changed is discarded with the tree."""
-        from .driver import clean_detach
+        from .worktree import clean_detach
         p, cd, done, prev = self.p, self.p.ci_dir, set(), None
         if cd == p.work_dir and any(self.owner.values()):
             self.periodic_ran(e, skipped=True)
@@ -136,7 +137,8 @@ class Periodic:
         """One periodic session: (its final reply, that plus the files it names), False when it was skipped before it
         started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
         it due, {group: its tickets}, named in its prompt."""
-        from .driver import pending_ids, rules
+        from .planner import pending_ids
+        from .runner import rules
         name, p = e["name"], self.p
         if not self.periodic_fits(e):
             return False
@@ -187,8 +189,8 @@ class Periodic:
             why = killed or error or "no PERIODIC line"
             self.log(f"{name}: no result ({why}); its changes are dropped")
             if killed != "stop now":  # the user stopped it: nothing to tell
-                what = f"it was cut off ({killed})" if killed else f"the session failed ({error[:150]})" if error \
-                    else "it ended without its PERIODIC line"
+                what = (f"it was cut off ({killed})" if killed else f"the session failed ({plain_error(error)[:150]})"
+                        if error else "it ended without its PERIODIC line")
                 self.periodic_failed(name, f"{what}; its changes were dropped.")
             return None
         self.log(f"{name}: PERIODIC: {m.group(1)}")
@@ -210,7 +212,7 @@ class Periodic:
         could clash with a plan's), the lines added at the end of existing tickets, and the lines added to QUEUE.md.
         Returns ({path: text}, the new ticket ids, (QUEUE.md as the chain found it, with only the lines added to it),
         {path: the lines added at its end}): the land replays the queue lines and the notes on main."""
-        from .driver import changed_paths
+        from .planner import changed_paths
         p, notes, logged = self.p, {}, 0
         keep = {f: (cd / f).read_text(errors="replace") for f in changed_paths(cd)
                 if f.startswith(p.tickets_rel + "/") and f.endswith(".md") and (cd / f).is_file()
@@ -245,7 +247,9 @@ class Periodic:
         it on a branch rather than overwrite that ticket. Notes go at the end of each ticket as main has it, unless it
         is done there (merged, or `done:`) or gone. The commit carries `reply` (the last session's, cut to 80 lines),
         so what it found already covered or chose not to ticket stays on record."""
-        from .driver import DIR, clean_detach, land as land_on_main
+        from .driver import DIR
+        from .held import land as land_on_main
+        from .worktree import clean_detach
         p = self.p
         base = gout(cd, "rev-parse", "HEAD")
         titles = {t: title_of(keep[f], t) for f in keep for t in [p.norm(Path(f).stem)] if t in tickets}
@@ -310,8 +314,7 @@ class Periodic:
         if quiet_now(p)[0]:
             self.log(f"{name}: quiet time, no question; the tickets are held")
             return "hold"
-        which = "; ".join(f"{t} {titles.get(t, '')[:60]}".strip() for t in tickets)
-        which = which if len(which) <= 400 else which[:399] + "…"
+        which = ticket_list(tickets, titles)
         sent = phone.ask(qid, f"{name} wrote {n} ticket{'s' * (n != 1)}: {which}. Queue them? "
                          f"No answer in {self.a.answer_wait:g} min: hold.", [o for _, o in ASK_LAND])
         if not sent:
@@ -411,6 +414,18 @@ def added_lines(old, new, onto=None):
     for at, lines in reversed(adds):  # from the bottom, so the places above stay right
         out[at:at] = [line for line in lines if not line.strip() or line not in out]
     return "\n".join(out)
+
+
+def ticket_list(tickets, titles):
+    """`T-004 Title; T-005 Title` with whole titles (a cut one reads as a typo) while they fit a push, the rest
+    counted: `; and 3 more`."""
+    which = []
+    for t in tickets:
+        if len("; ".join(which)) > phone.MOST // 2:
+            which.append(f"and {len(tickets) - len(which)} more")
+            break
+        which.append(f"{t} {titles.get(t, '')}".strip())
+    return "; ".join(which)
 
 
 def cut_lines(text, n):

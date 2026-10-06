@@ -123,7 +123,8 @@ class Desk:
     def desk_check(self, head):
         """The check on the tree main will hold: `head` merged with main when main moved past its base (a PR green on
         its own can still break main with what landed since), else `head` itself. (ok, summary, log, what ran)."""
-        from .driver import author_ident, clean_detach
+        from .held import author_ident
+        from .worktree import clean_detach
         p, cd = self.p, self.cd
         if git(cd, "merge-base", "--is-ancestor", p.upstream, head).returncode == 0:
             return (*self.check_at(head), head[:7])
@@ -138,7 +139,7 @@ class Desk:
         """A conflict only in appended entries of `[[append_only]]` files: resolved like a ticket's and pushed to the
         PR's branch, so the PR merges at that head. The renumbering, or None when it isn't one, or the push is
         refused."""
-        from .driver import clean_detach
+        from .worktree import clean_detach
         p, cd = self.p, self.cd
         if not files or not set(files) <= {r["file"] for r in p.append_only} or not clean_detach(p, cd, p.upstream):
             return None
@@ -187,7 +188,9 @@ class Desk:
              "warning")
 
     def desk_fix(self, pr, d, head, problem, details):
-        from .driver import clean_detach, rules, worker_perms
+        from .driver import worker_perms
+        from .runner import rules
+        from .worktree import clean_detach
         p, cd = self.p, self.cd
         n, branch = str(pr["number"]), pr["headRefName"]
         clean_detach(p, cd, head)

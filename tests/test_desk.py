@@ -40,7 +40,7 @@ elif a[:2] == ["pr", "comment"]:
     st.setdefault("comments", []).append([a[2], a[a.index("--body") + 1]])
 elif a[:2] == ["pr", "merge"]:
     x, sha = pr(a[2]), a[a.index("--match-head-commit") + 1]
-    d = tempfile.mkdtemp()
+    d = tempfile.mkdtemp(prefix="windvane-gh-")  # in the Sandbox's TMPDIR: removed with it
     run = lambda *c: subprocess.run(["git", *c], cwd=d, capture_output=True, text=True)
     run("clone", "-q", REMOTE, ".")
     if os.environ.get("FAKE_GH_REFUSE") or head(x["headRefName"]) != sha or run("merge", "--no-ff", "-m", "Merge PR",

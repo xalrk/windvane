@@ -4,7 +4,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -15,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver, renumber  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
-from helpers import Sandbox  # noqa: E402
+from helpers import Sandbox, tmpdir  # noqa: E402
 from test_parallel import args  # noqa: E402
 
 RULE = {"file": "docs/DECISIONS.md", "entry": r"^\| D-(\d+) \|", "ref": "D-{n}"}
@@ -27,13 +26,10 @@ class Resolve(unittest.TestCase):
     """A repo where main and a branch each change files from a common base, merged into main by hand."""
 
     def setUp(self):
-        self.dir = Path(tempfile.mkdtemp(prefix="windvane-renumber-"))
+        self.dir = tmpdir(self, "windvane-renumber-")
         self.git("init", "-q", "-b", "main")
         self.commit({"docs/DECISIONS.md": LOG, "notes.md": "about D-1\n"})
         self.git("branch", "topic")
-
-    def tearDown(self):
-        subprocess.run(["rm", "-rf", str(self.dir)])
 
     def git(self, *a):
         return subprocess.run(["git", *a], cwd=self.dir, capture_output=True, text=True,

@@ -163,8 +163,8 @@ class Unread(unittest.TestCase):
         # a row written before kinds were logged (T-077) was a workflow start
         append_jsonl(self.ledger, {"at": time.strftime("%Y-%m-%d %H:%M"), "event": "gh-refused", "ticket": "T-008",
                                    "command": "wr ci.yml"})
-        self.assertIn("gh guard refused: 2 workflow starts, 2 alias changes, 1 unknown command (alias list unread) "
-                      "(most: T-007, 3)\n", self.stats("--by", "ticket"))
+        self.assertIn("gh guard refused: 2 workflow starts, 2 alias changes, 1 unknown command "
+                      "(alias list unread; most: T-007, 3)\n", self.stats("--by", "ticket"))
         append_jsonl(self.ledger, {"role": "worker", "ticket": "T-007", "input": 1000, "usd": 0.1})
         self.assertIn("gh guard refused: 2 workflow starts, 2 alias changes, 1 unknown command", self.stats())
 

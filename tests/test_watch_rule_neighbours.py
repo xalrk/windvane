@@ -4,7 +4,6 @@ import importlib.util
 import json
 import subprocess
 import sys
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -15,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from windvane import watch  # noqa: E402
+from helpers import tmpdir  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location("watch_sweep", ROOT / "tools" / "watch-sweep.py")
 sweep = importlib.util.module_from_spec(SPEC)
@@ -76,7 +76,7 @@ class RuleNeighbours(unittest.TestCase):
 
 class SweepSynthetic(unittest.TestCase):
     def run_sweep(self, *args):
-        state = Path(tempfile.mkdtemp())
+        state = tmpdir(self)
         (state / "runs").mkdir()
         event = {"type": "assistant", "message": {"content": [{"type": "text", "text": "fine"}]}}
         (state / "runs" / "20261005-000000-T-001.jsonl").write_text(json.dumps(event) + "\n")
@@ -91,7 +91,7 @@ class SweepSynthetic(unittest.TestCase):
     def test_a_rule_sized_from_the_whole_message_is_named_by_its_synthetic_number(self):
         whole = lambda out, r, tables, cols: min(cols, max(watch.width(watch.ANSI.sub("", line)) for b in out if b
                                                           for line, _ in b))
-        state = Path(tempfile.mkdtemp())
+        state = tmpdir(self)
         (state / "runs").mkdir()
         (state / "runs" / "x.jsonl").write_text(json.dumps(
             {"type": "assistant", "message": {"content": [{"type": "text", "text": "fine"}]}}) + "\n")

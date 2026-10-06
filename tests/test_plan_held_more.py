@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import driver  # noqa: E402
+from windvane import held, planner  # noqa: E402
 from test_plan_retry import NETWORK, Base  # noqa: E402
 from test_plan_safety import REFUSE_PLAN  # noqa: E402
 
@@ -43,7 +43,7 @@ class ReopenedPlans(Base):
     def test_a_reopened_plan_claims_its_ids_again(self):
         self.p.state.mkdir(parents=True, exist_ok=True)
         self.closed.write_text(json.dumps([OLD]))  # found closed by an earlier plan, then reopened
-        self.assertEqual(driver.plan(self.p, "make it great"), 1)
+        self.assertEqual(planner.plan(self.p, "make it great"), 1)
         self.assertEqual(json.loads(self.closed.read_text()), [])
         self.s.git("fetch", "-q", "origin")
         new = [b for b in self.s.git("branch", "-r", "--format=%(refname:short)").split()
@@ -58,11 +58,11 @@ class ReopenedPlans(Base):
         self.p.state.mkdir(parents=True, exist_ok=True)
         self.closed.write_text(json.dumps([OLD]))
         (self.s.bin / "gh").write_text("#!/bin/sh\ncase \"$*\" in \"pr list --state open\"*) exit 1;; esac\nexit 0\n")
-        self.assertIn("T-009", driver.pending_ids(self.p))  # maybe reopened: a skipped id beats a collision
+        self.assertIn("T-009", planner.pending_ids(self.p))  # maybe reopened: a skipped id beats a collision
         self.assertEqual(json.loads(self.closed.read_text()), [OLD])  # asked again next time
 
     def test_no_remembered_branch_no_extra_query(self):
-        driver.pending_ids(self.p)
+        planner.pending_ids(self.p)
         self.assertFalse([c for c in self.gh_calls() if c.startswith("pr list --state open")])
 
 
@@ -76,7 +76,7 @@ class HeldInStatus(Base):
         hook = self.s.remote / "hooks" / "pre-receive"
         hook.write_text(REFUSE_PLAN)
         hook.chmod(0o755)
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         branch = self.local()
         for cmd in (["status"], ["overview"]):
             with self.subTest(cmd=cmd):
@@ -87,22 +87,22 @@ class HeldInStatus(Base):
         self.assertIn("1 held-back change not pushed, for under an hour", self.windvane("status", "--line"))
 
     def test_nothing_when_none_is_held(self):
-        driver.plan(self.p, "make it great")  # pushed fine
+        planner.plan(self.p, "make it great")  # pushed fine
         for cmd in (["status"], ["overview"], ["status", "--line"]):
             with self.subTest(cmd=cmd):
                 self.assertNotIn("held", self.windvane(*cmd))
 
     def test_the_newest_refusal_wins(self):
         self.refusal = NETWORK
-        driver.plan(self.p, "make it great")
-        self.assertIn("network down", driver.held_lines(self.p)[0])
+        planner.plan(self.p, "make it great")
+        self.assertIn("network down", held.held_lines(self.p)[0])
         hook = self.s.remote / "hooks" / "pre-receive"
         hook.write_text(REFUSE_PLAN)
         hook.chmod(0o755)
         self.refusal = None
-        self.assertEqual(driver.push_held(self.p), 0)
-        self.assertEqual(len(driver.held_lines(self.p)), 1)
-        self.assertIn(HOOK_WHY.format(b=self.local()), driver.held_lines(self.p)[0])
+        self.assertEqual(held.push_held(self.p), 0)
+        self.assertEqual(len(held.held_lines(self.p)), 1)
+        self.assertIn(HOOK_WHY.format(b=self.local()), held.held_lines(self.p)[0])
 
 
 class HeldPush(Base):
@@ -113,21 +113,21 @@ class HeldPush(Base):
                                        "$(cat \"$0.n\" 2>/dev/null || echo 7);;\n  \"pr merge 7\"*) exit 0;;\n"
                                        "  \"pr merge\"*|\"pr view\"*) exit 1;;\nesac\nexit 0\n")
         self.refusal = NETWORK
-        driver.plan(self.p, "first", merge=True)
-        driver.plan(self.p, "second", merge=True)
+        planner.plan(self.p, "first", merge=True)
+        planner.plan(self.p, "second", merge=True)
         first = json.loads((self.p.state / "held.json").read_text())
         self.assertEqual(len(first), 2)
         first = next(iter(first))
         self.refusal = None
         n = self.s.bin / "gh.n"
-        orig = driver.land
+        orig = held.land
 
         def land(p, cd, branch, *a, **k):  # the first PR is #7, the second #8
             n.write_text("7" if branch == first else "8")
             return orig(p, cd, branch, *a, **k)
-        driver.land = land
-        self.addCleanup(setattr, driver, "land", orig)
-        self.assertEqual(driver.push_held(self.p), 2)
+        held.land = land
+        self.addCleanup(setattr, held, "land", orig)
+        self.assertEqual(held.push_held(self.p), 2)
         title, body = self.pushes[-1]
         self.assertEqual(title, "1 held-back change pushed, not merged; 1 more pushed")
         lines = body.splitlines()
@@ -136,9 +136,9 @@ class HeldPush(Base):
         self.assertRegex(lines[3], r"^Plan: 1 ticket.*: on https://github.com/o/r/pull/7, merged\.$")
 
     def test_all_landed_keeps_todays_title(self):
-        self.assertEqual(driver.held_push([("a: on main, merged.", False), ("b: on main, merged.", False)]),
+        self.assertEqual(held.held_push([("a: on main, merged.", False), ("b: on main, merged.", False)]),
                          ("2 held-back changes pushed", "a: on main, merged.\nb: on main, merged."))
-        self.assertEqual(driver.held_push([("a: on plan-1, pushed; no PR opened, open one by hand.", True)]),
+        self.assertEqual(held.held_push([("a: on plan-1, pushed; no PR opened, open one by hand.", True)]),
                          ("1 held-back change pushed, not merged", "a: on plan-1, pushed; no PR opened, open one by "
                                                                     "hand."))
 

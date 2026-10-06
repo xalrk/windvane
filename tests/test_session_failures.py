@@ -19,7 +19,7 @@ from windvane.config import Project  # noqa: E402
 from windvane.util import now, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
-OVERLOADED = "API Error: 529 Overloaded"
+OVERLOADED = "API Error 529: Overloaded"  # as said: the fake sends it as JSON
 
 
 def args(**kw):

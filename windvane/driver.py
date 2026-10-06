@@ -19,27 +19,29 @@ import signal
 import sys
 import threading
 import re
-import shutil
 import subprocess
 import time
 import traceback
 from datetime import datetime, timedelta
-from pathlib import Path
 
-from . import actions, critic, net, phone, renumber, selfupdate
+from . import actions, critic, net, phone, renumber, scratch, selfupdate
 from .renumber import OLD_NUMBERS, said
 from .desk import Desk
+from .held import author_ident, push_held
 from .periodic import Periodic
+from .phone import whole
+from .planner import plan
 from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
-from .questions import (answered, desk_answers, give_answer, mode, parts, phone_answer, provisional, quiet_now, section)
+from .questions import (answered, desk_answers, give_answer, mode, note, parts, phone_answer, provisional, qkey,
+                        quiet_now, section, shown, unseen)
 from .queue import Queue
-from .runner import Usage, over_caps, run_claude, sweep_nested
-from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, run_limited, save_json
+from .runner import Usage, over_caps, plain_error, rules, run_claude, sweep_nested
+from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
+from .worktree import TIMED_OUT, SetupFailed, clean_detach, ensure_worktree
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
-PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
@@ -61,41 +63,11 @@ SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it read
                   ("request too large", "Split the ticket, or trim what it reads."))
 
 
-LOCK_SCREEN = 90  # characters of a push's body a phone's lock-screen preview shows
-
-
-def lead(head, free, tail="", whole=True, log=None):
-    """A push's first line: `head`, the free text `free` (an error, a reason, an option) cut with … so the line fits
-    LOCK_SCREEN, then `tail`, which carries the next step. The cut-off rest follows on the next line (`whole`), so
-    the point is on the lock screen and nothing is lost once the push is opened. A `head` and `tail` too long on their
-    own can't fit: the push still goes out, and `log` (stderr without one) gets a line so it doesn't pass unseen."""
-    if len(head) + len(tail) > LOCK_SCREEN:
-        msg = f"push's first line over {LOCK_SCREEN} characters before its free text: {head + '…' + tail!r}"
-        (log or (lambda m: print(m, file=sys.stderr)))(msg)
-    free = " ".join(str(free).split())
-    free = free.rstrip(".") if tail.startswith(".") else free
-    room = LOCK_SCREEN - len(head) - len(tail)
-    if len(free) <= room:
-        return head + free + tail
-    cut = free[:max(room - 1, 0)]
-    if " " in cut[-15:]:  # at a word's end, not inside one
-        cut = cut.rsplit(" ", 1)[0]
-    if cut.count("`") % 2:  # nor inside a command, which the user may copy
-        cut = cut[:cut.rindex("`")]
-    stop = "." * tail.startswith(".")  # "…" ends the line's sentence; the cut-off rest gets the full stop
-    rest = f"\n…{free[len(cut):].lstrip()}{stop}" if whole else ""
-    return head + cut.rstrip(" ,;:(") + "…" + tail.removeprefix(stop) + rest
+REASON = 300  # characters of a session's error in a set-aside or stop reason
 
 
 def said_times(n):
     return f"{n} time{'s' * (n != 1)}"
-
-
-def rules(p, name):
-    text = (HOME / "prompts" / name).read_text()
-    for k, v in {"{upstream}": p.upstream, "{remote}": p.remote, "{main}": p.main}.items():
-        text = text.replace(k, v)
-    return text
 
 
 def worker_perms(p):
@@ -140,71 +112,6 @@ def overlaps(paths, others):
 
 def nth(n):
     return {1: "1st", 2: "2nd", 3: "3rd"}.get(n, f"{n}th")
-
-
-def ensure_worktree(p, path, setup=True, stop=lambda: ""):
-    """The autopilot's own worktree at `path`, created detached at upstream (and set up) when missing. With
-    isolate off, work_dir and ci_dir are the checkout itself, which is left alone. `stop()` gives a reason to end
-    the setup early (the run's stop or deadline), raised as SetupFailed's `killed`."""
-    if path == p.main_root() or (path / ".git").exists():
-        return
-    root = p.main_root()
-    net.git(root, "fetch", "-q", p.remote)
-    git(root, "worktree", "prune")
-    r = git(root, "worktree", "add", "--detach", str(path), p.upstream)
-    if r.returncode:
-        raise SystemExit(f"windvane: can't create the worktree {path}: {r.stderr.strip()}")
-    if setup and p.cfg["setup"]:
-        log(p, f"setting up {path}: {p.cfg['setup']}…")
-        limit = p.cfg["setup_minutes"]
-        code, why, lines = run_limited(p.cfg["setup"], path, now() + timedelta(minutes=limit), stop, echo=True,
-                                       keep=15)
-        if code or why:  # a half-made tree fails every check: remove it, so the next start sets it up afresh
-            git(root, "worktree", "remove", "--force", str(path))
-            shutil.rmtree(path, ignore_errors=True)
-            git(root, "worktree", "prune")
-            how = (f"timed out after {limit:g} min" if why == TIMED_OUT else f"cut short ({why})" if why
-                   else f"failed (exit {code})")
-            cmd, where = f"`{clip(p.cfg['setup'], 60)}`", short_path(p, path)
-            raise SetupFailed(f"setup {cmd} {how} in {where}", lines, why, how, f"{cmd} in {where}")
-
-
-def clip(text, n):
-    """`text` cut to `n` characters with "…": a long chained `setup` would fill the phone's first line."""
-    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
-
-
-TIMED_OUT = "out of time"  # run_limited's reason when `until` passes
-
-
-def short_path(p, path):
-    """`path` as the user knows it: relative to the state dir (`work-1`), else its last two parts."""
-    try:
-        return str(Path(path).relative_to(p.state))
-    except ValueError:
-        return str(Path(*Path(path).parts[-2:]))
-
-
-class SetupFailed(Exception):
-    """The project's `setup` command failed in a fresh worktree; `lines` are the end of its output, `killed` why it
-    was killed (TIMED_OUT at `setup_minutes`, or the stop rule's reason), "" when it failed on its own."""
-
-    def __init__(self, why, lines, killed="", how="", ran=""):
-        super().__init__(why)
-        self.lines, self.killed, self.how, self.ran = lines, killed, how, ran
-
-    @property
-    def cut(self):
-        """Ended by the run's stop or deadline: the run ends as a stop, with nothing to fix."""
-        return self.killed not in ("", TIMED_OUT)
-
-
-def clean_detach(p, cwd, rev):
-    """Put the driver's own worktree on `rev`, discarding anything left there. Never used on the worker's tree."""
-    git(cwd, "merge", "--abort")
-    git(cwd, "reset", "-q", "--hard")
-    git(cwd, "clean", "-qfd")
-    return git(cwd, "switch", "-q", "--detach", rev).returncode == 0
 
 
 def pr_for(p, branch):
@@ -293,7 +200,7 @@ class Pilot(Desk, Periodic):
 
     def name(self, tid):
         t = self.queue.titles.get(tid, "") if hasattr(self, "queue") else ""
-        return f"{t[:45]} ({tid})" if t else tid
+        return f"{t} ({tid})" if t else tid
 
     def end(self):
         """The run's deadline, live: `windvane deadline` moves it by writing DEADLINE in the state dir, and every
@@ -379,20 +286,25 @@ class Pilot(Desk, Periodic):
             return False
         if aside:
             self.skip.add(tid)
-            self.aside[tid] = f"on trial: its sessions died ({error})"
+            self.aside[tid] = f"on trial: its sessions died ({self.said_error(error)})"
             self.log(f"  {label}: {own[0]} sessions died ({error}); set aside while another ticket runs: if its "
                      "session dies too, the run stops")
             return False
         wait = self.p.ap["retry_minutes"] * 2 ** (max(self.crashes, own[0] if own else 0) - 1)
         if self.crashes > n:
-            self.halt = f"{self.crashes} sessions in a row died ({error})"
+            self.halt = f"{self.crashes} sessions in a row died ({self.said_error(error)})"
         elif now() + timedelta(minutes=wait) >= self.end() - timedelta(minutes=self.a.min_slot):
-            self.halt = f"a session died ({error}), and there's no time left to retry it"
+            self.halt = f"a session died ({self.said_error(error)}), and there's no time left to retry it"
         if self.halt:
-            self.log(f"  {label}: {self.halt}")
+            self.log(f"  {label}: {self.halt}" + (f"; the error: {error}" if error not in self.halt else ""))
             return False
         self.log(f"  {label} died ({error}); retry {own[0] if own else self.crashes}/{n} in {wait:g} min")
         return self.backoff(wait)
+
+    def said_error(self, error):
+        """A session's error as a reason says it (the run summary's aside line, the stop reason): its API message, at
+        most REASON characters, since a summary carries a few of them in one push. The log keeps the whole text."""
+        return whole("", plain_error(error), log=self.log, most=REASON)
 
     def backoff(self, minutes):
         """A retry's backoff; False when a stop or the deadline came first."""
@@ -412,16 +324,17 @@ class Pilot(Desk, Periodic):
     def set_aside(self, tid, error):
         """A ticket whose own sessions keep dying while others' don't: the rest of the run goes on without it."""
         self.skip.add(tid)
-        self.aside[tid] = f"its sessions kept dying: {error}"
+        self.aside[tid] = f"its sessions kept dying: {self.said_error(error)}"
         self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work")
+        error = plain_error(error)
         died = f"Sessions died {self.p.ap['retries'] + 1}×: "
         why = "Other sessions worked, so it's this ticket's doing."
         hit = next(((text, fix) for text, fix in SELF_INFLICTED if text in error.lower()), None)
         if hit:  # the fix leads: the error's own words rarely say what to do
-            body = (lead(died, hit[0], f". {hit[1]}", log=self.log)
-                    + f"\nThe error: {' '.join(error.split())}\nBranch kept, run goes on. {why}")
+            body = (whole(died, hit[0], f". {hit[1]}", log=self.log)
+                    + "\n" + whole("The error: ", error, ".", log=self.log) + f"\nBranch kept, run goes on. {why}")
         else:
-            body = lead(died, error, ". Branch kept, run goes on.") + f"\n{why}"
+            body = whole(died, error, ". Branch kept, run goes on.", log=self.log) + f"\n{why}"
         push(f"Set aside: {self.name(tid)}", body, 4, "warning")
 
     def set_aside_limit(self, tid, limit, fix):
@@ -430,7 +343,8 @@ class Pilot(Desk, Periodic):
         self.skip.add(tid)
         self.aside[tid] = f"hit {limit}"
         self.log(f"{tid}: the run hit {limit}; set aside")
-        push(f"Set aside: {self.name(tid)}", lead("Hit ", limit, f". {fix} Branch kept.", log=self.log), 3, "hourglass")
+        push(f"Set aside: {self.name(tid)}", whole("Hit ", limit, f". {fix} Branch kept.", log=self.log), 3,
+             "hourglass")
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
@@ -692,18 +606,20 @@ class Pilot(Desk, Periodic):
         if r.returncode == 0 and not gout(cd, "status", "--porcelain"):
             self.stash_failed.discard(why)
             self.log(f"{why}: stashed the checkout's uncommitted changes as \"{msg}\"")
-            push("your changes were stashed", lead("Your uncommitted changes were stashed before ", why, ".")
+            push("your changes were stashed",
+                 whole("Your uncommitted changes were stashed before ", why, ".", log=self.log)
                  + f"\ngit stash list: {msg}", 3, "package")
             return True
-        err = (r.stderr.strip() or "?").splitlines()[0][:200] if r.returncode else "changes were left after it"
+        err = (r.stderr.strip() or "?").splitlines()[0] if r.returncode else "changes were left after it"
         first = why not in self.stash_failed
         if first or not then:  # a wait tries again every STASH_WAIT seconds: logged once
             self.log(f"{why}: {'waits' if then else 'skipped'}: couldn't stash the checkout's changes ({err})")
         if first:
             self.stash_failed.add(why)
-            push("checkout not cleaned", lead("Commit or stash your checkout's changes: ",
-                                              then or why + " was skipped", ".")
-                 + f"\nwindvane couldn't stash them, and deleted nothing. git said: {err}", 4, "warning")
+            push("checkout not cleaned", whole("Commit or stash your checkout's changes: ",
+                                              then or why + " was skipped", ".", log=self.log)
+                 + "\nwindvane couldn't stash them, and deleted nothing. " + whole("git said: ", err, "", log=self.log),
+                 4, "warning")
         return False
 
     def check_at(self, rev, ticket=None):
@@ -893,6 +809,7 @@ class Pilot(Desk, Periodic):
             if branch and git(wd, "merge-base", "--is-ancestor", branch, p.upstream).returncode == 0:
                 git(wd, "branch", "-q", "-D", branch)  # -d's own test would use the deleted remote branch
         self.merged.append(tid)
+        scratch.drop(p, tid)
         with self.lock:  # this attempt is still running: its time so far counts too
             ran = self.spent.pop(tid, 0) + time.time() - self.began.get(tid, time.time())
         self.minutes.append(round(ran / 60, 2))
@@ -904,16 +821,32 @@ class Pilot(Desk, Periodic):
         self.log(f"{tid}: merged {sha[:7]} · {self.usage.text()}")
         push(f"Done: {self.name(tid)}", "Built, checked, reviewed and merged."
              + (f" Critic {score:g}/10." if score is not None else "") + f" {self.usage.text()}"
-             + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else ""), 2, "white_check_mark")
+             + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else "") + self.built_lines(tid),
+             2, "white_check_mark")
+
+    def built_lines(self, tid):
+        """The Done push's lines for the ticket's provisional answers. A question the phone already showed gets one
+        line without its text; only one built without the user ever seeing it (a quiet time) is spelled out. Either
+        way it counts as pushed: the end-of-quiet digest leaves it out."""
+        p = self.p
         picks = [q for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
                  if p.norm(q["ticket"]) == tid]
-        if picks:
-            push(f"Provisional: {self.name(tid)}", f"To change one: windvane answer {tid} <letter>, or tell a Claude "
-                 "session."
-                 + "".join(f"\n{q['question']} Built {q['built']}: {q['option']}" for q in picks), 3, "memo")
+        if not picks:
+            return ""
+        with self.lock:  # slots merge side by side
+            new = unseen(picks, shown(p)["asked"].get(tid, []))
+
+            def told(s):
+                s["pushed"] += [qkey(q) for q in picks if qkey(q) not in s["pushed"]]
+                s["asked"].pop(tid, None)
+            note(p, told)
+        how = f"to change: windvane answer {tid} <letter>."
+        return "".join(f"\n{q['question']} Built {q['built']} without asking you: {q['option']}; {how}" if q in new
+                       else f"\nBuilt {q['built']} for {tid}: {q['option']}; {how}" for q in picks)
 
     def fail(self, tid, why):
         self.skip.add(tid)
+        scratch.drop(self.p, tid)
         self.failed.append(tid)
         self.approved.pop(tid, None)
         self.log(f"{tid}: FAILED: {why}")
@@ -923,7 +856,8 @@ class Pilot(Desk, Periodic):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
-        push(f"Failed: {self.name(tid)}", lead("", why, ". Branch kept, run goes on."), 4, "x")
+        push(f"Failed: {self.name(tid)}", whole("", plain_error(why), ". Branch kept, run goes on.", log=self.log), 4,
+             "x")
 
     # ---------- questions
 
@@ -958,6 +892,9 @@ class Pilot(Desk, Periodic):
         sent = phone.ask(self.p.qid(tid), f"{self.name(tid)}: {q['q']}{wait}", opts)
         if sent is None:
             self.log(f"{tid}: no phone; answer at the desk with `windvane answer {tid} <letter>`")
+        elif sent:  # the Done push then names it in one line, without the question
+            with self.lock:
+                note(self.p, lambda s: s["asked"].setdefault(tid, []).append(q["q"]))
         elif not sent:  # the next pass sends it again; the wait for an answer starts once it's out
             q["asked"] = None
             if not q.get("send_failed"):
@@ -987,14 +924,16 @@ class Pilot(Desk, Periodic):
                                       + (f" They added: {text}" if text else "")
                                       + ". Build that, and move the question to ## Answered with the answer.")
                 self.log(f"{tid}: answered {letter or ''} {text or ''}".rstrip())
+                with self.lock:  # answered, so never mistaken for a reworded copy of a later provisional answer
+                    note(p, lambda s: s["asked"].update({tid: [a for a in s["asked"].get(tid, []) if a != q["q"]]}))
             elif (not q.get("later") and not q["must_wait"] and q["rec"]
                   and time.time() - q["asked"] > self.a.answer_wait * 60):
                 self.feedback[tid] = (f"The user didn't answer your question \"{q['q']}\" within "
                                       f"{self.a.answer_wait:g} minutes: build your recommendation ({q['rec']}), and "
                                       "move the question to ## Provisional with its `Built:` line.")
                 self.log(f"{tid}: no answer in {self.a.answer_wait:g} min; building {q['rec']}")
-                opt = q["opts"].get(q["rec"], "")[:300]
-                push(f"No answer: {self.name(tid)}", lead(f"Going with {q['rec']}: ", opt, ".")
+                opt = q["opts"].get(q["rec"], "")
+                push(f"No answer: {self.name(tid)}", whole(f"Going with {q['rec']}: ", opt, ".", log=self.log)
                      + f"\nTo change it later: windvane answer {tid} <letter>.", 3, "hourglass")
             else:
                 continue
@@ -1008,19 +947,31 @@ class Pilot(Desk, Periodic):
         end, err = quiet_now(self.p)
         if err and getattr(self, "quiet_err_sent", None) != err:  # once, not on every pass; again after a fix
             self.log(f"quiet times ignored: {err}; asking as usual")
-            push("quiet times ignored", lead("", err, "; asking as usual till it's fixed.")
+            push("quiet times ignored", whole("", err, "; asking as usual till it's fixed.", log=self.log)
                  + "\n`windvane quiet` shows the format.", 3, "warning")
         self.quiet_err_sent = err
         if not end:  # only money, licence and merged-work questions ask in a quiet time
             self.send_unsent()
         if self.was_quiet and not end:
             self.log("quiet time over")
-            picks = provisional(gout(self.p.main_root(), "show", f"{self.p.upstream}:{self.p.questions_rel}"))
-            if picks:
-                push(f"Review: {len(picks)} provisional answer{'s' * (len(picks) > 1)}",
-                     "To change one: windvane answer <ID> <letter>."
-                     + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in picks[:8]), 3, "memo")
+            self.digest()
         self.was_quiet = bool(end)
+
+    def digest(self):
+        """At a quiet time's end: the provisional answers no push has shown yet (a Done push or an earlier digest
+        has the rest), or nothing. The record keeps only those still provisional."""
+        p = self.p
+        picks = provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
+        with self.lock:
+            done = set(shown(p)["pushed"])
+            new = [q for q in picks if qkey(q) not in done]
+            told = {qkey(q) for q in new[:8]} | done  # past eight: the next digest
+            note(p, lambda s: s.update(pushed=[qkey(q) for q in picks if qkey(q) in told]))
+        if new:
+            push(f"Review: {len(new)} provisional answer{'s' * (len(new) > 1)}",
+                 "To change one: windvane answer <ID> <letter>."
+                 + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in new[:8])
+                 + (f"\nThe other {len(new) - 8} come with the next one." if len(new) > 8 else ""), 3, "memo")
 
     # ---------- the loop
 
@@ -1168,9 +1119,9 @@ class Pilot(Desk, Periodic):
             if e.cut:  # stop_check gives the stop or the deadline as the run's reason
                 self.log(str(e))
                 return False
-            last = e.lines[-1][:200] if e.lines else "no output"
+            last = e.lines[-1] if e.lines else "no output"
             fix = "; raise `setup_minutes` in config.toml or fix the setup" if e.killed == TIMED_OUT else ""
-            self.halt = f"setup {e.how}{fix}: {last} (it ran {e.ran})"  # the fix first: the push's line is cut
+            self.halt = f"setup {e.how}{fix}: {last} (it ran {e.ran})"  # the fix first: the error may run long
             self.log(str(e))
             log(self.p, "\n".join(["its last lines:", *e.lines]), echo=False)  # the terminal showed them already
             return False
@@ -1232,12 +1183,22 @@ class Pilot(Desk, Periodic):
                     self.spent[tid] = self.spent.get(tid, 0) + ran
                 self.beside.discard(tid)  # a later attempt alone doesn't count its conflicts against parallel
             self.save()
+            self.clean_tmp()
             self.wake.set()
+
+    def clean_tmp(self):
+        """Between tickets: what tests and sessions leaked into the temp dir, before it fills (tmpfs inodes)."""
+        with self.lock:
+            running = set(self.running)
+        dirs, n = scratch.clean(self.p, running)
+        if dirs:
+            self.log(f"removed {dirs} leftover temp dir{'s' * (dirs > 1)} ({n} files)")
 
     def loop(self):
         p = self.p
         while True:
             self.quiet_check()
+            self.poll_questions()  # every pass, busy slots or not: a question's wait runs out on time
             why = self.stop_check()
             if why:
                 self.stop_reason = why
@@ -1271,7 +1232,6 @@ class Pilot(Desk, Periodic):
                 self.desk_one(desk[0])
                 continue
             self.fetch()
-            self.poll_questions()
             self.queue = Queue(p)
             tid, kind, branches, slot = self.pick(free)
             if tid is not None and over:  # no more slots until the window allows; the running ones go on
@@ -1309,8 +1269,9 @@ class Pilot(Desk, Periodic):
                 beside = f", beside {', '.join(sorted(self.running))}" if self.running else ""
                 self.log(f"{tid}: slot {slot}{beside}")
             self.start(slot, tid, kind, branches)
-            if self.n == 1:
-                self.threads[-1].join()
+            while self.n == 1 and self.threads[-1].is_alive():
+                self.threads[-1].join(NAP)
+                self.poll_questions()
 
     def self_update(self):
         """Pulls the windvane install between tickets (nothing running) and, when the driver's own code changed,
@@ -1381,6 +1342,7 @@ class Pilot(Desk, Periodic):
         swept = sweep_nested(p)  # under the lock: no live run owns them
         if swept:
             self.log(f"killed {swept} process group{'s' * (swept > 1)} left running by an earlier run's sessions")
+        self.clean_tmp()
         ready, crashed = False, None
         try:
             ready = self.rules_ok() and self.prepare(0)  # before any session or push: a bad rule or a failed setup
@@ -1419,7 +1381,8 @@ class Pilot(Desk, Periodic):
                 rest = "Merged:" + summary.split("\nMerged:", 1)[1]  # past the why, which may run on to a 2nd line
                 save_json(p.state / "crash.json", {"error": crashed, "summary": rest})
             elif not ready and self.halt:  # just why, once: nothing ran, so the summary's other lines say nothing
-                push("windvane couldn't start", lead("", self.halt[0].upper() + self.halt[1:], "."), 4, "warning")
+                push("windvane couldn't start", whole("", self.halt[0].upper() + self.halt[1:], ".", log=self.log), 4,
+                     "warning")
             else:
                 push("windvane stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                      "checkered_flag", ("Usage=usage",))
@@ -1435,17 +1398,17 @@ class Pilot(Desk, Periodic):
         names = lambda ids: "; ".join(map(self.name, ids)) or "none"
         crit = ", ".join(f"{t} {s:g}" for t, s in self.scores.items())
         under = [t for t in self.merged if (h := critic.history(p, t)) and h[-1].get("step") == "accept"]
-        picks = [(q["ticket"], q["question"], f"{q['built'] or '?'}: {q['option'][:60]}" if q["option"] else q["built"] or "?")
+        picks = [(q["ticket"], f"{q['built'] or '?'}: {q['option']}" if q["option"] else q["built"] or "?")
                  for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))]
         side = (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
                 f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else "")
-        return (lead("Why: ", self.stop_reason, ".") + f"\nMerged: {names(self.merged)}.\n"
+        return (whole("Why: ", self.stop_reason, ".", log=self.log) + f"\nMerged: {names(self.merged)}.\n"
                 + (f"Merged under the critic's bar (out of revisions): {names(under)}.\n" if under else "")
                 + (f"Desk PRs merged: {', '.join('#' + n for n in self.desk_merged)}.\n" if self.desk_merged else "")
                 + (f"Critic (/10): {crit}.\n" if crit else "") + side
                 + (f"Held for you (parked in QUEUE.md): {names(self.held)}.\n" if self.held else "")
                 + f"Waiting on you: {names(self.questions)}.\n"
-                + (f"Provisional answers to check: {'; '.join(f'{q[0]} {q[1]} (built {q[2]})' for q in picks[:6])}"
+                + (f"Provisional answers to check: {'; '.join(f'{q[0]} (built {q[1]})' for q in picks[:6])}"
                    + (f" and {len(picks) - 6} more" if len(picks) > 6 else "") + ". "
                    "To change one: windvane answer <ID> <letter>.\n" if picks else "")
                 + f"Failed: {names(self.failed)}.\n"
@@ -1474,8 +1437,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
                 why = f"the driver was killed ({signal.Signals(-rc).name})"
                 log(p, f"{why}; not restarted: its sessions may still be running in the worktrees")
-                push("windvane stopped", lead("Why: ", why, ". Not restarted.") + "\nIts sessions may still be "
-                     "running in the worktrees.", 4, "rotating_light", ("Status=status",))
+                push("windvane stopped", whole("Why: ", why, ". Not restarted.", log=lambda m: log(p, m))
+                     + "\nIts sessions may still be running in the worktrees.", 4, "rotating_light", ("Status=status",))
             return rc  # its own end (a stop, the deadline, the queue, a failed setup), or a kill
         why = info["error"]
         try:
@@ -1488,14 +1451,15 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
                 else asked() or ("deadline" if now() >= deadline else None))
         if not stop:
             log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour")
-            push("windvane restarted", lead("The driver crashed: ", why,
-                                            f". Restart {len(crashes)} of {RESTARTS} this hour.")
+            push("windvane restarted", whole("The driver crashed: ", why,
+                                            f". Restart {len(crashes)} of {RESTARTS} this hour.",
+                                            log=lambda m: log(p, m))
                  + f"\nIt goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
             sleep(RESTART_PAUSE)
             stop = asked()
         if stop:
             log(p, f"driver crashed ({why}); not restarted: {stop}")
-            push("windvane stopped", lead("Why: the driver crashed (", why, f"); not restarted: {stop}.",
+            push("windvane stopped", whole("Why: the driver crashed (", why, f"); not restarted: {stop}.",
                                           log=lambda m: log(p, m)) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             return rc
@@ -1514,474 +1478,3 @@ def locked(p):
         except OSError:
             return True
     return False
-
-
-# ---------- planning
-
-def changed_paths(cwd):
-    """Every path with uncommitted changes, both sides of a rename. -z: no quoting, no stripped leading spaces."""
-    out = git(cwd, "status", "--porcelain", "-z", "--untracked-files=all").stdout.split("\0")
-    paths, i = [], 0
-    while i < len(out):
-        entry = out[i]
-        if len(entry) > 3:
-            paths.append(entry[3:])
-            if entry[0] in "RC":  # a rename's source follows as its own field
-                i += 1
-                paths.append(out[i])
-        i += 1
-    return paths
-
-
-def author_ident(p):
-    """`-c user.name/email` for the driver's own commits when the config names an author."""
-    a = p.cfg["author"]
-    return (["-c", f"user.name={a.split('<')[0].strip()}", "-c", f"user.email={a.split('<')[1].rstrip('>').strip()}"]
-            if "<" in a else [])
-
-
-def push_branch(p, cd, branch, tries=2):
-    """Push `cd`'s HEAD to `branch`, trying twice (or `tries` times). When all fail, the commit stays on a local branch of that name, so
-    the next run's reset of `cd` can't lose paid-for work. Returns where it is: `branch`, or "the local branch ...
-    (why the push was refused and what to do)", so every push that names the place also says the next step."""
-    for _ in range(tries):
-        res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
-        if res.returncode == 0:
-            return branch
-    git(cd, "branch", "-f", branch, "HEAD")
-    log(p, f"push to {branch} refused ({' '.join(res.stderr.split())[:200]}); kept only locally on {branch}")
-    why = push_refusal(res.stderr, p.cfg["forge"], branch, p.remote, p.main)
-    hold(p, branch, "push", why)
-    return f"the local branch {branch} ({why})"
-
-
-def hold(p, branch, how, why=""):
-    """Note a branch a failed push kept locally, for `push_held`: "push" it, or "land" it (a merge stays a merge).
-    Only branches noted here are ever pushed again, so a user's own copy of a closed plan never comes back. The
-    refusal's reason goes beside it (held_why.json, the newest wins) with when it was first held, for `status` to show
-    while it waits."""
-    held = load_json(p.state / "held.json", {})
-    if held.get(branch) != "land":
-        held = {**held, branch: how}
-    old = held_note(load_json(p.state / "held_why.json", {}).get(branch))
-    save_held(p, held, {branch: {"why": why or old.get("why", ""), "at": old.get("at") or int(time.time())}})
-
-
-def held_note(note):
-    """A held_why.json entry as {"why", "at"}: one written before T-072 is the reason alone, with no time."""
-    return note if isinstance(note, dict) else {"why": note or ""}
-
-
-def save_held(p, held, notes=None):
-    """Write held.json and, in the same step, drop the reasons of branches no longer in it (adding `notes`), so no
-    stale reason outlives its branch."""
-    save_json(p.state / "held.json", held)
-    reasons = {**load_json(p.state / "held_why.json", {}), **(notes or {})}
-    save_json(p.state / "held_why.json", {b: w for b, w in reasons.items() if b in held})
-
-
-# What a refused push's stderr says, first match wins, with its next step: a secret by taking it out of the commit
-# (GitHub's push protection is a GH013 rule too, but no rule change or other name gets past it), a login problem by
-# logging in, a hook or branch protection by changing the rule or the branch (pushing again alone fails the same way),
-# the network by waiting: the next run pushes what was held back (`push_held`).
-REFUSALS = (
-    ("refused: it holds a secret{where} (GitHub push protection); remove it from the branch's commit "
-     "(`git commit --amend` on `{branch}`), then the next run pushes it{allow}",
-     re.compile(r"push protection|cannot contain secrets|secret scanning", re.I)),
-    ("login refused; {login} and the next run pushes it",
-     re.compile(r"authentication failed|permission denied|permission to .* denied|could not read username|"
-                r"terminal prompts disabled|invalid username or password|\b403\b", re.I)),
-    ("refused by a hook or branch rule; change the rule, or push it by hand with `git push {remote} {branch}:{branch}-b` "
-     "and {then}",
-     re.compile(r"hook declined|protected branch|GH00\d|GH013|rule violation|remote rejected", re.I)),
-    ("network down; the next run pushes it again",
-     re.compile(r"could not resolve|timed out|connection (refused|reset)|network is unreachable|unable to access|"
-                r"early eof|could not read from remote", re.I)),
-)
-
-
-LOGIN = {"github": "run `gh auth login`", "git": "check your login to the remote"}
-# After a hand push: windvane counts the branch as pushed and stops pushing it, so the user lands it (a change to land
-# stays listed until main has it).
-THEN = {"github": "open a PR from it", "git": "merge it into {main}"}
-
-
-def push_refusal(stderr, forge="git", branch="BRANCH", remote="origin", main="main"):
-    """A short reason for a refused push and its next step, from git's stderr: auth, hook, network; anything else
-    sends the user to the log, which `push_branch` gave git's own words (a raw git line reads badly on a phone).
-    A hook's step names the command for `branch` on `remote`: under another name it counts as pushed (`held_here`)."""
-    for why, pattern in REFUSALS:
-        if pattern.search(stderr):
-            return why.format(login=LOGIN.get(forge, LOGIN["git"]), branch=branch, remote=remote,
-                              then=THEN.get(forge, THEN["git"]).format(main=main), **secret_at(stderr))
-    return "push failed; see the windvane log"
-
-
-def secret_at(stderr):
-    """Where GitHub's push protection found the secret (its `path:` lines) and, when it isn't one, the page that
-    allows it (its unblock URL), for the secret's step; empty parts when the stderr names neither. The URL stays
-    whole (a cut one doesn't open): `lead` moves what passes the lock screen to the next line."""
-    paths = list(dict.fromkeys(re.findall(r"^remote:\s+path:\s*(\S+)", stderr, re.M)))
-    url = re.search(r"https://\S+/unblock-secret/\S+", stderr)
-    return {"where": " in " + ", ".join(f"`{x}`" for x in paths[:3]) + " and more" * (len(paths) > 3) if paths else "",
-            "allow": f"; or allow it on GitHub if it isn't a secret: {url.group()}" if url else ""}
-
-
-def n_tickets(n, kind=""):
-    """ "1 ticket", "2 tickets"; `kind` goes between ("1 new ticket")."""
-    return f"{n} {kind}ticket" + ("" if n == 1 else "s")
-
-
-def is_local(where):
-    return where.startswith("the local branch ")
-
-
-def local_push(where, kept):
-    """A push's body for a branch `push_branch` kept locally: why the push was refused and the next step first (the
-    branch's name would push them past the lock screen), then `kept` with the branch's name."""
-    m = re.fullmatch(r"the local branch (\S+) \((.*)\)", where, re.S)
-    branch, why = m.groups() if m else (where, "")
-    return lead("", why[:1].upper() + why[1:], ".") + f"\n{kept} {branch}."
-
-
-def land(p, cd, branch, title, body, commit=True, tries=2):
-    """Put the driver's own change in `cd` (staged, or committed when `commit` is off) on main: through a merged PR on
-    github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is). One kept on a local
-    branch is noted as one to land when pushed again."""
-    title = actions.tag(p, title, cd)
-    if commit:
-        git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
-    ok, where = _land(p, cd, branch, title, body, tries)
-    if is_local(where):
-        hold(p, branch, "land")
-    return ok, where
-
-
-def _land(p, cd, branch, title, body, tries):
-    if p.cfg["forge"] == "github":
-        where = push_branch(p, cd, branch, tries)
-        if is_local(where):
-            return False, where
-        pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title, "--body", body)
-        pr_n = pr.rstrip("/").rsplit("/", 1)[-1]
-        merged = pr_n.isdigit() and (
-            net.call(["gh", "pr", "merge", pr_n, "--merge", *(["--subject", title] * (actions.SKIP in title))],
-                     p.main_root()).returncode
-            == 0 or net.sh(p.main_root(), "gh", "pr", "view", pr_n, "--json", "state", "-q", ".state") == "MERGED")
-        if merged:
-            net.git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
-        return merged, pr or branch
-    res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
-    if res.returncode:  # main moved meanwhile: the change only adds to .windvane/, so replay it
-        net.git(p.main_root(), "fetch", "-q", p.remote)
-        if git(cd, *author_ident(p), "rebase", "-q", p.upstream).returncode == 0:
-            res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
-        else:
-            git(cd, "rebase", "--abort")
-        if res.returncode:  # keep the paid-for work on its branch rather than drop it
-            return False, push_branch(p, cd, branch, tries)
-    return True, p.main
-
-
-class PlanBusy(Exception):
-    """Another plan holds the lock: raised for the desk's `windvane plan`, which must say so."""
-
-
-def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max_new=6, busy_raises=False):
-    """A planner run writes tickets for `goal` (and the critic's follow-ups) on a branch the driver commits;
-    `merge` merges it at once. Returns how many tickets it merged (with `merge`) or wrote; while another plan runs,
-    0 (or PlanBusy with `busy_raises`)."""
-    p.state.mkdir(parents=True, exist_ok=True)
-    with open(p.state / "plan.lock", "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            log(p, "plan: another plan is running")
-            if busy_raises:
-                raise PlanBusy("another plan is running")
-            return 0
-        return _plan(p, goal, use_followups, usage, stop_if, merge, max_new)
-
-
-def held_branches(p):
-    """The branches `hold` noted that still wait to be pushed: unmerged and on no remote branch (pushing one by hand
-    under another name counts as pushed), with no PR on github (one pushed by hand, its PR closed and branch deleted,
-    stays closed). A change to land pushed by hand stays noted, not pushed again, until main has it or its PR is
-    closed. Notes and reasons for any other branch are dropped."""
-    held, root = load_json(p.state / "held.json", {}), p.main_root()
-    here, tracked = held_here(p, held), {}
-    for b, (how, on) in here.items():
-        states = p.cfg["forge"] == "github" and net.sh(
-            root, "gh", "pr", "list", "--head", on.removeprefix(f"{p.remote}/") if on else b, "--state", "all",
-            "--json", "state", "-q", ".[].state")
-        if not states or (on and "OPEN" in states.split()):
-            tracked[b] = how
-    if tracked != held or set(load_json(p.state / "held_why.json", {})) - set(tracked):
-        save_held(p, tracked)
-    return {b: how for b, how in tracked.items() if not here[b][1]}
-
-
-def held_here(p, held):
-    """`held`'s branches still tracked, as branch -> (how, the remote branch that has it or ""): unmerged ones on no
-    remote branch, and a change to land on one too (pushed by hand, it isn't done until main has it). Git alone, no
-    network."""
-    if not held:  # the usual case: no git call for `status`
-        return {}
-    root, out = p.main_root(), {}
-    unmerged = set(gout(root, "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split())
-    for b, how in held.items():
-        if b not in unmerged or main_has(root, p.upstream, b):
-            continue
-        on = gout(root, "branch", "-r", "--contains", b, "--format=%(refname:short)").split()
-        if not on or how == "land":
-            out[b] = how, (on or [""])[0]
-    return out
-
-
-def main_has(root, upstream, branch):
-    """Whether `upstream` already holds `branch`'s change though git doesn't count it merged: a squash or rebase merge
-    (GitHub's, or a `git merge --squash`) makes new commits. Merging the branch in would change nothing; before git
-    2.38 (no `merge-tree --write-tree`), `git cherry` finds a rebased or one-commit squashed change. When neither can
-    tell, it isn't landed: a change kept listed costs a line, a dropped one is lost."""
-    r = git(root, "merge-tree", "--write-tree", upstream, branch)
-    if r.returncode in (0, 1):  # 1: the merge conflicts, so main lacks some of it
-        return r.returncode == 0 and r.stdout.split()[:1] == [gout(root, "rev-parse", f"{upstream}^{{tree}}")]
-    marks = [line[:1] for line in gout(root, "cherry", upstream, branch).splitlines()]
-    return bool(marks) and "+" not in marks
-
-
-def held_now(p):
-    """(branch, the last refusal's reason and next step, when it was held, the remote branch a hand push put it on or
-    "") for each held branch still tracked; read only (no `gh`, no write: `held_branches` prunes at the next run's
-    start). One held before T-072 has no time noted: its last commit's date stands in."""
-    reasons, out = load_json(p.state / "held_why.json", {}), []
-    for b, (_, on) in held_here(p, load_json(p.state / "held.json", {})).items():  # no git call when none is held
-        note = held_note(reasons.get(b))
-        at = note.get("at") or int(gout(p.main_root(), "log", "-1", "--format=%ct", b) or time.time())
-        out.append((b, note["why"] or "push failed; see the windvane log", at, on))
-    return out
-
-
-def held_lines(p, now=None, subject=60):
-    """One line per held branch (of `now`, `held_now`'s list) with how long it has waited and where it is: the last
-    refusal's reason and next step, or, pushed by hand, the merge still to do (on github, through a PR); for `status`
-    (`subject` None: the commit subject whole) and `overview`."""
-    forge = p.cfg["forge"]
-    merge = THEN.get(forge, THEN["git"]).format(main=p.main) + " and merge it" * (forge == "github")
-    return [f"held back for {age(time.time() - at)}, " + (f"pushed to {on}, not merged" if on else "not pushed")
-            + f": {b} ({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:subject]}): "
-            + (merge if on else why) for b, why, at, on in (held_now(p) if now is None else now)]
-
-
-def age(seconds):
-    """ "under an hour", "5 hours", "3 days": how long something has waited, in a phone line's words."""
-    hours = int(seconds // 3600)
-    if hours < 1:
-        return "under an hour"
-    n, unit = (hours, "hour") if hours < 24 else (hours // 24, "day")
-    return f"{n} {unit}{'s' * (n > 1)}"
-
-
-def push_held(p):
-    """At a run's start and a desk plan's: push what a failed push kept on a local branch, one try each, landing
-    what was to land (held.json) and opening a plan's PR on github. A push still failing is logged only: the phone
-    heard why the first time. A pushed branch's local copy goes (the remote has it), or this would push it again
-    after its PR was closed and deleted. Returns how many were pushed; 0 while a plan runs (it uses the worktree)."""
-    p.state.mkdir(parents=True, exist_ok=True)
-    with open(p.state / "plan.lock", "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            return 0
-        net.git(p.main_root(), "fetch", "-q", "--prune", p.remote)
-        branches = held_branches(p)
-        if branches:
-            ensure_worktree(p, p.plan_dir, setup=False)
-        pushed = list(filter(None, (push_one_held(p, p.plan_dir, b, how) for b, how in branches.items())))
-        if branches:
-            clean_detach(p, p.plan_dir, p.upstream)
-        if pushed:  # one push for them all
-            push(*held_push(pushed), 3, "memo")
-        return len(pushed)
-
-
-def held_push(pushed):
-    """The title and body of `push_held`'s one push, from (line, needs the user) pairs: the ones that need the user
-    (not merged, no PR) come first, under a title that says so, so "pushed" never hides them."""
-    todo, done = [l for l, need in pushed if need], [l for l, need in pushed if not need]
-    if not todo:
-        return f"{len(done)} held-back change{'s' * (len(done) > 1)} pushed", "\n".join(done)
-    title = f"{len(todo)} held-back change{'s' * (len(todo) > 1)} pushed, not merged"
-    return title + (f"; {len(done)} more pushed" if done else ""), "\n".join(todo + ["", "Pushed:"] * bool(done) + done)
-
-
-def push_one_held(p, cd, branch, how):
-    """Where `branch` went, as a line for the phone and whether it needs the user; "" when it stays local."""
-    if not clean_detach(p, cd, branch):
-        return ""
-    title, body = gout(cd, "log", "-1", "--format=%s"), gout(cd, "log", "-1", "--format=%b")
-    to_land = how == "land"  # a desk plan without --merge only pushes
-    if to_land:
-        landed, where = land(p, cd, branch, title, body, commit=False, tries=1)
-    else:
-        where = push_branch(p, cd, branch, tries=1)
-        if not is_local(where) and p.cfg["forge"] == "github":
-            where = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title,
-                           "--body", body[-6000:]) or where
-    if is_local(where):
-        log(p, f"{branch}: still not pushed{where.removeprefix(f'the local branch {branch}')}")
-        return ""
-    git(p.main_root(), "branch", "-D", branch)
-    save_held(p, {b: h for b, h in load_json(p.state / "held.json", {}).items() if b != branch})
-    no_pr = not to_land and p.cfg["forge"] == "github" and where == branch
-    how = (("merged" if landed else "not merged; merge it by hand") if to_land
-           else "pushed; no PR opened, open one by hand" if no_pr else "pushed")
-    log(p, f"{branch}: held back, now on {where}, {how}")
-    first = lead("", title, f": on {where}, {how}.", whole=False, log=lambda m: log(p, m))
-    return first, no_pr or (to_land and not landed)
-
-
-def pending_ids(p):
-    """Ticket ids on unmerged remote `plan-*` and `periodic-*` branches: tickets whose PR is still open have claimed
-    them, and so do local ones (a plan whose push was refused, waiting to be pushed by hand). A branch whose PR was
-    closed unmerged frees its ids (its branch is left alone)."""
-    ids = set()
-    remote = gout(p.main_root(), "branch", "-r", "--no-merged", p.upstream, "--format=%(refname:short)").split()
-    local = gout(p.main_root(), "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split()
-    heads = {b: b.removeprefix(f"{p.remote}/") if b in remote else b for b in remote + local}
-    heads = {b: name for b, name in heads.items() if name.startswith(("plan-", "periodic-"))}
-    closed = closed_prs(p, set(heads.values()))
-    for b, name in heads.items():
-        if name not in closed:
-            names = gout(p.main_root(), "ls-tree", "--name-only", b, p.tickets_rel + "/").split()
-            ids |= {p.norm(Path(n).stem) for n in names if n.endswith(".md")} - {None}
-    return ids
-
-
-def closed_prs(p, branches):
-    """Which of `branches` have PRs that were all closed unmerged; none off github or without `gh` (every branch
-    counts). One query per branch rather than a list of recent PRs, so no limit drops an old closed plan; a branch
-    found closed is remembered in closed_plans.json and not asked about again (each query takes ~0.8 s, and the
-    closed ones pile up, since their paid-for branches are kept). One list of the open PRs per call notices a
-    reopened one: its branch leaves the file and claims its ids again, or a new plan would reuse them; when that
-    list fails, no branch counts as closed and the file stays."""
-    if p.cfg["forge"] != "github":
-        return set()
-    f = p.state / "closed_plans.json"
-    known = set(load_json(f, []))
-    reopened = set()
-    if known & set(branches):
-        r = net.call(["gh", "pr", "list", "--state", "open", "--limit", "1000", "--json", "headRefName", "-q",
-                      ".[].headRefName"], p.main_root())
-        if r.returncode:  # can't tell which reopened: all keep their ids this time (a skipped id costs nothing)
-            return set()
-        reopened = set(r.stdout.split())
-    closed = (known - reopened) & set(branches)
-    for b in sorted(set(branches) - known - reopened):
-        states = set(net.sh(p.main_root(), "gh", "pr", "list", "--head", b, "--state", "all", "--json", "state",
-                            "-q", ".[].state").split())
-        if states == {"CLOSED"}:
-            closed.add(b)
-    if closed != known:  # a deleted branch's line goes too
-        save_json(f, sorted(closed))
-    return closed
-
-
-def plan_branch(p, cd):
-    """`plan-<date>-<time to the second>`, with a suffix should that name be taken here or on the remote."""
-    base = name = f"plan-{now():%Y%m%d-%H%M%S}"
-    n = 1
-    while any(git(cd, "rev-parse", "-q", "--verify", ref).returncode == 0
-              for ref in (f"refs/heads/{name}", f"refs/remotes/{p.remote}/{name}")):
-        n += 1
-        name = f"{base}-{n}"
-    return name
-
-
-def unmerged(p, n, where):
-    """A plan that couldn't merge counts as none (so `run --replan` doesn't take it for new work), but the user
-    hears where it waits: it was a paid planner session."""
-    clean_detach(p, p.plan_dir, p.upstream)
-    how = "" if is_local(where) else ": merge it by hand"  # a local branch's reason says what to do
-    log(p, f"plan: {n_tickets(n)} on {where}, not merged{how}")
-    waits = f"{n_tickets(n)} {'waits' if n == 1 else 'wait'} on"
-    body = (lead(f"{waits} ", where, f"{how}.", log=lambda m: log(p, m)) if how
-            else local_push(where, f"{waits} the local branch"))
-    push("plan not merged", body, 4, "warning")
-    return 0
-
-
-def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
-    cd = p.plan_dir
-    net.git(p.main_root(), "fetch", "-q", "--prune", p.remote)
-    ensure_worktree(p, cd, setup=False)
-    if not clean_detach(p, cd, p.upstream):
-        log(p, "plan: can't check out main")
-        return 0
-    q = Queue(p)
-    first = int(re.search(r"\d+", q.next_id(pending_ids(p))).group())
-    ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + max_new)]
-    notes = critic.followups(p) if use_followups else []
-    if not goal and not notes:
-        log(p, "plan: no goal and no critic follow-ups")
-        return 0
-    prompt = "\n\n".join(filter(None, [
-        f"Plan tickets for this project. Today is {now():%Y-%m-%d}. Follow the planner rules in your system prompt "
-        "and end with the PLAN line.",
-        f"## The goal\n{goal}" if goal else "",
-        "## The critic's follow-up notes since the last plan (ticket, point)\n"
-        + "\n".join(f"- ({t}) {b}" for t, b in notes[:60]) if notes else "",
-        f"## Existing tickets (id, status, title)\n{q.listing() or '(none yet)'}",
-        f"## Ids for new tickets, in order (at most {max_new})\n{', '.join(ids)}",
-    ]))
-    log(p, f"plan run ({len(notes)} critic notes)")
-    deny = ["Agent", "Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
-            "Bash(gh *)", "NotebookEdit"]
-    while True:
-        text, killed, error = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd,
-                                         ["Bash(git ls-files *)"], deny, usage, stop_if)
-        m = last_match(PLAN_RE, text)
-        if killed or m or not net.down_wait():  # cut off by an outage: once it's back, plan again from scratch
-            break
-        log(p, "plan: the run was cut off with the network down; running it again")
-        clean_detach(p, cd, p.upstream)
-    changed = changed_paths(cd)
-    if killed or not m or not changed:
-        clean_detach(p, cd, p.upstream)
-        log(p, f"plan: nothing written ({killed or error or (m.group(0) if m else 'no PLAN line')})")
-        return 0
-    outside = [c for c in changed if not c.startswith(".windvane/")]
-    if outside:
-        clean_detach(p, cd, p.upstream)
-        log(p, f"plan: wrote outside .windvane/ ({outside[0]}); discarded")
-        return 0
-    n = int(m.group(1) or 0)
-    branch = plan_branch(p, cd)
-    git(cd, "add", "-A", ".windvane")
-    title = actions.tag(p, f"Plan: {n_tickets(n)} ({m.group(3)[:60]})", cd)
-    git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", text.strip()[-3000:])
-    if notes:
-        from .util import append_jsonl
-        append_jsonl(p.state / "critic.jsonl", {"ticket": "PLAN", "step": "plan", "notes": len(notes)})
-    if merge:
-        ok, where = land(p, cd, branch, f"Plan: {n_tickets(n, 'new ')}", text.strip()[-6000:], commit=False)
-        if not ok:
-            return unmerged(p, n, where)
-        log(p, f"plan: {n_tickets(n)} on {where} (merged)")
-    else:
-        where = push_branch(p, cd, branch)
-        if is_local(where):
-            clean_detach(p, cd, p.upstream)
-            kept = f"{n_tickets(n)} kept only locally on {where.removeprefix('the local branch ')}"
-            log(p, f"plan: {kept}")
-            push("plan not pushed", local_push(where, f"{n_tickets(n)} kept only locally on"), 4, "warning")
-            return 0
-        if p.cfg["forge"] == "github":
-            pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title",
-                        f"Plan: {n_tickets(n, 'new ')}", "--body", text.strip()[-6000:])
-            log(p, f"plan: {n_tickets(n)} on {pr or branch}")
-        else:
-            log(p, f"plan: {n_tickets(n)} pushed to {branch}")
-    push(f"planned {n_tickets(n)}", lead("", m.group(3)[:300] or "See the queue."), 3, "memo")
-    clean_detach(p, cd, p.upstream)
-    return n

@@ -1,0 +1,134 @@
+"""Temp space. Each session and check gets a TMPDIR of its own in the project's state dir, dropped when its ticket
+merges or fails, so what a session or a leaky test leaves behind can't fill the machine's temp dir (a tmpfs runs out of
+inodes long before space, and then no shell command runs). A cleaner removes what leaked anyway: `windvane-*` dirs in
+the temp dir and the session dirs of tickets no longer running, once they're an hour old and in use by no process."""
+import os
+import shutil
+import tempfile
+import time
+from pathlib import Path
+
+PREFIX = "windvane-"  # what the tests and tools/check_pythons.sh name their temp dirs, so the cleaner knows them
+AGE = 3600  # seconds a leftover must have sat untouched: a running check writes into its dirs all the time
+FULL = 90  # percent of the temp dir's inodes or space at which doctor warns
+
+
+def root():
+    """The temp dir, read fresh: tempfile caches its first answer, and a test or session changes TMPDIR."""
+    return Path(os.environ.get("TMPDIR") or tempfile.gettempdir())
+
+
+def session_dir(p, key):
+    """The TMPDIR of a ticket's sessions and checks (or of a ticketless session, by its label)."""
+    d = p.state / "tmp" / key
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def drop(p, key):
+    shutil.rmtree(p.state / "tmp" / key, ignore_errors=True)
+
+
+def busy():
+    """The cwd and TMPDIR of every process we can see (Linux /proc; elsewhere only the age rule protects a dir)."""
+    out = set()
+    try:
+        pids = [d for d in os.listdir("/proc") if d.isdigit()]
+    except OSError:
+        return out
+    for pid in pids:
+        try:
+            out.add(os.readlink(f"/proc/{pid}/cwd"))
+        except OSError:
+            pass
+        try:
+            env = Path(f"/proc/{pid}/environ").read_bytes()
+        except OSError:
+            continue
+        for var in env.split(b"\0"):
+            if var.startswith(b"TMPDIR="):
+                out.add(os.fsdecode(var[7:]).rstrip("/"))
+    return out
+
+
+def _recent(path, since):
+    """Whether anything in the tree at `path` changed since `since`; stops at the first that did."""
+    stack = [str(path)]
+    while stack:
+        d = stack.pop()
+        try:
+            if os.lstat(d).st_mtime >= since:
+                return True
+            with os.scandir(d) as it:
+                for e in it:
+                    if e.stat(follow_symlinks=False).st_mtime >= since:
+                        return True
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append(e.path)
+        except OSError:
+            continue
+    return False
+
+
+def size(path):
+    """(entries, bytes) in the tree at `path`: entries are what a tmpfs runs out of."""
+    n = b = 0
+    for d, dirs, files in os.walk(path):
+        n += len(dirs) + len(files)
+        for f in files:
+            try:
+                b += os.lstat(os.path.join(d, f)).st_size
+            except OSError:
+                pass
+    return n + 1, b
+
+
+def stale(dirs, age=AGE, procs=None):
+    """The dirs among `dirs` that are ours, untouched for `age` seconds, and no process's cwd or TMPDIR is in."""
+    since, procs = time.time() - age, busy() if procs is None else procs
+    out = []
+    for d in dirs:
+        try:
+            if not d.is_dir() or d.is_symlink() or d.stat().st_uid != os.getuid():
+                continue
+        except OSError:
+            continue
+        inside = str(d) + os.sep
+        if any(b == str(d) or b.startswith(inside) for b in procs) or _recent(d, since):
+            continue
+        out.append(d)
+    return out
+
+
+def candidates(p=None, running=()):
+    """windvane's temp dirs: `windvane-*` in the temp dir, and `p`'s session dirs of tickets not in `running`."""
+    try:
+        out = [d for d in root().iterdir() if d.name.startswith(PREFIX)]
+    except OSError:
+        out = []
+    if p is not None and (p.state / "tmp").is_dir():
+        out += [d for d in (p.state / "tmp").iterdir() if d.name not in running]
+    return out
+
+
+def leftovers(p=None, running=(), age=AGE):
+    """[(dir, entries, bytes)] of what `clean` would remove, the biggest first."""
+    return sorted(((d, *size(d)) for d in stale(candidates(p, running), age)), key=lambda x: -x[1])
+
+
+def clean(p=None, running=(), age=AGE):
+    """Remove the stale leftovers; (dirs, entries) removed."""
+    dirs = n = 0
+    for d in stale(candidates(p, running), age):
+        n += size(d)[0]
+        shutil.rmtree(d, ignore_errors=True)
+        dirs += 1
+    return dirs, n
+
+
+def fullness(path=None):
+    """(percent of inodes used, percent of space used) of the filesystem holding `path` (the temp dir)."""
+    st = os.statvfs(path or root())
+    inodes = 100 * (st.f_files - st.f_ffree) / st.f_files if st.f_files else 0  # some filesystems report none
+    space = 100 * (st.f_blocks - st.f_bfree) / st.f_blocks if st.f_blocks else 0
+    return inodes, space

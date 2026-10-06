@@ -84,7 +84,7 @@ class CrashPushes(Base):
         [(title, msg)] = self.aside()
         self.assertEqual(title, "Set aside: do T-001 (T-001)")
         self.assertEqual(msg, "Sessions died 4×: prompt is too long. Split the ticket, or trim what it reads.\n"
-                              f"The error: {TOO_LONG}\nBranch kept, run goes on. Other sessions worked, so it's this "
+                              f"The error: {TOO_LONG}.\nBranch kept, run goes on. Other sessions worked, so it's this "
                               "ticket's doing.")
 
     def test_other_errors_keep_the_plain_text(self):
@@ -132,7 +132,7 @@ class LoneTicket(Base):
         pilot.run(now() + timedelta(hours=2))
         calls = [l for l in (self.s.tmp / "calls.jsonl").read_text().splitlines() if "windvane worker" in l]
         self.assertEqual(len(calls), self.p.ap["retries"] + 1)
-        self.assertEqual(pilot.stop_reason, "4 sessions in a row died (API Error: 529 Overloaded)")
+        self.assertEqual(pilot.stop_reason, "4 sessions in a row died (API Error 529: Overloaded)")
         self.assertEqual(self.aside(), [])  # nothing to tell it from a broken API: no set-aside, a stop
 
 

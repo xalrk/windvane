@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import driver  # noqa: E402
+from windvane import held, net, planner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_plan_safety import REFUSE_PLAN  # noqa: E402
@@ -24,27 +24,27 @@ class PlanPushes(unittest.TestCase):
         self.s.publish()
         self.p = Project(self.s.root)
         self.pushes = []
-        orig = driver.push
-        driver.push = lambda title, msg="", *a, **k: self.pushes.append((title, msg))
-        self.addCleanup(setattr, driver, "push", orig)
+        for module in (held, planner):
+            self.addCleanup(setattr, module, "push", module.push)
+            module.push = lambda title, msg="", *a, **k: self.pushes.append((title, msg))
 
     def log(self):
         return (self.p.state / "autopilot.log").read_text()
 
     def refuse_with(self, stderr):
         """Every `git push` fails with `stderr`, as a remote that refuses the login would."""
-        orig = driver.net.git
+        orig = net.git
 
         def fake(cwd, *args):
             if args[0] == "push":
                 return subprocess.CompletedProcess(["git", *args], 128, "", stderr)
             return orig(cwd, *args)
-        driver.net.git = fake
-        self.addCleanup(setattr, driver.net, "git", orig)
+        net.git = fake
+        self.addCleanup(setattr, net, "git", orig)
 
     def test_an_auth_refusal_names_the_login(self):
         self.refuse_with(AUTH)
-        self.assertEqual(driver.plan(self.p, "make it great"), 0)
+        self.assertEqual(planner.plan(self.p, "make it great"), 0)
         title, msg = self.pushes[-1]
         self.assertEqual(title, "plan not pushed")
         self.assertRegex(msg, r"^Login refused; check your login to the remote and the next run pushes it\.\n"
@@ -55,22 +55,22 @@ class PlanPushes(unittest.TestCase):
         hook = self.s.remote / "hooks" / "pre-receive"
         hook.write_text(REFUSE_PLAN)
         hook.chmod(0o755)
-        self.assertEqual(driver.plan(self.p, "make it great"), 0)
+        self.assertEqual(planner.plan(self.p, "make it great"), 0)
         self.assertEqual(self.pushes[-1][0], "plan not pushed")
         self.assertRegex(self.pushes[-1][1], r"^Refused by a hook or branch rule; change the rule, or push it by hand "
-                                             r"with…\n…`git push origin (plan-\S+):\1-b` and merge it into main\.\n"
+                                             r"with `git push origin (plan-\S+):\1-b` and merge it into main\.\n"
                                              r"1 ticket kept only locally on \1\.$")
 
     def test_a_refused_merge_says_why_too(self):
         self.refuse_with("ssh: connect to host github.com port 22: Connection timed out\n"
                          "fatal: Could not read from remote repository.\n")
-        self.assertEqual(driver.plan(self.p, "make it great", merge=True), 0)
+        self.assertEqual(planner.plan(self.p, "make it great", merge=True), 0)
         self.assertEqual(self.pushes[-1][0], "plan not merged")
         self.assertRegex(self.pushes[-1][1], r"^Network down; the next run pushes it again\.\n"
                                              r"1 ticket waits on the local branch plan-\S+\.$")
 
     def test_one_ticket_is_singular_in_the_push_and_the_log(self):
-        self.assertEqual(driver.plan(self.p, "make it great"), 1)
+        self.assertEqual(planner.plan(self.p, "make it great"), 1)
         self.assertEqual(self.pushes[-1][0], "planned 1 ticket")
         self.assertIn("plan: 1 ticket pushed to plan-", self.log())
         self.assertIn("Plan: 1 ticket (", self.s.git("log", "-1", "--format=%s", "origin/" + self.s.git(
@@ -97,11 +97,11 @@ class Refusals(unittest.TestCase):
     def test_each_stderr_gets_its_reason(self):
         for stderr, word in self.CASES.items():
             with self.subTest(stderr=stderr[:40]):
-                self.assertIn(word, driver.push_refusal(stderr))
+                self.assertIn(word, held.push_refusal(stderr))
 
     def test_anything_else_sends_to_the_log(self):
         for stderr in ("To /tmp/r.git\nerror: src refspec x does not match any\n", ""):
-            self.assertEqual(driver.push_refusal(stderr), "push failed; see the windvane log")
+            self.assertEqual(held.push_refusal(stderr), "push failed; see the windvane log")
 
 
 # A repo with 301 PRs: the old closed plan PR is past any `--limit 300` list, but `--head` finds it.
@@ -140,7 +140,7 @@ class BusyRepo(unittest.TestCase):
         self.plan_branch("plan-20250101-000000", "T-002")  # closed long ago
         self.plan_branch("plan-20261001-000000", "T-003")  # no PR found: still holds its id
         self.s.git("fetch", "-q", "origin")
-        self.assertEqual(driver.pending_ids(self.p) - {"T-001"}, {"T-003"})
+        self.assertEqual(planner.pending_ids(self.p) - {"T-001"}, {"T-003"})
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import cli, driver  # noqa: E402
+from windvane import cli, held, planner  # noqa: E402
 from test_held_age import HOOK  # noqa: E402
 import test_held_secret  # noqa: E402
 from test_plan_retry import Base  # noqa: E402
@@ -46,10 +46,10 @@ class HeldMerged(Base):
         self.assertIn(branch, self.held())  # read only so far
         self.s.git("fetch", "-q", "--prune", "origin")  # as a run's start does: GitHub deleted the merged branch
         pushes = self.git_pushes
-        self.assertEqual(driver.held_branches(self.p), {})
+        self.assertEqual(held.held_branches(self.p), {})
         self.assertEqual(self.held(), {})
         self.assertEqual(json.loads((self.p.state / "held_why.json").read_text()), {})
-        self.assertEqual(driver.push_held(self.p), 0)
+        self.assertEqual(held.push_held(self.p), 0)
         self.assertEqual(self.git_pushes, pushes)  # not pushed again under its own name
 
     def test_a_github_squash_merge_drops_it(self):
@@ -81,22 +81,22 @@ class HeldMerged(Base):
         self.on_remote(["checkout", "-q", "-b", "r", f"origin/{branch}-b"], ["rebase", "-q", "main"],
                        ["push", "-q", "origin", "r:main"])
         self.s.git("fetch", "-q", "origin")
-        orig = driver.git
-        self.addCleanup(setattr, driver, "git", orig)
-        driver.git = lambda cwd, *a: (subprocess.CompletedProcess(a, 129, "", "unknown option") if a[0] == "merge-tree"
-                                      else orig(cwd, *a))
-        self.assertEqual(driver.held_now(self.p), [])
-        gout = driver.gout
-        self.addCleanup(setattr, driver, "gout", gout)
-        driver.gout = lambda cwd, *a: "" if a[0] == "cherry" else gout(cwd, *a)
-        self.assertEqual([b for b, *_ in driver.held_now(self.p)], [branch])  # can't tell: still listed
+        orig = held.git
+        self.addCleanup(setattr, held, "git", orig)
+        held.git = lambda cwd, *a: (subprocess.CompletedProcess(a, 129, "", "unknown option") if a[0] == "merge-tree"
+                                    else orig(cwd, *a))
+        self.assertEqual(held.held_now(self.p), [])
+        gout = held.gout
+        self.addCleanup(setattr, held, "gout", gout)
+        held.gout = lambda cwd, *a: "" if a[0] in ("cherry", "merge-base") else gout(cwd, *a)
+        self.assertEqual([b for b, *_ in held.held_now(self.p)], [branch])  # can't tell: still listed
 
     def test_a_change_main_lacks_stays_listed(self):
         branch = self.hand_pushed_land()
         self.on_remote(["push", "-q", "origin", "main"])
         self.assertIn(f"pushed to origin/{branch}-b, not merged", self.windvane("status"))
         self.assertEqual(self.s.git("rev-parse", "origin/main"), self.s.git("rev-parse", "main", cwd=self.other))
-        self.assertEqual(driver.held_branches(self.p), {})  # not pushed again, but still noted
+        self.assertEqual(held.held_branches(self.p), {})  # not pushed again, but still noted
         self.assertEqual(self.held(), {branch: "land"})
 
     def status_calls(self, line=False):
@@ -112,14 +112,14 @@ class HeldMerged(Base):
     def test_status_fetches_only_for_a_hand_pushed_change(self):
         self.assertEqual(self.status_calls(), [])  # nothing held
         self.refusal = HOOK
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         self.refusal = None
         self.assertEqual(self.status_calls() + self.status_calls(line=True), [])  # held, not pushed: no network
 
     def test_status_fetches_for_a_hand_pushed_change(self):
         self.hand_pushed_land()
-        self.assertEqual(self.status_calls(), [["git", "fetch", "-q", "origin"]])
-        self.assertEqual(self.status_calls(line=True), [["git", "fetch", "-q", "origin"]])
+        self.assertEqual(self.status_calls(), [["git", "fetch", "-q", "--prune", "origin"]])
+        self.assertEqual(self.status_calls(line=True), [["git", "fetch", "-q", "--prune", "origin"]])
 
     def test_a_failed_fetch_changes_nothing(self):
         branch = self.hand_pushed_land()
@@ -139,21 +139,20 @@ class HeldMerged(Base):
 
     def test_push_protection_names_the_file_and_the_unblock_page(self):
         self.refusal = test_held_secret.SECRET
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         body = self.pushes[-1][1]
         first = body.splitlines()[0]
-        self.assertLessEqual(len(first), driver.LOCK_SCREEN)
         self.assertTrue(first.startswith("Refused: it holds a secret in `README.md:4`"), first)
-        self.assertIn(f"or allow it on GitHub if it isn't a secret: {UNBLOCK}", " ".join(body.split()))
+        self.assertIn(f"or allow it on GitHub if it isn't a secret: {UNBLOCK}.", first)  # whole, in reading order
         why = json.loads((self.p.state / "held_why.json").read_text())[self.local()]["why"]
         self.assertTrue(why.endswith(UNBLOCK), why)  # whole in `status` too
-        bare = driver.push_refusal("remote: error: Secret scanning found a token", "git", "x")
+        bare = held.push_refusal("remote: error: Secret scanning found a token", "git", "x")
         self.assertNotIn(" in `", bare)
         self.assertNotIn("allow it", bare)
 
     def test_status_shows_a_long_subject_whole(self):
         self.refusal = HOOK
-        driver.plan(self.p, "make it great")
+        planner.plan(self.p, "make it great")
         branch, subject = self.local(), "Plan: " + "a very long subject " * 5 + "and its ending"
         self.assertEqual(len(subject), 120)
         fix = self.s.git("commit-tree", f"{branch}^{{tree}}", "-p", f"{branch}~1", "-m", subject)

@@ -12,7 +12,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import actions
+from . import actions, scratch
+from .config import HOME
 from .util import append_jsonl, load_json, save_json
 
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
@@ -248,6 +249,33 @@ def settings_json(allow=(), deny=()):
 OWN_LIMITS = {"error_max_turns": "max turns", "error_max_budget_usd": "dollar budget"}  # as the phone says them
 
 
+# The API's error types and their HTTP codes, for an error body that comes with no code before it
+API_STATUS = {"invalid_request_error": 400, "authentication_error": 401, "permission_error": 403,
+              "not_found_error": 404, "request_too_large": 413, "rate_limit_error": 429, "api_error": 500,
+              "overloaded_error": 529}
+
+
+def plain_error(text):
+    """A session's error as a push or a status line says it: `API Error: 400 {"type":"error","error":{"message":
+    "…"}}`, or the same JSON with no prefix, becomes `API Error 400: …`, so the phone shows the API's message, not
+    its JSON. Any other text comes back as it is. The log keeps the whole text: only what's said is shortened."""
+    text = str(text)
+    start = text.find("{")
+    try:
+        body, end = json.JSONDecoder().raw_decode(text, start) if start >= 0 else (None, 0)
+    except (ValueError, RecursionError):  # not JSON, or nested past Python's limit
+        return text
+    inner = body.get("error") if isinstance(body, dict) else None
+    inner = inner if isinstance(inner, dict) else body if isinstance(body, dict) else {}
+    message = inner.get("message")
+    prefix = re.search(r"API Error:?\s*(\d{3})?\s*$", text[:start])
+    if not isinstance(message, str) or not message.strip() or not (prefix or body.get("type") == "error"):
+        return text
+    code = (prefix and prefix.group(1)) or API_STATUS.get(inner.get("type"))
+    head = text[:prefix.start()] if prefix else text[:start]
+    return f"{head}API Error{f' {code}' if code else ''}: {' '.join(message.split())}{text[end:]}"
+
+
 def ending(final, code, noise):
     """How a session ended, as (kind, error text): "ok"; "error" when the result event says the API or the CLI failed
     (overload, 5xx, not logged in); "budget" when the session spent its own budget (max turns, max dollars): the
@@ -260,9 +288,8 @@ def ending(final, code, noise):
     if sub.startswith("error_max_"):
         return "budget", OWN_LIMITS.get(sub, sub.removeprefix("error_").replace("_", " "))
     if final.get("is_error") or sub != "success":
-        why = " ".join(str(final.get("result") or final.get("errors") or "").split())
-        why = re.sub(r'\{.*"message":\s*"([^"]*)".*\}', r"\1", why)[:300] or f"exit {code}"  # the API's JSON body
-        return "error", why if sub == "success" else f"{sub}: {why}"  # it reaches the phone: plain words only
+        why = " ".join(str(final.get("result") or final.get("errors") or "").split()) or f"exit {code}"
+        return "error", why if sub == "success" else f"{sub}: {why}"  # whole, for the log: plain_error() is for pushes
     return "ok", None
 
 
@@ -284,7 +311,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
            "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local",
            *lean_flags(p, role), "--settings", settings_json(allow, deny), "--append-system-prompt", system]
     started, parent = time.time(), os.environ.get(NEST)
-    extra = {NEST: raw.stem, TICKET: ticket, **(extra_env or {})}
+    extra = {NEST: raw.stem, TICKET: ticket, "TMPDIR": str(scratch.session_dir(p, ticket or label)),
+             **(extra_env or {})}
     if limits:
         extra.update(WINDVANE_STOP_AT=str(limits[0].timestamp()), WINDVANE_CAPS=f"{limits[1]:g},{limits[2]:g}")
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -339,8 +367,13 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         if mark:
             mark.unlink(missing_ok=True)
         raise
+    finally:  # an unclosed pipe warns when collected, onto whatever stderr is then (a test's capture)
+        sel.close()
+        proc.stdout.close()
     code = proc.wait()
     kill_nested(p, raw.stem)  # killed with it, or left running by a Bash call that timed out
+    if not ticket:  # a ticket's scratch outlives its sessions (the driver's check, the next run) until it ends
+        scratch.drop(p, label)
     if mark:
         mark.unlink(missing_ok=True)
     end, error = ("killed", None) if killed else ending(final, code, noise)
@@ -362,3 +395,10 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         "exit": code, "stream": raw.name})
     actions.refresh(p)  # the next worker start reads a fresh total from the cache, never waits on a count
     return result, killed, error
+
+
+def rules(p, name):
+    text = (HOME / "prompts" / name).read_text()
+    for k, v in {"{upstream}": p.upstream, "{remote}": p.remote, "{main}": p.main}.items():
+        text = text.replace(k, v)
+    return text

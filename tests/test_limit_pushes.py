@@ -72,16 +72,13 @@ class SetupText(unittest.TestCase):
         self.s.publish("setup")
         return Project(self.s.root)
 
-    def test_a_long_setup_command_is_cut_in_the_halt_push(self):
+    def test_a_long_setup_command_is_quoted_whole_in_the_halt_push(self):
         long = "echo one && echo two && echo three && echo four && echo five && echo six; exit 3"
         driver.Pilot(self.setup(long), args()).run(now() + timedelta(minutes=15))
         [(title, msg)] = self.pushes
         self.assertEqual(title, "windvane couldn't start")
-        quoted = msg.split("`")[1]
-        self.assertEqual(len(quoted), 60)
-        self.assertTrue(quoted.endswith("…"))
-        self.assertTrue(long.startswith(quoted[:-1]))
-        self.assertEqual(driver.clip("make", 60), "make")
+        self.assertEqual(msg.split("`")[1], long)
+        self.assertNotIn("…", msg)
 
     def test_a_second_slots_setup_cut_short_mid_run_lets_the_first_finish(self):
         pid = self.s.tmp / "setup.pid"

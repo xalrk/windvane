@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver, net  # noqa: E402
+from windvane import driver, net, planner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -128,7 +128,7 @@ class Sessions(Base):
         os.environ["FAKE_FAIL"] = "crash"
         net.probe, net.waiter = Probe(1), lambda: self.waits.append(60) or True
         with redirect_stdout(io.StringIO()):
-            self.assertEqual(driver.plan(self.p, "make it great", merge=True), 1)
+            self.assertEqual(planner.plan(self.p, "make it great", merge=True), 1)
         self.assertEqual((self.roles(), self.waits), (["planner"] * 2, [60]))
         self.assertIn("plan: the run was cut off with the network down; running it again", self.log())
 

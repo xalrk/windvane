@@ -1,6 +1,6 @@
-"""T-079: every phone push leads with a line a lock screen shows whole (driver.LOCK_SCREEN characters) and that line
-holds its point. Each `push(` call in driver.py is driven here through the driver's own methods with a 300-character
-error or reason; a new call with no case here fails the coverage test, so it gets one."""
+"""T-079, T-093: every phone push leads with a line that holds its point, and carries its free text whole (no "…").
+Each `push(` call in driver.py, held.py and planner.py is driven here through their own functions with a
+300-character error or reason; a new call with no case here fails the coverage test, so it gets one."""
 import ast
 import json
 import signal
@@ -17,14 +17,17 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver  # noqa: E402
+from windvane import driver, net, planner  # noqa: E402
+from windvane import held as held_mod  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
+from windvane.worktree import ensure_worktree  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_set_aside import args  # noqa: E402
 
 LONG = ("API Error: Request timed out while waiting for the model; the connection was reset by the peer. " * 4)[:300]
-DRIVER = Path(driver.__file__)
+MODULES = (driver, held_mod, planner)  # every module whose pushes are covered here
+SOURCES = {m.__file__: Path(m.__file__) for m in MODULES}
 
 
 def push_calls(source):
@@ -35,7 +38,7 @@ def push_calls(source):
 
 def pilot(p, worktree=False):
     if worktree:
-        driver.ensure_worktree(p, p.work_dir, setup=False)
+        ensure_worktree(p, p.work_dir, setup=False)
     pl = driver.Pilot(p, args())
     pl.sleep, pl.deadline = (lambda s: None), now() + timedelta(hours=2)
     return pl
@@ -92,11 +95,11 @@ def not_stashed(p, patch, s):
 def merged(p, patch, s):
     patch(driver, "provisional", picks)
     pilot(p, worktree=True).merged_ok("T-001", "", s.git("rev-parse", "HEAD"), renumbered=["T-002 to T-003"] * 20)
-    return {"Done": ("Built, checked, reviewed and merged.",), "Provisional": ("To change one: windvane answer T-001",)}
+    return {"Done": ("Built, checked, reviewed and merged.",)}
 
 
 def failed(p, patch, s):
-    patch(driver.net, "online", lambda: True)
+    patch(net, "online", lambda: True)
     pilot(p).fail("T-001", LONG)
     return {"Failed": ("API Error", "Branch kept, run goes on.")}
 
@@ -180,44 +183,44 @@ def crashed_stopped(p, patch, s):
 
 
 def held(p, patch, s):
-    patch(driver, "held_branches", lambda p: {"plan-1": "push"})
-    patch(driver, "ensure_worktree", lambda *a, **k: None)
-    patch(driver, "clean_detach", lambda *a: True)
-    patch(driver, "gout", lambda cd, *a: LONG if "--format=%s" in a else "")
-    patch(driver, "push_branch", lambda *a, **k: "plan-1")
-    driver.push_held(p)
+    patch(held_mod, "held_branches", lambda p: {"plan-1": "push"})
+    patch(held_mod, "ensure_worktree", lambda *a, **k: None)
+    patch(held_mod, "clean_detach", lambda *a: True)
+    patch(held_mod, "gout", lambda cd, *a: LONG if "--format=%s" in a else "")
+    patch(held_mod, "push_branch", lambda *a, **k: "plan-1")
+    held_mod.push_held(p)
     return {"1 held-back change pushed": ("API Error", ": on plan-1, pushed.")}
 
 
 def unmerged_local(p, patch, s):
-    patch(driver, "clean_detach", lambda *a: True)
-    driver.unmerged(p, 1, f"the local branch plan-1 ({LONG})")
+    patch(planner, "clean_detach", lambda *a: True)
+    planner.unmerged(p, 1, f"the local branch plan-1 ({LONG})")
     return {"plan not merged": ("API Error",)}
 
 
 def unmerged_remote(p, patch, s):
-    patch(driver, "clean_detach", lambda *a: True)
-    driver.unmerged(p, 1, LONG)
+    patch(planner, "clean_detach", lambda *a: True)
+    planner.unmerged(p, 1, LONG)
     return {"plan not merged": ("1 ticket waits on API Error", ": merge it by hand.")}
 
 
 def plan_not_pushed(p, patch, s):
-    orig = driver.net.git
-    patch(driver.net, "git", lambda cd, *a: subprocess.CompletedProcess(a, 1, "", "refused") if a[0] == "push"
+    orig = net.git
+    patch(net, "git", lambda cd, *a: subprocess.CompletedProcess(a, 1, "", "refused") if a[0] == "push"
           else orig(cd, *a))
-    patch(driver, "push_refusal", lambda *a, **k: LONG)
-    driver.plan(p, "make it great")
+    patch(held_mod, "push_refusal", lambda *a, **k: LONG)
+    planner.plan(p, "make it great")
     return {"plan not pushed": ("API Error",)}
 
 
 def planned(p, patch, s):
-    orig = driver.run_claude
+    orig = planner.run_claude
 
     def run_claude(*a, **k):
         text, killed, error = orig(*a, **k)
         return text.replace("one ticket", LONG), killed, error
-    patch(driver, "run_claude", run_claude)
-    driver.plan(p, "make it great")
+    patch(planner, "run_claude", run_claude)
+    planner.plan(p, "make it great")
     return {"planned 1 ticket": ("API Error",)}
 
 
@@ -227,20 +230,21 @@ SITES = [set_aside, own_limit, dollar_budget, partials, stashed, not_stashed, me
 
 
 def drive(site):
-    """One site in a fresh sandbox: ([(line of the push call in driver.py, title, body)], words), or the error."""
+    """One site in a fresh sandbox: ([((file, line) of the push call, title, body)], words), or the error."""
     got = []
 
     def push(title, msg="", *a, **k):
         caller = sys._getframe(1)
-        if caller.f_code.co_filename == str(DRIVER):
-            got.append((caller.f_lineno, title, msg))
+        if caller.f_code.co_filename in SOURCES:
+            got.append(((caller.f_code.co_filename, caller.f_lineno), title, msg))
     s = Sandbox()
     try:
         s.ticket("T-001")
         s.publish()
         with ExitStack() as stack:
             patch = lambda obj, name, value: stack.enter_context(mock.patch.object(obj, name, value))
-            patch(driver, "push", push)
+            for module in MODULES:
+                patch(module, "push", push)
             return got, site(Project(s.root), patch, s)
     except Exception:
         return got, traceback.format_exc()
@@ -258,7 +262,7 @@ class PushFit(unittest.TestCase):
             cls.driven = {site.__name__: drive(site) for site in SITES}
         return cls.driven
 
-    def test_each_push_leads_with_a_line_that_fits_and_holds_its_point(self):
+    def test_each_push_leads_with_a_line_that_holds_its_point(self):
         for name, (got, words) in self.results().items():
             with self.subTest(name):
                 self.assertIsInstance(words, dict, words)
@@ -266,18 +270,19 @@ class PushFit(unittest.TestCase):
                     self.assertTrue(any(t.startswith(key) for _, t, _ in got), (key, got))
                 for _, title, msg in got:
                     first = msg.split("\n", 1)[0]
-                    self.assertLessEqual(len(first), driver.LOCK_SCREEN, msg)
+                    self.assertNotIn("…", title + msg)
                     for key, need in words.items():
                         for w in need * title.startswith(key):
                             self.assertIn(w, first, msg)
 
     def test_every_push_call_in_the_driver_has_a_case(self):
-        covered = {line for got, _ in self.results().values() for line, _, _ in got}
-        missing = [n for n in push_calls(DRIVER.read_text()) if n not in covered]
-        self.assertEqual(missing, [], "driver.py's push( calls on these lines have no case in test_push_fit.py")
+        covered = {at for got, _ in self.results().values() for at, _, _ in got}
+        missing = [(path.name, n) for f, path in SOURCES.items() for n in push_calls(path.read_text())
+                   if (f, n) not in covered]
+        self.assertEqual(missing, [], "these push( calls (file, line) have no case in test_push_fit.py")
 
     def test_a_new_push_call_is_seen(self):
-        source = DRIVER.read_text()
+        source = Path(driver.__file__).read_text()
         self.assertEqual(len(push_calls(source + '\n\ndef new():\n    push("new", "body")\n')),
                          len(push_calls(source)) + 1)
 

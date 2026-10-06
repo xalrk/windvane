@@ -4,12 +4,12 @@ import io
 import os
 import shutil
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from helpers import tmpdir
 from test_install import REPO, fake_bin
 
 sys.path.insert(0, str(REPO))
@@ -21,7 +21,7 @@ GITHUB = SimpleNamespace(exists=True, cfg={"forge": "github"}, perm_problems=[])
 
 class Doctor(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="windvane-doctor-"))
+        self.tmp = tmpdir(self, "windvane-doctor-")
         (self.tmp / "bin").mkdir()
         (self.tmp / "bin/windvane").symlink_to(REPO / "bin/windvane")
         (self.tmp / "bin/git").symlink_to(shutil.which("git"))  # PATH has no system dir: a real gh there can't leak in
@@ -103,7 +103,7 @@ class OffLinux(unittest.TestCase):
     def test_heavy_without_meminfo_or_pgrep(self):
         with mock.patch.object(heavy, "Path", side_effect=lambda *a: Path("/nonexistent/meminfo")):
             self.assertIsNone(heavy.free_gb())
-        with mock.patch.dict(os.environ, {"PATH": tempfile.mkdtemp()}):
+        with mock.patch.dict(os.environ, {"PATH": str(tmpdir(self))}):
             self.assertIsNone(heavy.busy(["blender"]))
 
 
