@@ -6,7 +6,11 @@ When a merge conflicts only in those files, and on both sides every conflict hun
 entries stay, the branch's follow them, and the branch's colliding numbers move past main's. References are renumbered
 only on lines the branch itself added (in any file): main's lines mean main's entries. Anything else: None, and the
 caller bounces the ticket as before.
+
+`shared_notes` files (a notes file every ticket appends its findings to) merge the same way without numbers: when every
+conflict hunk only adds lines on both sides, main's text stays and the branch's added sections follow it.
 """
+import fnmatch
 import re
 import subprocess
 from pathlib import Path
@@ -17,9 +21,52 @@ MARKS = ("<<<<<<< ", "||||||| ", "=======", ">>>>>>> ")
 OLD_NUMBERS = " The PR's title, body and commit messages still use the old numbers."  # only files are renumbered
 
 
-def said(renumbered):
-    """The renumbering for a merge message, log line, PR comment or push."""
-    return "renumbered " + ", ".join(renumbered) if renumbered else "no number collided"
+NOTED = ": kept main's, appended "  # a shared notes file's line in resolve()'s list, not a renumbering
+HEADING = re.compile(r" {0,3}#{1,6}(?:[ \t]|$)")
+FENCE = re.compile(r" {0,3}(```|~~~)")
+
+
+def said(done):
+    """What resolve() did, for a merge message, log line, PR comment or push: the shared notes files' lines, then the
+    renumbering (or "no number collided" when only `[[append_only]]` files were resolved)."""
+    notes = [d for d in done if NOTED in d]
+    moved = [d for d in done if NOTED not in d]
+    return "; ".join(notes + (["renumbered " + ", ".join(moved)] if moved else [] if notes else ["no number collided"]))
+
+
+def old_numbers(done):
+    """The PR-comment caveat, when anything was renumbered."""
+    return OLD_NUMBERS if any(NOTED not in d for d in done) else ""
+
+
+def notes(patterns):
+    """`shared_notes`, checked at load: a list of paths in the repo (globs, or a directory ending in /)."""
+    if not isinstance(patterns, list) or not all(isinstance(x, str) and x.strip("/ ") for x in patterns):
+        raise SystemExit("windvane: shared_notes is a list of paths, e.g. shared_notes = [\"NOTES.md\"]")
+    return [x.strip() for x in patterns]
+
+
+def noted(path, patterns):
+    """Whether `path` is one of the `shared_notes` files."""
+    return any(path.startswith(x) if x.endswith("/") else fnmatch.fnmatchcase(path, x) for x in patterns)
+
+
+def sections(added):
+    """How many sections lines a branch added hold: each Markdown heading starts one (outside code fences), and text
+    before the first heading is a section of its own."""
+    n, fence, before = 0, None, False
+    for line in added:
+        m = FENCE.match(line)
+        if fence:
+            fence = None if m and m.group(1) == fence else fence
+        elif m:
+            fence = m.group(1)
+            before = before or not n
+        elif HEADING.match(line):
+            n += 1
+        elif line.strip() and not n:
+            before = True
+    return n + before
 
 
 def rules(entries):
@@ -142,32 +189,40 @@ def added_lines(cd):
     return out
 
 
-def resolve(cd, rule_list):
+def resolve(cd, rule_list, shared=()):
     """Resolve the merge in progress in `cd` (HEAD main, MERGE_HEAD the branch) and stage it. Returns the renumbering
-    as lines like "D-5 → D-6 (docs/DECISIONS.md)" ([] when no number collided), or None when it isn't only appended
-    entries, or a file it would read isn't UTF-8 (the branch's references there can't be followed safely): then the
-    caller aborts the merge, which also drops anything written here."""
+    as lines like "D-5 → D-6 (docs/DECISIONS.md)" ([] when no number collided) and one line per `shared` notes file
+    ("NOTES.md: kept main's, appended 2 sections"), or None when it isn't only appended entries and sections, or a file
+    it would read isn't UTF-8 (the branch's references there can't be followed safely): then the caller aborts the
+    merge, which also drops anything written here."""
     try:
-        return merge(cd, rule_list)
+        return merge(cd, rule_list, shared)
     except (OSError, UnicodeDecodeError):
         return None
 
 
-def merge(cd, rule_list):
+def merge(cd, rule_list, shared=()):
     """resolve() itself; a file it can't read or decode raises."""
     by_file = {r["file"]: r for r in rule_list}
     conflicted = gout(cd, "-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=U").splitlines()
-    if not conflicted or any(f not in by_file for f in conflicted):
+    if not conflicted or any(f not in by_file and not noted(f, shared) for f in conflicted):
         return None
-    staged, maps = {}, []  # maps: (rule, {old: new}, file)
+    staged, maps, kept = {}, [], []  # maps: (rule, {old: new}, file); kept: the notes files' lines
     for f in conflicted:
-        rule = by_file[f]
+        rule = by_file.get(f)
         stages = {int(s.split()[2]) for s in gout(cd, "ls-files", "-u", "--", f).splitlines()}
         if not {2, 3} <= stages or git(cd, "checkout", "--conflict=diff3", "--", f).returncode:
             return None
         parts = hunks(read(Path(cd) / f))
         if parts is None:
             return None
+        if rule is None:  # a shared notes file: both sides only added lines, where git can't tell their order
+            if any(isinstance(h, tuple) and (h[1] or not h[0] or not h[2]) for h in parts):
+                return None
+            n = sum(sections(h[2]) for h in parts if isinstance(h, tuple))
+            staged[f] = parts
+            kept.append(f"{f}{NOTED}{n} section{'s' * (n != 1)}")
+            continue
         ours = raw(cd, "show", f":2:{f}")
         theirs = raw(cd, "show", f":3:{f}")
         base = raw(cd, "show", f":1:{f}") if 1 in stages else ""
@@ -229,5 +284,5 @@ def merge(cd, rule_list):
     git(cd, "add", "--", *staged)
     if gout(cd, "-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=U"):
         return None
-    return [f"{rule['ref'].replace('{n}', str(a))} → {rule['ref'].replace('{n}', str(b))} ({f})"
-            for rule, mapping, f in maps for a, b in mapping.items()]
+    return kept + [f"{rule['ref'].replace('{n}', str(a))} → {rule['ref'].replace('{n}', str(b))} ({f})"
+                   for rule, mapping, f in maps for a, b in mapping.items()]

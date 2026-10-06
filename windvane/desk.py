@@ -15,7 +15,7 @@ from datetime import timedelta
 from . import net
 from .jobs import check, tail
 from .phone import cut
-from .renumber import OLD_NUMBERS, said
+from .renumber import noted, old_numbers, said
 from .util import git, gout, hhmm, last_match, now, push
 
 FIX_RE = re.compile(r"FIX: (PUSHED|GAVE UP) #(\d+)[ \t]*(.*)")
@@ -137,12 +137,14 @@ class Desk:
         return (*check(p, cd), where)
 
     def desk_renumber(self, n, branch, head, files):
-        """A conflict only in appended entries of `[[append_only]]` files: resolved like a ticket's and pushed to the
-        PR's branch, so the PR merges at that head. The renumbering, or None when it isn't one, or the push is
-        refused."""
+        """A conflict only in appended entries of `[[append_only]]` files and sections of `shared_notes` ones: resolved
+        like a ticket's and pushed to the PR's branch, so the PR merges at that head. What it did, or None when it
+        isn't one, or the push is refused."""
         from .worktree import clean_detach
         p, cd = self.p, self.cd
-        if not files or not set(files) <= {r["file"] for r in p.append_only} or not clean_detach(p, cd, p.upstream):
+        own = {r["file"] for r in p.append_only}
+        if (not files or not all(f in own or noted(f, p.shared_notes) for f in files)
+                or not clean_detach(p, cd, p.upstream)):
             return None
         ok, renumbered = self.merge_main(head, f"Merge {branch} into {p.main}")
         if not ok or renumbered is None or net.git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{head}",
@@ -150,7 +152,7 @@ class Desk:
             return None
         self.log(f"desk PR #{n}: conflicted with {p.main} only in appended entries: {said(renumbered)}")
         self.desk_comment(n, f"**windvane: resolved the conflict with {p.main}** in appended entries: "
-                             f"{said(renumbered)}." + OLD_NUMBERS * bool(renumbered))
+                             f"{said(renumbered)}." + old_numbers(renumbered))
         return renumbered
 
     def desk_conflicts(self, cd, head):

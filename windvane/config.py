@@ -12,7 +12,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from .renumber import rules
+from .renumber import notes, rules
 
 PKG = Path(__file__).resolve().parent
 # Where prompts/, templates/, skills/ and hooks/ are: inside the package when installed (pipx, uv, pip), at the top of
@@ -226,6 +226,7 @@ class Project:
         self.periodic = periodic(c.get("periodic", []))
         self.perms, self.perm_problems = permissions(c["permissions"], self.periodic)
         self.append_only = rules(c.get("append_only", []))
+        self.shared_notes = notes(c.get("shared_notes", []))
 
     def main_root(self):
         """The main checkout, also when `root` is one of its worktrees."""
