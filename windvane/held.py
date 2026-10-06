@@ -6,7 +6,7 @@ import subprocess
 import time
 
 from . import actions, net
-from .phone import whole
+from .phone import cut, whole
 from .util import git, gout, load_json, log, push, save_json
 from .worktree import clean_detach, ensure_worktree
 
@@ -27,7 +27,7 @@ def push_branch(p, cd, branch, tries=2):
         if res.returncode == 0:
             return branch
     git(cd, "branch", "-f", branch, "HEAD")
-    log(p, f"push to {branch} refused ({' '.join(res.stderr.split())[:200]}); kept only locally on {branch}")
+    log(p, f"push to {branch} refused ({cut(' '.join(res.stderr.split()))}); kept only locally on {branch}")
     why = push_refusal(res.stderr, p.cfg["forge"], branch, p.remote, p.main)
     hold(p, branch, "push", why)
     return f"the local branch {branch} ({why})"

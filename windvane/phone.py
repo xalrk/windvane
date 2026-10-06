@@ -25,6 +25,7 @@ import urllib.request
 from pathlib import Path
 
 from .config import exe, user_dir
+from .util import log
 
 SERVER = "https://ntfy.sh"
 PUMP_EVERY = 15  # seconds between a run's own looks at the reply topic (ntfy.sh allows a request per 5 s)
@@ -36,22 +37,36 @@ HELP = ("status: each project's status\noverview: where each project stands\nusa
 SERVICE = "windvane-phone.service"
 
 
-MOST = 1500  # characters of free text one push carries; ntfy takes 4,096 bytes for the whole message
+NTFY = 4096  # bytes ntfy takes for a whole message; past it the push arrives as an attachment
+MOST = 1500  # bytes of free text one push carries (an error, a reason, an option): two fit in a push with room left
+REASON = 300  # bytes of a reason or a log or session line: a set-aside or stop reason, a critic's gist, git's refusal
+REST = " (the rest is in the log)"
+
+
+def cut(text, most=REASON, *, log=None):
+    """`text` in at most `most` UTF-8 bytes, ended on a character, never inside one. A cut falls at the last sentence
+    or line end, a word end without one, or mid-word in one long token, and says so: with a `log`, the log gets the
+    whole text and the cut ends "(the rest is in the log)"; without one, a plain "…". One rule for every bounded
+    text, so a phone push or a session reads the same cut wherever it came from."""
+    text = str(text).strip()
+    if len(text.encode()) <= most:
+        return text
+    mark = REST if log else "…"
+    keep = text.encode()[:most - len(mark.encode())].decode(errors="ignore")
+    end, where = max(keep.rfind(". ") + 1, keep.rfind("\n")), "at a sentence end"
+    if end <= len(keep) // 2:  # no sentence end late enough: a word end, or a bare cut in one long token
+        end, where = (keep.rfind(" "), "at a word end") if " " in keep[1:] else (len(keep), "mid-word")
+    if log:
+        log(f"cut {where}; the whole text: {text}")
+    return keep[:end].rstrip(" ,;:.") + mark
 
 
 def whole(head, free, tail="", *, log, most=MOST):
     """`head`, the free text `free` (an error, a reason, an option) whole, then `tail`, the next step: one sentence in
     reading order, with one full stop. ntfy wraps a long line, so nothing is cut to fit a lock screen: a cut word
-    reads as a typo and a "…" hides the point. Only free text past `most` (a 5,000-character error) is cut, at its
-    last sentence or line end (a word end without one), and `log`, the project's log, gets it whole."""
-    free = str(free).strip()
-    if len(free) > most:
-        log(f"push cut at a sentence end; the whole text: {free}")
-        end = max(free.rfind(". ", 0, most) + 1, free.rfind("\n", 0, most))
-        if end <= most // 2:  # no sentence end late enough: a word end, or a bare cut in one long token
-            end = free.rfind(" ", 0, most) if " " in free[1:most] else most
-        free = free[:end].rstrip(" ,;:.") + " (the rest is in the log)"
-    free = " ".join(free.split())
+    reads as a typo and a "…" hides the point. Only free text past `most` bytes (a 5,000-character error) is cut, by
+    `cut`'s rule, and `log`, the project's log, gets it whole."""
+    free = " ".join(cut(free, most, log=log).split())
     free = free.rstrip(".") if tail.startswith((".", ";", ":", ",", ")")) else free
     return head + free + tail
 
@@ -169,13 +184,14 @@ def send(c, title, msg, prio=3, tags="", buttons=()):
 
 
 _project = ""  # the display name of the project this process works for (see use)
+_p = None  # that project, whose log gets a push too long for ntfy
 
 
 def use(p):
     """Name project `p` in every push and question this process sends: with two projects running, the phone must
     tell them apart at a glance. Set once where a process takes up its project (the CLI, a run)."""
-    global _project
-    _project = p.display if p else ""
+    global _project, _p
+    _project, _p = (p.display if p else ""), p
 
 
 def titled(text):
@@ -190,7 +206,7 @@ def titled(text):
 
 def push(title, msg, prio=3, tags="", buttons=()):
     """A push through the user's `notify` when it's on PATH, else the built-in one when the phone is on."""
-    title = titled(title)
+    title, msg = titled(title), fit(msg)
     if shutil.which("notify"):
         args = ["notify", "-t", title, "-p", str(prio), "-g", tags]
         for b in buttons[:3]:
@@ -199,6 +215,22 @@ def push(title, msg, prio=3, tags="", buttons=()):
         return True
     c = conf()
     return on(c) and send(c, title, msg, prio, tags, buttons)
+
+
+def fit(msg):
+    """The last guard on ntfy's 4,096 bytes, past which a push turns into an attachment: a message over it (most text
+    is already bounded by `cut`) keeps its lines that fit, and the log gets it whole, once."""
+    if len(msg.encode()) <= NTFY:
+        return msg
+    keep = msg.encode()[:NTFY - len(REST.encode())].decode(errors="ignore")
+    where = "at a line end" if "\n" in keep else "mid-line"
+    keep = (keep[:keep.rfind("\n")] if "\n" in keep else keep).rstrip()
+    line = f"push cut {where} to fit ntfy; the whole message: {msg}"
+    if _p:
+        log(_p, line, echo=False)
+    else:
+        print(line, file=sys.stderr, flush=True)
+    return keep + REST
 
 
 # ---------- questions
@@ -313,7 +345,7 @@ def answer_question(c, qid, letter, note=""):
     (d / "answers").mkdir(parents=True, exist_ok=True)
     (d / "answers" / f"{qid}.json").write_text(json.dumps({"option": letter, "text": opts[letter]}))
     q.unlink()
-    reply(c, "Answer recorded", f"{qid}: {letter}, {opts[letter][:150]}{note}")
+    reply(c, "Answer recorded", f"{qid}: {letter}, {cut(opts[letter])}{note}")
 
 
 def later(c, qid):
