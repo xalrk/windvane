@@ -283,7 +283,7 @@ class Replies(PhoneTest):
                 break
             time.sleep(0.1)
         status = next(m for m in self.pushes() if m.get("title") == "Status")
-        self.assertIn("Sandbox: autopilot off", status["message"])
+        self.assertEqual(status["message"], "windvane: no autopilot running (overview lists every project)")
 
 
 class WithTheDriver(PhoneTest):

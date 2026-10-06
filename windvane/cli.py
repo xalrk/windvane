@@ -229,11 +229,7 @@ def cmd_status(a, p):
     fetch_for_held(p)
     on, st = running(p), schedule.state(p)
     if a.line:
-        held, last = held_count(p), (last_log(p) or [""])[0][11:]
-        last = "" if held or HELD_LOG.search(last) else last  # the held count says it; or it's no longer held
-        last = "" if st and st["waiting"] and "schedule: waiting" in last else last  # the line says it already
-        extra = "".join(f". {x}" for x in (held, actions.line(p), f"Last: {last}" if last else "") if x)
-        print(f"{p.display}: autopilot {schedule.word(st) if st else 'running' if on else 'off'}{extra}")
+        print(status_line(p, on, st))
         return
     tmux = f"in tmux {p.tmux}" if in_tmux(p) else ""
     print("autopilot: " + (f"{schedule.word(st)}{', ' * bool(tmux)}{tmux}" if st
@@ -250,6 +246,32 @@ def cmd_status(a, p):
         print(f"provisional: {q['ticket']}: {q['question']} Built {q['built'] or '?'}"
               + (f": {q['option']}" if q["option"] else "") + f". To change: windvane answer {q['ticket']} <letter>")
     print("\n".join(held_text(p, subject=None) + last_log(p, 12)))
+
+
+def status_line(p, on, st):
+    """The phone's one line on a project: on or off, held-back changes, Actions minutes, the log's last line."""
+    held, last = held_count(p), (last_log(p) or [""])[0][11:]
+    last = "" if held or HELD_LOG.search(last) else last  # the held count says it; or it's no longer held
+    last = "" if st and st["waiting"] and "schedule: waiting" in last else last  # the line says it already
+    extra = "".join(f". {x}" for x in (held, actions.line(p), f"Last: {last}" if last else "") if x)
+    return f"{p.display}: autopilot {schedule.word(st) if st else 'running' if on else 'off'}{extra}"
+
+
+def status_running():
+    """The phone's `status`: a line for each known project whose autopilot is on (running, or a schedule waiting for
+    its window), so the one that matters isn't lost among idle ones; `overview` still covers every project. A project
+    whose repo or config is gone is skipped. One line when none runs: an empty answer would read as "no answer"."""
+    lines = []
+    for root in phone.projects().values():
+        try:
+            p = Project(Path(root))
+            if not p.exists or not running(p):
+                continue
+            fetch_for_held(p)
+            lines.append(status_line(p, True, schedule.state(p)))
+        except (SystemExit, OSError, ValueError):  # a config that no longer loads: not this answer's business
+            continue
+    print("\n".join(lines) or "windvane: no autopilot running (overview lists every project)")
 
 
 FETCH_S = 10  # seconds `status` gives its fetch: a slow remote costs a moment, never a hang
@@ -550,6 +572,8 @@ def main(argv=None):
     s.add_argument("when", nargs="+", help="HH:MM, 'YYYY-MM-DD HH:MM', or from now: +90m, +2h")
     s = sub.add_parser("status", help="running or not, open questions, the log's tail")
     s.add_argument("--line", action="store_true", help="one line (for the phone)")
+    s.add_argument("--running", action="store_true",
+                   help="with --line: every project whose autopilot is on, from anywhere (the phone's status)")
     sub.add_parser("overview", help="where the project stands (for the phone)")
     sub.add_parser("queue", help="the ticket queue")
     s = sub.add_parser("answer", help="answer a ticket's question at the desk")
@@ -597,7 +621,11 @@ def main(argv=None):
     s.add_argument("-o", type=int, default=6, help="lines of each command's output (0 hides output)")
     a = ap.parse_args(argv)
     if a.cwd:
+        if not os.path.isdir(a.cwd):  # a phone hook whose repo was deleted: one line, not a traceback
+            sys.exit(f"windvane: {a.cwd} doesn't exist (any more)")
         os.chdir(a.cwd)
+    if a.cmd == "status" and a.running:
+        return status_running()
     if a.cmd == "init":
         return cmd_init(a)
     if a.cmd in ("install", "uninstall"):

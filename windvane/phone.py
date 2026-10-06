@@ -31,7 +31,7 @@ SERVER = "https://ntfy.sh"
 PUMP_EVERY = 15  # seconds between a run's own looks at the reply topic (ntfy.sh allows a request per 5 s)
 RETRY = 10  # seconds before the listener reconnects after a dropped stream
 QID_RE = r"[a-z][a-z0-9-]{1,39}"
-HELP = ("status: each project's status\noverview: where each project stands\nusage: Claude usage\n"
+HELP = ("status: the autopilots that are on\noverview: where each project stands\nusage: Claude usage\n"
         "stop: stop the runs after their current ticket\nanswer <id> B: pick an option of a question\n"
         "B: answer the newest open question with B\nlater <id>: answer at the computer instead")
 SERVICE = "windvane-phone.service"
@@ -315,6 +315,16 @@ def each(*args, timeout=90):
     return out or ["No windvane project has run here yet."]
 
 
+def running_lines():
+    """`status`'s answer: only the projects whose autopilot is on (`overview` covers them all), the same lines as the
+    `status.d` hook gives ntfy-listen."""
+    try:
+        r = subprocess.run([*exe(), "status", "--line", "--running"], capture_output=True, text=True, timeout=90)
+        return r.stdout.strip() or "windvane: no answer"
+    except (OSError, subprocess.TimeoutExpired):
+        return "windvane: no answer"
+
+
 def usage_text():
     from .config import Project
     from .runner import Usage
@@ -382,7 +392,7 @@ def handle(c, text, stale=False):
     if len(w) == 1 and re.fullmatch(r"[a-e]\.?", w[0]):
         return answer_newest(c, w[0][0].upper())
     if w == ["status"]:
-        reply(c, "Status", "\n".join(each("status", "--line")), "Overview=overview", "Usage=usage")
+        reply(c, "Status", running_lines(), "Overview=overview", "Usage=usage")
     elif w == ["overview"]:
         reply(c, "Overview", "\n\n".join(each("overview")), "Status=status")
     elif w == ["usage"]:
