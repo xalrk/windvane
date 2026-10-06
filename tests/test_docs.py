@@ -9,7 +9,7 @@ from pathlib import Path
 from helpers import REPO
 
 from windvane import cli, heavy
-from windvane.config import DEFAULTS
+from windvane.config import DEFAULTS, STATE
 
 DOCS = REPO / "docs"
 PAGES = [REPO / "README.md", REPO / "CONTRIBUTING.md", REPO / "CHANGELOG.md", *sorted(DOCS.glob("*.md"))]
@@ -122,6 +122,9 @@ class ConfigReference(unittest.TestCase):
         body = sections((DOCS / "configuration.md").read_text())["machine.toml"]
         for key in [*heavy.DEFAULTS, "projects_dir"]:
             self.assertIn(f"| `{key}` |", body)
+        state = sections((DOCS / "configuration.md").read_text())["[state]"]
+        for key in STATE:
+            self.assertIn(f"| `{key}` |", state, f"[state] {key} isn't in configuration.md's table")
 
 
 class CommandReference(unittest.TestCase):

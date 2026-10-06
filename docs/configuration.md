@@ -5,7 +5,7 @@ windvane reads three files. Every key in every file is optional; the defaults be
 | File | Where | What |
 |---|---|---|
 | `.windvane/config.toml` | in the project, committed | how this project is built, checked, reviewed and merged |
-| `machine.toml` | `~/.config/windvane/` | settings for this machine: where new projects go, `windvane heavy` |
+| `machine.toml` | `~/.config/windvane/` | settings for this machine: where new projects go, `windvane heavy`, `[state]` |
 | `phone.toml` | `~/.config/windvane/` | the ntfy phone, written by `windvane phone setup` (see [Phone setup](phone.md)) |
 
 `XDG_CONFIG_HOME` moves `~/.config`, and `XDG_STATE_HOME` moves the state directory (`~/.local/state/windvane/`).
@@ -169,6 +169,24 @@ Settings for this machine, shared by every project on it.
 | `projects_dir` | none | Where the windvane skill creates new projects when you start one from a Claude Code session. |
 | `busy` | `["UnrealEditor", "ShaderCompile", "blender"]` | Process names (regular expressions, as `pgrep` matches them) of heavy work started outside windvane. `windvane heavy` waits while any of them runs. |
 | `min_free_gb` | `6` | `windvane heavy` waits until at least this much memory is available. Linux only; elsewhere only `busy` is waited on. |
+
+## [state]
+
+What of a project's state directory (`~/.local/state/windvane/<name>/`) may go. Set it in `machine.toml` for every
+project; a project's own `[state]` table in config.toml overrides it key by key. The driver cleans its own project at a
+run's start and end, and the transcripts and critic packs after each ticket; `windvane doctor --clean` cleans every
+project whose autopilot isn't running (`--dry-run` lists what would go, with sizes).
+
+Always removed, whatever these say: a parallel slot's worktree (`work-N`, `ci-N`) that is idle and holds nothing
+unmerged (no uncommitted change, and no commit `main` lacks). Never removed: a tree a running session uses, a process
+works in, or anything touched in the last hour. Slot 0's `work` and `ci` and the planner's `plan` stay: the next run
+reuses them.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `keep_days` | `14` | Session transcripts (`runs/*.jsonl`) and merged tickets' critic packs (`critic/<ID>/`) older than this go. `windvane stats` reads the token ledger, not the transcripts, so its numbers don't change. |
+| `keep_runs` | `3` | An unmerged ticket's newest transcripts that stay however old, for a look at what its last runs did. |
+| `trim_build` | `false` | Also remove the ignored files (build output, `node_modules`) of slot 0's and the planner's worktrees while they're idle. Off by default: the next run rebuilds them, which can take long (an engine, a Rust project). |
 
 ## Quiet times
 
