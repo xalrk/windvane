@@ -802,7 +802,9 @@ class Pilot(Desk, Periodic):
                 res = net.git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
             if merged:
-                return self.merged_ok(tid, branch, sha, renumbered) if self.landed(tid, branch, sha) else None
+                if self.landed(tid, branch, sha):  # the ci worktree is still on the merge
+                    return self.merged_ok(tid, branch, sha, renumbered, self.off_touches(tid))
+                return None
             self.log(f"{tid}: merge refused ({' '.join((res.stderr or res.stdout).split())[:200]}); trying again")
         self.fail(tid, "the merge was refused three times")
 
@@ -841,18 +843,16 @@ class Pilot(Desk, Periodic):
                        f"at {sha[:12]}")
         return False
 
-    def log_outside(self, tid):
-        """One line on the files a merged ticket changed that its Touches line didn't name: where planners' Touches
-        lines fall short, and so where side-by-side tickets meet without the driver knowing. The ci worktree is still
-        on the merge, so its first parent is main before it."""
+    def off_touches(self, tid):
+        """The files the merge in the ci worktree brings to main that `tid`'s Touches line didn't name: where planners'
+        Touches lines fall short, and so where side-by-side tickets meet without the driver knowing."""
         touches = self.queue.touches.get(tid)
         d = git(self.cd, "diff", "--name-only", "-z", "HEAD^1", "HEAD")
-        files = beyond(d.stdout.split("\0"), touches) if touches and d.returncode == 0 else []
-        if files:
-            self.log(f"{tid}: changed outside its Touches line: {', '.join(files)}")
+        return beyond(d.stdout.split("\0"), touches) if touches and d.returncode == 0 else []
 
-    def merged_ok(self, tid, branch, sha, renumbered=None):
-        """`renumbered`: the merge's renumbering, said in the push: on forge git it's the only place but the log."""
+    def merged_ok(self, tid, branch, sha, renumbered=None, outside=()):
+        """`renumbered`: the merge's renumbering, said in the push: on forge git it's the only place but the log.
+        `outside`: the files it changed off its Touches line, logged for planners."""
         p = self.p
         if branch:  # only while it still points at the merged head: a later push there is unmerged work
             if net.git(p.main_root(), "push", "-q", f"--force-with-lease={branch}:{sha}", p.remote, "--delete",
@@ -875,7 +875,8 @@ class Pilot(Desk, Periodic):
         self.save()
         score = self.scores.get(tid)
         self.log(f"{tid}: merged {sha[:7]} · {self.usage.text()}")
-        self.log_outside(tid)
+        if outside:
+            self.log(f"{tid}: changed outside its Touches line: {', '.join(outside)}")
         push(f"Done: {self.name(tid)}", "Built, checked, reviewed and merged."
              + (f" Critic {score:g}/10." if score is not None else "") + f" {self.usage.text()}"
              + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else "") + self.built_lines(tid),
