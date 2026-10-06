@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import cli, critic, driver  # noqa: E402
+from windvane import periodic as periodic_mod  # noqa: E402
 from windvane.config import Project, periodic  # noqa: E402
 from windvane.runner import run_claude  # noqa: E402
 from windvane.util import now, read_jsonl  # noqa: E402
@@ -166,6 +167,33 @@ class ProjectCritic(unittest.TestCase):
         t3 = self.s.git("show", "origin/main:.windvane/tickets/T-003.md")  # open when the audit ran
         self.assertIn("## From the project critic", t3)
         self.assertIn("- add a retry", t3)
+
+    def test_a_failed_dimension_is_named_the_rest_still_scored(self):
+        self.make()
+        os.environ["FAKE_ERROR_FOR"] = "the lean dimension"  # its session dies with an API error
+        out = self.cli("critic", "--project")
+        self.assertIn("works=8 clear=8 lean=-", out)
+        self.assertIn("## lean: no verdict (", out)
+        rec = self.records()[-1]
+        self.assertEqual((rec["dims"], rec["failed"]), ({"works": 8, "clear": 8}, ["lean"]))
+        self.assertIn("no verdict on lean", self.cli("critic", "--project", "--last"))
+        self.assertEqual(critic.calibration(read_jsonl(self.p.state / "critic.jsonl"), 8), None)
+
+    def test_no_verdict_at_all_fails_and_pushes(self):
+        self.make()
+        pushes = []
+        orig = periodic_mod.push
+        periodic_mod.push = lambda title, msg="", *a, **k: pushes.append((title, msg))
+        self.addCleanup(setattr, periodic_mod, "push", orig)
+        os.environ["FAKE_ERROR_FOR"] = "Critique the project"  # every dimension's session dies
+        with self.assertRaises(SystemExit) as e:
+            self.cli("critic", "--project")
+        self.assertIn("gave no verdict", str(e.exception.code))
+        self.assertIn(("project-critic round failed", "The project-critic round didn't finish: the critic gave no "
+                       "verdict on any dimension."), pushes)
+        self.assertEqual(self.records()[-1]["step"], "unavailable")
+        self.assertEqual(critic.followups(self.p), [])
+        self.assertEqual(self.s.git("log", "-1", "--format=%s", "origin/main"), "tickets")  # nothing landed
 
     def test_config(self):
         e = periodic([{"name": "audit", "builtin": "project-critic", "dims": "works, Lean", "every": 5}])["audit"]
