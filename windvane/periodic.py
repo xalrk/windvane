@@ -421,7 +421,7 @@ def ticket_list(tickets, titles):
     counted: `; and 3 more`."""
     which = []
     for t in tickets:
-        if len("; ".join(which)) > phone.MOST // 2:
+        if len("; ".join(which).encode()) > phone.MOST // 2:
             which.append(f"and {len(tickets) - len(which)} more")
             break
         which.append(f"{t} {titles.get(t, '')}".strip())
