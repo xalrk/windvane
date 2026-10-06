@@ -113,9 +113,10 @@ def overlaps(paths, others):
 def changed(wd, upstream, prefix):
     """The files a running ticket has changed in its worktree `wd`: uncommitted, and committed on its branch against
     `upstream` (only while the worktree is on a branch starting with `prefix`: a slot a bounced ticket left holds
-    that ticket's head until the next worker switches). None when git can't tell."""
+    that ticket's head until the next worker switches). None when git can't tell. No optional locks: a plain status
+    rewrites the index under index.lock, and the worker's own `git add` or `commit` at that moment would fail."""
     try:
-        st = git(wd, "status", "--porcelain", "-z", "-b", "-uall")
+        st = git(wd, "--no-optional-locks", "status", "--porcelain", "-z", "-b", "-uall")
         if st.returncode:
             return None
         head, *rest = st.stdout.split("\0")

@@ -1,5 +1,6 @@
 """A running ticket's files are its Touches line plus what its branch has changed already: a Touches line written
 before the work can miss a file, and a ticket beside it on that file pays for a conflict bounce."""
+import os
 import subprocess
 import sys
 import unittest
@@ -69,6 +70,16 @@ class Overlap(unittest.TestCase):
         self.wd("git", "add", "b.py")  # staged
         self.assertEqual(pilot.clash("T-002", ["T-001"]), WAIT)
 
+    def test_the_probe_leaves_a_live_workers_index_alone(self):
+        pilot = self.running_t001()
+        self.commit("a.py")
+        os.utime(self.p.work_dir / "a.py", (1, 1))  # stale stat data: a plain `git status` would rewrite the index
+        index = Path(subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-path", "index"],
+                                    cwd=self.p.work_dir, capture_output=True, text=True).stdout.strip())
+        before = index.stat().st_ino
+        self.assertEqual(pilot.outside(["T-001"]), {"T-001": []})
+        self.assertEqual(index.stat().st_ino, before)  # not taken under index.lock and replaced
+
     def test_a_branch_that_kept_to_its_touches_runs_beside(self):
         pilot = self.running_t001()
         self.commit("a.py")
@@ -88,6 +99,22 @@ class Overlap(unittest.TestCase):
         self.assertEqual(pilot.outside(["T-001"]), {"T-001": []})
         self.assertEqual(pilot.clash("T-002", ["T-001"]), "")
         self.assertEqual(pilot.clash("T-002", ["T-001"], {"T-001": ["b.py"]}), WAIT)
+
+    def test_in_a_run_the_ticket_waits_until_the_running_one_merges(self):
+        os.environ["FAKE_WORK_S"] = "1.5"
+        self.s.ticket("T-001", touches="a.py")
+        self.s.ticket("T-002", touches="T-001.txt")  # the fake worker writes <ID>.txt: off T-001's line
+        self.s.publish()
+        self.p = Project(self.s.root)
+        ensure_worktree(self.p, self.p.work_dir, setup=False)
+        (self.p.work_dir / "T-001.txt").write_text("from a run that was cut off\n")  # T-001 resumes in slot 0
+        pilot = driver.Pilot(self.p, args())
+        pilot.run(now() + timedelta(minutes=15))
+        self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
+        log = (self.p.state / "autopilot.log").read_text()
+        self.assertIn("T-001: slot 0", log)
+        self.assertEqual(log.count("T-002 waits: overlaps T-001 on T-001.txt (changed, not on its Touches line)"), 1)
+        self.assertLess(log.index("T-001: merged"), log.index("T-002: slot"))
 
     def test_the_merge_logs_what_was_changed_outside_touches(self):
         pilot = self.pilot(T_001="a.py", T_002="T-002.txt")  # the fake worker writes <ID>.txt
