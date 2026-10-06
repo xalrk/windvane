@@ -48,7 +48,7 @@ class Requests(unittest.TestCase):
             return self.cli("request", title, "--body", str(f))
 
     def inbox(self, done=False):
-        return {f.stem: f.read_text() for f in requests.files(done)}
+        return {f.stem: requests.read(f) for f in requests.files(done)}
 
     def test_a_filing_records_its_source_and_cuts_what_is_private(self):
         self.make()
@@ -168,12 +168,37 @@ class Requests(unittest.TestCase):
         self.assertIn('windvane request R-001 question: A or B?  (Rename the critic); answer at the desk: '
                       'windvane request --answer R-001 "<your answer>"', out)
         self.assertEqual(self.cli("request", "--answer", "R-002", "B")[0], 1)
+        with unittest.mock.patch.dict(os.environ, {requests.ROLE: "worker"}):  # a call only the user makes
+            code, out = self.cli("request", "--answer", "R-001", "A")
+        self.assertEqual((code, out.strip()), (1, "windvane request: only the user answers, at the desk "
+                                                  "(this is a worker session)"))
         code, out = self.cli("request", "--answer", "R-001", "B, keep it short")
         self.assertEqual((code, out.strip()), (0, "R-001: answered; windvane's next run triages it again with your answer"))
         self.assertIn("## Answer from the user (", self.inbox()["R-001"])
         self.assertIn("- Verdict: answered, back to triage", self.inbox()["R-001"])
         self.assertEqual(pilot.periodic_due()["name"], "requests")
         self.assertEqual(self.cli("request", "--answer", "R-001", "again")[0], 1)  # answered once
+        with unittest.mock.patch("windvane.periodic.push", lambda *a: None):
+            self.assertEqual(self.cli("periodic", "requests")[0], 0)  # asks again
+        _, out = self.cli("status")
+        self.assertIn("windvane request R-001 question: A or B?", out)  # a second question shows too
+
+    def test_a_stray_inbox_file_stops_nothing(self):
+        self.make(TRIAGE)
+        self.file("A request")
+        (requests.inbox() / "R-x.md").write_text("# R-x: stray")
+        (requests.inbox() / "R-002.md").write_bytes(b"# R-002: bad \xff bytes\n- From: sandbox\n")
+        pilot = driver.Pilot(self.p, __import__("test_pipeline").args())
+        self.assertEqual(pilot.periodic_due()["name"], "requests")
+        self.assertEqual(sorted(self.inbox()), ["R-001", "R-002"])
+        self.assertEqual(self.cli("request", "--status")[0], 0)
+
+    def test_an_accept_whose_land_stays_on_a_branch_stays_open(self):
+        self.make(TRIAGE)
+        with unittest.mock.patch("windvane.held.land", lambda *a: (False, "the branch periodic-x")):
+            self.triage([("Retry the check on a flaky network", "WANT=accept")])
+        self.assertEqual(list(self.inbox()), ["R-001"])
+        self.assertEqual(self.inbox(done=True), {})
 
     def test_an_accept_naming_no_landed_ticket_stays_open(self):
         self.make()

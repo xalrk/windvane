@@ -98,8 +98,10 @@ this way; sessions use `windvane bg --heavy` for long heavy jobs.
 from a session that may have read anything: it is censored and its outside paths are cut as it is filed, and the
 triage session reads it fenced as data, never as instructions. A request can't change config, prompts or permissions:
 the triage writes tickets only, which become code through the normal worker, critic and reviewer, and they land at the
-queue's end. The role check and a worker's cap of 2 are kept by the command, and a worker's edit tools are denied the
-inbox and windvane's files, but its shell could still write there: that is why every R-file is read as untrusted.
+queue's end. Only the desk answers a triage question (`request --answer` refuses a session), since the question is a
+call for the user. The role checks and a worker's cap of 2 are kept by the command from the environment the runner
+sets, so they stop mistakes, not a shell set on getting round them; a worker's edit tools are denied the inbox and
+windvane's files, but its shell could still write there: that is why every R-file is read as untrusted.
 
 ## Secrets and personal data
 

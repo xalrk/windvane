@@ -290,7 +290,7 @@ class Sandbox:
                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "FAKE_LOG": str(self.tmp / "calls.jsonl")}
         os.environ.clear()
         os.environ.update({**self.old_env, **self.env})
-        for k in ("WINDVANE_SESSION", "WINDVANE_TICKET", "WINDVANE_STOP_AT", "WINDVANE_CAPS"):  # when the tests run inside a session
+        for k in ("WINDVANE_SESSION", "WINDVANE_TICKET", "WINDVANE_STOP_AT", "WINDVANE_CAPS", "WINDVANE_ROLE"):  # when the tests run inside a session
             os.environ.pop(k, None)
         for k in [k for k in os.environ if k.startswith("GIT_CONFIG_")]:  # a worker's [skip ci] hook, for one
             os.environ.pop(k)

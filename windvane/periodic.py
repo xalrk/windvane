@@ -119,10 +119,11 @@ class Periodic:
             e = p.periodic.get(e["then"])
         self.save()
         try:
+            landed = []
             if kept and (kept[0] or kept[3] or kept[2][0] != kept[2][1]):
-                self.land_periodic(cd, *kept, land or "near", last, reply)
+                landed = self.land_periodic(cd, *kept, land or "near", last, reply)
             for reqs, text, name in self.triaged:
-                self.verdicts(reqs, text, kept[1] if kept else [], name)
+                self.verdicts(reqs, text, landed, name)
         finally:
             clean_detach(p, cd, p.upstream)
 
@@ -309,7 +310,8 @@ class Periodic:
         one of the ids meanwhile, the change is made on the commit the chain began on, so the land clashes and keeps
         it on a branch rather than overwrite that ticket. Notes go at the end of each ticket as main has it, unless it
         is done there (merged, or `done:`) or gone. The commit carries `reply` (the last session's, cut to 80 lines),
-        so what it found already covered or chose not to ticket stays on record."""
+        so what it found already covered or chose not to ticket stays on record. Returns the tickets that reached main
+        (none when the land stayed on a branch): only those may answer a request."""
         from .driver import DIR
         from .held import land as land_on_main
         from .worktree import clean_detach
@@ -344,7 +346,7 @@ class Periodic:
             noted.append(tid)
         if not (tickets or noted or queue != main_q):
             self.log(f"{name}: nothing left to land")
-            return
+            return []
         for f, text in keep.items():
             (cd / f).parent.mkdir(parents=True, exist_ok=True)
             (cd / f).write_text(text)
@@ -367,6 +369,7 @@ class Periodic:
         if not ok:
             push("periodic change not merged", f"{title}: waits on {where}{how.removeprefix(', not merged')}.", 4,
                  "warning")
+        return tickets if ok else []
 
     def ask_land(self, name, tickets, titles):
         """`land = "ask"`: one phone question, near / end / hold; waits up to `answer_wait` minutes (and never past
