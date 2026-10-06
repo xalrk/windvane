@@ -222,6 +222,7 @@ def squashed_on(root, upstream, branch):
     if not base:
         return False
     binary = binary_files(root, base, branch)
+    literal = [f":(literal){b}" for b in binary]  # a name such as `:(icase)logo.png` is a path, not pathspec magic
     rest = ["--", ".", *(f":(exclude,literal){b}" for b in binary)]
     change = patch_ids(root, raw(root, "diff-tree", "-p", base, branch, *rest))
     # raw, so it ends in a newline: `diff-tree --stdin` drops a last line without one
@@ -230,17 +231,26 @@ def squashed_on(root, upstream, branch):
         hits = [c for pid, c in patch_ids(root, raw(root, "diff-tree", "--stdin", "-p", *rest, stdin=recent))
                 if pid == change[0][0]]
     elif binary:
-        hits = raw(root, "diff-tree", "--stdin", "-s", "--format=%H", "--", *binary, stdin=recent).decode().split()
+        hits = raw(root, "diff-tree", "--stdin", "-s", "--format=%H", "--", *literal, stdin=recent).decode().split()
     else:
         return False
     if not binary:
         return bool(hits)
-    blobs = raw(root, "ls-tree", "--full-tree", "-z", branch, "--", *binary)
-    return any(raw(root, "ls-tree", "--full-tree", "-z", c, "--", *binary) == blobs for c in hits)
+    blobs = tree_entries(root, branch, literal)
+    return blobs is not None and any(tree_entries(root, c, literal) == blobs for c in hits)
+
+
+def tree_entries(root, rev, pathspecs):
+    """`rev`'s tree entries (mode, blob, path) for `pathspecs`, or None when ls-tree fails: two failures both print
+    nothing, and must not pass for the same blobs."""
+    r = subprocess.run(["git", "ls-tree", "--full-tree", "-z", rev, "--", *pathspecs], cwd=root, capture_output=True)
+    return r.stdout if r.returncode == 0 else None
 
 
 def binary_files(root, base, branch):
-    """The paths of binary files `branch` changes since `base` (numstat's "-" counts)."""
+    """The paths of binary files `branch` changes since `base` (numstat's "-" counts). `--no-renames` splits a renamed
+    binary file into a delete and an add, so both paths get their blob checked; `-z` keeps a name that isn't UTF-8
+    intact."""
     out = raw(root, "diff-tree", "-r", "--numstat", "--no-renames", "-z", base, branch)
     return [line[4:] for line in out.decode(errors="surrogateescape").split("\0") if line.startswith("-\t-\t")]
 

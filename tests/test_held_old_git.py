@@ -1,7 +1,7 @@
 """T-092: before git 2.38 (no `merge-tree --write-tree`), a held change squash-merged from several commits drops off
 `status` by its whole change's patch-id, which `git cherry` alone misses; one only half on upstream stays listed.
 T-099: old git's patch-id leaves a binary file's content out, so a change with one drops off only when the squash
-holds the same blob, and a squash main later reverted still counts as merged.
+holds the same blob (a failed ls-tree never passes for one), and a squash main later reverted still counts as merged.
 `status` prunes a hand-pushed change's remote branch once it's deleted, so its line reads as never pushed again."""
 import json
 import shlex
@@ -130,6 +130,31 @@ exec {shutil.which("git")} "$@"
         self.assertFalse(held.squashed_on(repo, "main", "art"))
         (repo / "icon.png").write_bytes(b"\x89PNG\0\3icon")
         self.s.git("commit", "-qam", "icon fixed", cwd=repo)
+        self.assertTrue(held.squashed_on(repo, "main", "art"))
+
+    def test_a_binary_file_named_like_pathspec_magic(self):
+        repo, logo = self.s.tmp / "magic", ":(icase)logo.png"  # a path to git, which ls-tree can't take as a pathspec
+        self.s.git("init", "-q", "-b", "main", str(repo))
+        (repo / "README").write_text("one\n")
+        self.s.git("add", "README", cwd=repo)
+        self.s.git("commit", "-qm", "one", cwd=repo)
+        self.s.git("checkout", "-qb", "art", cwd=repo)
+        for n in (2, 3):
+            (repo / "README").write_text(f"one\n{n}\n")
+            (repo / logo).write_bytes(b"\x89PNG\0" + bytes([n]))
+            self.s.git("add", ".", cwd=repo)
+            self.s.git("commit", "-qm", f"art {n}", cwd=repo)
+        self.s.git("checkout", "-q", "main", cwd=repo)
+        self.assertEqual(held.binary_files(repo, "main", "art"), [logo])
+        self.s.git("merge", "-q", "--squash", "art", cwd=repo)
+        (repo / logo).write_bytes(b"\x89PNG\0\4")  # the same text change, another picture
+        self.s.git("commit", "-qam", "art, squashed", cwd=repo)
+        self.assertFalse(held.squashed_on(repo, "main", "art"))
+        (repo / logo).write_bytes(b"\x89PNG\0\3")
+        self.s.git("commit", "-qam", "art, squashed right", cwd=repo)
+        self.assertFalse(held.squashed_on(repo, "main", "art"))  # the fix-up commit alone isn't the change
+        self.s.git("reset", "-q", "--soft", "HEAD~2", cwd=repo)
+        self.s.git("commit", "-qm", "art, squashed in one", cwd=repo)
         self.assertTrue(held.squashed_on(repo, "main", "art"))
 
     def test_a_change_half_on_main_stays_listed(self):
