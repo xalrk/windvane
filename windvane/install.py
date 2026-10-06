@@ -4,6 +4,7 @@ asking before each change, and take back exactly what it added. What it added is
 puts `settings.json` back byte for byte when nothing else in it changed meanwhile."""
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -100,6 +101,7 @@ def install(yes=False):
         if add_keyword_hook(settings):
             m["settings"].append({"path": str(settings), "command": hook_command(), "before": before})
     save(m)
+    tidy_phone_hooks()
     if not shutil.which("windvane"):
         print("windvane isn't on PATH yet: add ~/.local/bin to PATH (pipx users: pipx ensurepath)")
     print("next: windvane doctor (what this machine still lacks); windvane uninstall takes all of this back")
@@ -159,24 +161,99 @@ def remove_path(e):
 
 
 def phone_hooks(p):
-    """The phone's status/stop/overview hooks for a project (ntfy-listen runs them), when ntfy is set up here."""
-    base = Path.home() / ".config/ntfy"
+    """The phone's hooks for a project (ntfy-listen runs them), when ntfy is set up here: `stop` and `overview` per
+    project, and one `status` for them all that lists only the autopilots that are on."""
+    base = ntfy_dir()
     if not base.exists():
         return []
-    m, made = load(), []
-    cmd = shlex.join(exe())
-    for kind, args in (("status.d", "status --line"), ("stop.d", "stop --if-running"), ("overview.d", "overview")):
-        d = base / kind
-        make_dirs(d, m)
-        f = d / f"windvane-{p.name}"
-        if not f.exists():
-            m["paths"].append({"path": str(f), "kind": "file"})
-        f.write_text(f"#!/usr/bin/env bash\n# windvane {p.name}: `{args.split()[0]}` from the phone (ntfy-listen)\n"
-                     f"exec {cmd} -C {shlex.quote(str(p.main_root()))} {args}\n")
-        f.chmod(0o755)
-        made.append(str(d))
+    m, cmd = load(), shlex.join(exe())
+    for kind, args in (("stop.d", "stop --if-running"), ("overview.d", "overview")):
+        write_hook(base / kind / f"windvane-{p.name}", f"{p.name}: `{args.split()[0]}`",
+                   f"{cmd} -C {shlex.quote(str(p.main_root()))} {args}", m)
+    write_status_hook(m)
+    tidy_hooks(m)
     save(m)
-    return made
+    return [str(base / k) for k in ("status.d", "stop.d", "overview.d")]
+
+
+def ntfy_dir():
+    return Path.home() / ".config/ntfy"
+
+
+def write_hook(f, what, command, m):
+    """Write a hook script windvane owns. A file there is the user's, left alone, unless install.json lists it or it
+    has the form windvane writes (hooks from before install.json listed them, which get listed now)."""
+    listed = any(e["path"] == str(f) for e in m["paths"])
+    if f.exists() and not listed and not ours(f):
+        print(f"{f} isn't windvane's, so it's left alone")
+        return
+    make_dirs(f.parent, m)
+    if not listed:
+        m["paths"].append({"path": str(f), "kind": "file"})
+    f.write_text(f"#!/usr/bin/env bash\n# windvane {what} from the phone (ntfy-listen)\nexec {command}\n")
+    f.chmod(0o755)
+
+
+def write_status_hook(m):
+    write_hook(ntfy_dir() / "status.d/windvane", "every project: `status`, only the autopilots that are on",
+               f"{shlex.join(exe())} status --line --running", m)
+
+
+# A per-project hook as windvane writes it: hooks written before install.json listed them are known by this shape.
+OURS = re.compile(r"#!/usr/bin/env bash\n# windvane [a-z0-9-]+: `(status|stop|overview)` from the phone "
+                  r"\(ntfy-listen\)\nexec [^\n]+ -C [^\n]+\n")
+
+
+def tidy_hooks(m):
+    """Take out the phone hooks windvane wrote that no longer belong: the per-project `status` hooks of installs
+    before the shared one, and any hook whose project's repo is gone (it would answer with an error). Only hooks
+    install.json lists or that have exactly the form windvane writes are touched. Whether it removed an old `status`
+    hook, so the shared one replaces it."""
+    base, old_status = ntfy_dir(), False
+    listed = {e["path"] for e in m["paths"] if e["kind"] == "file"}
+    for kind in ("status.d", "stop.d", "overview.d"):
+        for t in sorted((base / kind).glob("windvane-*")):
+            if str(t) not in listed and not ours(t):
+                continue
+            if kind == "status.d" or not hook_root_exists(t):
+                old_status |= kind == "status.d"
+                t.unlink(missing_ok=True)  # another run's start may sweep it at the same moment
+    m["paths"] = [e for e in m["paths"]  # and what install.json lists there that's gone now
+                  if not (e["kind"] == "file" and Path(e["path"]).parent.parent == base and not Path(e["path"]).exists())]
+    return old_status
+
+
+def ours(f):
+    try:
+        return bool(OURS.fullmatch(f.read_text()))
+    except (OSError, ValueError):
+        return False
+
+
+def hook_root_exists(f):
+    """Whether the repo a per-project hook runs in (its `-C` directory) is still there; True when it can't tell."""
+    try:
+        words = shlex.split(f.read_text().splitlines()[-1])
+        return Path(words[words.index("-C") + 1]).is_dir()
+    except (OSError, ValueError, IndexError):
+        return True
+
+
+def tidy_phone_hooks():
+    """At a run's start: an install made before the shared `status` hook gets it now, and hooks of deleted repos go,
+    without waiting for an `init` (which is what writes the hooks)."""
+    try:
+        json.loads(manifest_path().read_text())
+    except ValueError:  # an unreadable record: saving over it would lose what install added
+        return
+    except OSError:
+        pass
+    m = load()
+    before = json.dumps(m)
+    if tidy_hooks(m):
+        write_status_hook(m)
+    if json.dumps(m) != before:
+        save(m)
 
 
 def _groups(data):

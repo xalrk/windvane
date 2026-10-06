@@ -74,8 +74,8 @@ Type one of these into the topic in the ntfy app:
 
 | Command | Reply |
 |---|---|
-| `status` | each project's state in one line (`Acme: autopilot running. Last: ...`) |
-| `overview` | where each project stands: tickets merged, underway, not started |
+| `status` | one line per project whose autopilot is on (`Acme: autopilot running. Last: ...`); idle ones are left out |
+| `overview` | every project, running or not: tickets merged, underway, not started |
 | `usage` | Claude usage: the 5-hour window and the week |
 | `stop` | stop the runs after their current ticket |
 | `answer <id> B` | answer a question by its id |
@@ -102,5 +102,6 @@ If the censor fails for any reason, nothing is sent.
 ## Using your own notification scripts
 
 If commands named `notify` and `notify-ask` are on your `PATH`, windvane uses them instead of the built-in phone,
-and `ntfy-listen` for replies. `windvane init` then adds `status`, `stop` and `overview` hooks for the project
-under `~/.config/ntfy/`. The built-in phone stays as the fallback.
+and `ntfy-listen` for replies. `windvane init` then adds `stop` and `overview` hooks for the project and one
+`status` hook for every project (`status.d/windvane`) under `~/.config/ntfy/`; a run's start removes the hooks of a
+project whose repo is gone. The built-in phone stays as the fallback.
