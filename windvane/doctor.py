@@ -9,8 +9,8 @@ import shutil
 import subprocess
 import sys
 
-from . import actions, heavy, install, phone, runner, scratch
-from .config import CHECKOUT
+from . import actions, heavy, install, phone, runner, scratch, statedir
+from .config import CHECKOUT, Project
 from .util import load_json
 
 # The triggers that run a workflow on its own for every autopilot ticket: its PR and the merge push to main.
@@ -224,7 +224,7 @@ def checks(p=None):
     settings = install.claude_dir() / "settings.json"
     add(install.has_keyword_hook(settings, any_copy=True), False, f"the mention hook in {settings}",
         "windvane install")
-    return out + tmp_warnings(p)
+    return out + tmp_warnings(p) + state_warnings(p)
 
 
 def tmp_scope(p):
@@ -254,11 +254,75 @@ def tmp_warnings(p=None):
     return out
 
 
-def main(p=None, clean=False):
-    if clean:
-        dirs, n = scratch.clean(*tmp_scope(p))
-        print(f"removed {dirs} leftover windvane temp dir{'s' * (dirs != 1)} ({n} files) from {scratch.root()}"
-              + (f" and {p.state / 'tmp'}" if tmp_scope(p)[0] else ""))
+def state_warnings(p=None):
+    """What of the project's state dir could go (statedir.py): one line, the biggest item named."""
+    if p is None or not getattr(p, "exists", False) or not getattr(p, "state", None):
+        return []
+    try:
+        items = statedir.reclaimable(p)
+    except (OSError, SystemExit) as e:
+        return [("warn", f"the state dir {p.state} wasn't surveyed: {e}", "fix the [state] settings")]
+    if not items:
+        return [("ok", f"state dir {p.state}: nothing to reclaim", "")]
+    total, big = sum(i.size for i in items), items[0]
+    what = f"{statedir.human(total)} of {p.state} can go (biggest: {big.what}, {statedir.human(big.size)})"
+    return [("warn" if total >= BIG else "ok", what, "windvane doctor --clean" if total >= BIG else "")]
+
+
+BIG = 100 * 2 ** 20  # reclaimable state worth a warning
+
+
+def clean_tmp(p, dry_run):
+    scope = tmp_scope(p)
+    where = f"{scratch.root()}" + (f" and {p.state / 'tmp'}" if scope[0] else "")
+    if not dry_run:
+        dirs, n = scratch.clean(*scope)
+        print(f"removed {dirs} leftover windvane temp dir{'s' * (dirs != 1)} ({n} files) from {where}")
+        return
+    left = scratch.leftovers(*scope)
+    print(f"would remove {len(left)} leftover windvane temp dir{'s' * (len(left) != 1)} from {where}")
+    for d, n, b in left:
+        print(f"  {statedir.human(b):>6}  {d} ({n} files)")
+
+
+def clean_states(p=None, dry_run=False):
+    """Every project's state dir on this machine (the ones its runs registered, and `p`), but not one whose
+    autopilot is running: its slots and transcripts are in use."""
+    from .driver import locked
+    roots = dict(phone.projects())
+    if p is not None and getattr(p, "exists", False):
+        roots.setdefault(p.name, str(p.main_root()))
+    total = 0
+    for name, root in sorted(roots.items()):
+        try:
+            q = Project(root)
+            if not q.exists:
+                continue
+            if locked(q):
+                print(f"{q.name}: skipped, its autopilot is running")
+                continue
+            items, kept = statedir.survey(q)
+        except (OSError, SystemExit) as e:
+            print(f"{name}: skipped ({e})")
+            continue
+        done = [(item, dry_run or statedir.remove(q, item)) for item in items]
+        freed = sum(item.size for item, ok in done if ok)
+        verb = "would free" if dry_run else "freed"
+        print(f"{q.name} ({q.state}): " + (f"{verb} {statedir.human(freed)}" if items else "nothing to reclaim"))
+        for item, ok in done:
+            print(f"  {statedir.human(item.size):>6}  {item.what}" + ("" if ok else "  (kept: it changed meanwhile)"))
+        for wt, why in kept:
+            print(f"  kept    {wt}: {why}")
+        total += freed
+    print(f"{'would free' if dry_run else 'freed'} {statedir.human(total)} of state in all")
+
+
+def main(p=None, clean=False, dry_run=False):
+    if clean or dry_run:
+        clean_tmp(p, dry_run)
+        clean_states(p, dry_run)
+        if dry_run:
+            return 0
     rows = checks(p)
     width = max(len(what) for level, what, _ in rows if level != "warn")  # a long warning mustn't push every fix out
     label = {"ok": "ok      ", "need": "MISSING ", "optional": "optional", "warn": "WARNING "}

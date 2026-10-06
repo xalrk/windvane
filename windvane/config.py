@@ -202,6 +202,28 @@ def actions_budget(c):
         raise SystemExit(f"windvane: actions_cap = {cap!r} in config.toml: use a share above 0, at most 1 (0.9: 90%)")
 
 
+# `[state]`: what of a project's state dir may go (statedir.py). In the machine settings file for every project,
+# overridable in a project's config.toml; not in DEFAULTS, so a project's table holds only what it sets.
+STATE = {"keep_days": 14,  # session transcripts and merged tickets' critic packs older than this go
+         "keep_runs": 3,  # but an unmerged ticket's newest transcripts stay, however old
+         "trim_build": False}  # idle slot 0 and plan worktrees lose their ignored build output (a rebuild may be slow)
+
+
+def state_settings(machine, project):
+    """`[state]`: the machine's table, the project's over it, each value checked (a typo must not delete more)."""
+    s = {**STATE, **machine, **project}
+    if set(s) - set(STATE):
+        raise SystemExit(f"windvane: [state] has no {', '.join(sorted(set(s) - set(STATE)))}: it takes "
+                         f"{', '.join(STATE)}")
+    for key in ("keep_days", "keep_runs"):
+        v = s[key]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+            raise SystemExit(f"windvane: [state] {key} = {v!r}: use a number, 0 or more")
+    if not isinstance(s["trim_build"], bool):
+        raise SystemExit(f"windvane: [state] trim_build = {s['trim_build']!r}: use true or false")
+    return s
+
+
 def toplevel(start=None):
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=start or os.getcwd(), capture_output=True,
                        text=True)

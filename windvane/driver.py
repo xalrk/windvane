@@ -24,7 +24,7 @@ import time
 import traceback
 from datetime import datetime, timedelta
 
-from . import actions, critic, install, net, phone, renumber, requests, scratch, selfupdate
+from . import actions, critic, install, net, phone, renumber, requests, scratch, selfupdate, statedir
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .held import author_ident, push_held
@@ -1281,7 +1281,7 @@ class Pilot(Desk, Periodic):
             self.clean_tmp()
             self.wake.set()
 
-    def clean_tmp(self):
+    def clean_tmp(self, between=True):
         """Between tickets: what tests and sessions leaked into the temp dir, before it fills (tmpfs inodes)."""
         with self.lock:
             running = set(self.running)
@@ -1289,6 +1289,22 @@ class Pilot(Desk, Periodic):
         if dirs:
             self.log(f"removed {dirs} leftover temp dir{'s' * (dirs > 1)} ({n} files)")
         self.warn_tmp_full()
+        self.clean_state(between)
+
+    def clean_state(self, between):
+        """What the state dir no longer needs (statedir.py). Between tickets the loop may prepare any slot at any
+        moment, so only the transcripts and critic packs go then; idle slot worktrees and build output go at the
+        run's start and end, when no slot is being prepared."""
+        with self.lock:
+            busy = set(self.running.values())
+        try:
+            n, freed = statedir.clean(self.p, busy=busy, keep_slots=self.n if between else 0,
+                                      trim=False if between else None)
+        except (OSError, SystemExit) as e:  # a bad [state] setting, a vanished file: the run goes on
+            self.log(f"state dir: not cleaned ({e})")
+            return
+        if n:
+            self.log(f"state dir: freed {statedir.human(freed)} ({n} item{'s' * (n > 1)})")
 
     def warn_tmp_full(self):
         """One push when the temp dir is nearly full even after cleaning (nobody runs doctor at 3am), and another
@@ -1461,7 +1477,7 @@ class Pilot(Desk, Periodic):
         swept = sweep_nested(p)  # under the lock: no live run owns them
         if swept:
             self.log(f"killed {swept} process group{'s' * (swept > 1)} left running by an earlier run's sessions")
-        self.clean_tmp()
+        self.clean_tmp(between=False)
         ready, crashed = False, None
         try:
             ready = self.rules_ok() and self.prepare(0)  # before any session or push: a bad rule or a failed setup
@@ -1491,6 +1507,7 @@ class Pilot(Desk, Periodic):
         finally:
             for t in self.threads:  # the running tickets finish (their runs stop at the deadline at the latest)
                 t.join()
+            self.clean_state(between=False)  # every slot's thread is done: its trees are idle
             if not quiet_now(p)[0]:
                 self.send_unsent()  # a question from a ticket that finished after the loop's last pass
             summary = self.summary()
