@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import net
 from .config import HOME
+from .phone import cut
 from .runner import plain_error, run_claude
 from .util import append_jsonl, git, gout, load_json, read_jsonl
 
@@ -361,7 +362,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     n = revisions(past)
     if not facing:
         entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": None, "fixes": 0,
-                 "revisions": n, "step": "skip", "gist": notes.strip().splitlines()[0][:200], "critique": ""}
+                 "revisions": n, "step": "skip", "gist": cut(notes.strip().splitlines()[0]), "critique": ""}
         append_jsonl(p.state / "critic.jsonl", entry)
         return entry, "Not user-facing: no critique."
     ticket = gout(cwd, "show", f"{rev}:{p.tickets_rel}/{tid}.md")
@@ -382,9 +383,9 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
             break
     if error:
         entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": None, "fixes": 0,
-                 "revisions": n, "step": "unavailable", "gist": plain_error(error)[:200], "critique": ""}
+                 "revisions": n, "step": "unavailable", "gist": cut(plain_error(error)), "critique": ""}
         append_jsonl(p.state / "critic.jsonl", entry)
-        return entry, f"Critic unavailable ({plain_error(error)[:300]})."  # the worker reads it
+        return entry, f"Critic unavailable ({cut(plain_error(error))})."  # the worker reads it
     v = verdict(text)
     if not v or p.norm(v[0]) != tid:
         return None, text or "The critic ended without a verdict."
@@ -403,7 +404,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         critique += (f"\nCapped by the driver: {', '.join(hits)} answered yes{f' ({low})' if low else ''}; "
                      "a hit cap counts as a fix.")
     entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
-             "dims": dims, "fixes": fixes, "effective": max(fixes, len(hits)), "revisions": n, "gist": gist[:200],
+             "dims": dims, "fixes": fixes, "effective": max(fixes, len(hits)), "revisions": n, "gist": cut(gist),
              "step": step(p, dims, max(fixes, len(hits)), n),
              "critique": critique, "scale": scale(p, cwd), "checks": len(caps),
              "hits": hits, "capped": was, "anchor": anchor}
@@ -431,7 +432,7 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
         critique += f"\nUnanswered, counted as no: {', '.join(missing)}"
     critique += f"\nCRITIC: {tid} {scores} fixes={eff} {gist}"
     entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
-             "dims": dims, "fixes": fixes, "effective": eff, "revisions": n, "gist": gist[:200],
+             "dims": dims, "fixes": fixes, "effective": eff, "revisions": n, "gist": cut(gist),
              "step": step(p, dims, eff, n, floor=next(iter(lad.values()))[0][0]),
              "critique": critique, "scale": scale(p, cwd), "answers": said,
              "failed": [cid for _, _, cid, _, _ in block], "scoped": scoped, "unanswered": missing}

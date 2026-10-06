@@ -130,7 +130,7 @@ class Periodic:
         until = min(now() + timedelta(minutes=e["setup_minutes"]), self.end() - timedelta(minutes=e["minutes"]))
         stopped = lambda: "stopped" if (self.p.state / "STOP").exists() else ""  # noqa: E731
         code, why, lines = run_limited(e["setup"], cd, until, stopped)
-        last = lines[0].strip()[:200] if lines else "no output"
+        last = phone.cut(lines[0], log=self.log) if lines else "no output"
         return why or (f"exit {code}: {last}" if code else "")
 
     def periodic_session(self, e, cd, prev, finished=None):
@@ -189,18 +189,18 @@ class Periodic:
             why = killed or error or "no PERIODIC line"
             self.log(f"{name}: no result ({why}); its changes are dropped")
             if killed != "stop now":  # the user stopped it: nothing to tell
-                what = (f"it was cut off ({killed})" if killed else f"the session failed ({plain_error(error)[:150]})"
+                what = (f"it was cut off ({killed})" if killed else f"the session failed ({phone.cut(plain_error(error), log=self.log)})"
                         if error else "it ended without its PERIODIC line")
                 self.periodic_failed(name, f"{what}; its changes were dropped.")
             return None
         self.log(f"{name}: PERIODIC: {m.group(1)}")
-        push(name, m.group(1)[:300] or "done", 3, "mag")
+        push(name, phone.cut(m.group(1), log=self.log) or "done", 3, "mag")
         if notes:  # used: the next plan (or triage) starts after them
             append_jsonl(p.state / "critic.jsonl", {"ticket": "PLAN", "step": f"periodic:{name}", "notes": len(notes)})
         score = SCORE_RE.search(m.group(1))
         if score:
             append_jsonl(p.state / "ledger.jsonl", {"role": f"periodic:{name}", "event": "score",
-                                                    "score": float(score.group(1)), "summary": m.group(1)[:200]})
+                                                    "score": float(score.group(1)), "summary": phone.cut(m.group(1))})
         return text.strip(), output(text, cd)
 
     def periodic_failed(self, name, why):

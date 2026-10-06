@@ -14,6 +14,7 @@ from datetime import timedelta
 
 from . import net
 from .jobs import check, tail
+from .phone import cut
 from .renumber import OLD_NUMBERS, said
 from .util import git, gout, hhmm, last_match, now, push
 
@@ -104,7 +105,7 @@ class Desk:
             if now_head and now_head != head:
                 self.log(f"desk PR #{n}: its head moved to {now_head[:7]} during the check; next pass")
                 return self.save()
-            why = " ".join((r.stderr or r.stdout).split())[:300]
+            why = cut(" ".join((r.stderr or r.stdout).split()), log=self.log)
             return self.desk_problem(pr, d, head, "merge refused", f"`gh pr merge` said: {why}")
         self.fetch()
         if git(p.main_root(), "merge-base", "--is-ancestor", head, p.upstream).returncode:
@@ -117,7 +118,7 @@ class Desk:
         self.desk_done(d, head)
         self.desk_merged.append(n)
         self.log(f"desk PR #{n}: merged {head[:7]}")
-        push(f"{'Fixed: d' if d.get('fixed') else 'D'}esk PR #{n} merged", f"{pr['title'][:150]}\n{summary}"
+        push(f"{'Fixed: d' if d.get('fixed') else 'D'}esk PR #{n} merged", f"{cut(pr['title'], log=self.log)}\n{summary}"
              + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else ""), 2, "white_check_mark")
 
     def desk_check(self, head):

@@ -29,7 +29,7 @@ from .renumber import OLD_NUMBERS, said
 from .desk import Desk
 from .held import author_ident, push_held
 from .periodic import Periodic
-from .phone import MOST, whole
+from .phone import MOST, REASON, cut, whole
 from .planner import plan
 from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
@@ -62,8 +62,6 @@ SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it read
                   ("context limit", "Split the ticket, or trim what it reads."),
                   ("request too large", "Split the ticket, or trim what it reads."))
 
-
-REASON = 300  # characters of a session's error in a set-aside or stop reason
 
 
 def said_times(n):
@@ -348,10 +346,11 @@ class Pilot(Desk, Periodic):
         self.log(f"  {label} died ({error}); retry {own[0] if own else self.crashes}/{n} in {wait:g} min")
         return self.backoff(wait)
 
-    def said_error(self, error):
+    def said_error(self, error, log=None):
         """A session's error as a reason says it (the run summary's aside line, the stop reason): its API message, at
-        most REASON characters, since a summary carries a few of them in one push. The log keeps the whole text."""
-        return whole("", plain_error(error), log=self.log, most=REASON)
+        most REASON bytes, since a summary carries a few of them in one push. The log keeps the whole text (`log`, a
+        no-op where the caller logs it itself)."""
+        return whole("", plain_error(error), log=log or self.log, most=REASON)
 
     def backoff(self, minutes):
         """A retry's backoff; False when a stop or the deadline came first."""
@@ -371,17 +370,18 @@ class Pilot(Desk, Periodic):
     def set_aside(self, tid, error):
         """A ticket whose own sessions keep dying while others' don't: the rest of the run goes on without it."""
         self.skip.add(tid)
-        self.aside[tid] = f"its sessions kept dying: {self.said_error(error)}"
         self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work")
+        logged = lambda m: None  # noqa: E731  the line above has the whole error: the cuts below don't log it again
+        self.aside[tid] = f"its sessions kept dying: {self.said_error(error, logged)}"
         error = plain_error(error)
         died = f"Sessions died {self.p.ap['retries'] + 1}×: "
         why = "Other sessions worked, so it's this ticket's doing."
         hit = next(((text, fix) for text, fix in SELF_INFLICTED if text in error.lower()), None)
         if hit:  # the fix leads: the error's own words rarely say what to do
-            body = (whole(died, hit[0], f". {hit[1]}", log=self.log)
-                    + "\n" + whole("The error: ", error, ".", log=self.log) + f"\nBranch kept, run goes on. {why}")
+            body = (whole(died, hit[0], f". {hit[1]}", log=logged)
+                    + "\n" + whole("The error: ", error, ".", log=logged) + f"\nBranch kept, run goes on. {why}")
         else:
-            body = whole(died, error, ". Branch kept, run goes on.", log=self.log) + f"\n{why}"
+            body = whole(died, error, ". Branch kept, run goes on.", log=logged) + f"\n{why}"
         push(f"Set aside: {self.name(tid)}", body, 4, "warning")
 
     def set_aside_limit(self, tid, limit, fix):
@@ -582,7 +582,7 @@ class Pilot(Desk, Periodic):
         limit = (self.p.critic if table == "critic" else self.p.ap)[key]
         if n > limit + spare:
             self.fail(tid, f"{what} sent it back {said_times(n)}; `[{table}] {key}` = {limit} allows {limit + spare}"
-                           f"{f' ({why})' if why else ''}: {self.feedback.get(tid, '')[:200]}")
+                           f"{f' ({why})' if why else ''}: {cut(self.feedback.get(tid, ''), log=self.log)}")
 
     def critic_gate(self, tid, sha, stale=None, branch=""):
         """`stale`: an approved head whose verdict no longer covers this one (it changed more than a resolution)."""
@@ -806,7 +806,7 @@ class Pilot(Desk, Periodic):
                 if self.landed(tid, branch, sha):  # the ci worktree is still on the merge
                     return self.merged_ok(tid, branch, sha, renumbered, self.off_touches(tid))
                 return None
-            self.log(f"{tid}: merge refused ({' '.join((res.stderr or res.stdout).split())[:200]}); trying again")
+            self.log(f"{tid}: merge refused ({cut(' '.join((res.stderr or res.stdout).split()))}); trying again")
         self.fail(tid, "the merge was refused three times")
 
     def merge_main(self, rev, msg):
