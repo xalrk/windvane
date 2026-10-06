@@ -8,7 +8,7 @@ from . import actions, critic, net
 from .held import author_ident, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
 from .queue import Queue
-from .runner import rules, run_claude
+from .runner import NO_REQUEST, rules, run_claude
 from .util import git, gout, last_match, load_json, log, now, push, save_json
 from .worktree import clean_detach, ensure_worktree
 
@@ -145,7 +145,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
     ]))
     log(p, f"plan run ({len(notes)} critic notes)")
     deny = ["Agent", "Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
-            "Bash(gh *)", "NotebookEdit"]
+            "Bash(gh *)", "NotebookEdit", NO_REQUEST]
     while True:
         text, killed, error = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd,
                                          ["Bash(git ls-files *)"], deny, usage, stop_if)

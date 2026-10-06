@@ -24,7 +24,7 @@ import time
 import traceback
 from datetime import datetime, timedelta
 
-from . import actions, critic, install, net, phone, renumber, scratch, selfupdate
+from . import actions, critic, install, net, phone, renumber, requests, scratch, selfupdate
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .held import author_ident, push_held
@@ -36,7 +36,7 @@ from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, mode, note, parts, phone_answer, provisional, qkey,
                         quiet_now, section, shown, unseen)
 from .queue import Queue
-from .runner import Usage, over_caps, plain_error, rules, run_claude, sweep_nested
+from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
 from .worktree import TIMED_OUT, SetupFailed, clean_detach, ensure_worktree
 
@@ -73,7 +73,7 @@ def worker_perms(p):
     deny = [f"Bash(git push * {m})", f"Bash(git push * HEAD:{m})", f"Bash(git push * {m}:{m})",
             "Bash(git push --force *)", "Bash(git push -f *)", "Bash(git reset --hard *)", "Bash(gh pr merge *)",
             f"Bash(git switch {m})", f"Bash(git checkout {m})", "Bash(git worktree *)",
-            *actions.DENY]
+            *actions.DENY, *requests.worker_deny(p)]
     if not p.ap["subagents"]:
         deny.append("Agent")
     allow = ["Bash(windvane *)", "Bash(git *)", "Bash(gh pr create *)", "Bash(gh pr view *)", "Bash(gh pr edit *)",
@@ -83,7 +83,7 @@ def worker_perms(p):
 
 REVIEW_DENY = ["Edit", "Write", "NotebookEdit", "Agent", "Bash(git push *)", "Bash(git commit *)",
                "Bash(git switch *)", "Bash(git checkout *)", "Bash(git reset *)", "Bash(gh pr merge *)",
-               "Bash(gh pr edit *)", "Bash(gh pr comment *)", "Bash(gh pr close *)"]
+               "Bash(gh pr edit *)", "Bash(gh pr comment *)", "Bash(gh pr close *)", NO_REQUEST]
 
 
 def shared(paths, others):
@@ -221,6 +221,7 @@ class Pilot(Desk, Periodic):
         self.periodic_at, self.held = {}, []  # [[periodic]] (periodic.py): name -> merges when it last ran; tickets held
         self.groups_seen, self.groups_read = {}, (None, None)  # name -> groups finished then; (main's sha, its queue)
         self.groups_wait = {}  # name -> merges when a round was skipped: its finished groups wait for the next merge
+        self.requests_tried = set()  # windvane requests a [[periodic]] round was given this run: never twice
         self.desk_init(s.get("desk", {}))  # the user's labelled PRs, merged between tickets (desk.py)
 
     def slot_dirs(self, i):

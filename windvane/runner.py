@@ -18,6 +18,8 @@ from .util import append_jsonl, load_json, save_json
 
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
+ROLE = "WINDVANE_ROLE"  # the session's role: `windvane request` records it, and files only from a worker (or the desk)
+NO_REQUEST = "Bash(windvane request *)"  # sessions other than workers (and the desk) don't file windvane requests
 TOOL_MS = "600000"
 GRACE = 3  # seconds a nested session gets to end on SIGTERM before SIGKILL: short, the driver waits on it
 POLL = 5  # seconds between a quiet session's stop checks (small file reads, no tokens): how soon `stop --now` acts
@@ -314,7 +316,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
            "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local",
            *lean_flags(p, role), "--settings", settings_json(allow, deny), "--append-system-prompt", system]
     started, parent = time.time(), os.environ.get(NEST)
-    extra = {NEST: raw.stem, TICKET: ticket, "TMPDIR": str(scratch.session_dir(p, ticket or label)),
+    extra = {NEST: raw.stem, TICKET: ticket, ROLE: role, "TMPDIR": str(scratch.session_dir(p, ticket or label)),
              **(extra_env or {})}
     if limits:
         extra.update(WINDVANE_STOP_AT=str(limits[0].timestamp()), WINDVANE_CAPS=f"{limits[1]:g},{limits[2]:g}")

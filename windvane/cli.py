@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import doctor, driver, install, jobs, net, phone, planner, preflight, questions, schedule, watch
+from . import doctor, driver, install, jobs, net, phone, planner, preflight, questions, requests, schedule, watch
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, exe, find, slots, toplevel
@@ -246,6 +246,8 @@ def cmd_status(a, p):
     for q in questions.provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")):
         print(f"provisional: {q['ticket']}: {q['question']} Built {q['built'] or '?'}"
               + (f": {q['option']}" if q["option"] else "") + f". To change: windvane answer {q['ticket']} <letter>")
+    for line in requests.unseen(p):
+        print(f"windvane request {line}")
     print("\n".join(held_text(p, subject=None) + last_log(p, 12)))
 
 
@@ -314,6 +316,29 @@ def held_text(p, subject=60):
     after = ("each run's start tries these again" if not pushed else "listed until main has them" if pushed == len(now)
              else "each run's start tries those not pushed again; the others are listed until main has them")
     return held_mod.held_lines(p, now, subject) + [f"  ({after})"]
+
+
+def cmd_request(a):
+    """`windvane request`: works from any directory, a windvane project or not; the inbox is the machine's."""
+    if a.status:
+        print("\n".join(requests.status_lines()))
+        return
+    if a.answer:
+        code, line = requests.answer(a.answer, a.title or "")
+        print(line)
+        if code:
+            sys.exit(code)
+        return
+    if not a.title:
+        sys.exit('windvane request: give a title: windvane request "<what windvane should do>" [--body FILE|-]')
+    try:
+        body = sys.stdin.read() if a.body == "-" else Path(a.body).read_text(errors="replace") if a.body else ""
+    except OSError as err:
+        sys.exit(f"windvane request: can't read the body: {err.strerror}")
+    code, line = requests.file(a.title, body)
+    print(line)
+    if code:
+        sys.exit(code)
 
 
 def cmd_overview(a, p):
@@ -395,6 +420,9 @@ def cmd_queue(a, p):
     for e in p.periodic.values():
         if e["after_group"]:
             print(periodic_mod.group_line(e, q))
+        if e["requests"]:
+            n = len(requests.pending())
+            print(f"{e['name']} runs while windvane's inbox has requests: {n} untriaged (windvane request --status)")
 
 
 def cmd_answer(a, p):
@@ -606,6 +634,13 @@ def main(argv=None):
     s.add_argument("--line", action="store_true", help="one line (for the phone)")
     s.add_argument("--running", action="store_true",
                    help="one line for every project whose autopilot is on, from anywhere (the phone's status; implies --line)")
+    s = sub.add_parser("request", help="file a feature request or bug report to windvane itself, from any project")
+    s.add_argument("title", nargs="?", help="one line: what windvane should do or stop doing")
+    s.add_argument("--body", metavar="FILE", help="the details from a file, or - for stdin: what happened, evidence "
+                   "(log lines, file:line in windvane, a repro), what you wanted, the workaround you used")
+    s.add_argument("--status", action="store_true", help="every request and its verdict")
+    s.add_argument("--answer", metavar="R-NNN", help="answer the triage's question on a request (the title argument "
+                   "is the answer): it goes back to triage")
     sub.add_parser("overview", help="where the project stands (for the phone)")
     sub.add_parser("queue", help="the ticket queue")
     s = sub.add_parser("answer", help="answer a ticket's question at the desk")
@@ -673,6 +708,8 @@ def main(argv=None):
     if a.cmd == "phone":
         root = toplevel()
         return phone.main(a, Project(root) if root and (root / DIR / "config.toml").is_file() else None)
+    if a.cmd == "request":
+        return cmd_request(a)
     if a.cmd == "heavy":
         from .heavy import run as heavy_run
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command

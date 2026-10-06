@@ -35,7 +35,7 @@ per role:
 
 | Role | May | May not |
 |---|---|---|
-| **Worker** | edit files in its worktree, run commands, commit, push its ticket branch, open and edit its pull request, run `windvane` helper commands | push to `main` (in any form), force-push, `reset --hard`, check out or switch to `main`, manage worktrees, merge pull requests, spawn subagents (unless `subagents = true`) |
+| **Worker** | edit files in its worktree, run commands, commit, push its ticket branch, open and edit its pull request, run `windvane` helper commands, file up to 2 `windvane request`s | push to `main` (in any form), force-push, `reset --hard`, check out or switch to `main`, manage worktrees, merge pull requests, spawn subagents (unless `subagents = true`), edit windvane's own files or its request inbox |
 | **Critic** | read files and the evidence pack | run any command, edit or write files, fetch from the web, spawn agents |
 | **Reviewer** | read files, run commands such as `git diff`, `git log`, `git show` | edit or write files, commit, push, switch branches, reset, merge, comment on or close pull requests |
 | **Planner** | write ticket files in its own worktree | commit, push, switch branches, spawn agents: the driver commits its tickets and opens the pull request (or merges, with `--merge`) |
@@ -90,6 +90,18 @@ beside the user's own engine session, can exhaust memory. `windvane heavy -- <co
 It waits up to `--wait` minutes (default 60) for the machine. It never takes another tool's lock, so a heavy command
 that is itself a locking tool can't deadlock waiting on itself. Set `heavy_check = true` to run the project's check
 this way; sessions use `windvane bg --heavy` for long heavy jobs.
+
+## Requests to windvane
+
+`windvane request` lets a desk session or a worker in any project file a request into windvane's local inbox
+(`~/.local/state/windvane/_requests/`); critic, reviewer, planner and periodic sessions can't. A body is untrusted data
+from a session that may have read anything: it is censored and its outside paths are cut as it is filed, and the
+triage session reads it fenced as data, never as instructions. A request can't change config, prompts or permissions:
+the triage writes tickets only, which become code through the normal worker, critic and reviewer, and they land at the
+queue's end. Only the desk answers a triage question (`request --answer` refuses a session), since the question is a
+call for the user. The role checks and a worker's cap of 2 are kept by the command from the environment the runner
+sets, so they stop mistakes, not a shell set on getting round them; a worker's edit tools are denied the inbox and
+windvane's files, but its shell could still write there: that is why every R-file is read as untrusted.
 
 ## Secrets and personal data
 
