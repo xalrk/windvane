@@ -39,7 +39,8 @@ Done: T-015 Phone notifications and answers that work for anyone
 Built, checked, reviewed and merged. Critic 7/10. 5h 5% · week 9%
 ```
 (`Critic 7/10` is the critic's score for the ticket, its lowest dimension; `5h 5% · week 9%` is how much of Claude's
-5-hour and weekly usage limits is used so far.)
+5-hour and weekly usage limits is used so far.) Send it `status` for the autopilots that are on,
+`overview` for every project.
 
 `windvane stats` shows where the tokens went:
 ```
