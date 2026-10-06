@@ -93,7 +93,7 @@ Run `gh auth status`. Workers open pull requests and the driver merges them with
 on the repository. Projects not on GitHub use `forge = "git"`.
 
 **The log says "actions: recount failed", or the phone's `status` says "Actions ... (stale: counted Oct 3, workers
-tag [skip ci])".**
+skip CI)".**
 With `actions_minutes` set, windvane recounts the month's Actions minutes through `gh` at each run's start and each
 session's end. When a `gh` call fails, the log says so, naming the call, gh's own first line and the fix:
 "actions: recount failed: `gh api repos/me/proj/actions/runs`: API rate limit exceeded (windvane waits for the limit

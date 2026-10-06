@@ -135,8 +135,8 @@ class RecountLog(unittest.TestCase):
     def test_status_line_says_stale_past_a_day(self):
         self.cache(1234, actions.STALE_S + 3600)
         out = self.status_line()
-        self.assertRegex(out, r"Actions 1,234/2,000 min \(stale: counted [A-Z][a-z]{2} \d{1,2}, workers tag "
-                              r"\[skip ci\]\)")
+        self.assertRegex(out, r"Actions 1,234/2,000 min \(stale: counted [A-Z][a-z]{2} \d{1,2}, workers skip "
+                              r"CI\)")
         self.assertNotRegex(out, r"\d\d:\d\d")  # the date says enough: the line stays short
 
     def test_status_line_under_an_hour_old_has_no_time_or_date(self):

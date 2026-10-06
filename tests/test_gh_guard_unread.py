@@ -133,6 +133,7 @@ class Unread(unittest.TestCase):
                                   r"`gh alias list` to check it$")
         self.assertEqual(self.kinds(), [("unread", "wr ci.yml")] * 2)  # each refusal still counted
         self.assertEqual(self.sh("gh dash")[:2], (0, "real gh: dash\n"))  # a readable list: as before
+        self.assertEqual(self.calls(), [["dash"]])
         with mock.patch.object(actions, "RUN", "next-run"):  # the next driver run says it again
             self.env = {**os.environ, **actions.gh_guard(self.p, self.s.root)}
         self.assert_unread_refusal("fail", TIMEOUT)

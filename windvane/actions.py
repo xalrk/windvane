@@ -315,7 +315,7 @@ def line(p, total=None):
     day = "" if at[:3] == time.localtime()[:3] else time.strftime("%b ", at) + f"{at.tm_mday} "
     if stale(total):
         return (f"Actions {fmt(total['used'])}/{fmt(b[0])} min "
-                f"(stale: counted {time.strftime('%b ', at)}{at.tm_mday}, workers tag {SKIP})")
+                f"(stale: counted {time.strftime('%b ', at)}{at.tm_mday}, workers skip CI)")
     when = day + time.strftime("%H:%M", at)
     return f"Actions {fmt(total['used'])}/{fmt(b[0])} min" + f" (counted {when})" * (time.time() - total["at"] > 3600)
 
