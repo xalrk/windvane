@@ -66,10 +66,10 @@ def answered(text, tid):
 
 # ---------- quiet times
 
-def quiet_until(lines, at):
-    """End of the quiet window `at` falls in, or None. Lines: `daily HH:MM-HH:MM` or `YYYY-MM-DD HH:MM-HH:MM`
-    (a window may cross midnight; # starts a comment). Touching windows chain."""
-    windows = []
+def windows(lines, at):
+    """[(start, end)] of the windows `lines` set around `at` (a daily one on the day before, of and after it). Lines:
+    `daily HH:MM-HH:MM` or `YYYY-MM-DD HH:MM-HH:MM` (a window may cross midnight; # starts a comment)."""
+    out = []
     for raw in lines:
         line = raw.split("#", 1)[0].strip()
         if not line:
@@ -82,11 +82,17 @@ def quiet_until(lines, at):
         for day in days:
             s = datetime.combine(day, datetime.strptime(m.group(2), "%H:%M").time())
             e = datetime.combine(day, datetime.strptime(m.group(3), "%H:%M").time())
-            windows.append((s, e if e > s else e + timedelta(days=1)))
+            out.append((s, e if e > s else e + timedelta(days=1)))
+    return out
+
+
+def quiet_until(lines, at):
+    """End of the quiet window `at` falls in, or None (`windows` reads the lines). Touching windows chain."""
+    ws = windows(lines, at)
     end = None
     while True:
         t = end or at
-        ext = [e for s, e in windows if s <= t < e and (end is None or e > end)]
+        ext = [e for s, e in ws if s <= t < e and (end is None or e > end)]
         if not ext:
             return end
         end = max(ext)

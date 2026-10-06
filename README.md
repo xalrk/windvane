@@ -73,6 +73,8 @@ windvane new "Retry failed uploads with backoff"   # writes .windvane/tickets/T-
 git add .windvane && git commit -m "windvane" && git push
 
 windvane run --for 2h --detach                     # work the tickets for two hours, in tmux
+windvane run --from 12:00 --until 20:00 --detach   # wait in tmux until noon, then work until 20:00
+windvane run --daily 12:00-20:00 --detach          # every day 12:00-20:00 until `windvane stop` (a reboot ends it)
 windvane watch                                     # follow it live
 ```
 Or ask Claude Code: after `windvane install` (`--yes` when Claude runs it), a session that hears "let's build this with windvane" sets the project
