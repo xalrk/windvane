@@ -441,7 +441,7 @@ def critic_retry(p, sleep=time.sleep):
 
 
 def cmd_critic(a, p):
-    if a.project:
+    if getattr(a, "project", False):  # a worker's `windvane critic <ID>` has no --project
         return critic_project(a, p)
     tid = p.norm(a.ticket or "") or sys.exit("give a ticket id, or --project")
     if not p.critic["enabled"]:

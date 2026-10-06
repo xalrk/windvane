@@ -152,9 +152,12 @@ def periodic(entries):
         if not e.get("prompt") and not builtin:
             raise SystemExit(f"windvane: [[periodic]] {name} needs prompt = \"<the project's rules file>\"")
         try:
-            every, minutes, par = (int(e.get(k, d)) for k, d in (("every", 0), ("minutes", 60), ("parallel", 4)))
+            every, minutes = (int(e.get(k, d)) for k, d in (("every", 0), ("minutes", 60)))
         except (TypeError, ValueError):
-            raise SystemExit(f"windvane: [[periodic]] {name}: every, minutes and parallel are whole numbers")
+            raise SystemExit(f"windvane: [[periodic]] {name}: every and minutes are whole numbers")
+        par = e.get("parallel", 4)
+        if isinstance(par, bool) or not isinstance(par, int):
+            raise SystemExit(f"windvane: [[periodic]] {name}: parallel = {par!r}: use a whole number of sessions")
         dims = e.get("dims", [])
         dims = [str(d).strip().lower() for d in (dims.split(",") if isinstance(dims, str) else dims) if str(d).strip()]
         setup_m = setup_minutes(e.get("setup_minutes", 60), f"[[periodic]] {name}: ")
