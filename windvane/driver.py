@@ -1447,11 +1447,16 @@ class Pilot(Desk, Periodic):
         """One driver per project; `locked` reads this lock to tell the phone a run is on."""
         self.p.state.mkdir(parents=True, exist_ok=True)
         self.lockfile = open(self.p.state / "lock", "w")
-        try:
-            fcntl.flock(self.lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            self.lockfile.close()
-            raise SystemExit("windvane: the autopilot is already running for this project")
+        until = time.time() + statedir.WAIT
+        while True:
+            try:
+                fcntl.flock(self.lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except OSError:  # a run, or `doctor --clean` for a few seconds (it may be removing a slot's tree)
+                if not (self.p.state / statedir.CLEANING).exists() or time.time() > until:
+                    self.lockfile.close()
+                    raise SystemExit("windvane: the autopilot is already running for this project")
+                time.sleep(0.2)
 
     def run(self, deadline):
         """Works tickets until a stop; False when it couldn't start (a failed setup)."""

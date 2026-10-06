@@ -288,7 +288,6 @@ def clean_tmp(p, dry_run):
 def clean_states(p=None, dry_run=False):
     """Every project's state dir on this machine (the ones its runs registered, and `p`), but not one whose
     autopilot is running: its slots and transcripts are in use."""
-    from .driver import locked
     roots = dict(phone.projects())
     if p is not None and getattr(p, "exists", False):
         roots.setdefault(p.name, str(p.main_root()))
@@ -296,16 +295,17 @@ def clean_states(p=None, dry_run=False):
     for name, root in sorted(roots.items()):
         try:
             q = Project(root)
-            if not q.exists:
+            if not q.exists or not q.state.is_dir():
                 continue
-            if locked(q):
-                print(f"{q.name}: skipped, its autopilot is running")
-                continue
-            items, kept = statedir.survey(q)
+            with statedir.lock(q) as free:
+                if not free:
+                    print(f"{q.name}: skipped, its autopilot is running")
+                    continue
+                items, kept = statedir.survey(q)
+                done = [(item, dry_run or statedir.remove(q, item)) for item in items]
         except (OSError, SystemExit) as e:
             print(f"{name}: skipped ({e})")
             continue
-        done = [(item, dry_run or statedir.remove(q, item)) for item in items]
         freed = sum(item.size for item, ok in done if ok)
         verb = "would free" if dry_run else "freed"
         print(f"{q.name} ({q.state}): " + (f"{verb} {statedir.human(freed)}" if items else "nothing to reclaim"))

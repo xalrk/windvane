@@ -6,7 +6,9 @@ transcripts (`runs/*.jsonl`: `stats` reads the ledger, `watch` only the newest s
 Work is never lost: a worktree with a commit not on main, uncommitted changes, or a running session (the driver's
 `running` slots, a process inside it) stays, and so does anything touched in the last hour (`scratch.AGE`). Slot 0's
 `work`/`ci` and `plan/` stay too (the next run reuses them); with `trim_build` their ignored build output goes."""
+import contextlib
 import fcntl
+import os
 import re
 import shutil
 import time
@@ -20,6 +22,8 @@ from .util import git, gout, load_json
 DAY = 86400
 SLOT = re.compile(r"(?:work|ci)-([1-9]\d*)")  # slot N's worktrees; slot 0's are `work` and `ci`
 RUN = re.compile(r"\d{8}-\d{6}-(.+)\.jsonl")  # runner.py names a session's stream `<when>-<label>.jsonl`
+CLEANING = "cleaning"  # in the state dir while `doctor --clean` holds a project's run lock: a run starting then waits
+WAIT = 120  # seconds a starting run waits for such a clean (a few seconds a project) before it gives up
 # One line of the listing: `paths` go together (a worktree, a trim, or every old transcript); `kind` says how.
 Item = namedtuple("Item", "what size paths kind")
 
@@ -200,6 +204,24 @@ def remove(p, item):
     for x in item.paths:
         shutil.rmtree(x, ignore_errors=True) if x.is_dir() else x.unlink(missing_ok=True)
     return True
+
+
+@contextlib.contextmanager
+def lock(p):
+    """The project's run lock, held while `doctor --clean` cleans a project no run is using: a run starting meanwhile
+    waits (it sees CLEANING) rather than prepare a slot tree the clean is removing. Yields False when a run holds it."""
+    with open(p.state / "lock", "a") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        mark = p.state / CLEANING
+        mark.write_text(f"{os.getpid()}\n")
+        try:
+            yield True
+        finally:
+            mark.unlink(missing_ok=True)
 
 
 def clean(p, **kw):

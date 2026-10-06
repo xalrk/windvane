@@ -8,9 +8,11 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from helpers import Sandbox
 from test_install import REPO
@@ -215,6 +217,41 @@ class DoctorClean(Base):
         self.assertRegex(out, r"other \(.*\): freed \d+K")
         self.assertFalse((q.state / "work-1").exists())
         self.assertTrue(mine.exists())
+
+    def test_doctor_holds_the_run_lock_while_it_removes_and_a_run_starting_then_waits(self):
+        q = self.other()
+        seen, remove = [], statedir.remove
+
+        def watched(p, item):
+            seen.append((driver.locked(p), (p.state / statedir.CLEANING).exists()))
+            if not seen[1:]:  # a run starts in the middle of the clean: it waits, then takes the lock
+                pilot = driver.Pilot(p, args())
+                self.addCleanup(lambda: pilot.lockfile.close())
+                threading.Thread(target=lambda: started.append(pilot.take_lock() or time.time())).start()
+                time.sleep(0.5)
+            try:
+                return remove(p, item)
+            finally:
+                removed.append(time.time())  # the clean lets go of this project's lock after this
+
+        started, removed = [], []
+        with mock.patch.object(statedir, "remove", watched):
+            self.doctor(True)
+        for _ in range(50):
+            if started:
+                break
+            time.sleep(0.1)
+        self.assertEqual(seen, [(True, True)])
+        self.assertTrue(started and started[0] >= removed[0], (started, removed))  # only once the clean let go
+        self.assertFalse((q.state / statedir.CLEANING).exists())
+
+    def test_a_run_that_finds_another_run_still_refuses_at_once(self):
+        with open(self.p.state / "lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            t = time.time()
+            with self.assertRaises(SystemExit):
+                driver.Pilot(self.p, args()).take_lock()
+        self.assertLess(time.time() - t, 1)
 
     def test_doctor_names_the_biggest_reclaimable_item(self):
         self.assertIn(("ok", f"state dir {self.p.state}: nothing to reclaim", ""), doctor.state_warnings(self.p))
