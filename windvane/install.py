@@ -241,6 +241,12 @@ def hook_root_exists(f):
 def tidy_phone_hooks():
     """At a run's start: an install made before the shared `status` hook gets it now, and hooks of deleted repos go,
     without waiting for an `init` (which is what writes the hooks)."""
+    try:
+        json.loads(manifest_path().read_text())
+    except ValueError:  # an unreadable record: saving over it would lose what install added
+        return
+    except OSError:
+        pass
     m = load()
     before = json.dumps(m)
     if tidy_hooks(m):

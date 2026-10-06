@@ -140,6 +140,13 @@ class PhoneStatus(unittest.TestCase):
         self.assertEqual(pilot.stop_reason, "queue empty")
         self.assertIn("phone hooks: not tidied", (self.p["sandbox"].state / "autopilot.log").read_text())
 
+    def test_an_unreadable_install_record_is_neither_swept_by_nor_saved_over(self):
+        shutil.rmtree(self.roots["gone"])
+        install.manifest_path().write_text("{not json")
+        install.tidy_phone_hooks()
+        self.assertEqual(install.manifest_path().read_text(), "{not json")
+        self.assertIn("windvane-gone", self.hooks("overview.d"))
+
     def test_a_status_hook_the_user_wrote_under_windvanes_name_is_left_alone(self):
         f = self.ntfy / "status.d/windvane"
         m = install.load()
