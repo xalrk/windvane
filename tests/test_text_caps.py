@@ -92,7 +92,9 @@ class Guard(unittest.TestCase):
         self.assertLessEqual(len(out.encode()), phone.NTFY)
         kept = out.removesuffix(phone.REST)
         self.assertTrue(msg.startswith(kept + "\n"), kept[-60:])  # whole lines only
-        self.assertEqual((self.state / "autopilot.log").read_text().count(msg), 1)
+        log = (self.state / "autopilot.log").read_text()
+        self.assertEqual(log.count(msg), 1)
+        self.assertIn("push cut at a line end to fit ntfy", log)
 
     def test_a_message_that_fits_is_sent_as_it_is(self):
         msg = "ü" * 2000

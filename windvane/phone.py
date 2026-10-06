@@ -223,8 +223,9 @@ def fit(msg):
     if len(msg.encode()) <= NTFY:
         return msg
     keep = msg.encode()[:NTFY - len(REST.encode())].decode(errors="ignore")
+    where = "at a line end" if "\n" in keep else "mid-line"
     keep = (keep[:keep.rfind("\n")] if "\n" in keep else keep).rstrip()
-    line = f"push cut at a line end to fit ntfy; the whole message: {msg}"
+    line = f"push cut {where} to fit ntfy; the whole message: {msg}"
     if _p:
         log(_p, line, echo=False)
     else:
