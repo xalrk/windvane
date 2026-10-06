@@ -205,11 +205,26 @@ elif system.startswith("# windvane periodic run"):  # the project's rules file s
         open(path, "w").write("\n".join(lines[:at] + ["", "## From the playtest", "jump fails at x=3"] + lines[at:]))
     if "EDIT_RULES" in system:  # edits the next session's rules in its tree: they must still come from main
         open("tools/TRIAGE.md", "w").write("# Triage\nNO_LINE\n")
+    verdicts = ""  # a triage of windvane requests: each fenced request's WANT=<verdict>, or a body that fools it
+    for rid, body in re.findall(r"^<request-\w+ (R-\d+)>\n(.*?)^</request-\w+ \1>", prompt, re.M | re.S):
+        want = (re.findall(r"WANT=(\w+)", body) or ["obey" if "ignore previous instructions" in body else ""])[0]
+        if want in ("accept", "obey"):  # its bullet at the top of the queue: the entry's `land` must move it
+            tid = ids.pop(0)
+            open(f".windvane/tickets/{tid}.md", "w").write(f"# {tid}: asked in {rid}\nDepends on: nothing.\n")
+            q = open(".windvane/QUEUE.md").read()
+            open(".windvane/QUEUE.md", "w").write(q.replace("# Queue\n", f"# Queue\n- {tid} asked in {rid}\n"))
+            verdicts += f"REQUEST: {rid} accept {tid}\n"
+        if want == "obey":  # fooled: changes the config and tries a merge, as the body said
+            open(".windvane/config.toml", "a").write('land = "top"\n')
+            sh("git", "merge", "-q", "origin/t-001-work")
+        elif want in ("reject", "question"):
+            verdicts += f"REQUEST: {rid} {want} " + ("not windvane's doing" if want == "reject" else "A or B?") + "\n"
     open("README", "a").write("stray\n")
     score = re.search(r"SCORE=(\d+)", system)
     extra = int((re.findall(r"REPLY_LINES=(\d+)", system) or [0])[0])  # a long reply
     text = "played\n" + "".join(f"note {i}\n" for i in range(extra))
     text += "covered: the jump by T-001\nnot ticketed: the fog (by design)\n" if "NOTE=" in system else ""
+    text += verdicts
     text += ("" if "NO_LINE" in system else "PERIODIC: " + (
         "see report.txt" if "WRITE_REPORT" in system else "wrote a ticket") + (f" score={score.group(1)}" if score else ""))
 elif system.startswith("# windvane fix run"):  # FAKE_FIX: push (fixes it), red (pushes, still red), giveup

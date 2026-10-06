@@ -21,10 +21,10 @@ import re
 from datetime import timedelta
 from pathlib import Path
 
-from . import critic, phone
+from . import critic, phone, requests
 from .questions import quiet_now
 from .queue import Queue, title as title_of
-from .runner import plain_error
+from .runner import NO_REQUEST, plain_error
 from .util import append_jsonl, git, gout, hhmm, last_match, now, push, run_limited
 
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
@@ -41,11 +41,14 @@ class Periodic:
 
     def periodic_due(self):
         """The first [[periodic]] entry whose `every` merges have passed since it last ran this run (restarts carry
-        the count), or with a group finished since then, or None."""
+        the count), or with a group finished since then, or with requests in the inbox no round this run was given
+        (one that failed waits for the next run, never loops), or None."""
         for e in self.p.periodic.values():
             if e["every"] and len(self.merged) - self.periodic_at.get(e["name"], 0) >= e["every"]:
                 return e
             if e["after_group"] and len(self.merged) > self.groups_wait.get(e["name"], -1) and self.groups_finished(e):
+                return e
+            if e["requests"] and requests.pending(self.requests_tried):
                 return e
         return None
 
@@ -98,6 +101,7 @@ class Periodic:
         kept, reply = None, ""  # what the last session that finished leaves; a cut-off one's changes are dropped
         land, last = "", e["name"]  # `land` is inherited along the chain: an entry's own setting wins
         self.handed = set()  # the ticket ids the chain's sessions were given: only those land
+        self.triaged = []  # (the requests a session was given, its final reply, its name): verdicts after the land
         while e and e["name"] not in done and not (p.state / "STOP").exists():
             done.add(e["name"])
             finished = self.groups_finished(e) if e["after_group"] else {}
@@ -117,6 +121,8 @@ class Periodic:
         try:
             if kept and (kept[0] or kept[3] or kept[2][0] != kept[2][1]):
                 self.land_periodic(cd, *kept, land or "near", last, reply)
+            for reqs, text, name in self.triaged:
+                self.verdicts(reqs, text, kept[1] if kept else [], name)
         finally:
             clean_detach(p, cd, p.upstream)
 
@@ -157,8 +163,14 @@ class Periodic:
                 return False
         if e["builtin"]:
             return self.project_critic(e, cd)
+        reqs = requests.pending(self.requests_tried)[:requests.PER_ROUND] if e["requests"] else []
+        if e["requests"] and not reqs:
+            self.log(f"{name}: skipped: no untriaged requests")
+            return False
+        self.requests_tried |= {f.stem for f in reqs}
         self.fetch()  # its rules as they are on main now: never a copy an earlier session in the chain edited
-        own_rules = gout(cd, "show", f"{p.upstream}:{e['prompt']}")
+        own_rules = (gout(cd, "show", f"{p.upstream}:{e['prompt']}") if e["prompt"]
+                     else rules(p, "TRIAGE-REQUESTS.md"))
         if not own_rules:
             self.log(f"{name}: skipped: its prompt {e['prompt']} isn't on {p.upstream}")
             self.periodic_failed(name, f"its prompt {e['prompt']} isn't on {p.upstream}.")
@@ -180,12 +192,14 @@ class Periodic:
             triage and f"## Existing tickets (id, status, title)\n{Queue(p).listing() or '(none yet)'}",
             f"## Ids for new tickets, in order (at most 6)\n{', '.join(ids)}",
             f"Time limit: {hhmm(limit)}; check with `date`.",
+            reqs and requests.prompt_part(reqs),
         ]))
         said = f", {len(notes)} critic note{'s' * (len(notes) != 1)}" if triage else ""
         said += f", {', '.join(finished)} finished" if finished else ""
+        said += f", requests {', '.join(f.stem for f in reqs)}" if reqs else ""
         self.log(f"{name}: periodic session ({e['minutes']} min{said})")
         deny = ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
-                "Bash(git reset *)", "Bash(gh *)"] + ([] if p.ap["subagents"] else ["Agent"])
+                "Bash(git reset *)", "Bash(gh *)", NO_REQUEST] + ([] if p.ap["subagents"] else ["Agent"])
         system = rules(p, "PERIODIC.md") + "\n" + own_rules
         text, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}", prompt, system, cd, limit,
                                           ["Bash(windvane *)"], deny)
@@ -202,6 +216,8 @@ class Periodic:
         push(name, phone.cut(m.group(1), log=self.log) or "done", 3, "mag")
         if notes:  # used: the next plan (or triage) starts after them
             append_jsonl(p.state / "critic.jsonl", {"ticket": "PLAN", "step": f"periodic:{name}", "notes": len(notes)})
+        if reqs:
+            self.triaged.append((reqs, text, name))
         score = SCORE_RE.search(m.group(1))
         if score:
             append_jsonl(p.state / "ledger.jsonl", {"role": f"periodic:{name}", "event": "score",
@@ -233,6 +249,20 @@ class Periodic:
                 f.write_text(text + "\n" * (not text.endswith("\n")) + f"\n## From the project critic ({now():%Y-%m-%d})\n"
                              + "".join(f"- {b}\n" for b in points))
         return report, report
+
+    def verdicts(self, reqs, text, landed, name):
+        """Write a triage session's `REQUEST:` verdicts into its requests (an accept only for a ticket that landed or
+        exists on main), log each, and push each question: the requests' answers come from the user."""
+        self.fetch()
+        q = Queue(self.p)
+        done = requests.apply(reqs, text, set(landed), lambda t: t in q.files, self.log)
+        for rid, (kind, detail) in done.items():
+            self.log(f"{name}: {rid} {kind}: {detail}")
+            if kind == "question":
+                push(f"windvane request {rid}", f"Triage asks: {phone.cut(detail, log=self.log)}", 3, "question")
+        left = len(reqs) - len(done)
+        if left:
+            self.log(f"{name}: {left} request{'s' * (left != 1)} got no verdict: they wait for the next run")
 
     def periodic_failed(self, name, why):
         """One push for a round that didn't finish: overnight, a playtest that stopped working was only in the log."""

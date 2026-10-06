@@ -138,8 +138,9 @@ BUILTINS = ("project-critic",)  # [[periodic]] sessions windvane brings, so a pr
 
 def periodic(entries):
     """`[[periodic]]` sessions by name: a project's own session (a playtest, an audit) run every `every` merges, when a
-    group of tickets (`after_group`: a regex on their headers, group 1 the group's name) is finished, or only as
-    another entry's `then` when neither is set. `builtin` names one of windvane's own sessions instead of a `prompt`
+    group of tickets (`after_group`: a regex on their headers, group 1 the group's name) is finished, while windvane's
+    request inbox holds untriaged requests (`requests = true`; its prompt defaults to windvane's TRIAGE-REQUESTS.md),
+    or only as another entry's `then` when none is set. `builtin` names one of windvane's own sessions instead of a `prompt`
     (`project-critic`: the critic on the whole project, its `dims` and `parallel` as `windvane critic --project`'s).
     Mistakes stop the run at once rather than at the Nth merge."""
     out = {}
@@ -150,7 +151,10 @@ def periodic(entries):
         builtin = str(e.get("builtin", ""))
         if builtin and builtin not in BUILTINS:
             raise SystemExit(f"windvane: [[periodic]] {name}: builtin = {builtin!r}: use one of {', '.join(BUILTINS)}")
-        if not e.get("prompt") and not builtin:
+        reqs = e.get("requests", False)
+        if not isinstance(reqs, bool):
+            raise SystemExit(f"windvane: [[periodic]] {name}: requests = {reqs!r}: use true or false")
+        if not e.get("prompt") and not builtin and not reqs:
             raise SystemExit(f"windvane: [[periodic]] {name} needs prompt = \"<the project's rules file>\"")
         try:
             every, minutes = (int(e.get(k, d)) for k, d in (("every", 0), ("minutes", 60)))
@@ -174,7 +178,7 @@ def periodic(entries):
         out[name] = {"name": name, "land": land, "every": max(0, every), "after_group": group, "minutes": max(1, minutes),
                      "setup": e.get("setup", ""), "setup_minutes": setup_m,
                      "prompt": e.get("prompt", ""), "then": e.get("then", ""), "builtin": builtin,
-                     "dims": dims, "parallel": max(1, par),
+                     "dims": dims, "parallel": max(1, par), "requests": reqs,
                      "allow": e.get("allow", []), "deny": e.get("deny", [])}
     for e in out.values():
         if e["then"] and e["then"] not in out:
