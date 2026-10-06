@@ -110,6 +110,37 @@ def overlaps(paths, others):
     return bool(shared(paths, others))
 
 
+def changed(wd, upstream, prefix):
+    """The files a running ticket has changed in its worktree `wd`: uncommitted, and committed on its branch against
+    `upstream` (only while the worktree is on a branch starting with `prefix`: a slot a bounced ticket left holds
+    that ticket's head until the next worker switches). None when git can't tell."""
+    try:
+        st = git(wd, "status", "--porcelain", "-z", "-b", "-uall")
+        if st.returncode:
+            return None
+        head, *rest = st.stdout.split("\0")
+        out, entries = set(), iter(rest)
+        for e in entries:
+            if len(e) > 3:
+                out.add(e[3:])
+                if "R" in e[:2] or "C" in e[:2]:
+                    out.add(next(entries, ""))  # a rename's old path follows it
+        branch = head[3:].split("...")[0]
+        if branch.startswith(prefix + "-") or branch == prefix:
+            d = git(wd, "diff", "--name-only", "-z", f"{upstream}...HEAD")
+            if d.returncode:
+                return None
+            out |= set(d.stdout.split("\0"))
+    except OSError:  # its worktree is gone
+        return None
+    return out
+
+
+def beyond(files, touches):
+    """The `files` a Touches list doesn't cover, leaving out the queue's own under .windvane/."""
+    return sorted(f for f in files if f and not f.startswith(DIR + "/") and not overlaps({f}, touches))
+
+
 def nth(n):
     return {1: "1st", 2: "2nd", 3: "3rd"}.get(n, f"{n}th")
 
@@ -810,6 +841,16 @@ class Pilot(Desk, Periodic):
                        f"at {sha[:12]}")
         return False
 
+    def log_outside(self, tid):
+        """One line on the files a merged ticket changed that its Touches line didn't name: where planners' Touches
+        lines fall short, and so where side-by-side tickets meet without the driver knowing. The ci worktree is still
+        on the merge, so its first parent is main before it."""
+        touches = self.queue.touches.get(tid)
+        d = git(self.cd, "diff", "--name-only", "-z", "HEAD^1", "HEAD")
+        files = beyond(d.stdout.split("\0"), touches) if touches and d.returncode == 0 else []
+        if files:
+            self.log(f"{tid}: changed outside its Touches line: {', '.join(files)}")
+
     def merged_ok(self, tid, branch, sha, renumbered=None):
         """`renumbered`: the merge's renumbering, said in the push: on forge git it's the only place but the log."""
         p = self.p
@@ -834,6 +875,7 @@ class Pilot(Desk, Periodic):
         self.save()
         score = self.scores.get(tid)
         self.log(f"{tid}: merged {sha[:7]} · {self.usage.text()}")
+        self.log_outside(tid)
         push(f"Done: {self.name(tid)}", "Built, checked, reviewed and merged."
              + (f" Critic {score:g}/10." if score is not None else "") + f" {self.usage.text()}"
              + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else "") + self.built_lines(tid),
@@ -1075,10 +1117,12 @@ class Pilot(Desk, Periodic):
             return ""
         return f"{left} ticket{'s' * (left != 1)} x {m:.0f} min fit before {hhmm(self.end())} one at a time"
 
-    def clash(self, tid, busy):
+    def clash(self, tid, busy, extra=None):
         """Why `tid` can't start beside the `busy` tickets, or "". Tickets run side by side only when their
         `Touches:` lists don't overlap and they aren't related: a planner's `Related:` line, or a ticket naming a
-        running one or a file it changes (it builds on unmerged work). One without Touches may touch anything."""
+        running one or a file it changes (it builds on unmerged work). One without Touches may touch anything. A
+        running ticket's files are also those its branch has changed already: Touches lines are written before the
+        work and miss some. `extra`: running ticket -> those files outside its Touches line (computed when None)."""
         q = self.queue
         touches = q.touches
         alone = next((b for b in busy if not touches.get(b)), None)
@@ -1086,10 +1130,14 @@ class Pilot(Desk, Periodic):
             return f"{alone} runs alone (no Touches line)"
         if busy and not touches.get(tid):
             return "no Touches line, so it runs alone"
+        extra = self.outside(busy) if extra is None else extra
         for b in busy:
             both = shared(touches[tid], touches[b])
             if both:
                 return f"overlaps {b} on {', '.join(both)}"
+            both = shared(touches[tid], extra.get(b, ()))
+            if both:
+                return f"overlaps {b} on {', '.join(both)} (changed, not on its Touches line)"
         text = q.text.get(tid, "")
         for b in busy:
             if b in q.related.get(tid, []) or tid in q.related.get(b, []):
@@ -1101,6 +1149,16 @@ class Pilot(Desk, Periodic):
                 return f"names {path}, which {b} changes"
         return ""
 
+    def outside(self, busy):
+        """Running ticket -> the files its branch changed that its Touches line doesn't cover (none when git can't
+        tell). The queue's own files under .windvane/ don't count: any ticket may note a question or a done line."""
+        out, touches = {}, self.queue.touches
+        for b in busy:
+            slot = self.running.get(b)
+            files = None if slot is None else changed(self.slot_dirs(slot)[0], self.p.upstream, self.p.branch_prefix(b))
+            out[b] = beyond(files or (), touches.get(b, ()))
+        return out
+
     def pick(self, free):
         """(ticket, kind, branches, slot) to start in one of the `free` slots, or (None, why, None, None). Notes in
         `waits` why each ready ticket must wait for the running ones."""
@@ -1108,8 +1166,9 @@ class Pilot(Desk, Periodic):
         busy = sorted(self.running)
         avoid = set(self.skip) | set(busy)
         self.waits = []
+        extra = self.outside(busy)  # once a pass: two git calls a running ticket
         for t in q.order:
-            why = "" if t in avoid or q.status(t, set(self.questions)) not in ("wip", "todo") else self.clash(t, busy)
+            why = "" if t in avoid or q.status(t, set(self.questions)) not in ("wip", "todo") else self.clash(t, busy, extra)
             if why:
                 avoid.add(t)
                 self.waits.append(f"{t} waits: {why}")
