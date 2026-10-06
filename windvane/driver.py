@@ -29,7 +29,7 @@ from .renumber import OLD_NUMBERS, said
 from .desk import Desk
 from .held import author_ident, push_held
 from .periodic import Periodic
-from .phone import whole
+from .phone import MOST, whole
 from .planner import plan
 from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
@@ -119,6 +119,20 @@ def pr_for(p, branch):
         return ""
     return net.sh(p.main_root(), "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number",
                   "-q", ".[0].number")
+
+
+def also(tickets, most=MOST):
+    """The digest's line naming the answers past its first eight by ticket, each ticket once, or "". Kept under
+    `most` characters (what the push has left): a backlog too long for that ends with how many more."""
+    ids = list(dict.fromkeys(tickets))
+    if not ids:
+        return ""
+    end = "; windvane status lists them."
+    for n in range(len(ids), 0, -1):
+        line = "\nAlso: " + ", ".join(ids[:n]) + (f" and {len(ids) - n} more" if n < len(ids) else "") + end
+        if len(line) <= most:
+            return line
+    return f"\nAlso {len(ids)} more{end}"
 
 
 class Pilot(Desk, Periodic):
@@ -959,19 +973,20 @@ class Pilot(Desk, Periodic):
 
     def digest(self):
         """At a quiet time's end: the provisional answers no push has shown yet (a Done push or an earlier digest
-        has the rest), or nothing. The record keeps only those still provisional."""
+        has the rest), or nothing. Past eight, the rest are named by ticket on one line, so a long backlog reaches
+        the user in one push, not one quiet time's end per eight. The record keeps only those still provisional."""
         p = self.p
         picks = provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
         with self.lock:
             done = set(shown(p)["pushed"])
             new = [q for q in picks if qkey(q) not in done]
-            told = {qkey(q) for q in new[:8]} | done  # past eight: the next digest
+            told = {qkey(q) for q in new} | done
             note(p, lambda s: s.update(pushed=[qkey(q) for q in picks if qkey(q) in told]))
         if new:
+            body = ("To change one: windvane answer <ID> <letter>."
+                    + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in new[:8]))
             push(f"Review: {len(new)} provisional answer{'s' * (len(new) > 1)}",
-                 "To change one: windvane answer <ID> <letter>."
-                 + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in new[:8])
-                 + (f"\nThe other {len(new) - 8} come with the next one." if len(new) > 8 else ""), 3, "memo")
+                 body + also([q["ticket"] for q in new[8:]], MOST - len(body)), 3, "memo")
 
     # ---------- the loop
 
