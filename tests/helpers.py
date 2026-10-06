@@ -110,6 +110,14 @@ if system.startswith("# windvane worker run"):
         if "conflicts with" in prompt:
             sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
         open("shared.txt", "w").write(tid + "\n")
+    notes = os.environ.get("FAKE_NOTES")  # append: a section of its own in NOTES.md; edit: also rewrites its line 1
+    if notes and "conflicts with" not in prompt:
+        nt = open("NOTES.md").read()
+        if notes == "edit":
+            nt = f"# Notes, as {tid} sees them\n" + nt.split("\n", 1)[1]
+        open("NOTES.md", "w").write(nt + f"\n## {tid}\nFound things.\n")
+    elif notes == "edit":
+        sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
     if behaviour == "question" and "answered" not in prompt and "didn't answer" not in prompt:
         q = open(".windvane/QUESTIONS.md").read().replace("## Open\n", f"## Open\n### {tid}: Red or blue?\nContext.\n- **A**: red\n- **B**: blue\nRecommendation: A, because.\n", 1)
         open(".windvane/QUESTIONS.md", "w").write(q)

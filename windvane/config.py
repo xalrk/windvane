@@ -12,7 +12,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from .renumber import rules
+from .renumber import notes, rules
 
 PKG = Path(__file__).resolve().parent
 # Where prompts/, templates/, skills/ and hooks/ are: inside the package when installed (pipx, uv, pip), at the top of
@@ -38,6 +38,7 @@ DEFAULTS = {
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
     "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
     "overview_extra": "",  # a command whose output `windvane overview` adds (the project's own milestones)
+    "shared_notes": [],  # notes files every ticket appends to: no Touches overlap, appended sections merge on their own
     "models": {"worker": "opus", "worker_effort": "high", "reviewer": "opus", "reviewer_effort": "high",
                "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high",
                "preflight": "sonnet", "preflight_effort": "medium",  # preflight: a light read of the next tickets
@@ -226,6 +227,7 @@ class Project:
         self.periodic = periodic(c.get("periodic", []))
         self.perms, self.perm_problems = permissions(c["permissions"], self.periodic)
         self.append_only = rules(c.get("append_only", []))
+        self.shared_notes = notes(c["shared_notes"])
 
     def main_root(self):
         """The main checkout, also when `root` is one of its worktrees."""

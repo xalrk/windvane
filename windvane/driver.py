@@ -25,7 +25,7 @@ import traceback
 from datetime import datetime, timedelta
 
 from . import actions, critic, install, net, phone, renumber, scratch, selfupdate
-from .renumber import OLD_NUMBERS, said
+from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .held import author_ident, push_held
 from .periodic import Periodic
@@ -133,6 +133,12 @@ def changed(wd, upstream, prefix):
     except OSError:  # its worktree is gone
         return None
     return out
+
+
+def apart(paths, notes):
+    """`paths` without the `shared_notes` files: every ticket appends to them and the merge resolves that, so they
+    never make one ticket wait for another."""
+    return {x for x in paths if not noted(x, notes)} if notes else paths
 
 
 def beyond(files, touches):
@@ -444,6 +450,8 @@ class Pilot(Desk, Periodic):
             "No check is configured: `windvane check` passes at once; run the tests you wrote yourself.",
             f"Forge: {p.cfg['forge']}. Design questions now: {mode(p)}.",
             f"Wrap-up time: {hhmm(wrap)} (the run is stopped at {hhmm(kill_at)}); check with `date`.",
+            f"Shared notes ({', '.join(p.shared_notes)}): add to them as a new section at the end; don't rewrite their "
+            "existing text, or your merge conflicts." if p.shared_notes else "",
             skip_line,
         ]))
         self.log(f"{tid}: worker run ({kind}{', ' + ' '.join(branches) if branches else ''})")
@@ -794,7 +802,7 @@ class Pilot(Desk, Periodic):
                     sha = merge  # the head to merge now, and on a retry the one to merge main into
                     net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
                            f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}."
-                           + OLD_NUMBERS * bool(renumbered))
+                           + old_numbers(renumbered))
                 res = net.call(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", sha, "--subject", msg],
                                p.main_root())
                 merged = res.returncode == 0 or net.sh(p.main_root(), "gh", "pr", "view", pr, "--json", "state",
@@ -811,12 +819,13 @@ class Pilot(Desk, Periodic):
 
     def merge_main(self, rev, msg):
         """Merge `rev` into main in the ci worktree (left on the merge). A conflict only in appended entries of
-        `[[append_only]]` files is resolved and committed with the renumbering in its message. Returns (merged,
-        the renumbering: None for a clean merge)."""
+        `[[append_only]]` files and sections of `shared_notes` files is resolved and committed with what it did in its
+        message. Returns (merged, what it did, as renumber.resolve() says it: None for a clean merge)."""
         cd, ident = self.cd, author_ident(self.p)
         if git(cd, *ident, "merge", "--no-ff", "-m", msg, rev).returncode == 0:
             return True, None
-        done = renumber.resolve(cd, self.p.append_only) if self.p.append_only else None
+        p = self.p
+        done = renumber.resolve(cd, p.append_only, p.shared_notes) if p.append_only or p.shared_notes else None
         if done is not None and git(cd, *ident, "commit", "-q", "--no-verify", "-m", msg, "-m",
                                     "Appended entries kept from both sides: " + said(done)).returncode == 0:
             return True, done
@@ -849,7 +858,8 @@ class Pilot(Desk, Periodic):
         Touches lines fall short, and so where side-by-side tickets meet without the driver knowing."""
         touches = self.queue.touches.get(tid)
         d = git(self.cd, "diff", "--name-only", "-z", "HEAD^1", "HEAD")
-        return beyond(d.stdout.split("\0"), touches) if touches and d.returncode == 0 else []
+        return (beyond(apart(d.stdout.split("\0"), self.p.shared_notes), touches) if touches and d.returncode == 0
+                else [])
 
     def merged_ok(self, tid, branch, sha, renumbered=None, outside=()):
         """`renumbered`: the merge's renumbering, said in the push: on forge git it's the only place but the log.
@@ -1124,7 +1134,8 @@ class Pilot(Desk, Periodic):
         `Touches:` lists don't overlap and they aren't related: a planner's `Related:` line, or a ticket naming a
         running one or a file it changes (it builds on unmerged work). One without Touches may touch anything. A
         running ticket's files are also those its branch has changed already: Touches lines are written before the
-        work and miss some. `extra`: running ticket -> those files outside its Touches line (computed when None)."""
+        work and miss some. `shared_notes` files count for neither. `extra`: running ticket -> those files outside its
+        Touches line (computed when None)."""
         q = self.queue
         touches = q.touches
         alone = next((b for b in busy if not touches.get(b)), None)
@@ -1133,11 +1144,13 @@ class Pilot(Desk, Periodic):
         if busy and not touches.get(tid):
             return "no Touches line, so it runs alone"
         extra = self.outside(busy) if extra is None else extra
+        notes = self.p.shared_notes
+        mine = apart(touches[tid], notes)
         for b in busy:
-            both = shared(touches[tid], touches[b])
+            both = shared(mine, apart(touches[b], notes))
             if both:
                 return f"overlaps {b} on {', '.join(both)}"
-            both = shared(touches[tid], extra.get(b, ()))
+            both = shared(mine, extra.get(b, ()))
             if both:
                 return f"overlaps {b} on {', '.join(both)} (changed, not on its Touches line)"
         text = q.text.get(tid, "")
@@ -1146,19 +1159,20 @@ class Pilot(Desk, Periodic):
                 return f"related to {b}"
             if re.search(rf"\b{re.escape(b)}\b", text):
                 return f"names {b}, which is running"
-            path = next((x for x in sorted(touches[b]) if names(text, x)), None)
+            path = next((x for x in sorted(apart(touches[b], notes)) if names(text, x)), None)
             if path:
                 return f"names {path}, which {b} changes"
         return ""
 
     def outside(self, busy):
         """Running ticket -> the files its branch changed that its Touches line doesn't cover (none when git can't
-        tell). The queue's own files under .windvane/ don't count: any ticket may note a question or a done line."""
+        tell). The queue's own files under .windvane/ and `shared_notes` don't count: any ticket may note a question,
+        a done line or its findings."""
         out, touches = {}, self.queue.touches
         for b in busy:
             slot = self.running.get(b)
             files = None if slot is None else changed(self.slot_dirs(slot)[0], self.p.upstream, self.p.branch_prefix(b))
-            out[b] = beyond(files or (), touches.get(b, ()))
+            out[b] = beyond(apart(files or (), self.p.shared_notes), touches.get(b, ()))
         return out
 
     def pick(self, free):
@@ -1332,6 +1346,7 @@ class Pilot(Desk, Periodic):
                 continue
             self.fetch()
             self.queue = Queue(p)
+            busy = bool(self.running)  # a slot that ends during the pick still had its ticket held back: pick again
             tid, kind, branches, slot = self.pick(free)
             if tid is not None and over:  # no more slots until the window allows; the running ones go on
                 why = "usage limit reached" if self.usage.rejected else (
@@ -1345,7 +1360,7 @@ class Pilot(Desk, Periodic):
                 self.pause()
                 continue
             if tid is None:
-                if self.running:
+                if busy or self.running:
                     self.idle_note(self.waits)
                     self.pause()
                     continue
