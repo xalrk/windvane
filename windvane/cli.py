@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import doctor, driver, install, jobs, net, phone, planner, preflight, questions, watch
+from . import doctor, driver, install, jobs, net, phone, planner, preflight, questions, schedule, watch
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, exe, find, toplevel
@@ -27,12 +28,10 @@ from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 STOP_WAIT = 90  # seconds `stop --now` waits for the run to end: a 5 s poll, then up to 60 s for SIGTERM to work
 
 
-def parse_deadline(until, for_, usage=None):
+def parse_deadline(until, for_, usage=None, base=None):
+    """--for from now, or --until: an HH:MM is its first time after `base` (default now)."""
     if for_:
-        m = re.fullmatch(r"(\d+(?:\.\d+)?)([hm])", for_)
-        if not m:
-            sys.exit(usage or "--for takes e.g. 90m or 6h")
-        return now() + timedelta(**{"hours" if m.group(2) == "h" else "minutes": float(m.group(1))})
+        return now() + (schedule.span(for_) or sys.exit(usage or "--for takes e.g. 90m or 6h"))
     for fmt in ("%Y-%m-%d %H:%M",):
         try:
             return datetime.strptime(until, fmt)
@@ -42,8 +41,9 @@ def parse_deadline(until, for_, usage=None):
         t = datetime.strptime(until, "%H:%M")
     except ValueError:
         sys.exit(usage or "--until takes HH:MM or 'YYYY-MM-DD HH:MM'")
-    d = now().replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
-    return d if d > now() else d + timedelta(days=1)
+    base = base or now()
+    d = base.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+    return d if d > base else d + timedelta(days=1)
 
 
 def in_tmux(p):
@@ -53,8 +53,8 @@ def in_tmux(p):
 
 def running(p):
     """A run started without --detach holds the lock but has no tmux session; tmux covers the moment before a
-    detached run takes the lock."""
-    return driver.locked(p) or in_tmux(p)
+    detached run takes the lock, and a schedule's lock the waits between its windows."""
+    return driver.locked(p) or in_tmux(p) or bool(schedule.state(p))
 
 
 # ---------- commands
@@ -101,18 +101,25 @@ def need(p):
 
 def cmd_run(a, p):
     need(p)
-    if not (a.until or a.for_):
+    try:
+        window = schedule.first(a.from_, a.until, a.for_, a.daily)
+    except ValueError as e:
+        sys.exit(str(e))
+    if not (window or a.until or a.for_):
         sys.exit("say when to stop: --until HH:MM or --for 6h")
-    deadline = parse_deadline(a.until, a.for_)
+    if window and not (a.detach or a.supervise):
+        sys.exit("--from and --daily wait in a tmux session, as a terminal won't stay open; run: windvane "
+                 + " ".join(shlex.quote(x) for x in sys.argv[1:]) + " --detach")
+    deadline = window[1] if window else parse_deadline(a.until, a.for_)
     if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
         sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
     p.state.mkdir(parents=True, exist_ok=True)
     if a.detach and in_tmux(p):  # (the detached run itself starts inside that session)
         sys.exit(f"already running in tmux session {p.tmux}")
-    if driver.locked(p):
+    if driver.locked(p) or (schedule.state(p) and not os.environ.get(driver.SUPERVISED)):  # (not the window's own)
         sys.exit("already running: stop it with windvane stop")
     if not a.no_preflight and sys.stdin.isatty():  # never blocks a run started from a script
-        ask_first(p, (deadline - now()).total_seconds() / 3600, a.parallel)
+        ask_first(p, (deadline - (window[0] if window else now())).total_seconds() / 3600, a.parallel)
     if a.detach:
         args, skip = [], False
         for x in sys.argv[1:]:
@@ -126,12 +133,16 @@ def cmd_run(a, p):
         args += [] if "--no-preflight" in args else ["--no-preflight"]  # asked here already, if at all
         cmd = " ".join(json.dumps(x) for x in [*exe(), "-C", str(p.main_root()), *args, "--supervise"])
         subprocess.run(["tmux", "new-session", "-d", "-s", p.tmux, "-c", str(p.main_root()), cmd], check=True)
-        print(f"autopilot running in tmux session {p.tmux} until {hhmm(deadline)}\n"
+        waits = window and window[0] > now()
+        print(f"autopilot {'waiting' if waits else 'running'} in tmux session {p.tmux}"
+              + (f", starts {hhmm(window[0])}" if waits else "") + f", until {hhmm(deadline)}"
+              + (f"; then daily {a.daily} until windvane stop" if a.daily else "") + "\n"
               f"  watch:  windvane watch      (or tmux attach -t {p.tmux}; leave with Ctrl-b d)\n"
               f"  status: windvane status     stop: windvane stop")
         return
     if a.supervise:  # the detached run: the driver in a process of its own, restarted after a crash
-        sys.exit(driver.supervise(p, [x for x in sys.argv[1:] if x != "--supervise"], deadline))
+        argv = [x for x in sys.argv[1:] if x != "--supervise"]
+        sys.exit(schedule.run(p, argv, window, a.daily) if window else driver.supervise(p, argv, deadline))
     if not driver.Pilot(p, a).run(deadline):
         sys.exit(1)  # it couldn't start (a failed setup): scripts see it
 
@@ -166,10 +177,19 @@ def cmd_stop(a, p):
     stop_now = getattr(a, "now", False)  # callers that predate --now pass a Namespace without it
     if stop_now and not running(p):
         return print(f"{p.display}: autopilot isn't running")
+    st = schedule.state(p)
+    if st:
+        schedule.stop(p)
+    if st and st["waiting"]:
+        return print(f"{p.display}: schedule ({schedule.what(st['daily'], st['end'])}) called off: nothing starts "
+                     f"at {hhmm(st['start'])}")
+    ends = f", and the schedule (daily {st['daily']}) ends: no later window starts" if st and st["daily"] else ""
     if not stop_now:
         (p.state / "STOP").touch()
-        return print(f"{p.display}: autopilot stops after the current ticket")
+        return print(f"{p.display}: autopilot stops after the current ticket{ends}")
     (p.state / "STOP").write_text("now")
+    if ends:
+        print(f"{p.display}: the schedule (daily {st['daily']}) ends: no later window starts")
     print(f"{p.display}: stopping now: killing the running sessions...", flush=True)
     for _ in range(STOP_WAIT):  # each session's next poll kills it (SIGTERM, then SIGKILL a minute later)
         if not driver.locked(p):
@@ -181,12 +201,20 @@ def cmd_stop(a, p):
 def cmd_deadline(a, p):
     when = " ".join(a.when)
     usage = "windvane deadline takes HH:MM, 'YYYY-MM-DD HH:MM' or +90m / +2h"
-    t = parse_deadline(None, when[1:], usage) if when.startswith("+") else parse_deadline(when, None, usage)
+    st = schedule.state(p)
+    waits = st and st["waiting"]  # an HH:MM is then the first after the start
+    t = (parse_deadline(None, when[1:], usage) if when.startswith("+")
+         else parse_deadline(when, None, usage, st["start"] if waits else None))
     if not running(p):
         sys.exit(f"{p.display}: autopilot isn't running; start one with windvane run --until {t:%H:%M}")
+    if waits and t <= st["start"]:
+        sys.exit(f"{p.display}: the run starts {hhmm(st['start'])}; give an end after that")
     (p.state / "DEADLINE").write_text(t.isoformat(timespec="seconds"))
-    print(f"{p.display}: the run now ends at {t:%Y-%m-%d %H:%M}. New tickets keep to it at once; running sessions are "
-          "stopped by then")
+    later = f" (this window only: later ones keep daily {st['daily']})" if st and st["daily"] else ""
+    if waits:
+        return print(f"{p.display}: the run starting {hhmm(st['start'])} now ends at {t:%Y-%m-%d %H:%M}{later}")
+    print(f"{p.display}: the run now ends at {t:%Y-%m-%d %H:%M}{later}. New tickets keep to it at once; running "
+          "sessions are stopped by then")
 
 
 def parallel_arg(v):
@@ -199,14 +227,16 @@ def parallel_arg(v):
 
 def cmd_status(a, p):
     fetch_for_held(p)
-    on = running(p)
+    on, st = running(p), schedule.state(p)
     if a.line:
         held, last = held_count(p), (last_log(p) or [""])[0][11:]
         last = "" if held or HELD_LOG.search(last) else last  # the held count says it; or it's no longer held
         extra = "".join(f". {x}" for x in (held, actions.line(p), f"Last: {last}" if last else "") if x)
-        print(f"{p.display}: autopilot {'running' if on else 'off'}{extra}")
+        print(f"{p.display}: autopilot {schedule.word(st) if st else 'running' if on else 'off'}{extra}")
         return
-    print(f"autopilot: {('running in tmux ' + p.tmux if in_tmux(p) else 'running') if on else 'not running'}")
+    tmux = f"in tmux {p.tmux}" if in_tmux(p) else ""
+    print("autopilot: " + (f"{schedule.word(st)}{', ' * bool(tmux)}{tmux}" if st
+                           else f"running {tmux}".strip() if on else "not running"))
     print(f"questions now: {questions.mode(p)}")
     if (spent := actions.line(p)):
         print(f"{spent} this month (cap {actions.cap_minutes(p):,})")
@@ -493,6 +523,9 @@ def main(argv=None):
     g = s.add_mutually_exclusive_group()
     g.add_argument("--until", help="HH:MM or 'YYYY-MM-DD HH:MM'")
     g.add_argument("--for", dest="for_", help="e.g. 90m or 6h")
+    s.add_argument("--from", dest="from_", metavar="WHEN", help="with --detach: start at HH:MM or 'YYYY-MM-DD HH:MM' (now if past)")
+    s.add_argument("--daily", metavar="HH:MM-HH:MM",
+                   help="with --detach: run in this window every day (may cross midnight), until windvane stop")
     s.add_argument("--detach", action="store_true", help="run in a tmux session, restarted after a crash")
     s.add_argument("--supervise", action="store_true", help=argparse.SUPPRESS)  # what --detach runs in tmux
     s.add_argument("--no-preflight", action="store_true", help="start without asking the next tickets' questions")
