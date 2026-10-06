@@ -43,7 +43,7 @@ number. More kinds of line:
 - done: T-002 (folded into T-005)     counts as merged without a merge of its own
 - done: M9 (beta shipped)             releases tickets with `Depends on: M9`
 - parked: T-003 (needs a design call)  never started
-- last: T-009 (polish)                runs after every ticket not marked last, in the order of these lines
+- last: T-009 (polish)                runs only once no ticket not marked last can start, in the order of these lines
 ```
 A ticket with a question under `## Open` in `QUESTIONS.md` on `main` waits until it's answered (moved under
 `## Answered`), whoever wrote it: a question written at the desk stops its ticket like a worker's does.
