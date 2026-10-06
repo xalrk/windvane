@@ -4,6 +4,7 @@ asking before each change, and take back exactly what it added. What it added is
 puts `settings.json` back byte for byte when nothing else in it changed meanwhile."""
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -197,27 +198,39 @@ def write_status_hook(m):
                f"{shlex.join(exe())} status --line --running", m)
 
 
+# A per-project hook as windvane writes it: hooks written before install.json listed them are known by this shape.
+OURS = re.compile(r"#!/usr/bin/env bash\n# windvane [a-z0-9-]+: `(status|stop|overview)` from the phone "
+                  r"\(ntfy-listen\)\nexec [^\n]+ -C [^\n]+\n")
+
+
 def tidy_hooks(m):
     """Take out the phone hooks windvane wrote that no longer belong: the per-project `status` hooks of installs
-    before the shared one, and any hook whose project's repo is gone (it would answer with an error). Only paths
-    install.json lists are touched. Whether it removed an old `status` hook, so the shared one replaces it."""
-    base, kept, old_status = ntfy_dir(), [], False
-    for e in m["paths"]:
-        t = Path(e["path"])
-        if e["kind"] == "file" and t.parent.parent == base and t.name.startswith("windvane-"):
-            if t.parent.name == "status.d" or not hook_root_exists(t):
-                old_status |= t.parent.name == "status.d"
-                t.unlink(missing_ok=True)
+    before the shared one, and any hook whose project's repo is gone (it would answer with an error). Only hooks
+    install.json lists or that have exactly the form windvane writes are touched. Whether it removed an old `status`
+    hook, so the shared one replaces it."""
+    base, old_status = ntfy_dir(), False
+    listed = {e["path"] for e in m["paths"] if e["kind"] == "file"}
+    for kind in ("status.d", "stop.d", "overview.d"):
+        for t in sorted((base / kind).glob("windvane-*")):
+            if str(t) not in listed and not ours(t):
                 continue
-        kept.append(e)
-    m["paths"] = kept
+            if kind == "status.d" or not hook_root_exists(t):
+                old_status |= kind == "status.d"
+                t.unlink()
+    m["paths"] = [e for e in m["paths"]  # and what install.json lists there that's gone now
+                  if not (e["kind"] == "file" and Path(e["path"]).parent.parent == base and not Path(e["path"]).exists())]
     return old_status
+
+
+def ours(f):
+    try:
+        return bool(OURS.fullmatch(f.read_text()))
+    except (OSError, ValueError):
+        return False
 
 
 def hook_root_exists(f):
     """Whether the repo a per-project hook runs in (its `-C` directory) is still there; True when it can't tell."""
-    if not f.exists():
-        return False  # nothing left to keep
     try:
         words = shlex.split(f.read_text().splitlines()[-1])
         return Path(words[words.index("-C") + 1]).is_dir()

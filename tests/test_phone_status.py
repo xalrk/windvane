@@ -71,6 +71,9 @@ class PhoneStatus(unittest.TestCase):
         code, out, err = run_hook(self.ntfy / "overview.d/windvane-gone")  # before the sweep: a line, not a traceback
         self.assertNotIn("Traceback", out + err)
         self.assertIn("doesn't exist", err)
+        m = install.load()  # one of them written before install.json listed hooks
+        m["paths"] = [e for e in m["paths"] if not e["path"].endswith("overview.d/windvane-gone")]
+        install.save(m)
         install.tidy_phone_hooks()  # what a run's start does
         self.assertEqual(self.hooks("overview.d"), ["windvane-idle", "windvane-sandbox"])
         self.assertEqual(self.hooks("stop.d"), ["windvane-idle", "windvane-sandbox"])
@@ -92,7 +95,8 @@ class PhoneStatus(unittest.TestCase):
             f.write_text(f"#!/usr/bin/env bash\n# windvane {name}: `status` from the phone (ntfy-listen)\n"
                          f"exec {' '.join(exe())} -C {root} status --line\n")
             f.chmod(0o755)
-            m["paths"].append({"path": str(f), "kind": "file"})
+            if name != "gone":  # written before install.json listed hooks: known by its form
+                m["paths"].append({"path": str(f), "kind": "file"})
         install.save(m)
         for mine in ("mine", "windvane-mine"):  # the user's own scripts, not in install.json
             (status / mine).write_text("#!/bin/sh\necho mine\n")
