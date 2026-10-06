@@ -573,7 +573,7 @@ def main(argv=None):
     s = sub.add_parser("status", help="running or not, open questions, the log's tail")
     s.add_argument("--line", action="store_true", help="one line (for the phone)")
     s.add_argument("--running", action="store_true",
-                   help="with --line: every project whose autopilot is on, from anywhere (the phone's status)")
+                   help="one line for every project whose autopilot is on, from anywhere (the phone's status; implies --line)")
     sub.add_parser("overview", help="where the project stands (for the phone)")
     sub.add_parser("queue", help="the ticket queue")
     s = sub.add_parser("answer", help="answer a ticket's question at the desk")

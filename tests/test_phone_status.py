@@ -4,6 +4,7 @@ import contextlib
 import fcntl
 import io
 import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -158,6 +159,20 @@ class PhoneStatus(unittest.TestCase):
         self.assertIn("isn't windvane's, so it's left alone", said.getvalue())
         self.assertEqual(f.read_text(), "#!/bin/sh\necho theirs\n")
         self.assertNotIn(str(f), json.dumps(install.load()))
+
+
+    def test_init_refreshes_and_records_a_hook_claude_wrote_before_install_json_listed_it(self):
+        f = self.ntfy / "stop.d/windvane-idle"
+        m = install.load()
+        m["paths"] = [e for e in m["paths"] if e["path"] != str(f)]
+        install.save(m)
+        current = f.read_text()
+        f.write_text(current.replace(shlex.join(exe()), "/old/path/windvane"))  # an old hook: a stale exe path
+        with contextlib.redirect_stdout(io.StringIO()) as said:
+            install.phone_hooks(self.p["idle"])
+        self.assertNotIn("left alone", said.getvalue())
+        self.assertEqual(f.read_text(), current)
+        self.assertIn(str(f), [e["path"] for e in install.load()["paths"]])
 
 
 if __name__ == "__main__":

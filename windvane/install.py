@@ -181,13 +181,14 @@ def ntfy_dir():
 
 
 def write_hook(f, what, command, m):
-    """Write a hook script windvane owns; a file there that install.json doesn't list is the user's, left alone."""
-    ours = any(e["path"] == str(f) for e in m["paths"])
-    if f.exists() and not ours:
+    """Write a hook script windvane owns. A file there is the user's, left alone, unless install.json lists it or it
+    has the form windvane writes (hooks from before install.json listed them, which get listed now)."""
+    listed = any(e["path"] == str(f) for e in m["paths"])
+    if f.exists() and not listed and not ours(f):
         print(f"{f} isn't windvane's, so it's left alone")
         return
     make_dirs(f.parent, m)
-    if not ours:
+    if not listed:
         m["paths"].append({"path": str(f), "kind": "file"})
     f.write_text(f"#!/usr/bin/env bash\n# windvane {what} from the phone (ntfy-listen)\nexec {command}\n")
     f.chmod(0o755)
