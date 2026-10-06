@@ -596,7 +596,9 @@ def main(argv=None):
     s.add_argument("--yes", action="store_true", help="without asking")
     s = sub.add_parser("doctor", help="what this machine lacks for windvane, and how to fix it")
     s.add_argument("--clean", action="store_true",
-                   help="first remove windvane's leftover temp dirs (an hour old, in use by nothing)")
+                   help="first remove windvane's leftover temp dirs, and what every project's state dir no longer "
+                   "needs (idle merged worktrees, old transcripts, merged tickets' critic packs)")
+    s.add_argument("--dry-run", action="store_true", help="with --clean: list what would go, with sizes")
     s = sub.add_parser("phone", help="pushes and questions on your phone (ntfy); off until `phone setup`")
     s.add_argument("action", choices=("setup", "off", "rotate", "listen"),
                    help="setup: turn it on and subscribe; off; rotate: new topics; listen: act on the phone's replies")
@@ -704,7 +706,7 @@ def main(argv=None):
         return getattr(install, a.cmd)(a.yes)
     if a.cmd == "doctor":
         root = toplevel()
-        return doctor.main(Project(root) if root else None, a.clean)
+        return doctor.main(Project(root) if root else None, a.clean, a.dry_run)
     if a.cmd == "phone":
         root = toplevel()
         return phone.main(a, Project(root) if root and (root / DIR / "config.toml").is_file() else None)

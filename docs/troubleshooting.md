@@ -115,6 +115,13 @@ why it fails (often a broken `~/.config/gh/config.yml`). The log says this once 
 windvane has already removed its own leftovers (and the `tmpXXXXXXXX` dirs older tests leaked, once a day old); see
 what's left with `du --inodes -s /tmp/* | sort -n | tail`, and remove what you don't need before it stops every command.
 
+**The disk is full (or nearly).**
+windvane's state directory (`~/.local/state/windvane/`) holds each project's worktrees with their build output, every
+session's transcript and the critic's screenshots. `windvane doctor --clean --dry-run` lists what of it can go, with
+sizes, for every project; `windvane doctor --clean` removes it (a project whose autopilot is running is skipped: stop
+it first, or let its run clean at its end). Work is never removed: a worktree with uncommitted changes or commits
+`main` lacks stays. To free more, lower `keep_days` or turn on `trim_build` in [`[state]`](configuration.md#state).
+
 **No pushes arrive on the phone.**
 `windvane doctor` checks the phone. Make sure the app is subscribed to the topic `windvane phone setup` showed (and
 to the right server, if you use your own). `windvane phone setup` again sends a test push.
