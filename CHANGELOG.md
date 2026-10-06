@@ -7,6 +7,8 @@ All notable changes to windvane are listed here. The format follows
 ## Unreleased
 
 ### Added
+- `windvane run --from 12:00 --until 20:00 --detach` waits in tmux for its start; `run --daily 12:00-20:00 --detach`
+  runs in that window every day until `windvane stop`, and `status` says when it next starts.
 - `[[periodic]]` `after_group`: run the session when a group of tickets (a milestone) is finished, its prompt
   naming the group and its tickets; `windvane queue` shows the groups closest to finishing.
 - `[[append_only]]`: a conflict only in entries appended to a numbered log (decisions, ADRs, migrations) is resolved

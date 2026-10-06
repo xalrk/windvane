@@ -81,6 +81,8 @@ Run `windvane init --check "<the repo's test command>"`, then either write the t
 | `windvane stats [--by ticket]` | tokens, turns and minutes per role or ticket |
 | `windvane new "<title>"` / `windvane plan "<goal>"` | add tickets by hand / by a planner run |
 | `windvane run --until 13:50 --parallel 3` | a deadline, and at most 3 tickets at a time (default "auto": up to 4, as Touches and usage allow) |
+| `windvane run --from 12:00 --until 20:00 --detach` | start later: waits in tmux until 12:00 (a past start starts now; an end before the start is the next day's) |
+| `windvane run --daily 12:00-20:00 --detach` | the same window every day, each its own run; `stop` ends the schedule, `deadline` moves the current or next window's end |
 | `windvane heavy -- <cmd>` | run an engine/render/big build one at a time on this machine |
 
 The user overruling a critic score: add a line to `.windvane/CALIBRATION.md` (date, ticket, critic's score, theirs,

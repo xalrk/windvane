@@ -231,6 +231,7 @@ def cmd_status(a, p):
     if a.line:
         held, last = held_count(p), (last_log(p) or [""])[0][11:]
         last = "" if held or HELD_LOG.search(last) else last  # the held count says it; or it's no longer held
+        last = "" if st and st["waiting"] and "schedule: waiting" in last else last  # the line says it already
         extra = "".join(f". {x}" for x in (held, actions.line(p), f"Last: {last}" if last else "") if x)
         print(f"{p.display}: autopilot {schedule.word(st) if st else 'running' if on else 'off'}{extra}")
         return
