@@ -111,6 +111,10 @@ Workers' `gh` goes through a guard that refuses workflow starts, including throu
 gh command or one of your installed extensions (`gh dash`); gh's own commands still work. Run `gh alias list` to see
 why it fails (often a broken `~/.config/gh/config.yml`). The log says this once a run.
 
+**A push says "Temp dir nearly full".**
+windvane has already removed its own leftovers (and the `tmpXXXXXXXX` dirs older tests leaked, once a day old); see
+what's left with `du --inodes -s /tmp/* | sort -n | tail`, and remove what you don't need before it stops every command.
+
 **No pushes arrive on the phone.**
 `windvane doctor` checks the phone. Make sure the app is subscribed to the topic `windvane phone setup` showed (and
 to the right server, if you use your own). `windvane phone setup` again sends a test push.

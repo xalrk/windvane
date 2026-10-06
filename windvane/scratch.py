@@ -1,8 +1,11 @@
 """Temp space. Each session and check gets a TMPDIR of its own in the project's state dir, dropped when its ticket
 merges or fails, so what a session or a leaky test leaves behind can't fill the machine's temp dir (a tmpfs runs out of
 inodes long before space, and then no shell command runs). A cleaner removes what leaked anyway: `windvane-*` dirs in
-the temp dir and the session dirs of tickets no longer running, once they're an hour old and in use by no process."""
+the temp dir and the session dirs of tickets no longer running, once they're an hour old and in use by no process; and
+the `tmpXXXXXXXX` dirs tests leaked before windvane named them (old leaks), once they're a day old and hold only what
+windvane makes."""
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -10,7 +13,12 @@ from pathlib import Path
 
 PREFIX = "windvane-"  # what the tests and tools/check_pythons.sh name their temp dirs, so the cleaner knows them
 AGE = 3600  # seconds a leftover must have sat untouched: a running check writes into its dirs all the time
-FULL = 90  # percent of the temp dir's inodes or space at which doctor warns
+FULL = 90  # percent of the temp dir's inodes or space at which doctor warns and the driver pushes
+DAY = 86400  # seconds an old leak must have sat untouched: a `tmpXXXXXXXX` dir might be anyone's work in progress
+LEAK = re.compile(r"tmp[a-z0-9_]{8}")  # tempfile.mkdtemp's names, which the tests used before they named theirs
+OURS = {"runs", "settings.json", "windvane-mentioned", "Critic", "critic.jsonl", "windvane-heavy.lock", "state.json",
+        "answers.json"}  # all an old leak holds when it was a session's state dir
+ORIGIN = re.compile(r'^\[remote "origin"\]\s*$((?:\n[^\[].*$)*)', re.M)
 
 
 def root():
@@ -111,15 +119,50 @@ def candidates(p=None, running=()):
     return out
 
 
+def orphan_clone(d):
+    """Whether `d` is a git clone of a test Sandbox's remote that's gone: what a test's clone leaked."""
+    try:
+        m = ORIGIN.search((d / ".git" / "config").read_text(errors="replace"))
+    except OSError:
+        return False
+    url = re.search(r"^\s*url\s*=\s*(.+?)\s*$", m.group(1), re.M) if m else None
+    return bool(url) and re.search(r"/windvane-test-[^/]+/remote\.git/?$", url.group(1)) is not None \
+        and not Path(url.group(1)).exists()
+
+
+def old_leak(d):
+    """Whether a `tmpXXXXXXXX` dir is one a test leaked: empty, windvane state files only, or an orphan clone.
+    Anything else (another program's files) isn't ours, whatever its age."""
+    try:
+        names = set(os.listdir(d))
+    except OSError:
+        return False
+    return names <= OURS or (".git" in names and orphan_clone(d))
+
+
+def old_leaks():
+    """`tmpXXXXXXXX` dirs in the temp dir shaped like a test's leak (their age is for `stale`)."""
+    try:
+        dirs = [d for d in root().iterdir() if LEAK.fullmatch(d.name)]
+    except OSError:
+        return []
+    return [d for d in dirs if d.is_dir() and not d.is_symlink() and old_leak(d)]
+
+
+def removable(p=None, running=(), age=AGE):
+    """The leftovers `clean` removes: stale windvane dirs, and old leaks untouched for a day."""
+    return stale(candidates(p, running), age) + stale(old_leaks(), max(age, DAY))
+
+
 def leftovers(p=None, running=(), age=AGE):
     """[(dir, entries, bytes)] of what `clean` would remove, the biggest first."""
-    return sorted(((d, *size(d)) for d in stale(candidates(p, running), age)), key=lambda x: -x[1])
+    return sorted(((d, *size(d)) for d in removable(p, running, age)), key=lambda x: -x[1])
 
 
 def clean(p=None, running=(), age=AGE):
     """Remove the stale leftovers; (dirs, entries) removed."""
     dirs = n = 0
-    for d in stale(candidates(p, running), age):
+    for d in removable(p, running, age):
         n += size(d)[0]
         shutil.rmtree(d, ignore_errors=True)
         dirs += 1
