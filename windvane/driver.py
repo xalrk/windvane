@@ -1163,14 +1163,17 @@ class Pilot(Desk, Periodic):
 
     def pick(self, free):
         """(ticket, kind, branches, slot) to start in one of the `free` slots, or (None, why, None, None). Notes in
-        `waits` why each ready ticket must wait for the running ones."""
+        `waits` why each ready ticket must wait for the running ones. A last ticket also waits while a ticket not
+        marked last could still start, even one held only by a clash: last means once the rest has run out."""
         q = self.queue
         busy = sorted(self.running)
         avoid = set(self.skip) | set(busy)
         self.waits = []
         extra = self.outside(busy)  # once a pass: two git calls a running ticket
+        ahead = q.to_run(avoid, set(self.questions))  # those waiting on a clash too: a free slot isn't "run out"
         for t in q.order:
-            why = "" if t in avoid or q.status(t, set(self.questions)) not in ("wip", "todo") else self.clash(t, busy, extra)
+            why = ("" if t in avoid or q.status(t, set(self.questions)) not in ("wip", "todo")
+                   else f"last, {ahead[0]} still to run" if ahead and t in q.last else self.clash(t, busy, extra))
             if why:
                 avoid.add(t)
                 self.waits.append(f"{t} waits: {why}")

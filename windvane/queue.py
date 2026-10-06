@@ -6,7 +6,8 @@ branches (fetch first).
            ticket by number; a bullet naming a split ticket's parent (T-004) stands for its parts (T-004a, T-004b)
   done     a merge on main from its branch (`t-003-...`, the whole branch name: `q-t-003-x` is another branch), or
            `- done: T-003 (why)` in QUEUE.md
-  last     `- last: T-003 (why)` in QUEUE.md: after every ticket not marked last, in the order of these lines
+  last     `- last: T-003 (why)` in QUEUE.md: starts only once no ticket not marked last can (wip or todo, even if
+           only waiting for a running ticket's files); among themselves in the order of these lines
   parked   `- parked: T-003 (why)` in QUEUE.md: never started
   wip      an unmerged remote branch `t-003-...`: resumed before new work, unless no commit touched it for
            `stale_days`: then it waits for its turn in the order like new work
@@ -97,6 +98,7 @@ class Queue:
         num = lambda t: (int(re.search(r"\d+", t).group()), t)
         first = [t for t in listed if t not in last]
         self.order = first + sorted((t for t in self.files if t not in first and t not in last), key=num) + last
+        self.last = set(last)
         heads = {t: "\n".join(self.text[t].splitlines()[:8]) for t in self.files}
         self.deps = {t: depends_on(heads[t], p) for t in self.files}
         self.outside = {t: outside(heads[t], p) for t in self.files}
@@ -151,9 +153,16 @@ class Queue:
         return ([d for d in self.deps.get(tid, []) if not self.is_done(d)]
                 + [x for x in self.outside.get(tid, []) if x.lower() not in self.done_words])
 
+    def to_run(self, skip=(), blocked=()):
+        """The tickets not marked last that could still start (wip or todo, not in `skip`): while one is left, every
+        last ticket waits, even when that one only waits for a running ticket's files."""
+        return [t for t in self.order
+                if t not in self.last and t not in skip and self.status(t, blocked) in ("wip", "todo")]
+
     def pick(self, skip=(), blocked=()):
         """(ticket, "wip"|"todo", its branches) for the next run, or (None, why)."""
-        ready = [(t, self.status(t, blocked)) for t in self.order if t not in skip]
+        held = self.last if self.to_run(skip, blocked) else ()  # a wip last ticket isn't resumed ahead of them either
+        ready = [(t, self.status(t, blocked)) for t in self.order if t not in skip and t not in held]
         for wants in (("wip",), ("wip", "todo")):
             for t, s in ready:
                 if s in wants and (len(wants) == 2 or t not in self.stale):
@@ -168,7 +177,7 @@ class Queue:
             s = self.status(t, blocked)
             why = {"waiting": f"waiting on: {', '.join(self.waits_on(t))}",
                    "blocked": f"question: {self.asked[t][:60]}" if t in self.asked else ""}.get(s, "")
-            rows.append(f"{t:8} {s:8} {self.titles[t][:70]}"
+            rows.append(f"{t:8} {s:8} {'(last) ' * (t in self.last)}{self.titles[t][:70]}"
                         + (f"  [{' '.join(self.wip[t])}{', stale' if t in self.stale else ''}]"
                            if t in self.wip else "") + (f"  ({why})" if why else ""))
         return "\n".join(rows)
