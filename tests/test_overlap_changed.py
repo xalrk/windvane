@@ -116,6 +116,20 @@ class Overlap(unittest.TestCase):
         self.assertEqual(log.count("T-002 waits: overlaps T-001 on T-001.txt (changed, not on its Touches line)"), 1)
         self.assertLess(log.index("T-001: merged"), log.index("T-002: slot"))
 
+    def test_the_wait_saves_the_conflict_bounce_running_beside_would_cost(self):
+        os.environ["FAKE_WORK_S"], os.environ["FAKE_CONFLICT"] = "1.5", "1"  # every worker rewrites shared.txt
+        self.s.ticket("T-001", touches="a.py")
+        self.s.ticket("T-002", touches="shared.txt")
+        self.s.publish()
+        self.p = Project(self.s.root)
+        ensure_worktree(self.p, self.p.work_dir, setup=False)
+        (self.p.work_dir / "shared.txt").write_text("T-001, cut off\n")  # without it, the two ran beside and bounced
+        pilot = driver.Pilot(self.p, args())
+        pilot.run(now() + timedelta(minutes=15))
+        self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
+        self.assertEqual(pilot.conflicts, 0)
+        self.assertNotIn("conflicts with", (self.p.state / "autopilot.log").read_text())
+
     def test_the_merge_logs_what_was_changed_outside_touches(self):
         pilot = self.pilot(T_001="a.py", T_002="T-002.txt")  # the fake worker writes <ID>.txt
         pilot.run(now() + timedelta(minutes=15))
