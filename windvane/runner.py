@@ -214,7 +214,8 @@ class Usage:
 # [[periodic]] session) keeps the CLI's default set and the project's skills.
 TOOLS = {"worker": ["Bash", "Read", "Edit", "Write"], "fix": ["Bash", "Read", "Edit", "Write"],
          "planner": ["Bash", "Read", "Edit", "Write"], "reviewer": ["Bash", "Read"],
-         "critic": ["Read", "Glob", "Grep"], "preflight": ["Read", "Glob", "Grep"]}
+         "critic": ["Read", "Glob", "Grep"], "critic:project": ["Bash", "Read", "Glob", "Grep"],
+         "preflight": ["Read", "Glob", "Grep"]}
 NO_MCP = json.dumps({"mcpServers": {}})
 # The flags every session's command line uses that an older `claude` may not know: `windvane doctor` checks them,
 # since a CLI that lacks one fails every session at launch.
@@ -304,7 +305,9 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         raise SystemExit(f"windvane: bad permission rules in config.toml: {'; '.join(p.perm_problems)}")
     own = p.perms.get(role, {})
     allow, deny = [*allow, *own.get("allow", ())], [*deny, *own.get("deny", ())]
-    model, effort = p.models.get(role, "opus"), p.models.get(f"{role}_effort", "high")
+    base = role.split(":")[0]  # `critic:project` runs on the critic's model unless the config names its own
+    model = p.models.get(role, p.models.get(base, "opus"))
+    effort = p.models.get(f"{role}_effort", p.models.get(f"{base}_effort", "high"))
     raw = p.state / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}-{label}.jsonl"
     raw.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["claude", "-p", prompt, "--model", model, "--effort", effort, "--permission-mode", "auto",

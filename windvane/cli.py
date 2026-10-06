@@ -18,7 +18,8 @@ from . import critic as critic_mod
 from . import doctor, driver, install, jobs, net, phone, planner, preflight, questions, schedule, watch
 from . import held as held_mod
 from . import periodic as periodic_mod
-from .config import DIR, HOME, Project, exe, find, toplevel
+from .config import DIR, HOME, Project, exe, find, slots, toplevel
+from .config import periodic as periodic_entries
 from .queue import Queue
 from .runner import Usage, inherited_stop, plain_error
 from .stats import cmd_stats, shared_line  # cmd_stats: main runs `stats` by its name
@@ -440,7 +441,9 @@ def critic_retry(p, sleep=time.sleep):
 
 
 def cmd_critic(a, p):
-    tid = p.norm(a.ticket) or sys.exit("give a ticket id")
+    if a.project:
+        return critic_project(a, p)
+    tid = p.norm(a.ticket or "") or sys.exit("give a ticket id, or --project")
     if not p.critic["enabled"]:
         print("CRITIC STEP: skip. The critic is off for this project.")
         return
@@ -460,6 +463,30 @@ def cmd_critic(a, p):
     if not critic_mod.comment(p, entry, pr):
         print(f"\n(couldn't post the critique on PR #{pr})")
     print("\n" + critic_mod.next_step(p, tid, entry))
+
+
+def critic_project(a, p):
+    """`windvane critic --project`: the critic on the whole project as it stands on main, run as the `project-critic`
+    [[periodic]] preset would be (its covered points land as notes on their tickets), then its report."""
+    need(p)
+    if a.last:
+        print(critic_mod.project_scores(p))
+        return
+    net.git(p.main_root(), "fetch", "-q", p.remote)
+    lad = critic_mod.ladder(gout(p.main_root(), "show", f"{p.upstream}:{p.rubric_rel}"))
+    dims = [d.strip().lower() for d in (a.dims or "").split(",") if d.strip()]
+    if not lad:
+        sys.exit(f"no ladder scale in {p.rubric_rel} on {p.upstream}: the project critic answers a ladder's checks")
+    if set(dims) - set(lad):
+        sys.exit(f"no dimension {', '.join(d for d in dims if d not in lad)} in {p.rubric_rel} (it has: {', '.join(lad)})")
+    e = periodic_entries([{"name": "project-critic", "builtin": "project-critic", "dims": dims,
+                           "parallel": a.parallel or slots(p), "minutes": a.minutes}])["project-critic"]
+    before = len(read_jsonl(p.state / "critic.jsonl"))
+    desk_periodic(p, e)
+    got = [r for r in read_jsonl(p.state / "critic.jsonl")[before:] if r.get("ticket") == critic_mod.PROJECT]
+    if not got or not got[-1].get("dims"):
+        sys.exit("the project critic gave no verdict (see `windvane log`)")
+    print(got[-1]["critique"])
 
 
 def cmd_plan(a, p):
@@ -501,6 +528,11 @@ def cmd_periodic(a, p):
     if not e:
         sys.exit(f"no [[periodic]] entry {a.name!r} in {DIR}/config.toml"
                  + (f" (there is: {', '.join(p.periodic)})" if p.periodic else ""))
+    desk_periodic(p, e)
+
+
+def desk_periodic(p, e):
+    """Run [[periodic]] entry `e` (and its chain) from the desk, under the run's lock."""
     if running(p):
         sys.exit("a run is busy: it runs periodic sessions itself between tickets; try again once it stops")
     if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
@@ -585,8 +617,13 @@ def main(argv=None):
     s.add_argument("workflow", nargs="?", default="", help="its file or name (default: the repo's only one)")
     s.add_argument("--ref", default="", help="the branch to run it on (default: the current one)")
     s.add_argument("--dry-run", action="store_true", help="count and say, but start nothing")
-    s = sub.add_parser("critic", help="have the critic judge a ticket's evidence pack")
-    s.add_argument("ticket")
+    s = sub.add_parser("critic", help="have the critic judge a ticket's evidence pack, or the whole project")
+    s.add_argument("ticket", nargs="?")
+    s.add_argument("--project", action="store_true", help="judge the project on main against its CRITIC.md")
+    s.add_argument("--dims", help="with --project: only these dimensions, comma-separated (default: all)")
+    s.add_argument("--parallel", type=int, help="with --project: at most N dimension sessions at once")
+    s.add_argument("--minutes", type=int, default=60, help="with --project: each session's time limit (default 60)")
+    s.add_argument("--last", action="store_true", help="with --project: the latest verdicts' scores per dimension")
     s = sub.add_parser("bg", help="start a long command in the background")
     s.add_argument("--heavy", action="store_true", help="run it under the machine-wide heavy lock")
     s.add_argument("name")
