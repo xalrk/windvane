@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -22,6 +23,7 @@ from test_temp_clean import age
 sys.path.insert(0, str(REPO))
 from windvane import doctor, driver, phone, scratch, statedir  # noqa: E402
 from windvane.config import Project  # noqa: E402
+from windvane.util import now  # noqa: E402
 
 LATER = time.time() + 2 * scratch.AGE  # `now` an hour past every file the test made: the age rule lets them go
 OLD = time.time() - 30 * statedir.DAY
@@ -180,6 +182,30 @@ class StateDir(Base):
         pilot.clean_state(between=False)
         self.assertFalse(d.exists())
         self.assertIn("state dir: freed", (self.p.state / "autopilot.log").read_text())
+
+    def test_a_run_after_the_clean_resumes_its_work_in_progress(self):
+        """2026-10-06: `work` held a WIP commit the next run resumes; the run's own clean at its start mustn't
+        touch it, and an idle merged slot goes."""
+        self.s.ticket("T-002")
+        self.s.publish()
+        wip = self.tree("work")
+        self.s.git("switch", "-q", "-c", "t-002-work", cwd=wip)
+        (wip / "half.txt").write_text("WIP\n")
+        self.s.git("add", "-A", cwd=wip)
+        self.s.git("commit", "-qm", "WIP: 7 tests fail", cwd=wip)
+        self.s.git("push", "-q", "origin", "t-002-work", cwd=wip)
+        self.s.git("switch", "-q", "--detach", cwd=wip)
+        idle = self.tree("work-1")
+        for d in (wip, idle):
+            age(d, OLD)
+        pilot = driver.Pilot(self.p, args(parallel=2))
+        pilot.run(now() + timedelta(hours=1))
+        self.assertFalse(idle.exists())
+        self.assertNotIn(str(idle), self.listed())
+        self.assertEqual(pilot.merged, ["T-002"])
+        self.s.git("fetch", "-q", "origin")
+        self.assertEqual(self.s.git("show", "origin/main:half.txt"), "WIP")  # the WIP commit went on, not lost
+        self.assertIn("WIP: 7 tests fail", self.s.git("log", "origin/main", "--format=%s"))
 
 
 class DoctorClean(Base):
