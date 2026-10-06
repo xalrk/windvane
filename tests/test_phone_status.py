@@ -8,13 +8,17 @@ import shutil
 import subprocess
 import sys
 import unittest
+from argparse import Namespace
+from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from windvane import install, phone  # noqa: E402
+from windvane import driver, install, phone  # noqa: E402
 from windvane.config import Project, exe  # noqa: E402
+from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
 NONE = "windvane: no autopilot running (overview lists every project)"
@@ -98,6 +102,8 @@ class PhoneStatus(unittest.TestCase):
             if name != "gone":  # written before install.json listed hooks: known by its form
                 m["paths"].append({"path": str(f), "kind": "file"})
         install.save(m)
+        before = [run_hook(f)[1] for f in sorted(status.iterdir())]  # the old answer: a line for every project
+        self.assertIn("Idle: autopilot off", "\n".join(before))
         for mine in ("mine", "windvane-mine"):  # the user's own scripts, not in install.json
             (status / mine).write_text("#!/bin/sh\necho mine\n")
         install.tidy_phone_hooks()
@@ -110,6 +116,29 @@ class PhoneStatus(unittest.TestCase):
             install.uninstall(yes=True)  # uninstall still takes back exactly what windvane wrote
         self.assertEqual(self.hooks("status.d"), ["mine", "windvane-mine"])
         self.assertFalse((self.ntfy / "overview.d").exists())  # its own directory too, once empty
+
+    def test_a_hook_another_run_swept_first_is_no_error(self):
+        shutil.rmtree(self.roots["gone"])
+        real = install.hook_root_exists
+
+        def raced(f):  # another run's start removes the hook between the look and the unlink
+            gone = real(f)
+            if not gone:
+                f.unlink()
+            return gone
+        with mock.patch.object(install, "hook_root_exists", raced):
+            install.tidy_phone_hooks()
+        self.assertEqual(self.hooks("overview.d"), ["windvane-idle", "windvane-sandbox"])
+
+    def test_a_run_starts_even_when_the_hooks_cant_be_tidied(self):
+        shutil.rmtree(self.roots["gone"])
+        (self.ntfy / "overview.d").chmod(0o555)  # unwritable: the gone repo's hook can't be removed
+        self.addCleanup((self.ntfy / "overview.d").chmod, 0o755)
+        pilot = driver.Pilot(self.p["sandbox"], Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0,
+                                                          answer_wait=10, replan=0, goal="", parallel=1))
+        pilot.run(now() + timedelta(minutes=5))
+        self.assertEqual(pilot.stop_reason, "queue empty")
+        self.assertIn("phone hooks: not tidied", (self.p["sandbox"].state / "autopilot.log").read_text())
 
     def test_a_status_hook_the_user_wrote_under_windvanes_name_is_left_alone(self):
         f = self.ntfy / "status.d/windvane"

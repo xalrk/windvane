@@ -216,7 +216,7 @@ def tidy_hooks(m):
                 continue
             if kind == "status.d" or not hook_root_exists(t):
                 old_status |= kind == "status.d"
-                t.unlink()
+                t.unlink(missing_ok=True)  # another run's start may sweep it at the same moment
     m["paths"] = [e for e in m["paths"]  # and what install.json lists there that's gone now
                   if not (e["kind"] == "file" and Path(e["path"]).parent.parent == base and not Path(e["path"]).exists())]
     return old_status

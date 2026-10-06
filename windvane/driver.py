@@ -1423,7 +1423,10 @@ class Pilot(Desk, Periodic):
         p = self.p
         self.take_lock()
         phone.start_run(p)
-        install.tidy_phone_hooks()  # an older install's per-project `status` hooks, or a deleted repo's
+        try:  # an older install's per-project `status` hooks, or a deleted repo's: never worth a run
+            install.tidy_phone_hooks()
+        except OSError as e:
+            self.log(f"phone hooks: not tidied ({e})")
         restarted = os.environ.pop("WINDVANE_RESTARTED", None)
         if not restarted:  # a stop asked for while the driver restarted still holds
             (p.state / "STOP").unlink(missing_ok=True)

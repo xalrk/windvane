@@ -269,7 +269,7 @@ def status_running():
                 continue
             fetch_for_held(p)
             lines.append(status_line(p, True, schedule.state(p)))
-        except (SystemExit, OSError, ValueError):  # a config that no longer loads: not this answer's business
+        except (SystemExit, Exception):  # one project's broken config or state mustn't cost the others their line
             continue
     print("\n".join(lines) or "windvane: no autopilot running (overview lists every project)")
 
