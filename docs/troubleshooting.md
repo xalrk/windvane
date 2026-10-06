@@ -92,15 +92,24 @@ and the next plan notices (one list of open PRs) and keeps its ids.
 Run `gh auth status`. Workers open pull requests and the driver merges them with `gh`; it needs push and merge rights
 on the repository. Projects not on GitHub use `forge = "git"`.
 
-**The log says "actions: recount failed", or the phone's `status` says "Actions ... (stale: counted Oct 3)".**
+**The log says "actions: recount failed", or the phone's `status` says "Actions ... (stale: counted Oct 3, workers
+skip CI)".**
 With `actions_minutes` set, windvane recounts the month's Actions minutes through `gh` at each run's start and each
-session's end. When a `gh` call fails, the log says so once a run, naming the call and gh's own first line:
-"actions: recount failed: `gh api repos/me/proj/actions/runs`: To get started with GitHub CLI, please run: gh auth
-login (run `gh auth status`)". Other causes read "error connecting to api.github.com" (network) or "API rate limit
-exceeded" (wait an hour). Run `gh auth status` and log in again if it says so; the next recount fixes the count.
+session's end. When a `gh` call fails, the log says so, naming the call, gh's own first line and the fix:
+"actions: recount failed: `gh api repos/me/proj/actions/runs`: API rate limit exceeded (windvane waits for the limit
+to reset)". A network error adds "(check the connection)", an HTTP 5xx "(GitHub's own error: the next recount tries
+again)", a login problem "(run `gh auth status`)"; when gh's own line already names a command ("please run: gh auth
+login"), nothing is added. Each cause is logged once a run: again
+only when the cause changes or comes back after a recount worked. The next recount that works fixes the count.
 Once the last good count is over a day old, the phone's line marks it stale and workers' commits carry `[skip ci]`
-until a recount succeeds. A recount that waited on another project's driver counting isn't a failure and isn't
+until a recount succeeds; the log says so once a run, with the same fix as the recount's line. A recount that waited on another project's driver counting isn't a failure and isn't
 logged.
+
+**The log says "gh guard: gh's alias list couldn't be read".**
+Workers' `gh` goes through a guard that refuses workflow starts, including through your gh aliases. When
+`gh alias list` fails or hangs, the guard can't tell an alias from a typo, so it refuses any first word that isn't a
+gh command or one of your installed extensions (`gh dash`); gh's own commands still work. Run `gh alias list` to see
+why it fails (often a broken `~/.config/gh/config.yml`). The log says this once a run.
 
 **A push says "Temp dir nearly full".**
 windvane has already removed its own leftovers (and the `tmpXXXXXXXX` dirs older tests leaked, once a day old); see

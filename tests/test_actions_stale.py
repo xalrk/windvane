@@ -34,7 +34,7 @@ class Stale(unittest.TestCase):
         actions.counting.release()
         actions.asked.clear()
         actions.stale_logged.clear()
-        actions.recount_logged.clear()
+        actions.recount_said.clear()
         self.s.close()
 
     def cache(self, used, age):
@@ -97,7 +97,8 @@ class Stale(unittest.TestCase):
     def test_status_shows_the_date_of_another_days_count(self):
         self.cache(10, 2 * 86400)
         day = time.localtime(time.time() - 2 * 86400)
-        self.assertIn(f"(stale: counted {time.strftime('%b', day)} {day.tm_mday})", actions.line(self.p))
+        self.assertIn(f"(stale: counted {time.strftime('%b', day)} {day.tm_mday}, workers skip CI)",
+                      actions.line(self.p))
         self.cache(10, 2 * 3600)
         if time.localtime(time.time() - 2 * 3600)[:3] == time.localtime()[:3]:  # not just past midnight
             self.assertRegex(actions.line(self.p), r"\(counted \d\d:\d\d\)$")

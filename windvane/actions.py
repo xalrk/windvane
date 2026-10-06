@@ -15,6 +15,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -42,6 +43,7 @@ DENY = [*(f"Bash(gh {verb}*)" for verb in ("workflow run", "workflow enable", "r
         "Bash(gh api *dispatches*)", "Bash(gh api *rerun*)", "Bash(gh api */enable*)",
         *(f"Bash(gh api *{a}*{b}*)" for flag in ("-X", "--method")
           for a, b in ((flag, "/actions/"), ("/actions/", flag)))]
+RUN = f"{os.getpid()}.{int(time.time())}"  # this driver run, for the guard's once-a-run log line
 GUARD = "windvane gh guard"  # in the wrapper's first lines: how a guard is told from the real gh
 
 
@@ -85,7 +87,26 @@ class GhFailed(Exception):
     so the log can say why instead of the count just coming back empty."""
     def __init__(self, what, r):
         why = next((" ".join(x.split()) for x in (r.stderr or "").splitlines() if x.strip()), f"exit {r.returncode}")
-        super().__init__(f"`{what}`: {why}" if r.returncode else f"`{what}`: not JSON")
+        self.why = why if r.returncode else "not JSON"
+        super().__init__(f"`{what}`: {self.why}")
+
+
+# A failed recount's cause, found in gh's first stderr line, and what fixes it: a rate limit first, since gh's limit
+# text also mentions authenticated requests.
+CAUSES = (("rate limit", re.compile(r"rate limit|HTTP 429", re.I), "windvane waits for the limit to reset"),
+          ("github", re.compile(r"HTTP 5\d\d", re.I), "GitHub's own error: the next recount tries again"),
+          ("network", re.compile(r"connect|timed? ?out|timeout|network|no such host|dial tcp|unreachable|TLS", re.I),
+           "check the connection"),
+          ("auth", re.compile(r"auth|log ?in|token|credential|HTTP 401", re.I), "run `gh auth status`"))
+FIXES = {name: fix for name, _, fix in CAUSES}
+CHECK = "run `gh auth status`"  # an unknown cause's fix: it checks both the login and the connection
+
+
+def cause(why):
+    """(cause, hint) for gh's first stderr line: the hint names the fix, and is "" when gh's own text already names a
+    command (`gh auth login`), so the line never names two."""
+    name = next((n for n, rx, _ in CAUSES if rx.search(why)), "other")
+    return name, "" if re.search(r"\bgh [a-z]", why) else f" ({FIXES.get(name, CHECK)})"
 
 
 def get(cd, path):
@@ -295,7 +316,8 @@ def line(p, total=None):
     at = time.localtime(total["at"])
     day = "" if at[:3] == time.localtime()[:3] else time.strftime("%b ", at) + f"{at.tm_mday} "
     if stale(total):
-        return f"Actions {fmt(total['used'])}/{fmt(b[0])} min (stale: counted {time.strftime('%b ', at)}{at.tm_mday})"
+        return (f"Actions {fmt(total['used'])}/{fmt(b[0])} min "
+                f"(stale: counted {time.strftime('%b ', at)}{at.tm_mday}, workers skip CI)")
     when = day + time.strftime("%H:%M", at)
     return f"Actions {fmt(total['used'])}/{fmt(b[0])} min" + f" (counted {when})" * (time.time() - total["at"] > 3600)
 
@@ -312,14 +334,17 @@ counting = threading.Lock()
 
 def refresh_now(p):
     """The background count: a failure is one line in the project's log, not a thread's traceback on stderr. A failed
-    gh call is logged once a run, as recounts every session would repeat it; one held up by another driver's count
-    isn't a failure."""
+    gh call is logged once per cause, as recounts every session would repeat it: again when the cause changes
+    (logged out, then offline) or comes back after a recount worked. One held up by another driver's count isn't a
+    failure."""
     try:
-        recount(p.root)
+        if recount(p.root):
+            recount_said.pop(p.name, None)
     except GhFailed as e:
-        if p.name not in recount_logged:
-            recount_logged.add(p.name)
-            log(p, f"actions: recount failed: {e} (run `gh auth status`)")
+        why, hint = cause(e.why)
+        if recount_said.get(p.name) != why:
+            recount_said[p.name] = why
+            log(p, f"actions: recount failed: {e}{hint}")
     except Exception as e:
         log(p, f"actions: recount failed: {type(e).__name__}: {(str(e).splitlines() or [''])[0]}")
     finally:
@@ -339,15 +364,17 @@ def cached_over_cap(p):
 
 
 def say_stale(p):
-    """Once a run, when only the stale rule makes workers tag: the log says why, as nothing else would. Quiet while
-    this process's recount is in flight (a driver started after a weekend idle): it may yet succeed."""
+    """Once a run, when only the stale rule makes workers tag: the log says why, as nothing else would, with the fix
+    for the cause this run's recount failed on, so the two lines agree. Quiet while this process's recount is in
+    flight (a driver started after a weekend idle): it may yet succeed."""
     total = cached()
     if (p.name in stale_logged or counting.locked() or not total or not stale(total)
             or total["used"] >= cap_minutes(p)):
         return
     stale_logged.add(p.name)
     days = int((time.time() - total["at"]) // 86400)
-    log(p, f"Actions count is {days} day{'s' * (days != 1)} old (recounts failing: run `gh auth status`); "
+    fix = FIXES.get(recount_said.get(p.name), CHECK)  # the same fix the recount's own line named
+    log(p, f"Actions count is {days} day{'s' * (days != 1)} old (recounts failing: {fix}); "
            f"workers' commits carry {SKIP}")
 
 
@@ -363,7 +390,7 @@ def over_cap(p, cd=None):
 logged = set()  # the projects whose log has said "at the cap" in this process: once a run, not once a commit
 asked = set()  # the projects whose log has said their workers are asked for [skip ci], their hooks being their own
 stale_logged = set()  # the projects whose log has said their count is too old to trust
-recount_logged = set()  # the projects whose log has said why their recount failed
+recount_said = {}  # project: the cause its log last said its recount failed for, until one works
 
 
 def tag(p, msg, cd=None):
@@ -541,6 +568,21 @@ def aliases():
     return found
 
 
+def extensions():
+    # The user's installed gh extensions' names: the gh-NAME dirs (or links) in gh's data dir holding the gh-NAME
+    # executable gh runs, read without running gh, so they pass when the alias list can't be read. gh won't let an
+    # alias take an extension's name.
+    env = os.environ
+    d = env.get("GH_DATA_DIR") or env.get("XDG_DATA_HOME") and os.path.join(env["XDG_DATA_HOME"], "gh")
+    if not d and os.name == "nt" and env.get("LOCALAPPDATA"):
+        d = os.path.join(env["LOCALAPPDATA"], "GitHub CLI")
+    d = os.path.join(d or os.path.join(os.path.expanduser("~"), ".local", "share", "gh"), "extensions")
+    try:
+        return {n[3:] for n in os.listdir(d) if n.startswith("gh-") and os.access(os.path.join(d, n, n), os.X_OK)}
+    except OSError:
+        return set()
+
+
 def expand(exp, rest):
     # The args gh runs for a (non-shell) alias: $1... filled from the rest while the expansion has a "$" in it, the
     # rest appended otherwise, as gh's ExpandAlias does.
@@ -565,13 +607,25 @@ def via_alias(a):
         return None
     found = aliases()
     if found is None:
-        return "unread"
+        return None if a[0] in extensions() else "unread"
     exp = found.get(a[0])
     if exp is None:
         return None
     if exp.startswith("!"):
         return "workflow" if SHELL.search(exp) or re.search(r"\bapi\b", exp) and "actions/" in exp else None
     return refused(expand(exp, a[1:]))
+
+
+def say_unread():
+    # Once a run, a line in the project's log: an unread alias list refuses every unknown word, and nothing else
+    # would say this machine's gh can't list its aliases. The first refusal of the run makes the marker file.
+    try:
+        os.close(os.open(SAID, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        with open(LOG, "a") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M") + " gh guard: gh's alias list couldn't be read, so workers' gh "
+                    "calls that start with a word gh doesn't know are refused; run `gh alias list` to check it\n")
+    except Exception:
+        pass
 
 
 def count(a, kind):
@@ -593,6 +647,7 @@ if not kind:
 if kind:
     count(a, kind)
     if kind == "unread":
+        say_unread()
         sys.exit(f"windvane: `gh {a[0]}` isn't a gh command and gh's alias list couldn't be read (`gh alias list` "
                  f"failed or took over {ALIAS_TIMEOUT} s), so it could be an alias that starts a workflow: refused. "
                  "gh's own commands still work.")
@@ -641,7 +696,12 @@ def gh_guard(p, wd):
     # sh starts it with this python: a shebang can't hold a path with spaces, nor one over 255 bytes (a deep venv)
     tmp.write_text(f"#!/bin/sh\n''''exec {shlex.quote(sys.executable)} \"$0\" \"$@\" # '''\n"
                    f"# {GUARD}: workers never start, re-run or enable a GitHub workflow.\n"
-                   f"REAL = {real_gh()!r}\nLEDGER = {str(p.state / 'ledger.jsonl')!r}\n{GUARD_SCRIPT}")
+                   f"REAL = {real_gh()!r}\nLEDGER = {str(p.state / 'ledger.jsonl')!r}\n"
+                   f"LOG = {str(p.state / 'autopilot.log')!r}\nSAID = {str(folder / f'unread-said.{RUN}')!r}\n"
+                   f"{GUARD_SCRIPT}")
+    for old in folder.glob("unread-said.*"):  # an earlier run's: this run says it again
+        if old.name != f"unread-said.{RUN}":
+            old.unlink(missing_ok=True)
     tmp.chmod(0o755)
     os.replace(tmp, folder / "gh")
     own = os.environ.get("CLAUDE_ENV_FILE")
