@@ -105,6 +105,9 @@ class ProjectCritic(unittest.TestCase):
         self.assertIn("- (PROJECT) improve lean", plan)
         self.assertNotIn("add a retry", plan)
         self.assertEqual(critic.followups(self.p), [])  # used by that plan
+        table = self.cli("stats").splitlines()
+        self.assertTrue(any(line.startswith("critic:project    3 ") for line in table))  # named whole
+        self.assertLessEqual(max(map(len, table[:4])), 100)
 
     def test_dims_picks_a_subset_and_last_shows_the_scores(self):
         self.make()

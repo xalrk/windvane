@@ -182,7 +182,7 @@ def session_stats(a, p, rows, swept=0, checks=(), refusals=()):
         note("(base: a run's first-turn context, \"-\" for runs logged before windvane kept it; cached/turn: what "
              "each turn re-reads, base plus what the run has added.)")
     else:
-        note(f"(--wide, {len(stats_header(a.by, outcome, True))} columns, adds base and cached/turn: what a run "
+        note(f"(--wide, {len(stats_header(a.by, outcome, True, name_width(a.by, agg, outcome)))} columns, adds base and cached/turn: what a run "
              "starts with and each turn re-reads.)")
 
 
@@ -209,19 +209,27 @@ def stats_table(by, agg, outcome, wide=False):
     """One line per role or ticket, the costliest (weighted) first. 100 columns at most by default; `wide` adds the
     context columns, for tuning prompts."""
     k1 = lambda n, d: f"{n / d / 1000:,.1f}k" if d else "-"
-    print(stats_header(by, outcome, wide))
+    w = name_width(by, agg, outcome)
+    print(stats_header(by, outcome, wide, w))
     for name, g in sorted(agg.items(), key=lambda kv: -kv[1]["w"]):
         o = f" {outcome.get(name, '-'):7}" if outcome else ""
         more = f" {k1(g['base'], g['based']):>6} {k1(g['cache'], g['turns']):>11}" if wide else ""
-        print(f"{name[:12]:12}{o} {g['runs']:4} {g['died'] + g['killed'] or '·':>11} {g['turns']:5} {k(g['in']):>9} "
+        print(f"{name[:w]:{w}}{o} {g['runs']:4} {g['died'] + g['killed'] or '·':>11} {g['turns']:5} {k(g['in']):>9} "
               f"{k(g['cache']):>10} {k(g['out']):>7} {k(g['w']):>9} {usd(g):>7} {g['min']:5.0f}{more}")
 
 
-def stats_header(by, outcome, wide):
+def name_width(by, agg, outcome):
+    """The first column's width: 12, or the longest name (`critic:project`, `periodic:playtest`) while the table
+    still fits 100 columns."""
+    room = 12 + 100 - len(stats_header(by, outcome, False))
+    return max(12, min(max(map(len, agg), default=12), room))
+
+
+def stats_header(by, outcome, wide, w=12):
     """The table's header, whose length is its width: the --wide note says it."""
     col = f" {'outcome':7}" if outcome else ""
     more = f" {'base':>6} {'cached/turn':>11}" if wide else ""
-    return (f"{by:12}{col} {'runs':>4} {'died/killed':>11} {'turns':>5} {'fresh in':>9} {'cached in':>10} {'out':>7} "
+    return (f"{by:{w}}{col} {'runs':>4} {'died/killed':>11} {'turns':>5} {'fresh in':>9} {'cached in':>10} {'out':>7} "
             f"{'weighted':>9} {'API $':>7} {'min':>5}{more}")
 
 
