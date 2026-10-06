@@ -18,8 +18,8 @@ from helpers import Sandbox  # noqa: E402
 from test_pipeline import args  # noqa: E402
 
 
-def answers(n):
-    return "".join(f"### T-{100 + i}: Question {i}?\n- **A**: yes\n- **B**: no\nRecommendation: A, because.\n"
+def answers(n, long=""):
+    return "".join(f"### T-{100 + i}: Question {i}?{long}\n- **A**: yes\n- **B**: no\nRecommendation: A, because.\n"
                    "Built: A; to change it: x.txt\n" for i in range(n))
 
 
@@ -38,8 +38,8 @@ class Backlog(unittest.TestCase):
         stack.enter_context(mock.patch.object(driver, "quiet_now", lambda p: (None, None)))
         self.addCleanup(os.chdir, os.getcwd())
 
-    def morning(self, n):
-        self.s.write(".windvane/QUESTIONS.md", f"# Q\n\n## Open\n\n## Provisional\n{answers(n)}\n## Answered\n")
+    def morning(self, n, long=""):
+        self.s.write(".windvane/QUESTIONS.md", f"# Q\n\n## Open\n\n## Provisional\n{answers(n, long)}\n## Answered\n")
         self.s.publish("questions")
         ensure_worktree(self.p, self.p.work_dir, setup=False)
         pl = driver.Pilot(self.p, args())
@@ -59,6 +59,12 @@ class Backlog(unittest.TestCase):
         pl.was_quiet = True
         pl.quiet_check()
         self.assertEqual(len(self.sent), 1, self.sent)
+
+    def test_long_questions_and_a_long_backlog_stay_under_the_phones_bound(self):
+        self.morning(300, " Why" * 30)
+        [(_, msg)] = self.sent
+        self.assertLessEqual(len(msg), phone.MOST)
+        self.assertRegex(msg.splitlines()[-1], r"^Also: T-108, .* and \d+ more; windvane status lists them\.$")
 
     def test_three_have_no_also_line(self):
         self.morning(3)

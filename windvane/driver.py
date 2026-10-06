@@ -123,7 +123,7 @@ def pr_for(p, branch):
 
 def also(tickets, most=MOST):
     """The digest's line naming the answers past its first eight by ticket, each ticket once, or "". Kept under
-    `most` characters: a backlog too long for that ends with how many more."""
+    `most` characters (what the push has left): a backlog too long for that ends with how many more."""
     ids = list(dict.fromkeys(tickets))
     if not ids:
         return ""
@@ -983,10 +983,10 @@ class Pilot(Desk, Periodic):
             told = {qkey(q) for q in new} | done
             note(p, lambda s: s.update(pushed=[qkey(q) for q in picks if qkey(q) in told]))
         if new:
+            body = ("To change one: windvane answer <ID> <letter>."
+                    + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in new[:8]))
             push(f"Review: {len(new)} provisional answer{'s' * (len(new) > 1)}",
-                 "To change one: windvane answer <ID> <letter>."
-                 + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in new[:8])
-                 + also([q["ticket"] for q in new[8:]]), 3, "memo")
+                 body + also([q["ticket"] for q in new[8:]], MOST - len(body)), 3, "memo")
 
     # ---------- the loop
 
