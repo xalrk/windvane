@@ -29,6 +29,16 @@ LATER = time.time() + 2 * scratch.AGE  # `now` an hour past every file the test 
 OLD = time.time() - 30 * statedir.DAY
 
 
+def held(p):
+    """Whether someone holds the project's run lock (a run, or a clean)."""
+    with open(p.state / "lock") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError:
+            return True
+    return False
+
+
 def ledger_row(stream, tokens):
     return {"at": time.strftime("%Y-%m-%d %H:%M"), "role": "worker", "label": "T-002", "ticket": "T-002",
             "model": "opus", "effort": "high", "minutes": 3.0, "turns": 9, "estimated": False, "input": tokens,
@@ -249,7 +259,7 @@ class DoctorClean(Base):
         seen, remove = [], statedir.remove
 
         def watched(p, item):
-            seen.append((driver.locked(p), (p.state / statedir.CLEANING).exists()))
+            seen.append((held(p), (p.state / statedir.CLEANING).exists(), driver.locked(p)))
             if not seen[1:]:  # a run starts in the middle of the clean: it waits, then takes the lock
                 pilot = driver.Pilot(p, args())
                 self.addCleanup(lambda: pilot.lockfile.close())
@@ -267,9 +277,23 @@ class DoctorClean(Base):
             if started:
                 break
             time.sleep(0.1)
-        self.assertEqual(seen, [(True, True)])
+        self.assertEqual(seen, [(True, True, False)])  # held, marked, and no run to the phone's status
         self.assertTrue(started and started[0] >= removed[0], (started, removed))  # only once the clean let go
         self.assertFalse((q.state / statedir.CLEANING).exists())
+
+    def test_windvane_run_started_during_a_clean_waits_and_runs(self):
+        with statedir.lock(self.p) as free:
+            self.assertTrue(free)
+            self.assertFalse(driver.locked(self.p))  # the phone's status and `run` see no run
+            run = subprocess.Popen(["windvane", "run", "--for", "30m", "--no-preflight"], cwd=self.s.root,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            time.sleep(1.5)
+            self.assertIsNone(run.poll())  # waiting for the clean, not refused
+        out = run.communicate(timeout=60)[0]
+        self.assertEqual(run.returncode, 0, out)
+        self.assertNotIn("already running", out)
+        self.assertIn("autopilot started", (self.p.state / "autopilot.log").read_text())
+        self.assertFalse((self.p.state / statedir.CLEANING).exists())
 
     def test_a_run_that_finds_another_run_still_refuses_at_once(self):
         with open(self.p.state / "lock", "w") as lock:

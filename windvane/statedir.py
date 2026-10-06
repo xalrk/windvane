@@ -220,7 +220,8 @@ def lock(p):
         mark.write_text(f"{os.getpid()}\n")
         try:
             yield True
-        finally:
+        finally:  # let go first: a run waiting on the mark would otherwise see the lock held and no mark
+            fcntl.flock(f, fcntl.LOCK_UN)
             mark.unlink(missing_ok=True)
 
 

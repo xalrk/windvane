@@ -1451,6 +1451,7 @@ class Pilot(Desk, Periodic):
         while True:
             try:
                 fcntl.flock(self.lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                (self.p.state / statedir.CLEANING).unlink(missing_ok=True)  # one a killed doctor left
                 return
             except OSError:  # a run, or `doctor --clean` for a few seconds (it may be removing a slot's tree)
                 if not (self.p.state / statedir.CLEANING).exists() or time.time() > until:
@@ -1609,7 +1610,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
 
 
 def locked(p):
-    """Whether a driver holds this project's lock, foreground or detached: the lock goes when its process does."""
+    """Whether a driver holds this project's lock, foreground or detached: the lock goes when its process does.
+    `doctor --clean` holds it for a few seconds too (with CLEANING): that's no run, and a run starting then waits."""
     f = p.state / "lock"
     if not f.exists():
         return False
@@ -1617,5 +1619,5 @@ def locked(p):
         try:
             fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except OSError:
-            return True
+            return not (p.state / statedir.CLEANING).exists()
     return False
