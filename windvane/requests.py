@@ -180,7 +180,7 @@ def prompt_part(reqs):
 def apply(reqs, text, landed, exists, log):
     """Write the verdicts in a triage session's final `text` into the R-files it was given (`reqs`, names), and move
     each to `done/`. An accept must name a ticket that landed (`landed`) or exists (`exists(tid)`): one naming
-    anything else stays open for the next round. Returns {R-id: (kind, detail)} applied, for the log and the phone."""
+    anything else stays open for the next round. Returns {R-id: (kind, the verdict as said)} applied, for the log and the phone."""
     given, done = {f.stem: f for f in reqs}, {}
     with locked() as d:
         for rid, kind, detail in VERDICT_RE.findall(text):
@@ -196,7 +196,7 @@ def apply(reqs, text, landed, exists, log):
             body = re.sub(r"^- Verdict: .*$", lambda m: f"- Verdict: {word}", f.read_text(), count=1, flags=re.M)
             (d / "done" / f.name).write_text(body + f"\n## Verdict ({now():%Y-%m-%d %H:%M})\n{word}\n")
             f.unlink()
-            done[rid] = (kind, tid if kind == "accept" else detail)
+            done[rid] = (kind, word)
     return done
 
 

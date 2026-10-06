@@ -256,13 +256,15 @@ class Periodic:
         self.fetch()
         q = Queue(self.p)
         done = requests.apply(reqs, text, set(landed), lambda t: t in q.files, self.log)
-        for rid, (kind, detail) in done.items():
-            self.log(f"{name}: {rid} {kind}: {detail}")
+        for rid, (kind, word) in done.items():
+            self.log(f"{name}: {rid} {word}")
             if kind == "question":
-                push(f"windvane request {rid}", f"Triage asks: {phone.cut(detail, log=self.log)}", 3, "question")
+                push(f"windvane request {rid}", f"Triage asks: {phone.cut(word.removeprefix('question: '), log=self.log)}",
+                     3, "question")
         left = len(reqs) - len(done)
         if left:
-            self.log(f"{name}: {left} request{'s' * (left != 1)} got no verdict: they wait for the next run")
+            self.log(f"{name}: {left} request{'s' * (left != 1)} got no verdict: "
+                     f"{'they wait' if left != 1 else 'it waits'} for the next run")
 
     def periodic_failed(self, name, why):
         """One push for a round that didn't finish: overnight, a playtest that stopped working was only in the log."""
