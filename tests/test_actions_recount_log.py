@@ -38,6 +38,7 @@ class RecountLog(unittest.TestCase):
 
     def tearDown(self):
         actions.recount_said.clear()
+        actions.stale_logged.clear()
         self.s.close()
 
     def gh(self, script):
@@ -123,6 +124,25 @@ class RecountLog(unittest.TestCase):
         self.gh_fails("error connecting to api.github.com")
         self.refresh()
         self.assertEqual(len(self.failures()), 3, self.failures())
+
+    def test_the_stale_line_names_the_fix_the_recount_line_named(self):
+        for stderr, fix in (("error connecting to api.github.com", "check the connection"),
+                            ("HTTP 502: Bad Gateway (https://api.github.com/user/repos)",
+                             "GitHub's own error: the next recount tries again"),
+                            ("HTTP 401: Bad credentials", "run `gh auth status`")):
+            with self.subTest(stderr):
+                actions.recount_said.clear()
+                actions.stale_logged.clear()
+                self.cache(10, 2 * 86400)  # offline all weekend
+                self.gh_fails(stderr)
+                self.refresh()
+                with contextlib.redirect_stdout(io.StringIO()):
+                    actions.say_stale(self.p)
+                recount, stale = self.log()[-2:]
+                self.assertTrue(recount.endswith(f"{stderr} ({fix})"), recount)
+                self.assertIn(f"Actions count is 2 days old (recounts failing: {fix}); ", stale)
+                if "gh auth" not in fix:
+                    self.assertNotIn("gh auth", recount + stale)
 
     def test_a_count_held_by_another_driver_logs_nothing(self):
         with actions.locked() as got, mock.patch.object(actions, "WAIT_S", 0.3):

@@ -94,17 +94,19 @@ class GhFailed(Exception):
 # A failed recount's cause, found in gh's first stderr line, and what fixes it: a rate limit first, since gh's limit
 # text also mentions authenticated requests.
 CAUSES = (("rate limit", re.compile(r"rate limit|HTTP 429", re.I), "windvane waits for the limit to reset"),
+          ("github", re.compile(r"HTTP 5\d\d", re.I), "GitHub's own error: the next recount tries again"),
           ("network", re.compile(r"connect|timed? ?out|timeout|network|no such host|dial tcp|unreachable|TLS", re.I),
            "check the connection"),
           ("auth", re.compile(r"auth|log ?in|token|credential|HTTP 401", re.I), "run `gh auth status`"))
+FIXES = {name: fix for name, _, fix in CAUSES}
+CHECK = "run `gh auth status`"  # an unknown cause's fix: it checks both the login and the connection
 
 
 def cause(why):
     """(cause, hint) for gh's first stderr line: the hint names the fix, and is "" when gh's own text already names a
-    command (`gh auth login`), so the line never names two. An unknown cause gets `gh auth status`, which checks both
-    the login and the connection."""
-    name, fix = next(((n, h) for n, rx, h in CAUSES if rx.search(why)), ("other", "run `gh auth status`"))
-    return name, "" if re.search(r"\bgh [a-z]", why) else f" ({fix})"
+    command (`gh auth login`), so the line never names two."""
+    name = next((n for n, rx, _ in CAUSES if rx.search(why)), "other")
+    return name, "" if re.search(r"\bgh [a-z]", why) else f" ({FIXES.get(name, CHECK)})"
 
 
 def get(cd, path):
@@ -362,15 +364,17 @@ def cached_over_cap(p):
 
 
 def say_stale(p):
-    """Once a run, when only the stale rule makes workers tag: the log says why, as nothing else would. Quiet while
-    this process's recount is in flight (a driver started after a weekend idle): it may yet succeed."""
+    """Once a run, when only the stale rule makes workers tag: the log says why, as nothing else would, with the fix
+    for the cause this run's recount failed on, so the two lines agree. Quiet while this process's recount is in
+    flight (a driver started after a weekend idle): it may yet succeed."""
     total = cached()
     if (p.name in stale_logged or counting.locked() or not total or not stale(total)
             or total["used"] >= cap_minutes(p)):
         return
     stale_logged.add(p.name)
     days = int((time.time() - total["at"]) // 86400)
-    log(p, f"Actions count is {days} day{'s' * (days != 1)} old (recounts failing: run `gh auth status`); "
+    fix = FIXES.get(recount_said.get(p.name), CHECK)  # the same fix the recount's own line named
+    log(p, f"Actions count is {days} day{'s' * (days != 1)} old (recounts failing: {fix}); "
            f"workers' commits carry {SKIP}")
 
 

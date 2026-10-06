@@ -97,11 +97,12 @@ skip CI)".**
 With `actions_minutes` set, windvane recounts the month's Actions minutes through `gh` at each run's start and each
 session's end. When a `gh` call fails, the log says so, naming the call, gh's own first line and the fix:
 "actions: recount failed: `gh api repos/me/proj/actions/runs`: API rate limit exceeded (windvane waits for the limit
-to reset)". A network error adds "(check the connection)", a login problem "(run `gh auth status`)"; when gh's own
-line already names a command ("please run: gh auth login"), nothing is added. Each cause is logged once a run: again
+to reset)". A network error adds "(check the connection)", an HTTP 5xx "(GitHub's own error: the next recount tries
+again)", a login problem "(run `gh auth status`)"; when gh's own line already names a command ("please run: gh auth
+login"), nothing is added. Each cause is logged once a run: again
 only when the cause changes or comes back after a recount worked. The next recount that works fixes the count.
 Once the last good count is over a day old, the phone's line marks it stale and workers' commits carry `[skip ci]`
-until a recount succeeds. A recount that waited on another project's driver counting isn't a failure and isn't
+until a recount succeeds; the log says so once a run, with the same fix as the recount's line. A recount that waited on another project's driver counting isn't a failure and isn't
 logged.
 
 **The log says "gh guard: gh's alias list couldn't be read".**
