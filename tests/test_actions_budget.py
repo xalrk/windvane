@@ -285,7 +285,7 @@ class Budget(unittest.TestCase):
         t = time.time()
         out = subprocess.run(["windvane", "status", "--line"], cwd=self.s.root, capture_output=True, text=True).stdout
         self.assertLess(time.time() - t, 10)
-        self.assertRegex(out, r"Actions 1,983/2,000 min \(counted \d\d:\d\d\)")
+        self.assertRegex(out, r"Actions 1,983/2,000 min \(counted (\w{3} \d+ )?\d\d:\d\d\)")  # dated after midnight
 
     def stale_cache(self):
         """This month's count, made two hours ago."""

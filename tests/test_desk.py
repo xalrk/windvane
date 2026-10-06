@@ -214,6 +214,53 @@ class DeskPRs(unittest.TestCase):
         self.assertEqual((self.s.root / "LOG.md").read_text(), "- L1: start\n- L2: main\n- L3: ticket\n")
         self.assertIn("in appended entries: renumbered L2 → L3 (LOG.md)", self.comments()[0])
 
+    def shared_notes(self):
+        cfg = self.s.root / ".windvane/config.toml"
+        cfg.write_text('shared_notes = ["NOTES.md"]\n' + cfg.read_text())
+        self.commit({"NOTES.md": "# Notes\n"})
+        self.s.git("push", "-q", "origin", "main")
+        self.p = Project(self.s.root)
+        self.pilot = self.new_pilot()
+        self.assertTrue(self.pilot.prepare(0))
+
+    def test_a_conflict_only_in_appended_notes_sections_merges_without_a_fix_run(self):
+        self.shared_notes()
+        self.pr(1, {"NOTES.md": "# Notes\n\n## desk\nfound\n", "desk.txt": "x\n"})
+        self.commit({"NOTES.md": "# Notes\n\n## main\nfound\n"})
+        self.s.git("push", "-q", "origin", "main")
+        self.assertEqual(self.step(), [1])
+        self.assertEqual(self.fixes(), [])
+        self.assertEqual(self.state()["prs"][0]["state"], "MERGED")
+        self.s.git("pull", "-q", "origin", "main")
+        self.assertEqual((self.s.root / "NOTES.md").read_text(), "# Notes\n\n## main\nfound\n\n## desk\nfound\n")
+        self.assertEqual(self.comments()[0], "**windvane: resolved the conflict with main** in appended entries: "
+                                             "NOTES.md: kept main's, appended 1 section.")
+        self.assertIn("desk PR #1: conflicted with main only in appended entries: NOTES.md: kept main's, appended 1 "
+                      "section", (self.p.state / "autopilot.log").read_text())
+
+    def test_a_tickets_notes_resolution_is_pushed_to_its_branch_and_named_on_its_pr(self):
+        self.shared_notes()
+        self.pr(7, {"NOTES.md": "# Notes\n\n## T-001\nfound\n"}, label=False)
+        sha = self.s.git("rev-parse", "desk-7")
+        self.commit({"NOTES.md": "# Notes\n\n## T-000\nfound\n"})
+        self.s.git("push", "-q", "origin", "main")
+        self.pilot.queue = driver.Queue(self.p)
+        self.pilot.integrate("T-001", "desk-7", sha)
+        self.assertEqual(self.pilot.merged, ["T-001"])
+        self.assertEqual(self.state()["prs"][0]["state"], "MERGED")
+        self.s.git("pull", "-q", "origin", "main")
+        self.assertTrue((self.s.root / "NOTES.md").read_text().endswith("## T-000\nfound\n\n## T-001\nfound\n"))
+        self.assertEqual(self.comments()[0], "**windvane: resolved the conflict with main** in appended entries: "
+                                             "NOTES.md: kept main's, appended 1 section.")
+
+    def test_a_desk_pr_editing_a_notes_line_goes_to_a_fix_run(self):
+        self.shared_notes()
+        self.pr(1, {"NOTES.md": "# Notes, by the desk\n\n## desk\n"})
+        self.commit({"NOTES.md": "# Notes\n\n## main\n"})
+        self.s.git("push", "-q", "origin", "main")
+        self.step()
+        self.assertEqual(len(self.fixes()), 1)
+
     def test_refused_merge_goes_to_a_fix_run(self):
         os.environ["FAKE_GH_REFUSE"] = "1"
         os.environ["FAKE_FIX"] = "giveup"
