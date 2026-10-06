@@ -133,6 +133,26 @@ elif system.startswith("# windvane review run"):
     tid = re.search(r"Review (\S+) at head", prompt).group(1)
     verdict = os.environ.get("FAKE_REVIEW", "APPROVE")
     text = f"1. a point\nREVIEW: {verdict} {tid} looks fine"
+elif system.startswith("# windvane critic") and prompt.startswith("Critique the project"):
+    dim = re.search(r"the (\S+) dimension only", prompt).group(1)
+    checks = re.findall(r"^- [\d.]+ (\S+):", prompt.split("## Open tickets")[0], re.M)
+    together = True
+    if os.environ.get("FAKE_PROJECT_BARRIER"):  # n sessions must all run at once, or each answers no
+        import glob, time
+        open(f"{log}.proj-{dim}", "w").close()
+        until = time.time() + 15
+        while len(glob.glob(log + ".proj-*")) < int(os.environ["FAKE_PROJECT_BARRIER"]) and time.time() < until:
+            time.sleep(0.05)
+        together = time.time() < until
+    if os.environ.get("FAKE_PROJECT_EDIT"):  # tries to change the tree and the repo
+        open("README", "a").write("edited by the critic\n")
+        open("stray-critic.txt", "w").write("x\n")
+        sh("git", "commit", "-qam", "the critic commits")
+    no = os.environ.get("FAKE_PROJECT_NO", "").split(",")  # the check ids it answers no
+    text = "Checks:\n" + "".join(f"- {c}: " + ("no, README:1 says so\n" if c in no or not together else "yes, seen\n")
+                                 for c in checks)
+    beyond = os.environ.get(f"FAKE_PROJECT_BEYOND_{dim}", f"- improve {dim} (new)").replace("|", "\n")
+    text += f"Fine.\nBeyond:\n{beyond}\nFor the user: decide {dim}\nCRITIC: PROJECT fixes=0 {dim} ok"
 elif system.startswith("# windvane critic"):
     tid = re.search(r"Critique (\S+)\.", prompt).group(1)
     if os.environ.get("FAKE_CRITIC_PID"):  # a slow critic, to be killed with its worker

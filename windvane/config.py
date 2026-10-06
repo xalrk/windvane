@@ -132,23 +132,34 @@ def permissions(table, entries):
 
 
 LANDS = ("near", "next", "end", "hold", "ask")  # where a [[periodic]] chain's new tickets go in the queue
+BUILTINS = ("project-critic",)  # [[periodic]] sessions windvane brings, so a project needs no prompt of its own
 
 
 def periodic(entries):
     """`[[periodic]]` sessions by name: a project's own session (a playtest, an audit) run every `every` merges, when a
     group of tickets (`after_group`: a regex on their headers, group 1 the group's name) is finished, or only as
-    another entry's `then` when neither is set. Mistakes stop the run at once rather than at the Nth merge."""
+    another entry's `then` when neither is set. `builtin` names one of windvane's own sessions instead of a `prompt`
+    (`project-critic`: the critic on the whole project, its `dims` and `parallel` as `windvane critic --project`'s).
+    Mistakes stop the run at once rather than at the Nth merge."""
     out = {}
     for i, e in enumerate(entries if isinstance(entries, list) else [entries]):
         name = str(e.get("name") or f"periodic-{i + 1}")
         if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or name in out:
             raise SystemExit(f"windvane: [[periodic]] name = {name!r}: use a unique word of letters, digits, - or _")
-        if not e.get("prompt"):
+        builtin = str(e.get("builtin", ""))
+        if builtin and builtin not in BUILTINS:
+            raise SystemExit(f"windvane: [[periodic]] {name}: builtin = {builtin!r}: use one of {', '.join(BUILTINS)}")
+        if not e.get("prompt") and not builtin:
             raise SystemExit(f"windvane: [[periodic]] {name} needs prompt = \"<the project's rules file>\"")
         try:
             every, minutes = (int(e.get(k, d)) for k, d in (("every", 0), ("minutes", 60)))
         except (TypeError, ValueError):
             raise SystemExit(f"windvane: [[periodic]] {name}: every and minutes are whole numbers")
+        par = e.get("parallel", 4)
+        if isinstance(par, bool) or not isinstance(par, int):
+            raise SystemExit(f"windvane: [[periodic]] {name}: parallel = {par!r}: use a whole number of sessions")
+        dims = e.get("dims", [])
+        dims = [str(d).strip().lower() for d in (dims.split(",") if isinstance(dims, str) else dims) if str(d).strip()]
         setup_m = setup_minutes(e.get("setup_minutes", 60), f"[[periodic]] {name}: ")
         land = str(e.get("land", ""))
         if land and land not in LANDS:
@@ -161,7 +172,8 @@ def periodic(entries):
             raise SystemExit(f"windvane: [[periodic]] {name}: after_group = {group!r}: {err}")
         out[name] = {"name": name, "land": land, "every": max(0, every), "after_group": group, "minutes": max(1, minutes),
                      "setup": e.get("setup", ""), "setup_minutes": setup_m,
-                     "prompt": e["prompt"], "then": e.get("then", ""),
+                     "prompt": e.get("prompt", ""), "then": e.get("then", ""), "builtin": builtin,
+                     "dims": dims, "parallel": max(1, par),
                      "allow": e.get("allow", []), "deny": e.get("deny", [])}
     for e in out.values():
         if e["then"] and e["then"] not in out:

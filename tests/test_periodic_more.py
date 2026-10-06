@@ -249,7 +249,7 @@ class Scores(Base):
         out = self.cli_stats("--periodic")
         self.assertIn("triage: 6 → 8  (2 runs, +2 since", out)
         self.assertIn("last: wrote a ticket score=8", out)
-        self.assertRegex(self.cli_stats(), r"periodic:tri\s+2 ")  # two sessions; the score rows aren't runs
+        self.assertRegex(self.cli_stats(), r"periodic:triage\s+2 ")  # two sessions; the score rows aren't runs
 
     def test_no_scores_yet(self):
         self.make(TRIAGE)

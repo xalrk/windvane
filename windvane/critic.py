@@ -10,10 +10,19 @@ the approach is wrong), accept (out of revisions). A scale written as ladders of
 answer the checks and the driver work out the score; an old numeric scale has the critic write the numbers. Either
 way the critic never sees the bar. Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed
 `windvane plan`.
+
+`windvane critic --project` (and the `project-critic` [[periodic]] preset) runs the same scale on the whole project
+as it stands on main, one session per dimension (`project`), each in project mode (`prompts/CRITIC-project.md`). Its
+record (ticket PROJECT) feeds the planner only its `new` follow-ups; those an open ticket covers become that ticket's
+notes.
 """
 import hashlib
+import os
 import re
 import statistics
+import subprocess
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import net
@@ -32,11 +41,18 @@ HEAD_RE = re.compile(r"^#{2,}[ \t]+`?([\w-]+)")
 RUNG_RE = re.compile(r"^[ \t]*[-*][ \t]*(\d+(?:\.\d+)?)[ \t]+`?([\w-]+)`?[ \t]*:[ \t]*(.+)$")
 ANSWER_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?(?:[\w-]+(?:\.|[ \t]+(?=\d)))?(?:\d+(?:\.\d+)?[ \t]+)?([\w-]+)`?[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
                        r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$", re.I)
-LISTS_RE = re.compile(r"^[ \t#*_-]*(?:fix in|beyond) this ticket\b", re.I | re.M)
+LISTS_RE = re.compile(r"^[ \t#*_-]*(?:(?:fix in|beyond) this ticket\b|beyond[*_]*:)", re.I | re.M)
 CHECKS_RE = re.compile(r"^[ \t#*_]*Checks[*_]*:[*_]*[ \t]*\n?", re.I | re.M)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
 DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]
+# The project critic runs commands for its evidence, but never changes the tree or the repo (what it does change is
+# put back after it, `restore`)
+PROJECT_DENY = DENY[1:] + ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
+                           "Bash(git reset *)", "Bash(git stash *)", "Bash(gh *)"]
+PROJECT = "PROJECT"  # critic.jsonl's ticket for a verdict on the whole project
+COVERED_RE = re.compile(r"[(\[]?[ \t]*covered by[ \t]+([A-Za-z]+-\d+[a-z]?)[ \t]*[)\]]?", re.I)
+NEW_TAG_RE = re.compile(r"[ \t]*[(\[][ \t]*new[ \t]*[)\]][ \t.]*$", re.I)
 
 NEXT = {
     "pass": "Meets the bar. Go on to the check; put the critique in the PR body under \"Critic\".",
@@ -233,7 +249,7 @@ def unscored(critique):
 
 
 def beyond(critique):
-    m = re.search(r"^Beyond this ticket:?\s*\n((?:[ \t]*[-*\d].*\n?)*)", critique or "", re.M)
+    m = re.search(r"^Beyond(?: this ticket)?:?\s*\n((?:[ \t]*[-*\d].*\n?)*)", critique or "", re.M)
     return [re.sub(r"^[ \t]*(?:[-*]|\d+\.)\s*", "", l).strip() for l in (m.group(1) if m else "").splitlines()
             if l.strip()]
 
@@ -246,12 +262,18 @@ def followups(p):
     last = max((i for i, r in enumerate(recs) if r.get("ticket") == "PLAN"), default=-1)
     latest = {r.get("ticket"): r for r in recs[last + 1:] if r.get("critique")}  # dicts keep first-seen order
     seen, out = set(), []
-    for r in latest.values():
-        for b in beyond(r.get("critique")) + r.get("scoped", []):
+    for r in latest.values():  # a project verdict's covered points are its tickets' notes already
+        for b in r.get("new", []) if r.get("ticket") == PROJECT else beyond(r.get("critique")) + r.get("scoped", []):
             if b.lower() not in seen:
                 seen.add(b.lower())
                 out.append((r.get("ticket"), b))
     return out
+
+
+def ticketed(r):
+    """A record about one ticket: not a plan's marker nor a verdict on the whole project, which would skew the
+    ticket critic's calibration."""
+    return r.get("ticket") not in ("PLAN", PROJECT)
 
 
 def calibration(recs, bar, last=10):
@@ -260,7 +282,7 @@ def calibration(recs, bar, last=10):
     no score and are left out. Returns None when nothing was scored."""
     by, latest = {}, {}
     for i, r in enumerate(recs):
-        if r.get("score") is not None and r.get("ticket") != "PLAN":
+        if r.get("score") is not None and ticketed(r):
             by.setdefault(r["ticket"], []).append(r)
             latest[r["ticket"]] = i
     order = sorted(by, key=latest.get)[-last:]
@@ -286,7 +308,7 @@ def rates(recs, last=10):
     the check tells a weak first head from a good one; any verdict, whether a revision can reach it at all."""
     by, latest = {}, {}
     for i, r in enumerate(recs):
-        if r.get("answers") and r.get("ticket") != "PLAN":
+        if r.get("answers") and ticketed(r):
             by.setdefault(r["ticket"], []).append(r)
             latest[r["ticket"]] = i
     out = {}
@@ -303,7 +325,7 @@ def unanswered(recs, last=10, least=3):
     """Check ids the critic left unanswered in `least` or more of its last `last` verdicts: [(id, times, verdicts)].
     Each counts as `no` and can send work back, so the same id again and again points at the check's wording or the
     critic's prompt, not at the tickets."""
-    rs = [r for r in recs if "unanswered" in r and r.get("ticket") != "PLAN"][-last:]
+    rs = [r for r in recs if "unanswered" in r and ticketed(r)][-last:]
     n = {}
     for r in rs:
         for cid in dict.fromkeys(r["unanswered"]):
@@ -336,14 +358,17 @@ def scale(p, cwd):
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
-def system_prompt(p, cwd):
+def system_prompt(p, cwd, project=False):
     """The critic's rules, the scale and the calibration. An old numeric scale swaps in the numeric rules' sections
-    (`prompts/CRITIC-numeric.md`), so a ladder project's critic never reads them."""
+    (`prompts/CRITIC-numeric.md`), so a ladder project's critic never reads them; the project critic adds its few
+    lines of project mode, so the ticket critic never reads those."""
     parts = [(HOME / "prompts/CRITIC.md").read_text()]
     if not rubric(p, cwd):
         split = lambda t: re.split(r"(?m)^(?=## )", t)
         new = {x.split("\n", 1)[0]: x.rstrip() + "\n\n" for x in split((HOME / "prompts/CRITIC-numeric.md").read_text())}
         parts = ["".join(new.get(x.split("\n", 1)[0], x) for x in split(parts[0])).rstrip() + "\n"]
+    if project:
+        parts.append((HOME / "prompts/CRITIC-project.md").read_text())
     for rel, head in ((p.rubric_rel, "# This project's scale"), (p.calibration_rel, "# The user's calibration")):
         f = Path(cwd) / rel
         if f.is_file():
@@ -497,3 +522,147 @@ def next_step(p, tid, entry):
     n = revisions(history(p, tid))
     return f"CRITIC STEP: {entry['step']}. " + NEXT[entry["step"]].format(
         tid=tid, n=n, max=p.critic["revisions"], floor=p.critic["floor"])
+
+
+def project(p, cwd, run, dims=(), parallel=4):
+    """The critic on the whole project at `cwd`'s HEAD: one session per dimension of the ladder (or of `dims`), up to
+    `parallel` at once, each through `run(role, label, prompt, system, allow, deny)` -> (text, killed, error). Joined
+    into one report, recorded in `critic.jsonl` (ticket PROJECT) with a `critic:project` score line in the ledger.
+    Whatever a session changed in the tree is put back. Returns (record or None, the report or why there's none)."""
+    from .queue import Queue
+    lad = rubric(p, cwd)
+    if not lad:
+        return None, f"No ladder scale in {p.rubric_rel}: the project critic answers a ladder's checks."
+    unknown = [d for d in dims if d not in lad]
+    if unknown:
+        return None, f"No dimension {', '.join(unknown)} in {p.rubric_rel} (it has: {', '.join(lad)})."
+    pick = [d for d in lad if not dims or d in dims]
+    q = Queue(p)
+    open_ids = {t for t in q.files if not q.is_done(t)}
+    listing = "\n".join(line for line in q.listing().splitlines() if line.split()[0] in open_ids)
+    sha, system = gout(cwd, "rev-parse", "--short", "HEAD"), system_prompt(p, cwd, project=True)
+
+    def one(d):
+        prompt = "\n\n".join([
+            f"Critique the project on {p.upstream} at {sha}: the {d} dimension only. Follow the critic rules in "
+            "your system prompt, in project mode, and end with the CRITIC line.",
+            f"## The {d} checks\n" + "\n".join(f"- {r:g} {cid}: {qn}" for r, cid, qn in lad[d]),
+            f"## Open tickets (id, status, title)\n{listing or '(none)'}"])
+        return run("critic:project", f"project-critic-{d}", prompt, system, ["Bash"], PROJECT_DENY)
+    before = snapshot(cwd)
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, min(parallel, len(pick)))) as ex:
+            got = dict(zip(pick, ex.map(one, pick)))
+    finally:
+        restore(cwd, before)
+    entry, report = joined(p, lad, pick, got, open_ids, sha)
+    entry["scale"] = scale(p, cwd)
+    append_jsonl(p.state / "critic.jsonl", entry)
+    if entry["dims"]:
+        append_jsonl(p.state / "ledger.jsonl", {"role": "critic:project", "event": "score", "score": entry["score"],
+                                                "dims": entry["dims"], "summary": cut(report.splitlines()[0])})
+    return entry, report
+
+
+def joined(p, lad, pick, got, open_ids, sha):
+    """The dimension sessions' replies as one record and report: each check's answer with its evidence, a joined
+    Beyond list split into `new` points and those an open ticket covers ({ticket: [points]}), and the For-the-user
+    lines. A dimension whose session failed or answered none of its checks is named, not scored."""
+    dims, said, sections, users, failed, points = {}, {}, [], [], [], []
+    for d in pick:
+        text, killed, error = got[d]
+        ans = answers(text)
+        if killed or error or not any(cid in ans for _, cid, _ in lad[d]):
+            why = killed or (plain_error(error) if error else "it answered none of the checks")
+            failed.append(d)
+            sections.append(f"## {d}: no verdict ({cut(why)})")
+            continue
+        score, more, _, scoped, _ = climb({d: lad[d]}, ans, p.critic["pass"])
+        dims[d] = score[d]
+        said.update(more)
+        lines = [f"- {cid} ({r:g}): {a}{f', {ev}' if ev else ''}" for r, cid, _ in lad[d]
+                 for a, ev in [ans.get(cid, ("unanswered, counted as no", ""))]]
+        sections.append(f"## {d}: {score[d]:g}\n" + "\n".join(lines))
+        points += beyond(text) + scoped
+        users += re.findall(r"^[ \t*_]*For the user:[*_]*[ \t]*(.+)$", text, re.M)
+    new, covered, seen = [], {}, set()
+    for b in points:
+        m = COVERED_RE.search(b)
+        point = NEW_TAG_RE.sub("", COVERED_RE.sub("", b)).strip(" ,;.") or b
+        tid = p.norm(m.group(1)) if m else None
+        if point.lower() in seen:
+            continue
+        seen.add(point.lower())
+        if tid in open_ids:
+            covered.setdefault(tid, []).append(point)
+        else:
+            new.append(point)
+    scores = " ".join(f"{d}={dims[d]:g}" if d in dims else f"{d}=-" for d in pick)
+    head = (f"Project critic on {p.upstream} at {sha}: {scores}; {len(new)} new follow-up{'s' * (len(new) != 1)}, "
+            f"{sum(map(len, covered.values()))} covered by open tickets")
+    report = "\n\n".join(filter(None, [
+        head, *sections,
+        new and "Beyond (new):\n" + "\n".join(f"- {b}" for b in new),
+        covered and "Beyond (covered by open tickets):\n" + "\n".join(
+            f"- {t}: {b}" for t, bs in covered.items() for b in bs),
+        users and "For the user:\n" + "\n".join(f"- {u}" for u in dict.fromkeys(users))]))
+    entry = {"ticket": PROJECT, "role": "project", "sha": sha, "score": min(dims.values()) if dims else None,
+             "dims": dims, "step": "project" if dims else "unavailable", "answers": said, "new": new,
+             "covered": covered, "for_user": list(dict.fromkeys(users)), "failed": failed, "critique": report}
+    return entry, report
+
+
+def snapshot(cwd):
+    """`cwd` as it is: (its files as a tree object, staged in a copy of its index so the real one is never touched;
+    its HEAD; its index's bytes)."""
+    real = Path(cwd) / gout(cwd, "rev-parse", "--git-path", "index")
+    index = real.read_bytes() if real.is_file() else None
+    fd, idx = tempfile.mkstemp(prefix="windvane-index-")
+    os.close(fd)
+    if index is not None:
+        Path(idx).write_bytes(index)
+    try:
+        index_git(cwd, idx, "add", "-A")
+        return index_git(cwd, idx, "write-tree").stdout.strip(), gout(cwd, "rev-parse", "HEAD"), index
+    finally:
+        os.unlink(idx)
+
+
+def restore(cwd, before):
+    """Put `cwd` back as `snapshot` found it: files edited, deleted or added by a session that ran commands go back,
+    a commit it made is undone and what it staged unstaged. Ignored files (caches, build output) stay."""
+    tree, head, index = before
+    if gout(cwd, "rev-parse", "HEAD") != head:
+        git(cwd, "reset", "-q", "--soft", head)
+    real = Path(cwd) / gout(cwd, "rev-parse", "--git-path", "index")
+    if index is not None and (not real.is_file() or real.read_bytes() != index):
+        real.write_bytes(index)
+    if not tree or snapshot(cwd)[0] == tree:
+        return
+    fd, idx = tempfile.mkstemp(prefix="windvane-index-")
+    os.close(fd)
+    try:
+        for args in (("read-tree", tree), ("checkout-index", "-a", "-f"), ("clean", "-qfd")):
+            index_git(cwd, idx, *args)
+    finally:
+        os.unlink(idx)
+
+
+def index_git(cwd, idx, *args):
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                          env={**os.environ, "GIT_INDEX_FILE": idx})
+
+
+def project_scores(p, last=10):
+    """`windvane critic --project --last`: the latest project verdicts, oldest first, one line each with every
+    dimension's score, so a trend shows."""
+    recs = [r for r in read_jsonl(p.state / "critic.jsonl") if r.get("ticket") == PROJECT][-last:]
+    if not recs:
+        return "no project critic verdicts yet: run `windvane critic --project`"
+    out = [f"project critic, last {len(recs)} verdict{'s' * (len(recs) != 1)} (pass mark {p.critic['pass']:g}):"]
+    for r in recs:
+        scores = " ".join(f"{d}={s:g}" for d, s in r.get("dims", {}).items()) or "no verdict"
+        failed = f", no verdict on {', '.join(r['failed'])}" if r.get("failed") and r.get("dims") else ""
+        out.append(f"  {r.get('at', '')}  {r.get('sha', ''):9} {scores}  ({len(r.get('new', []))} new, "
+                   f"{sum(map(len, r.get('covered', {}).values()))} covered{failed})")
+    return "\n".join(out)

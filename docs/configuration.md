@@ -106,7 +106,9 @@ the [README](../README.md#periodic-sessions) for an example.
 | `minutes` | `60` | The session's time limit. It is skipped when the deadline is nearer. |
 | `setup` | `""` | A shell command run first on current `main` (a build), with no input. A failure skips this round and is logged; so does a setup still running at `setup_minutes`, when the session would no longer fit before the deadline, or at any `windvane stop`. |
 | `setup_minutes` | `60` | The longest `setup` may run, in minutes (any number above 0, e.g. `0.5`). |
-| `prompt` | required | The project's rules file for the session, a path in the repo. |
+| `prompt` | required | The project's rules file for the session, a path in the repo. Not with `builtin`. |
+| `builtin` | `""` | One of windvane's own sessions instead of a `prompt`: `"project-critic"` runs `windvane critic --project` (its points an open ticket covers become that ticket's notes; a `then` triage gets the rest). |
+| `dims`, `parallel` | all, `4` | With `builtin = "project-critic"`: the dimensions to judge (`["works", "clear"]`) and how many sessions at once. |
 | `then` | `""` | Another `[[periodic]]` entry run right after, given this one's final text and the files it names. |
 | `allow`, `deny` | `[]` | This session's own permission rules, after `[permissions]`' `periodic_allow` / `periodic_deny`; see [`[permissions]`](#permissions). |
 

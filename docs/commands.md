@@ -20,6 +20,8 @@ options. Commands that read state (`status`, `queue`, `watch`, `stats` and so on
 |---|---|
 | `windvane new <title>` | Write a new ticket file with the next free id. |
 | `windvane plan [goal] [--merge] [--no-followups] [--max N]` | A planner session writes up to N tickets (default 6) for the goal (default: config's `goal`) and the critic's follow-up notes, and opens a pull request with them. `--merge` merges them at once; `--no-followups` leaves out the critic's notes. Its branch is `plan-<date>-<time>`; a push the remote refuses twice leaves the plan on a local branch of that name, for you to push. While another plan runs it says so and exits 1. |
+| `windvane critic --project [--dims a,b] [--parallel N] [--minutes 60]` | The critic judges the whole project on `main` against `.windvane/CRITIC.md` (a ladder scale): one read-only session per dimension (`--dims` picks some), up to N at once (default: the run's `parallel`), every check answered with evidence for each `no`, joined into one printed report. Its follow-ups an open ticket covers are added to that ticket's notes on `main`; the `new` ones go to the next `windvane plan` or triage. Costs show in `stats` as `critic:project`; refused while a run is on. |
+| `windvane critic --project --last` | The latest project verdicts, one line each: every dimension's score, new and covered follow-ups. |
 | `windvane periodic <name>` | Run a `[[periodic]]` entry and its `then` chain now, as a run would between tickets; its tickets land where its `land` says. Refused while a run is on. |
 | `windvane queue` | The queue: done, in progress, open, parked. |
 | `windvane answer <ticket> <answer>` | Answer a ticket's question at the desk: a letter (`windvane answer T-007 B`) or free text in quotes. |

@@ -11,6 +11,9 @@ the commit; every other change is dropped with the tree. Where the new tickets g
 `hold` parked for the desk, `ask` one phone question (no answer in `answer_wait` minutes: hold).
 
 A `score=<n>` on the PERIODIC line goes to the ledger (`event: score`), and `windvane stats --periodic` shows it.
+
+An entry with `builtin = "project-critic"` needs no prompt: it runs the critic on the whole project (`critic.project`),
+whose points an open ticket covers land as that ticket's notes, and whose new ones a `then` triage gets.
 """
 import difflib
 import os
@@ -152,6 +155,8 @@ class Periodic:
                 return False
             if not self.periodic_fits(e):
                 return False
+        if e["builtin"]:
+            return self.project_critic(e, cd)
         self.fetch()  # its rules as they are on main now: never a copy an earlier session in the chain edited
         own_rules = gout(cd, "show", f"{p.upstream}:{e['prompt']}")
         if not own_rules:
@@ -202,6 +207,32 @@ class Periodic:
             append_jsonl(p.state / "ledger.jsonl", {"role": f"periodic:{name}", "event": "score",
                                                     "score": float(score.group(1)), "summary": phone.cut(m.group(1))})
         return text.strip(), output(text, cd)
+
+    def project_critic(self, e, cd):
+        """The `project-critic` preset: the critic on the project in `cd`, one session per dimension. Its report
+        is the session's output for a `then`; each point an open ticket covers is added at the end of that ticket,
+        where `periodic_keep` finds it as a note."""
+        p, name = self.p, e["name"]
+        limit = now() + timedelta(minutes=e["minutes"])
+        self.log(f"{name}: the project critic ({', '.join(e['dims']) or 'every dimension'}, "
+                 f"up to {e['parallel']} at once, {e['minutes']} min)")
+        entry, report = critic.project(p, cd, lambda role, label, prompt, system, allow, deny: self.claude(
+            role, label, prompt, system, cd, limit, allow, deny), e["dims"], e["parallel"])
+        if not entry or not entry["dims"]:
+            self.log(f"{name}: no result ({phone.cut(report.splitlines()[-1] if report else 'no report')})")
+            if not (p.state / "STOP").exists():
+                self.periodic_failed(name, "the critic gave no verdict on any dimension.")
+            return None
+        head = report.splitlines()[0]
+        self.log(f"{name}: {head}")
+        push(name, phone.cut(head, log=self.log), 3, "mag")
+        for tid, points in entry["covered"].items():
+            f = cd / p.tickets_rel / f"{tid}.md"
+            if f.is_file():
+                text = f.read_text()
+                f.write_text(text + "\n" * (not text.endswith("\n")) + f"\n## From the project critic ({now():%Y-%m-%d})\n"
+                             + "".join(f"- {b}\n" for b in points))
+        return report, report
 
     def periodic_failed(self, name, why):
         """One push for a round that didn't finish: overnight, a playtest that stopped working was only in the log."""

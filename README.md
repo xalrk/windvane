@@ -140,6 +140,9 @@ tickets under `.windvane/tickets/`, lines added at the end of an open ticket, an
 top), `end`, `hold` (parked in `QUEUE.md`, listed in the run's summary for you) or `ask` (one phone question: near,
 end or hold; no answer in `answer_wait` minutes: hold). A `then` entry without its own `land` takes the one before.
 
+An audit needs no prompt of your own: `builtin = "project-critic"` (with `every = 10` and `then = "triage"`, say)
+runs the critic on the whole project against your `CRITIC.md`, the same as `windvane critic --project` at the desk.
+
 `windvane periodic playtest` runs an entry (and its `then` chain) now, from the desk; it refuses while a run is on.
 A `score=<n>` at the end of the `PERIODIC:` line goes to the ledger: `windvane stats --periodic` shows each entry's
 scores over time. Sessions show in `windvane stats` as `periodic:<name>`.
