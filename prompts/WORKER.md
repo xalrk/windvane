@@ -72,6 +72,8 @@ Scratch files go in `$TMPDIR` (this ticket's own, removed when it ends), never s
     money, licence and merged-work cases, or when you can't honestly recommend one option.
 - **An answered question** (your prompt says which option, or that the user's answer timed out): build it, move the
   question to `## Answered` with the answer (or to `## Provisional` with `Built:` when it timed out).
+- **windvane itself in your way** (a bug or a missing feature of the autopilot, not of the project): work around it,
+  then `windvane request "<title>" --body <file>` (what happened, evidence, what you wanted, the workaround), at most 2.
 - A ticket that is already done or folded into another: add `- done: <ID> (why)` to `.windvane/QUEUE.md` on your
   branch, open the PR, and finish `READY` as usual.
 
