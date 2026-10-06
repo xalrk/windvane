@@ -323,6 +323,12 @@ def cmd_request(a):
     if a.status:
         print("\n".join(requests.status_lines()))
         return
+    if a.answer:
+        code, line = requests.answer(a.answer, a.title or "")
+        print(line)
+        if code:
+            sys.exit(code)
+        return
     if not a.title:
         sys.exit('windvane request: give a title: windvane request "<what windvane should do>" [--body FILE|-]')
     try:
@@ -633,6 +639,8 @@ def main(argv=None):
     s.add_argument("--body", metavar="FILE", help="the details from a file, or - for stdin: what happened, evidence "
                    "(log lines, file:line in windvane, a repro), what you wanted, the workaround you used")
     s.add_argument("--status", action="store_true", help="every request and its verdict")
+    s.add_argument("--answer", metavar="R-NNN", help="answer the triage's question on a request (the title argument "
+                   "is the answer): it goes back to triage")
     sub.add_parser("overview", help="where the project stands (for the phone)")
     sub.add_parser("queue", help="the ticket queue")
     s = sub.add_parser("answer", help="answer a ticket's question at the desk")

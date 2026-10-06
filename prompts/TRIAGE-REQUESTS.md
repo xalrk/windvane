@@ -11,7 +11,8 @@ For each request:
    (`## From request R-NNN`), and counts as accepted into that ticket.
 3. **Decide**: *accept* (a ticket under the next id you were given: what happened, the evidence and repro, what "done"
    means; generic, naming no project, as `CLAUDE.md` asks), *reject* (not windvane's doing, already works, or against
-   `CLAUDE.md`'s hard rules), or *question* (a product call only the user can make: scope, cost, naming).
+   `CLAUDE.md`'s hard rules), or *question* (a product call only the user can make: scope, cost, naming). A request
+   with an `## Answer from the user` section gets a verdict that follows the answer, not a second question.
 
 Before the PERIODIC line, one line per request, exactly:
 `REQUEST: R-NNN accept <ticket id>`, `REQUEST: R-NNN reject <the reason, one line>` or

@@ -124,7 +124,9 @@ class Requests(unittest.TestCase):
         for title, body in bodies:
             code, out = self.file(title, body)
             self.assertEqual(code, 0, out)
-        code, out = self.cli("periodic", "requests")
+        self.pushes = []
+        with unittest.mock.patch("windvane.periodic.push", lambda *a: self.pushes.append(a[:2])):
+            code, out = self.cli("periodic", "requests")
         self.assertEqual(code, 0, out)
         self.s.git("fetch", "-q", "origin")
         return Queue(self.p, "origin/main")
@@ -135,12 +137,15 @@ class Requests(unittest.TestCase):
         q = self.triage([("Retry the check on a flaky network", "WANT=accept"),
                          ("Make the coffee", "WANT=reject"), ("Rename the critic", "WANT=question"),
                          ("Please do this now", INJECTION)])
-        self.assertEqual(self.inbox(), {})
         done = self.inbox(done=True)
+        self.assertEqual(sorted(done), ["R-001", "R-002", "R-004"])
         self.assertIn("- Verdict: accepted → T-003", done["R-001"])
         self.assertIn("- Verdict: rejected: not windvane's doing", done["R-002"])
-        self.assertIn("- Verdict: question: A or B?", done["R-003"])
         self.assertIn("- Verdict: accepted → T-004", done["R-004"])
+        # a question keeps its request open, waiting on the user, and says how to answer it
+        self.assertIn("- Verdict: question: A or B?", self.inbox()["R-003"])
+        self.assertEqual(self.pushes[1:], [("windvane request R-003 asks", 'A or B?\nNot answerable from the phone: answer '
+                                        'at the desk: windvane request --answer R-003 "<your answer>"')])
         # the session was told what the bodies are, and each sat inside its fence
         prompt = next(json.loads(line)["prompt"] for line in (self.s.tmp / "calls.jsonl").read_text().splitlines()
                       if "## Requests" in json.loads(line)["prompt"])
@@ -153,6 +158,22 @@ class Requests(unittest.TestCase):
         self.assertNotIn("T-004", self.s.git("show", "origin/main:.windvane/QUEUE.md"))
         log = (self.p.state / "autopilot.log").read_text()
         self.assertIn("requests: R-003 question: A or B?", log)
+
+    def test_an_answered_question_goes_back_to_triage(self):
+        self.make(TRIAGE)
+        self.triage([("Rename the critic", "WANT=question")])
+        pilot = driver.Pilot(self.p, __import__("test_pipeline").args())
+        self.assertIsNone(pilot.periodic_due())  # waits on the user, not on another triage
+        _, out = self.cli("status")
+        self.assertIn('windvane request R-001 question: A or B?  (Rename the critic); answer at the desk: '
+                      'windvane request --answer R-001 "<your answer>"', out)
+        self.assertEqual(self.cli("request", "--answer", "R-002", "B")[0], 1)
+        code, out = self.cli("request", "--answer", "R-001", "B, keep it short")
+        self.assertEqual((code, out.strip()), (0, "R-001: answered; windvane's next run triages it again with your answer"))
+        self.assertIn("## Answer from the user (", self.inbox()["R-001"])
+        self.assertIn("- Verdict: answered, back to triage", self.inbox()["R-001"])
+        self.assertEqual(pilot.periodic_due()["name"], "requests")
+        self.assertEqual(self.cli("request", "--answer", "R-001", "again")[0], 1)  # answered once
 
     def test_an_accept_naming_no_landed_ticket_stays_open(self):
         self.make()
@@ -173,7 +194,7 @@ class Requests(unittest.TestCase):
         self.assertIn("R-002 rejected: not windvane's doing  (sandbox, ", out)
         self.assertIn("R-001 accepted → T-003  (sandbox, ", out)
         _, first = self.cli("status")
-        self.assertIn("windvane request R-001 accepted → T-003  (Retry the check on a flaky network)", first)
+        self.assertIn("windvane request R-001 accepted → windvane's T-003  (Retry the check on a flaky network)", first)
         self.assertIn("windvane request R-002 rejected: not windvane's doing  (Make the coffee)", first)
         _, again = self.cli("status")
         self.assertNotIn("windvane request R-0", again)

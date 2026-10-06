@@ -258,9 +258,9 @@ class Periodic:
         done = requests.apply(reqs, text, set(landed), lambda t: t in q.files, self.log)
         for rid, (kind, word) in done.items():
             self.log(f"{name}: {rid} {word}")
-            if kind == "question":
-                push(f"windvane request {rid}", f"Triage asks: {phone.cut(word.removeprefix('question: '), log=self.log)}",
-                     3, "question")
+            if kind == "question":  # not a phone question: a bare letter would answer the newest notify-ask instead
+                push(f"windvane request {rid} asks", f"{phone.cut(word.removeprefix('question: '), log=self.log)}\n"
+                     f"Not answerable from the phone: {requests.how_to_answer(rid)}", 3, "question")
         left = len(reqs) - len(done)
         if left:
             self.log(f"{name}: {left} request{'s' * (left != 1)} got no verdict: "

@@ -135,35 +135,69 @@ def verdict_text(head):
     return head.get("verdict", "none yet")
 
 
+def set_verdict(text, word):
+    return re.sub(r"^- Verdict: .*$", lambda m: f"- Verdict: {word}", text, count=1, flags=re.M)
+
+
+def asking(head):
+    """Whether a request waits on the user's answer to the triage's question."""
+    return verdict_text(head).startswith("question:")
+
+
+def how_to_answer(rid):
+    return f'answer at the desk: windvane request --answer {rid} "<your answer>"'
+
+
+def answer(rid, text):
+    """The user's answer to a request's question: added to it, and the request goes back to triage. Returns (exit
+    code, the line to print)."""
+    name, _, root = source()
+    text = clean(text.strip(), root, name)
+    if not text:
+        return 1, "windvane request: give the answer"
+    with locked() as d:
+        f = d / f"{rid.upper()}.md"
+        if not f.is_file() or not asking(fields(f.read_text())[1]):
+            return 1, f"windvane request: {rid} isn't waiting on an answer (windvane request --status lists them)"
+        body = set_verdict(f.read_text(), "answered, back to triage")
+        f.write_text(body + f"\n## Answer from the user ({now():%Y-%m-%d %H:%M})\n{text}\n")
+    return 0, f"{f.stem}: answered; windvane's next run triages it again with your answer"
+
+
 def status_lines():
     """`windvane request --status`: every request, newest first, with its verdict."""
     out = []
     for f in reversed(files()):
         title, head, srcs = fields(f.read_text())
-        state = verdict_text(head) if f.parent.name == "done" else "open"
-        out.append(f"{f.stem} {state}  ({', '.join(dict.fromkeys(srcs))}, {head.get('date', '?')[:10]}): {title}")
+        state = verdict_text(head) if f.parent.name == "done" or asking(head) else "open"
+        out.append(f"{f.stem} {state}  ({', '.join(dict.fromkeys(srcs))}, {head.get('date', '?')[:10]}): {title}"
+                   + (f"; {how_to_answer(f.stem)}" if asking(head) and f.parent.name != "done" else ""))
     return out or ["no requests yet"]
 
 
 def unseen(p):
     """The verdicts on requests project `p` filed (or joined) that its `windvane status` hasn't shown yet, as lines;
-    each is marked shown."""
+    each is marked shown. A question shows once while it waits, and the final verdict once more."""
     seen_f = p.state / "requests-shown.json"
     seen = set(load_json(seen_f, []))
     out = []
-    for f in files(True):
+    for f in files():
         title, head, srcs = fields(f.read_text())
-        if p.name in srcs and f.stem not in seen:
-            out.append(f"{f.stem} {verdict_text(head)}  ({title})")
-            seen.add(f.stem)
+        key = f.stem if f.parent.name == "done" else f"{f.stem}:question"
+        if p.name in srcs and key not in seen and (f.parent.name == "done" or asking(head)):
+            said = verdict_text(head).replace("accepted → ", "accepted → windvane's ")  # not this project's ticket
+            out.append(f"{f.stem} {said}  ({title})"
+                       + (f"; {how_to_answer(f.stem)}" if f.parent.name != "done" else ""))
+            seen.add(key)
     if out:
         save_json(seen_f, sorted(seen))
     return out
 
 
 def pending(tried=()):
-    """Open requests not in `tried` (the ones a round this run was given already), oldest first."""
-    return [f for f in files(False) if f.stem not in tried]
+    """Open requests not in `tried` (the ones a round this run was given already) nor waiting on the user's answer,
+    oldest first."""
+    return [f for f in files(False) if f.stem not in tried and not asking(fields(f.read_text())[1])]
 
 
 def prompt_part(reqs):
@@ -178,9 +212,10 @@ def prompt_part(reqs):
 
 
 def apply(reqs, text, landed, exists, log):
-    """Write the verdicts in a triage session's final `text` into the R-files it was given (`reqs`, names), and move
-    each to `done/`. An accept must name a ticket that landed (`landed`) or exists (`exists(tid)`): one naming
-    anything else stays open for the next round. Returns {R-id: (kind, the verdict as said)} applied, for the log and the phone."""
+    """Write the verdicts in a triage session's final `text` into the R-files it was given (`reqs`), and move each
+    accepted or rejected one to `done/`; a question stays in the inbox, waiting for `windvane request --answer`. An
+    accept must name a ticket that landed (`landed`) or exists (`exists(tid)`): one naming anything else stays open
+    for the next round. Returns {R-id: (kind, the verdict as said)} applied, for the log and the phone."""
     given, done = {f.stem: f for f in reqs}, {}
     with locked() as d:
         for rid, kind, detail in VERDICT_RE.findall(text):
@@ -193,9 +228,12 @@ def apply(reqs, text, landed, exists, log):
                 continue
             word = {"accept": f"accepted → {tid}", "reject": f"rejected: {detail or 'no reason given'}",
                     "question": f"question: {detail or '(none given)'}"}[kind]
-            body = re.sub(r"^- Verdict: .*$", lambda m: f"- Verdict: {word}", f.read_text(), count=1, flags=re.M)
-            (d / "done" / f.name).write_text(body + f"\n## Verdict ({now():%Y-%m-%d %H:%M})\n{word}\n")
-            f.unlink()
+            body = set_verdict(f.read_text(), word) + f"\n## Verdict ({now():%Y-%m-%d %H:%M})\n{word}\n"
+            if kind == "question":
+                f.write_text(body)
+            else:
+                (d / "done" / f.name).write_text(body)
+                f.unlink()
             done[rid] = (kind, word)
     return done
 
