@@ -1,5 +1,6 @@
 """The project's `teardown` runs once when a run really ends, whatever ended it, in the driver's own ci worktree:
 after the "stopped" push, never holding it up, and a hung one is killed with its children."""
+import fcntl
 import io
 import os
 import sys
@@ -134,6 +135,27 @@ class Teardown(unittest.TestCase):
             time.sleep(0.05)
         self.assertFalse(alive(pid))
 
+    def helper_after_run(self, teardown):
+        """The pid of a helper the setup starts outside every process group (as a shared emulator is), after a run."""
+        pids = self.s.tmp / "helper.pids"
+        self.config(f'setup = "setsid sleep 600 >/dev/null 2>&1 & echo $! >> {pids}"\n' + teardown)
+        self.run_until()
+        pid = int(pids.read_text().split()[0])
+        self.addCleanup(lambda: [os.kill(int(q), 9) for q in pids.read_text().split() if alive_pid(int(q))])
+        for _ in range(50):
+            if not alive_pid(pid):
+                break
+            time.sleep(0.05)
+        return pid
+
+    def test_a_helper_started_outside_the_sessions_outlives_a_run_without_teardown(self):
+        self.assertTrue(alive_pid(self.helper_after_run("")))  # the old failure: up for hours after the run
+
+    def test_the_teardown_stops_that_helper(self):
+        pids = self.s.tmp / "helper.pids"
+        self.assertFalse(alive_pid(self.helper_after_run(f'teardown = "kill $(cat {pids})"\n')))
+        self.assertIn("` done", self.log())
+
     def test_nothing_runs_without_a_teardown(self):
         self.config(f'setup = "touch {self.marker}.setup"\n')
         self.run_until()
@@ -149,18 +171,46 @@ class Teardown(unittest.TestCase):
         self.assertIn("teardown_minutes = 0 in config.toml: use a number of minutes above 0", str(e.exception))
 
 
+def alive_pid(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
 class SupervisedTeardown(unittest.TestCase):
     """A crash `supervise` restarts goes on with the run's helpers; only the run's real end tears them down."""
     R = test_robust.Supervisor  # its helpers, not its tests
-    tearDown, crash_when, start, supervise = R.tearDown, R.crash_when, R.start, R.supervise
+    tearDown, crash_when, start, supervise, log = R.tearDown, R.crash_when, R.start, R.supervise, R.log
 
     def setUp(self):
         self.R.setUp(self)
         self.marker = self.s.tmp / "torn"
-        cfg = self.s.root / ".windvane/config.toml"
-        cfg.write_text(f'teardown = "echo x >> {self.marker}"\n' + cfg.read_text())
+        self.cfg = self.s.root / ".windvane/config.toml"
+        self.base = self.cfg.read_text()
+        self.config(f'teardown = "echo x >> {self.marker}"\n')
+
+    def config(self, teardown):
+        self.cfg.write_text(teardown + self.base)
         self.s.publish("teardown")
         self.p = Project(self.s.root)
+
+    def give_up(self, teardown, on_stopped=lambda: None):
+        """Four crashes in a row with `teardown`; (seconds from the "stopped" push to supervise's return, the log)."""
+        if teardown:
+            self.config(teardown)
+        self.crash_when(lambda pilot: True)
+        at = []
+
+        def push(title, msg="", *a, **k):
+            self.pushes.append((title, msg))
+            if title == "windvane stopped":
+                at.append(time.monotonic())
+                on_stopped()
+        driver.push = push
+        self.supervise("--for", "2h")
+        return time.monotonic() - at[0], self.log()
 
     def test_not_between_restarts_only_at_the_end(self):
         crashed = []
@@ -174,6 +224,22 @@ class SupervisedTeardown(unittest.TestCase):
         rc, _ = self.supervise("--for", "2h")
         self.assertEqual((rc, len(self.calls)), (1, 4))
         self.assertEqual(self.marker.read_text(), "x\n")
+
+    def test_when_it_gives_up_a_hung_teardown_doesnt_hold_up_the_push(self):
+        after, log = self.give_up('teardown = "sleep 600"\nteardown_minutes = 0.05\n')
+        self.assertGreater(after, 2.5)  # the push went out before the 3 s teardown was killed
+        self.assertIn("teardown `sleep 600` timed out after 0.05 min (killed)", log)
+
+    def test_when_it_gives_up_a_run_started_meanwhile_keeps_its_helpers(self):
+        held = []
+
+        def new_run():  # takes the lock in the gap between the dead driver and the teardown
+            held.append(open(self.p.state / "lock", "a"))
+            fcntl.flock(held[0], fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _, log = self.give_up(None, new_run)
+        held[0].close()
+        self.assertFalse(self.marker.exists())
+        self.assertIn("teardown not run: a new run has started and uses the helpers", log)
 
 
 if __name__ == "__main__":

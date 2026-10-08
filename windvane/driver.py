@@ -22,6 +22,7 @@ import re
 import subprocess
 import time
 import traceback
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 
 from . import actions, critic, install, net, phone, renumber, requests, scratch, selfupdate, statedir
@@ -1605,19 +1606,29 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             stop = asked()
         if stop:
             log(p, f"driver crashed ({why}); not restarted: {stop}")
-            tear_down(p)
             push("windvane stopped", whole("Why: the driver crashed (", why, f"); not restarted: {stop}.",
                                           log=lambda m: log(p, m)) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
+            tear_down(p, lock=True)  # after the push, as the driver's own end does
             return rc
         args = selfupdate.restart_args(args, deadline)
         env["WINDVANE_RESTARTED"] = "1"
 
 
-def tear_down(p):
-    """The project's `teardown` at a run's real end; nothing in it may cost the run its end (the lock, the state)."""
+def tear_down(p, lock=False):
+    """The project's `teardown` at a run's real end; nothing in it may cost the run its end (the lock, the state).
+    `lock`: `supervise` takes the run's lock for it, as the dead driver no longer holds it, so a run started meanwhile
+    keeps its helpers."""
+    if not p.cfg["teardown"]:
+        return
     try:
-        teardown(p)
+        with open(p.state / "lock", "a") if lock else nullcontext() as fh:
+            if lock:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return log(p, "teardown not run: a new run has started and uses the helpers")
+            teardown(p)
     except Exception as e:  # noqa: BLE001 (a git or OS error: the run is over either way)
         log(p, f"teardown `{p.cfg['teardown']}` not run: {e}")
 
