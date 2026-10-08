@@ -297,7 +297,7 @@ def critic_stats(a, p):
     lad = critic_mod.rubric(p, p.root)
     if not lad:
         print(f"cap checks answered: {c['checked']} of {c['verdicts']} verdicts; a hit cap lowered the score in "
-              f"{c['capped']}")
+              f"{c['capped']}; caps answered yes: {c['hits']} sent back, {c['scoped_caps']} out of scope")
     for t, rs in c["tickets"]:
         print(f"  {t:8} {' → '.join(g(r['score']) for r in rs):14} {rs[-1].get('step', '')}")
     if line := shared_line(p, lad):

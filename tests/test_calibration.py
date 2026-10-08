@@ -43,7 +43,8 @@ class Calibration(unittest.TestCase):
             "needed revisions: 2 of 4",
             "exactly on the pass mark: 2 of 4 final scores, 3 of 9 verdicts",
             "passed only by running out of revisions (accept): 1 of 4",
-            "cap checks answered: 0 of 9 verdicts; a hit cap lowered the score in 0",
+            "cap checks answered: 0 of 9 verdicts; a hit cap lowered the score in 0; caps answered yes: 0 sent back, "
+            "0 out of scope",
         ])
         self.assertRegex(out[7], r"^  T-001 +4 → 6 → 8 +pass$")
         self.assertRegex(out[-1], r"^  T-005 +8 → 8 +pass$")

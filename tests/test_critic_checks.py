@@ -100,6 +100,36 @@ class Checks(unittest.TestCase):
         c = critic.calibration(read_jsonl(self.p.state / "critic.jsonl"), 8)
         self.assertEqual((c["checked"], c["capped"], c["verdicts"]), (1, 1, 2))
 
+    def test_an_out_of_scope_cap_caps_the_score_but_is_no_fix(self):
+        """R-002: the user chose to merge as a step; a true `yes` cap sent the ticket back three times."""
+        r = CHECKED.replace("wedge): yes:", "wedge): yes (out of scope: the user chose to merge as a step):")
+        entry, critique = self.judge(r)
+        self.assertEqual((entry["dims"]["works"], entry["score"]), (5.0, 5.0), "the score stays honest")
+        self.assertEqual((entry["fixes"], entry["effective"], entry["step"]), (0, 0, "scope"))
+        self.assertEqual(entry["hits"], [])
+        self.assertEqual(entry["scoped"], ["works<=5 (out of scope: the user chose to merge as a step)"])
+        self.assertIn("works<=5 answered yes, out of scope (works 7 → 5)", critique)
+        self.assertIn(("T-040", "works<=5 (out of scope: the user chose to merge as a step)"), critic.followups(self.p))
+
+    def test_a_plain_yes_cap_with_no_fixes_still_goes_back(self):
+        entry, _ = self.judge(CHECKED)
+        self.assertEqual((entry["fixes"], entry["effective"], entry["step"], entry["scoped"]), (0, 1, "revise", []))
+
+    def test_a_cap_named_in_words_maps_to_the_dimension(self):
+        caps, _ = critic.checks("- out of the way<=2 (x): **yes**, because\nCRITIC: T-1 out-of-the-way=2 fixes=0 g")
+        self.assertEqual(caps, [("out-of-the-way", 2.0, True)])
+        caps, _ = critic.checks("- **on the course**<=4 (x): no\n- `works<=5` (y): **yes** (out of scope)\n"
+                                "CRITIC: T-1 on=5 works=3 fixes=0 g")
+        self.assertEqual(caps, [("on", 4.0, False), ("works", 5.0, "no reason given")])
+
+    def test_stats_count_out_of_scope_caps_beside_hits(self):
+        self.judge(CHECKED)
+        self.judge(CHECKED.replace("T-040", "T-041").replace("wedge): yes:", "wedge): yes (out of scope: later):"),
+                   "T-041")
+        c = critic.calibration(read_jsonl(self.p.state / "critic.jsonl"), 8)
+        self.assertEqual((c["hits"], c["scoped_caps"]), (1, 1))
+        self.assertIn("out of scope: <why>", critic.system_prompt(self.p, self.s.root))
+
     def test_an_old_style_scale_keeps_the_numeric_prompt(self):
         self.s.write(".windvane/CRITIC.md", "# What a 10 means\n- **works**: 2: one test. 5: the CLI. 8: failures.\n")
         sp = critic.system_prompt(self.p, self.s.root)
