@@ -301,6 +301,7 @@ class Labels(unittest.TestCase):
     def test_the_old_forms_still_parse_and_unknown_labels_are_ignored(self):
         self.assertEqual(self.ans("- works 2 shown: no, nothing")["shown"], ("no", "nothing"))
         self.assertEqual(self.ans("works.shown: yes")["shown"][0], "yes")
+        self.assertEqual(self.ans("- works/shown: yes")["shown"][0], "yes")
         self.assertEqual(self.ans("- `on.reachable`: no (out of scope: T-9)")["reachable"][0], "scope")
         self.assertEqual(self.ans("- clear: -"), {"clear": ("-", "")})
         self.assertEqual(self.ans("- nothing: no"), {})

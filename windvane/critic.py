@@ -120,10 +120,10 @@ class Scale(dict):
 
 
 def words(label):
-    """A label's words, lower case, without markup (`` ` ``, `*`, `_` around a word) or dots: `**works.shown**`
-    reads as ["works", "shown"]."""
+    """A label's words, lower case, without markup (`` ` ``, `*`, `_` around a word), dots or slashes:
+    `**works.shown**` and `works/shown` read as ["works", "shown"]."""
     plain = re.sub(r"(?<!\w)_+|_+(?!\w)", "", re.sub(r"[`*]", "", label))
-    return plain.lower().replace(".", " ").split()
+    return re.sub(r"[./]", " ", plain.lower()).split()
 
 
 def ladder(text):
@@ -143,7 +143,7 @@ def ladder(text):
 
 def named(lad, label):
     """The check id or dimension a critic's answer label names in the scale, or None. A label ending in a check id
-    answers it whatever comes before (`works shown`, `works.shown`, `on the course 3 reachable`); a label that is a
+    answers it whatever comes before (`works shown`, `works/shown`, `on the course 3 reachable`); a label that is a
     dimension's id or its full heading answers the dimension (`on the course: -`). Critics write all of these: a
     reply in `works shown: yes` form once matched nothing and cost a second critic run (R-001)."""
     w = words(label)
