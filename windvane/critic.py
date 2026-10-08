@@ -34,8 +34,9 @@ from .util import append_jsonl, git, gout, load_json, read_jsonl
 OLD_RE = re.compile(r"CRITIC: (\d+(?:\.\d+)?)/10 (\S+) fixes=(\d+)[ \t]*(.*)")
 CRITIC_RE = re.compile(r"CRITIC: (\S+) ((?:[\w-]+=(?:\d+(?:\.\d+)?|-)[ \t]+)+?)fixes=(\d+)[ \t]*(.*)")
 DIM_RE = re.compile(r"([\w-]+)=(\d+(?:\.\d+)?|-)")
-CAP_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?([\w-]+)[ \t]*(?:<=|≤)[ \t]*(\d+(?:\.\d+)?)`?[^:\n]*:[ \t*_]*(yes|no)\b",
-                    re.I | re.M)
+# A dimension may be written with spaces (`out of the way<=2`): `checks()` maps the label to the scale's id
+CAP_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?[`*_]*(\w[\w \t./-]*?)[`*_ \t]*(?:<=|≤)[ \t]*(\d+(?:\.\d+)?)`?[^:\n]*:"
+                    r"[ \t*_]*(yes|no)\b[*_]*(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?", re.I | re.M)
 NEW_RE = re.compile(r"CRITIC: (\S+) fixes=(\d+)[ \t]*(.*)")
 HEAD_RE = re.compile(r"^#{2,}[ \t]+`?([\w-]+)")
 RUNG_RE = re.compile(r"^[ \t]*[-*][ \t]*(\d+(?:\.\d+)?)[ \t]+`?([\w-]+)`?[ \t]*:[ \t]*(.+)$")
@@ -248,11 +249,34 @@ def checks(text):
     """The critic's cap checks, answered before its scores: ([(dimension, cap, hit?)], nearest anchor or "").
     T-046: 15 of 20 tickets ended on 7 with nothing to fix, among them T-040, whose critique named a lost milestone
     (a "lose work" cap at 5) three times. Making the critic answer each cap from the calibration, line by line, puts
-    those failures in front of it before it picks a number. A reply without the checks gives ([], "")."""
+    those failures in front of it before it picks a number. A reply without the checks gives ([], "").
+    T-109: a cap answered `yes (out of scope: <why>)` has its why, not True, as hit: it still caps the dimension, but
+    `judge` doesn't count it as a fix (a ticket whose cap was a choice the project made, such as merging as a step,
+    went back three times with nothing to fix)."""
     body = (text or "").rsplit("CRITIC:", 1)[0]
-    caps = [(d, float(n), a.lower() == "yes") for d, n, a in CAP_RE.findall(body)]
+    v = verdict(text or "")
+    dims = list(v[1]) if v else []
+    caps = []
+    for d, n, a, scope in CAP_RE.findall(body):
+        hit = a.lower() == "yes"
+        if hit and scope:
+            hit = re.sub(r"^\s*out of scope\b[:,\s]*", "", scope, flags=re.I).strip() or "no reason given"
+        if d := dim_id(d, dims):
+            caps.append((d, float(n), hit))
     m = ANCHOR_RE.search(body)
     return caps, (clip(m.group(1).strip()) if m else "")
+
+
+def dim_id(label, dims):
+    """The scale's id for a cap's dimension label: spaces and hyphens are the same (`out of the way` is
+    `out-of-the-way`), and a heading's full text names its first word's id (`on the course` is `on`), as T-108 reads
+    check labels. A one-word label the CRITIC line doesn't score stays as it is (a cap on an untouched dimension still
+    counts); a longer one is None, so a sentence like `- caps at works<=5 (x): yes` is no cap."""
+    w = words(label)
+    whole, keys = "-".join(w), {"-".join(words(d.replace("-", " "))): d for d in dims}
+    if whole in keys:
+        return keys[whole]
+    return keys.get(w[0]) or (whole if len(w) == 1 else None)
 
 
 def capped(dims, caps):
@@ -346,6 +370,9 @@ def calibration(recs, bar, last=10):
         "accepted": sum(rs[-1].get("step") == "accept" for _, rs in tickets),
         "checked": sum(bool(r.get("checks")) for _, rs in tickets for r in rs),
         "capped": sum(bool(r.get("capped")) for _, rs in tickets for r in rs),
+        # T-109: a critic that waves caps through as out of scope shows here beside the ones it sent back
+        "hits": sum(len(r.get("hits") or []) for _, rs in tickets for r in rs),
+        "scoped_caps": sum(len(r.get("scoped") or []) for _, rs in tickets for r in rs if "hits" in r),
     }
 
 
@@ -472,17 +499,21 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         return none(tid, text, "the critic's CRITIC line has no scores, and the scale has no checks to work them out.")
     caps, anchor = checks(text)
     dims, was = capped(dims, caps)
-    hits = [f"{d}<={c:g}" for d, c, hit in caps if hit]
+    hits = [f"{d}<={c:g}" for d, c, hit in caps if hit is True]
+    scoped = [f"{d}<={c:g} (out of scope: {hit})" for d, c, hit in caps if isinstance(hit, str)]
     critique = text[min((i for i in (text.find("Caps:"), text.find("Score")) if i >= 0), default=0):]
-    if hits:
+    if hits or scoped:
         low = ", ".join(f"{d} {was[d]:g} → {dims[d]:g}" for d in was)
-        critique += (f"\nCapped by the driver: {', '.join(hits)} answered yes{f' ({low})' if low else ''}; "
-                     "a hit cap counts as a fix.")
+        said = [f"{', '.join(hits)} answered yes"] if hits else []
+        said += [f"{', '.join(s.split(' ', 1)[0] for s in scoped)} answered yes, out of scope"] if scoped else []
+        why = "; ".join((["a hit cap counts as a fix"] if hits else [])
+                        + (["out of scope caps the score but isn't a fix"] if scoped else []))
+        critique += f"\nCapped by the driver: {'; '.join(said)}{f' ({low})' if low else ''}; {why}."
     entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
              "dims": dims, "fixes": fixes, "effective": max(fixes, len(hits)), "revisions": n, "gist": cut(gist),
              "step": step(p, dims, max(fixes, len(hits)), n),
              "critique": critique, "scale": scale(p, cwd), "checks": len(caps),
-             "hits": hits, "capped": was, "anchor": anchor}
+             "hits": hits, "scoped": scoped, "capped": was, "anchor": anchor}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
 

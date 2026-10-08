@@ -100,6 +100,60 @@ class Checks(unittest.TestCase):
         c = critic.calibration(read_jsonl(self.p.state / "critic.jsonl"), 8)
         self.assertEqual((c["checked"], c["capped"], c["verdicts"]), (1, 1, 2))
 
+    def test_an_out_of_scope_cap_caps_the_score_but_is_no_fix(self):
+        """R-002: the user chose to merge as a step; a true `yes` cap sent the ticket back three times."""
+        r = CHECKED.replace("wedge): yes:", "wedge): yes (out of scope: the user chose to merge as a step):")
+        entry, critique = self.judge(r)
+        self.assertEqual((entry["dims"]["works"], entry["score"]), (5.0, 5.0), "the score stays honest")
+        self.assertEqual((entry["fixes"], entry["effective"], entry["step"]), (0, 0, "scope"))
+        self.assertEqual(entry["hits"], [])
+        self.assertEqual(entry["scoped"], ["works<=5 (out of scope: the user chose to merge as a step)"])
+        self.assertIn("works<=5 answered yes, out of scope (works 7 → 5)", critique)
+        self.assertIn(("T-040", "works<=5 (out of scope: the user chose to merge as a step)"), critic.followups(self.p))
+
+    def test_a_plain_yes_cap_with_no_fixes_still_goes_back(self):
+        entry, _ = self.judge(CHECKED)
+        self.assertEqual((entry["fixes"], entry["effective"], entry["step"], entry["scoped"]), (0, 1, "revise", []))
+
+    def test_a_cap_named_in_words_maps_to_the_dimension(self):
+        caps, _ = critic.checks("- out of the way<=2 (x): **yes**, because\nCRITIC: T-1 out-of-the-way=2 fixes=0 g")
+        self.assertEqual(caps, [("out-of-the-way", 2.0, True)])
+        caps, _ = critic.checks("- **on the course**<=4 (x): no\n- `works<=5` (y): **yes** (out of scope)\n"
+                                "CRITIC: T-1 on=5 works=3 fixes=0 g")
+        self.assertEqual(caps, [("on", 4.0, False), ("works", 5.0, "no reason given")])
+        caps, _ = critic.checks("- caps at works<=5 (x): yes\n- lean<=5 (y): yes\nCRITIC: T-1 works=7 fixes=0 g")
+        self.assertEqual(caps, [("lean", 5.0, True)], "a sentence isn't a cap; one unscored word still is")
+
+    def test_the_critic_command_lets_an_out_of_scope_cap_go_on(self):
+        """The R-002 reply through `windvane critic` and the sandbox's fake claude: the worker is told to go on."""
+        d = critic.pack_dir(self.p, "T-040")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "notes.md").write_text("User-facing: yes\nit works\n")
+        r = CHECKED.replace("wedge): yes:", "wedge): yes (out of scope: the user chose to merge as a step):")
+        out, cwd = io.StringIO(), os.getcwd()
+        os.chdir(self.s.root)
+        self.addCleanup(os.chdir, cwd)
+        with mock.patch.dict(os.environ, FAKE_CRITIC_TEXT=r), mock.patch.dict(self.p.critic, enabled=True), \
+                redirect_stdout(out):
+            cli.cmd_critic(argparse.Namespace(ticket="T-040"), self.p)
+        lines = out.getvalue().strip().splitlines()
+        self.assertIn("Capped by the driver: works<=5 answered yes, out of scope (works 7 → 5); out of scope caps the "
+                      "score but isn't a fix.", lines)
+        self.assertTrue(lines[-1].startswith("CRITIC STEP: scope. Under the bar, but nothing this ticket can fix."))
+        both = r.replace("lean<=5 (tokens on nothing): no", "lean<=5 (tokens on nothing): yes")
+        entry, critique = self.judge(both.replace("T-040", "T-041"), "T-041")
+        self.assertEqual((entry["hits"], entry["effective"], entry["step"]), (["lean<=5"], 1, "revise"))
+        self.assertIn("lean<=5 answered yes; works<=5 answered yes, out of scope (works 7 → 5, lean 8 → 5); a hit "
+                      "cap counts as a fix; out of scope caps the score but isn't a fix.", critique)
+
+    def test_stats_count_out_of_scope_caps_beside_hits(self):
+        self.judge(CHECKED)
+        self.judge(CHECKED.replace("T-040", "T-041").replace("wedge): yes:", "wedge): yes (out of scope: later):"),
+                   "T-041")
+        c = critic.calibration(read_jsonl(self.p.state / "critic.jsonl"), 8)
+        self.assertEqual((c["hits"], c["scoped_caps"]), (1, 1))
+        self.assertIn("out of scope: <why>", critic.system_prompt(self.p, self.s.root))
+
     def test_an_old_style_scale_keeps_the_numeric_prompt(self):
         self.s.write(".windvane/CRITIC.md", "# What a 10 means\n- **works**: 2: one test. 5: the CLI. 8: failures.\n")
         sp = critic.system_prompt(self.p, self.s.root)
