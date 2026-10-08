@@ -253,8 +253,10 @@ def ask(qid, question, options):
     room = NTFY - ASKED - sum(len(f"\nX: {o}".encode()) for o in options)  # the options keep at least half the push
     question = fit(titled(question), room)
     if shutil.which("notify-ask"):
-        subprocess.run(["notify-ask", qid, question, *options], capture_output=True)
-        return True
+        try:
+            return subprocess.run(["notify-ask", qid, question, *options], capture_output=True).returncode == 0
+        except OSError:
+            return False
     c = conf()
     if not on(c):
         return None

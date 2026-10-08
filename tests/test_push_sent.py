@@ -168,6 +168,20 @@ class Ask(Base):
         self.assertTrue(options[0].endswith(phone.REST), options[0])
         self.assertTrue(self.logged_whole())
 
+    def test_a_failed_notify_ask_is_not_counted_as_asked(self):
+        self.fake("notify-ask", 1)
+        self.assertFalse(phone.ask("t-001-q", "Which cache?", ["New", "Old"]))
+        pl = driver.Pilot(self.p, args())
+        pl.questions["T-001"] = {"q": "Which cache?", "opts": {"A": "New", "B": "Old"}, "rec": "A",
+                                 "must_wait": False, "asked": None}
+        pl.send_question("T-001")
+        self.assertIsNone(pl.questions["T-001"]["asked"], "the wait for an answer starts once it's out")
+        self.assertFalse((self.p.state / "shown.json").exists())
+        os.environ["FAKE_EXIT"] = "0"
+        pl.send_question("T-001")
+        self.assertIsNotNone(pl.questions["T-001"]["asked"])
+        self.assertEqual(json.loads((self.p.state / "shown.json").read_text())["asked"], {"T-001": ["Which cache?"]})
+
     def test_a_long_option_stays_under_ntfys_bytes_through_send(self):
         got = self.fake_send()
         self.assertTrue(phone.ask("t-001-q", "Which cache?", [self.option, "Keep it"]))
