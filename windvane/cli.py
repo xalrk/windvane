@@ -117,7 +117,10 @@ def cmd_run(a, p):
     p.state.mkdir(parents=True, exist_ok=True)
     if a.detach and in_tmux(p):  # (the detached run itself starts inside that session)
         sys.exit(f"already running in tmux session {p.tmux}")
-    if driver.locked(p) or (schedule.state(p) and not os.environ.get(driver.SUPERVISED)):  # (not the window's own)
+    st = not os.environ.get(driver.SUPERVISED) and schedule.state(p)  # (not the window's own)
+    if st and st["waiting"]:
+        sys.exit(f"a schedule is {schedule.word(st)}; change it with windvane stop, then run again")
+    if driver.locked(p) or st:
         sys.exit("already running: stop it with windvane stop")
     if not a.no_preflight and sys.stdin.isatty():  # never blocks a run started from a script
         ask_first(p, (deadline - (window[0] if window else now())).total_seconds() / 3600, a.parallel)
@@ -178,9 +181,10 @@ def cmd_stop(a, p):
     stop_now = getattr(a, "now", False)  # callers that predate --now pass a Namespace without it
     if stop_now and not running(p):
         return print(f"{p.display}: autopilot isn't running")
-    st = schedule.state(p)
-    if st:
-        schedule.stop(p)
+    with schedule.turn(p):  # a window starting meanwhile: nothing starts, or it's running and its driver keeps STOP
+        st = schedule.state(p)
+        if st:
+            schedule.stop(p)
     if st and st["waiting"]:
         return print(f"{p.display}: schedule ({schedule.what(st['daily'], st['end'])}) called off: nothing starts "
                      f"at {hhmm(st['start'])}")
