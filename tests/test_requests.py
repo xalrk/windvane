@@ -144,7 +144,7 @@ class Requests(unittest.TestCase):
         self.assertIn("- Verdict: accepted → T-004", done["R-004"])
         # a question keeps its request open, waiting on the user, and says how to answer it
         self.assertIn("- Verdict: question: A or B?", self.inbox()["R-003"])
-        self.assertEqual(self.pushes[1:], [("windvane request R-003 asks", 'A or B?\nNot answerable from the phone: answer '
+        self.assertEqual(self.pushes[1:], [("windvane request R-003 asks", 'Request: Rename the critic\nQuestion: A or B?\nNot answerable from the phone: answer '
                                         'at the desk: windvane request --answer R-003 "<your answer>"')])
         # the session was told what the bodies are, and each sat inside its fence
         prompt = next(json.loads(line)["prompt"] for line in (self.s.tmp / "calls.jsonl").read_text().splitlines()
@@ -193,12 +193,12 @@ class Requests(unittest.TestCase):
         self.assertEqual(sorted(self.inbox()), ["R-001", "R-002"])
         self.assertEqual(self.cli("request", "--status")[0], 0)
 
-    def test_an_accept_whose_land_stays_on_a_branch_stays_open(self):
+    def test_an_accept_whose_land_stays_on_a_branch_is_done_as_held(self):
         self.make(TRIAGE)
         with unittest.mock.patch("windvane.held.land", lambda *a: (False, "the branch periodic-x")):
             self.triage([("Retry the check on a flaky network", "WANT=accept")])
-        self.assertEqual(list(self.inbox()), ["R-001"])
-        self.assertEqual(self.inbox(done=True), {})
+        self.assertEqual(list(self.inbox()), [])  # the next round doesn't ticket it again
+        self.assertRegex(self.inbox(done=True)["R-001"], r"- Verdict: accepted → T-003 \(held on periodic-\d{8}-\d{4}\)")
 
     def test_an_accept_naming_no_landed_ticket_stays_open(self):
         self.make()

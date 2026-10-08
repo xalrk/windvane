@@ -119,11 +119,11 @@ class Periodic:
             e = p.periodic.get(e["then"])
         self.save()
         try:
-            landed = []
+            landed, held = [], {}
             if kept and (kept[0] or kept[3] or kept[2][0] != kept[2][1]):
-                landed = self.land_periodic(cd, *kept, land or "near", last, reply)
+                landed, held = self.land_periodic(cd, *kept, land or "near", last, reply)
             for reqs, text, name in self.triaged:
-                self.verdicts(reqs, text, landed, name)
+                self.verdicts(reqs, text, landed, held, name)
         finally:
             clean_detach(p, cd, p.upstream)
 
@@ -251,16 +251,20 @@ class Periodic:
                              + "".join(f"- {b}\n" for b in points))
         return report, report
 
-    def verdicts(self, reqs, text, landed, name):
+    def verdicts(self, reqs, text, landed, held, name):
         """Write a triage session's `REQUEST:` verdicts into its requests (an accept only for a ticket that landed or
-        exists on main), log each, and push each question: the requests' answers come from the user."""
+        exists on main, or waits on a branch: this land's `held` ones, or a plan's), log each, and push each question,
+        under its request's title: the requests' answers come from the user."""
+        from .planner import pending_branches
         self.fetch()
-        q = Queue(self.p)
-        done = requests.apply(reqs, text, set(landed), lambda t: t in q.files, self.log)
+        q, titles = Queue(self.p), {f.stem: requests.fields(requests.read(f))[0] for f in reqs}
+        done = requests.apply(reqs, text, set(landed), lambda t: t in q.files, self.log,
+                              {**pending_branches(self.p), **held})
         for rid, (kind, word) in done.items():
             self.log(f"{name}: {rid} {word}")
             if kind == "question":  # not a phone question: a bare letter would answer the newest notify-ask instead
-                push(f"windvane request {rid} asks", f"{phone.cut(word.removeprefix('question: '), log=self.log)}\n"
+                push(f"windvane request {rid} asks", f"Request: {phone.cut(titles[rid], log=self.log)}\n"
+                     f"Question: {phone.cut(word.removeprefix('question: '), log=self.log)}\n"
                      f"Not answerable from the phone: {requests.how_to_answer(rid)}", 3, "question")
         left = len(reqs) - len(done)
         if left:
@@ -310,8 +314,8 @@ class Periodic:
         one of the ids meanwhile, the change is made on the commit the chain began on, so the land clashes and keeps
         it on a branch rather than overwrite that ticket. Notes go at the end of each ticket as main has it, unless it
         is done there (merged, or `done:`) or gone. The commit carries `reply` (the last session's, cut to 80 lines),
-        so what it found already covered or chose not to ticket stays on record. Returns the tickets that reached main
-        (none when the land stayed on a branch): only those may answer a request."""
+        so what it found already covered or chose not to ticket stays on record. Returns (the tickets that reached
+        main, {ticket: the branch it waits on} when the land stayed on one): only those may answer a request."""
         from .driver import DIR
         from .held import land as land_on_main
         from .worktree import clean_detach
@@ -346,7 +350,7 @@ class Periodic:
             noted.append(tid)
         if not (tickets or noted or queue != main_q):
             self.log(f"{name}: nothing left to land")
-            return []
+            return [], {}
         for f, text in keep.items():
             (cd / f).parent.mkdir(parents=True, exist_ok=True)
             (cd / f).write_text(text)
@@ -358,7 +362,8 @@ class Periodic:
         body = f"Written by the [[periodic]] session {name}; land = {land}."
         if reply:
             body += f"\n\n## Its final reply\n{cut_lines(reply, 80)}"
-        ok, where = land_on_main(p, cd, f"periodic-{now():%Y%m%d-%H%M}", title, body)
+        branch = f"periodic-{now():%Y%m%d-%H%M}"
+        ok, where = land_on_main(p, cd, branch, title, body)
         how = {"near": f"right after {anchor}" if anchor else "at the top", "next": "at the top",
                "end": "at the end", "hold": "held for the desk"}.get(land, "")
         what = f"{', '.join(tickets)}, {how}" if tickets else "no new tickets"
@@ -369,7 +374,7 @@ class Periodic:
         if not ok:
             push("periodic change not merged", f"{title}: waits on {where}{how.removeprefix(', not merged')}.", 4,
                  "warning")
-        return tickets if ok else []
+        return (tickets, {}) if ok else ([], dict.fromkeys(tickets, branch))
 
     def ask_land(self, name, tickets, titles):
         """`land = "ask"`: one phone question, near / end / hold; waits up to `answer_wait` minutes (and never past

@@ -11,6 +11,7 @@ project and windvane are cut, and the triage prompt fences them so they read as 
 """
 import difflib
 import fcntl
+import hashlib
 import os
 import re
 import secrets
@@ -23,6 +24,8 @@ from .config import HOME, user_dir
 from .util import load_json, now, save_json
 
 ROLE = "WINDVANE_ROLE"  # the session's role, set by runner.py: a request records who filed it
+NEST = "WINDVANE_SESSION"  # runner.py's name for the session: a worker run's count of requests is kept under it
+TREES = {"work": "worker", "ci": "ci", "plan": "planner"}  # a project's trees in the state dir, by the role they host
 WORKER_CAP = 2  # requests (dedups too) one worker run may file
 SIMILAR = 0.8  # title similarity at which a new request joins an open one
 MOST = 20000  # characters of a body kept: the triage prompt carries every open request
@@ -63,8 +66,21 @@ def fields(text):
     """An R-file's title, its `- Key: value` header lines (lower-case keys), and the projects that filed it."""
     title = re.match(r"# R-\d+: (.*)", text)
     head = dict((k.lower(), v.strip()) for k, v in re.findall(r"^- (\w+): (.*)$", text.split("\n## ", 1)[0], re.M))
-    srcs = [head.get("from", "")] + re.findall(r"^## Also from (\S+)", text, re.M)
-    return (title.group(1).strip() if title else ""), head, [s for s in srcs if s]
+    return (title.group(1).strip() if title else ""), head, [n for n, _ in sources(text, head)]
+
+
+def sources(text, head):
+    """(name, root key or "") of each project that filed or joined the request; one filed before T-115 has no key."""
+    also = re.findall(r"^## Also from (\S+) \(([^)\n]*)\)", text, re.M)
+    srcs = [(head.get("from", ""), head.get("root", ""))]
+    srcs += [(n, (re.search(r"\broot (\w+)", inside) or [None, ""])[1]) for n, inside in also]
+    return [(n, r) for n, r in srcs if n]
+
+
+def root_key(root):
+    """A project's resolved main checkout as a short hash: two projects named `app` in different dirs differ, and the
+    R-file (read by the triage session) carries no home path."""
+    return hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:16]
 
 
 def similar(a, b):
@@ -91,30 +107,52 @@ def clean(text, root, name):
 
 
 def source():
-    """(project name, short commit, root) of the checkout this runs in; a directory outside git names itself."""
+    """(project name, short commit, root, its main checkout's `root_key`) of the checkout this runs in; a directory
+    outside git names itself."""
     from .config import Project, toplevel
     root = toplevel()
     if not root:
-        return Path.cwd().name, "-", Path.cwd()
+        return Path.cwd().name, "-", Path.cwd(), root_key(Path.cwd())
     r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True)
-    return Project(root).name, r.stdout.strip() or "-", root
+    p = Project(root)
+    return p.name, r.stdout.strip() or "-", root, root_key(p.main_root())
+
+
+def tree():
+    """(the role, the tree) when this runs inside windvane's state dir: "worker" in a project's `work` or `work-N`
+    tree, the tree's own role in `ci`/`plan`, "windvane" anywhere else there (a session's TMPDIR, its evidence).
+    ("", None) elsewhere."""
+    state, cwd = user_dir("XDG_STATE_HOME", ".local/state").resolve(), Path.cwd().resolve()
+    if state != cwd and state not in cwd.parents:
+        return "", None
+    parts = cwd.relative_to(state).parts
+    m = len(parts) > 1 and re.fullmatch(r"(work|ci|plan)(-\d+)?", parts[1])
+    return (TREES[m.group(1)], state.joinpath(*parts[:2])) if m else ("windvane", None)
+
+
+def role_here():
+    """Who runs this: the env's `WINDVANE_ROLE` (the session's finer role), unless it says desk (or nothing) inside
+    windvane's state dir. A worker's shell can set the env, not where its tree is: run from a tree, `WINDVANE_ROLE=desk`
+    is still that tree's session."""
+    said = os.environ.get(ROLE, "") or "desk"
+    return (tree()[0] or said) if said == "desk" else said
 
 
 def file(title, body):
     """File a request from the checkout this runs in. Returns (exit code, the line to print)."""
-    role = os.environ.get(ROLE, "") or "desk"
+    role = role_here()
     if role.split(":")[0] not in ("desk", "worker"):
         return 1, f"windvane request: only desk sessions and workers file requests (this is a {role} session)"
-    name, commit, root = source()
+    name, commit, root, key = source()
     title = " ".join(clean(title, root, name).split())[:200]
     if not title:
         return 1, "windvane request: give a title"
     body = clean(body.strip(), root, name) or "(no details given)"
     if len(body) > MOST:
         body = body[:MOST] + "\n… (cut)"
-    session = os.environ.get("WINDVANE_SESSION", "")
+    session = os.environ.get(NEST, "") or run_key()
     with locked() as d:
-        count = d / ".sessions" / session if role == "worker" and session else None
+        count = d / ".sessions" / session if role.startswith("worker") and session else None
         prune(d / ".sessions")
         n = int(count.read_text() or 0) if count and count.is_file() else 0
         if count and n >= WORKER_CAP:
@@ -124,13 +162,13 @@ def file(title, body):
         same = next((f for f in files(False) if similar(fields(read(f))[0], title) >= SIMILAR), None)
         if same:
             with same.open("a") as out:
-                out.write(f"\n## Also from {name} (commit {commit}, {role}, {stamp})\n{title}\n\n{body}\n")
+                out.write(f"\n## Also from {name} (commit {commit}, {role}, {stamp}, root {key})\n{title}\n\n{body}\n")
             line = f"{same.stem}: near-duplicate of \"{fields(read(same))[0]}\": your report was added to it"
         else:
             last = max((int(f.stem[2:]) for f in files()), default=0)
             same = d / f"R-{last + 1:03d}.md"
-            text = (f"# {same.stem}: {title}\n- From: {name}\n- Commit: {commit}\n- Role: {role}\n- Date: {stamp}\n"
-                    f"- Verdict: none yet\n\n## Report\n{body}\n")
+            text = (f"# {same.stem}: {title}\n- From: {name}\n- Root: {key}\n- Commit: {commit}\n- Role: {role}\n"
+                    f"- Date: {stamp}\n- Verdict: none yet\n\n## Report\n{body}\n")
             with os.fdopen(os.open(same, os.O_WRONLY | os.O_CREAT | os.O_EXCL), "w") as out:
                 out.write(text)
             line = f"{same.stem} filed: windvane's own autopilot triages it; `windvane request --status` shows the verdict"
@@ -138,6 +176,16 @@ def file(title, body):
             count.parent.mkdir(exist_ok=True)
             count.write_text(str(n + 1))
     return 0, line
+
+
+def run_key():
+    """A worker run's count key when the env's session name is gone: its tree and branch (one ticket's run), so
+    unsetting `WINDVANE_SESSION` doesn't lift the cap. None outside a work tree."""
+    role, where = tree()
+    if role != "worker":
+        return None
+    r = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=where, capture_output=True, text=True)
+    return re.sub(r"[^\w.-]", "-", f"{where.parent.name}-{where.name}-{r.stdout.strip()}")
 
 
 def prune(d, days=2):
@@ -167,10 +215,10 @@ def how_to_answer(rid):
 def answer(rid, text):
     """The user's answer to a request's question: added to it, and the request goes back to triage. Returns (exit
     code, the line to print)."""
-    role = os.environ.get(ROLE, "") or "desk"
+    role = role_here()
     if role != "desk":  # a question is a call only the user makes: a session's answer would make it for them
         return 1, f"windvane request: only the user answers, at the desk (this is a {role} session)"
-    name, _, root = source()
+    name, _, root, _ = source()
     text = clean(text.strip(), root, name)
     if not text:
         return 1, "windvane request: give the answer"
@@ -198,12 +246,13 @@ def unseen(p):
     """The verdicts on requests project `p` filed (or joined) that its `windvane status` hasn't shown yet, as lines;
     each is marked shown. A question shows once while it waits, and the final verdict once more."""
     seen_f = p.state / "requests-shown.json"
-    seen = set(load_json(seen_f, []))
+    seen, mine = set(load_json(seen_f, [])), root_key(p.main_root())
     out = []
     for f in files():
-        title, head, srcs = fields(read(f))
+        title, head, _ = fields(read(f))
         key = f.stem if f.parent.name == "done" else f"{f.stem}:{read(f).count(chr(10) + '## Verdict (')}"  # each question
-        if p.name in srcs and key not in seen and (f.parent.name == "done" or asking(head)):
+        ours = any(r == mine if r else n == p.name for n, r in sources(read(f), head))  # an old R-file: by name
+        if ours and key not in seen and (f.parent.name == "done" or asking(head)):
             said = verdict_text(head).replace("accepted → ", "accepted → windvane's ")  # not this project's ticket
             out.append(f"{f.stem} {said}  ({title})"
                        + (f"; {how_to_answer(f.stem)}" if f.parent.name != "done" else ""))
@@ -230,11 +279,13 @@ def prompt_part(reqs):
     return "\n\n".join(parts)
 
 
-def apply(reqs, text, landed, exists, log):
+def apply(reqs, text, landed, exists, log, held=None):
     """Write the verdicts in a triage session's final `text` into the R-files it was given (`reqs`), and move each
     accepted or rejected one to `done/`; a question stays in the inbox, waiting for `windvane request --answer`. An
-    accept must name a ticket that landed (`landed`) or exists (`exists(tid)`): one naming anything else stays open
-    for the next round. Returns {R-id: (kind, the verdict as said)} applied, for the log and the phone."""
+    accept must name a ticket that landed (`landed`), exists (`exists(tid)`) or waits on a branch (`held`, {ticket:
+    branch}: noted beside it, so the next round doesn't ticket it again): one naming anything else stays open for the
+    next round. Returns {R-id: (kind, the verdict as said)} applied, for the log and the phone."""
+    held = held or {}
     given, done = {f.stem: f for f in reqs}, {}
     with locked() as d:
         for rid, kind, detail in VERDICT_RE.findall(text):
@@ -242,10 +293,12 @@ def apply(reqs, text, landed, exists, log):
             if not f or not f.is_file() or rid in done:
                 continue
             tid = (re.match(r"\S+", detail) or [""])[0].rstrip(".,;:")
-            if kind == "accept" and not (tid in landed or exists(tid)):
+            here = tid in landed or exists(tid)
+            if kind == "accept" and not (here or tid in held):
                 log(f"{rid}: accept names {tid or 'no ticket'}, which didn't land: it stays open")
                 continue
-            word = {"accept": f"accepted → {tid}", "reject": f"rejected: {detail or 'no reason given'}",
+            word = {"accept": f"accepted → {tid}" + ("" if here else f" (held on {held.get(tid)})"),
+                    "reject": f"rejected: {detail or 'no reason given'}",
                     "question": f"question: {detail or '(none given)'}"}[kind]
             body = set_verdict(read(f), word) + f"\n## Verdict ({now():%Y-%m-%d %H:%M})\n{word}\n"
             if kind == "question":
