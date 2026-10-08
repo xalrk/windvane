@@ -1042,7 +1042,8 @@ class Pilot(Desk, Periodic):
         sent = False
         if new:
             body = ("To change one: windvane answer <ID> <letter>."
-                    + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in new[:8]))
+                    + "".join(f"\n{q['ticket']}: {cut(q['question'], log=self.log)} Built {q['built']}."
+                              for q in new[:8]))
             sent = push(f"Review: {len(new)} provisional answer{'s' * (len(new) > 1)}",
                         body + also([q["ticket"] for q in new[8:]], MOST - len(body.encode())), 3, "memo")
         with self.lock:  # marked only once the phone has them: a failed push leaves them for the next digest
