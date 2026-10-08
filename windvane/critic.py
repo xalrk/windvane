@@ -261,7 +261,8 @@ def checks(text):
         hit = a.lower() == "yes"
         if hit and scope:
             hit = re.sub(r"^\s*out of scope\b[:,\s]*", "", scope, flags=re.I).strip() or "no reason given"
-        caps.append((dim_id(d, dims), float(n), hit))
+        if d := dim_id(d, dims):
+            caps.append((d, float(n), hit))
     m = ANCHOR_RE.search(body)
     return caps, (clip(m.group(1).strip()) if m else "")
 
@@ -269,12 +270,13 @@ def checks(text):
 def dim_id(label, dims):
     """The scale's id for a cap's dimension label: spaces and hyphens are the same (`out of the way` is
     `out-of-the-way`), and a heading's full text names its first word's id (`on the course` is `on`), as T-108 reads
-    check labels. A label the CRITIC line doesn't score stays as written, hyphenated."""
+    check labels. A one-word label the CRITIC line doesn't score stays as it is (a cap on an untouched dimension still
+    counts); a longer one is None, so a sentence like `- caps at works<=5 (x): yes` is no cap."""
     w = words(label)
     whole, keys = "-".join(w), {"-".join(words(d.replace("-", " "))): d for d in dims}
     if whole in keys:
         return keys[whole]
-    return keys.get(w[0], whole) if w else whole
+    return keys.get(w[0]) or (whole if len(w) == 1 else None)
 
 
 def capped(dims, caps):
@@ -504,7 +506,8 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         low = ", ".join(f"{d} {was[d]:g} → {dims[d]:g}" for d in was)
         said = [f"{', '.join(hits)} answered yes"] if hits else []
         said += [f"{', '.join(s.split(' ', 1)[0] for s in scoped)} answered yes, out of scope"] if scoped else []
-        why = "a hit cap counts as a fix" + (", one out of scope only caps the score" if scoped else "")
+        why = "; ".join((["a hit cap counts as a fix"] if hits else [])
+                        + (["out of scope caps the score but isn't a fix"] if scoped else []))
         critique += f"\nCapped by the driver: {'; '.join(said)}{f' ({low})' if low else ''}; {why}."
     entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
              "dims": dims, "fixes": fixes, "effective": max(fixes, len(hits)), "revisions": n, "gist": cut(gist),

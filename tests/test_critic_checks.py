@@ -121,6 +121,30 @@ class Checks(unittest.TestCase):
         caps, _ = critic.checks("- **on the course**<=4 (x): no\n- `works<=5` (y): **yes** (out of scope)\n"
                                 "CRITIC: T-1 on=5 works=3 fixes=0 g")
         self.assertEqual(caps, [("on", 4.0, False), ("works", 5.0, "no reason given")])
+        caps, _ = critic.checks("- caps at works<=5 (x): yes\n- lean<=5 (y): yes\nCRITIC: T-1 works=7 fixes=0 g")
+        self.assertEqual(caps, [("lean", 5.0, True)], "a sentence isn't a cap; one unscored word still is")
+
+    def test_the_critic_command_lets_an_out_of_scope_cap_go_on(self):
+        """The R-002 reply through `windvane critic` and the sandbox's fake claude: the worker is told to go on."""
+        d = critic.pack_dir(self.p, "T-040")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "notes.md").write_text("User-facing: yes\nit works\n")
+        r = CHECKED.replace("wedge): yes:", "wedge): yes (out of scope: the user chose to merge as a step):")
+        out, cwd = io.StringIO(), os.getcwd()
+        os.chdir(self.s.root)
+        self.addCleanup(os.chdir, cwd)
+        with mock.patch.dict(os.environ, FAKE_CRITIC_TEXT=r), mock.patch.dict(self.p.critic, enabled=True), \
+                redirect_stdout(out):
+            cli.cmd_critic(argparse.Namespace(ticket="T-040"), self.p)
+        lines = out.getvalue().strip().splitlines()
+        self.assertIn("Capped by the driver: works<=5 answered yes, out of scope (works 7 → 5); out of scope caps the "
+                      "score but isn't a fix.", lines)
+        self.assertTrue(lines[-1].startswith("CRITIC STEP: scope. Under the bar, but nothing this ticket can fix."))
+        both = r.replace("lean<=5 (tokens on nothing): no", "lean<=5 (tokens on nothing): yes")
+        entry, critique = self.judge(both.replace("T-040", "T-041"), "T-041")
+        self.assertEqual((entry["hits"], entry["effective"], entry["step"]), (["lean<=5"], 1, "revise"))
+        self.assertIn("lean<=5 answered yes; works<=5 answered yes, out of scope (works 7 → 5, lean 8 → 5); a hit "
+                      "cap counts as a fix; out of scope caps the score but isn't a fix.", critique)
 
     def test_stats_count_out_of_scope_caps_beside_hits(self):
         self.judge(CHECKED)
