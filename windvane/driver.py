@@ -167,7 +167,7 @@ def also(tickets, most=MOST):
     end = "; windvane status lists them."
     for n in range(len(ids), 0, -1):
         line = "\nAlso: " + ", ".join(ids[:n]) + (f" and {len(ids) - n} more" if n < len(ids) else "") + end
-        if len(line) <= most:
+        if len(line.encode()) <= most:
             return line
     return f"\nAlso {len(ids)} more{end}"
 
@@ -890,30 +890,33 @@ class Pilot(Desk, Periodic):
         self.log(f"{tid}: merged {sha[:7]} · {self.usage.text()}")
         if outside:
             self.log(f"{tid}: changed outside its Touches line: {', '.join(outside)}")
-        push(f"Done: {self.name(tid)}", "Built, checked, reviewed and merged."
-             + (f" Critic {score:g}/10." if score is not None else "") + f" {self.usage.text()}"
-             + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else "") + self.built_lines(tid),
-             2, "white_check_mark")
+        lines, picks = self.built_lines(tid)
+        sent = push(f"Done: {self.name(tid)}", "Built, checked, reviewed and merged."
+                    + (f" Critic {score:g}/10." if score is not None else "") + f" {self.usage.text()}"
+                    + (f"\nMerged with {p.main}: {said(renumbered)}." if renumbered else "") + lines,
+                    2, "white_check_mark")
+        if picks:
+            with self.lock:  # slots merge side by side
+                def told(s):
+                    if sent:  # a failed push leaves them to the end-of-quiet digest
+                        s["pushed"] += [qkey(q) for q in picks if qkey(q) not in s["pushed"]]
+                    s["asked"].pop(tid, None)
+                note(p, told)
 
     def built_lines(self, tid):
-        """The Done push's lines for the ticket's provisional answers. A question the phone already showed gets one
-        line without its text; only one built without the user ever seeing it (a quiet time) is spelled out. Either
-        way it counts as pushed: the end-of-quiet digest leaves it out."""
+        """The Done push's lines for the ticket's provisional answers, and those answers. A question the phone already
+        showed gets one line without its text; only one built without the user ever seeing it (a quiet time) is
+        spelled out. Once the push went out, either way it counts as pushed: the end-of-quiet digest leaves it out."""
         p = self.p
         picks = [q for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
                  if p.norm(q["ticket"]) == tid]
         if not picks:
-            return ""
-        with self.lock:  # slots merge side by side
+            return "", []
+        with self.lock:
             new = unseen(picks, shown(p)["asked"].get(tid, []))
-
-            def told(s):
-                s["pushed"] += [qkey(q) for q in picks if qkey(q) not in s["pushed"]]
-                s["asked"].pop(tid, None)
-            note(p, told)
         how = f"to change: windvane answer {tid} <letter>."
         return "".join(f"\n{q['question']} Built {q['built']} without asking you: {q['option']}; {how}" if q in new
-                       else f"\nBuilt {q['built']} for {tid}: {q['option']}; {how}" for q in picks)
+                       else f"\nBuilt {q['built']} for {tid}: {q['option']}; {how}" for q in picks), picks
 
     def fail(self, tid, why):
         self.skip.add(tid)
@@ -1035,15 +1038,16 @@ class Pilot(Desk, Periodic):
         p = self.p
         picks = provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
         with self.lock:
-            done = set(shown(p)["pushed"])
-            new = [q for q in picks if qkey(q) not in done]
-            told = {qkey(q) for q in new} | done
-            note(p, lambda s: s.update(pushed=[qkey(q) for q in picks if qkey(q) in told]))
+            new = [q for q in picks if qkey(q) not in set(shown(p)["pushed"])]
+        sent = False
         if new:
             body = ("To change one: windvane answer <ID> <letter>."
                     + "".join(f"\n{q['ticket']}: {q['question']} Built {q['built']}." for q in new[:8]))
-            push(f"Review: {len(new)} provisional answer{'s' * (len(new) > 1)}",
-                 body + also([q["ticket"] for q in new[8:]], MOST - len(body.encode())), 3, "memo")
+            sent = push(f"Review: {len(new)} provisional answer{'s' * (len(new) > 1)}",
+                        body + also([q["ticket"] for q in new[8:]], MOST - len(body.encode())), 3, "memo")
+        with self.lock:  # marked only once the phone has them: a failed push leaves them for the next digest
+            told = {qkey(q) for q in new} if sent else set()
+            note(p, lambda s: s.update(pushed=[qkey(q) for q in picks if qkey(q) in told | set(s["pushed"])]))
 
     # ---------- the loop
 

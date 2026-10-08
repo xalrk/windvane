@@ -90,9 +90,10 @@ def last_log(p, n=1):
 
 
 def push(title, msg, prio=3, tags="", buttons=()):
-    """A phone push (censored first), when there's a phone: see phone.py. Silently nothing without one."""
+    """A phone push (censored first), when there's a phone: see phone.py. Silently nothing without one; True when it
+    went out."""
     from . import phone
-    phone.push(title, msg, prio, tags, buttons)
+    return phone.push(title, msg, prio, tags, buttons)
 
 
 def load_json(path, default):
