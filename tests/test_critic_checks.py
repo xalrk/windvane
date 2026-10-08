@@ -1,12 +1,16 @@
+import argparse
+import io
+import os
 import sys
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import critic  # noqa: E402
+from windvane import cli, critic  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import append_jsonl, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -255,6 +259,115 @@ class Ladder(unittest.TestCase):
         self.assertLessEqual(len(ids), 12)
         self.assertEqual(len(ids), len(set(ids)), "check ids are unique across the scale")
         self.assertLessEqual(len((root / "prompts/CRITIC.md").read_text().splitlines()), 54, "the prompt never grows")
+
+
+COURSE = LADDER + """
+## on the course
+- 3 reachable: a player can reach it.
+- 8 `fair`: it plays fair.
+"""
+WRAP = "Checks:\n{}\n\nCRITIC: T-1 fixes=0 g"
+
+
+class Labels(unittest.TestCase):
+    """T-108: answers are read by any label the scale gives a check (`works shown`, `on the course 3 reachable`), and
+    a reply with no verdict says why."""
+
+    def setUp(self):
+        s = Sandbox("pass = 8\nfloor = 4\n")
+        self.addCleanup(s.close)
+        self.s, self.p = s, Project(s.root)
+        s.write(".windvane/CRITIC.md", COURSE)
+        self.lad = critic.ladder(COURSE)
+
+    def ans(self, line):
+        return critic.answers(WRAP.format(line), self.lad)
+
+    def judge(self, reply, tid="T-054"):
+        return Checks.judge(self, reply, tid)
+
+    def test_the_heading_keeps_its_full_text(self):
+        self.assertEqual(list(self.lad), ["works", "clear", "on"])
+        self.assertEqual(self.lad.heads["on the course"], "on")
+        self.assertEqual([c for _, c, _ in self.lad["on"]], ["reachable", "fair"])
+
+    def test_the_repro_lines_parse(self):
+        self.assertEqual(self.ans("- works shown: yes. ok"), {"shown": ("yes", "ok")})
+        self.assertEqual(self.ans("- on the course 3 reachable: yes"), {"reachable": ("yes", "")})
+        self.assertEqual(self.ans("- **works shown**: yes"), {"shown": ("yes", "")})
+        self.assertEqual(self.ans("- on the course: -"), {"on": ("-", "")})
+        self.assertEqual(self.ans("- __on the course__: -"), {"on": ("-", "")})
+
+    def test_the_old_forms_still_parse_and_unknown_labels_are_ignored(self):
+        self.assertEqual(self.ans("- works 2 shown: no, nothing")["shown"], ("no", "nothing"))
+        self.assertEqual(self.ans("works.shown: yes")["shown"][0], "yes")
+        self.assertEqual(self.ans("- works/shown: yes")["shown"][0], "yes")
+        self.assertEqual(self.ans("- `on.reachable`: no (out of scope: T-9)")["reachable"][0], "scope")
+        self.assertEqual(self.ans("- clear: -"), {"clear": ("-", "")})
+        self.assertEqual(self.ans("- nothing: no"), {})
+        self.assertEqual(self.ans("- works shown is fine: no"), {}, "the last word must be a check id")
+        self.assertEqual(critic.answers(WRAP.format("- works shown: yes")), {}, "no scale: today's forms only")
+
+    def test_a_reply_in_the_dimension_and_id_form_passes(self):
+        lines = [f"- {d} {c}: yes, shown" for d, cs in self.lad.items() for _, c, _ in cs]
+        entry, critique = self.judge("\n".join(["Checks:", *lines, "Good.", "CRITIC: T-054 fixes=0 fine"]))
+        self.assertIsNotNone(entry)
+        self.assertEqual((entry["dims"], entry["step"], entry["unanswered"]), ({"works": 10, "clear": 8, "on": 8}, "pass", []))
+
+    def test_a_multi_word_heading_is_scored_from_its_answers_or_left_out(self):
+        base = ["- shown: yes", "- safe: yes", "- failures: yes", "- class: no", "- quoted: yes", "- awake: yes"]
+        entry, _ = self.judge("\n".join(["Checks:", *base, "- on the course 3 reachable: yes",
+                                          "- on the course 8 fair: no, a dead end", "CRITIC: T-054 fixes=0 g"]))
+        self.assertEqual((entry["dims"]["on"], entry["failed"], entry["unanswered"]), (3, ["fair"], []))
+        entry, critique = self.judge("\n".join(["Checks:", *base, "- on the course: -", "CRITIC: T-055 fixes=0 g"]), "T-055")
+        self.assertEqual((entry["dims"], entry["step"]), ({"works": 8, "clear": 8}, "pass"))
+        self.assertIn("on=- fixes=0", critique)
+
+    def test_a_recritique_hides_answers_in_the_new_forms(self):
+        earlier = ("Checks:\n- works shown: yes, ok\n- on the course 3 reachable: no, a wall\n- on the course: -\n"
+                   "- **clear quoted**: yes\nFine.\nBeyond this ticket:\n- a map\nCRITIC: T-054 fixes=0 g")
+        hidden = critic.unscored(earlier, self.lad)
+        self.assertEqual(hidden, "Checks:\nFine.\nBeyond this ticket:\n- a map")
+        append_jsonl(self.p.state / "critic.jsonl", {"ticket": "T-054", "step": "revise", "critique": earlier})
+        seen = []
+        d = critic.pack_dir(self.p, "T-054")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "notes.md").write_text("User-facing: yes\nit works\n")
+        with mock.patch.object(critic, "run_claude", lambda p, r, l, prompt, *a, **kw: (seen.append(prompt), ("", None, None))[1]):
+            critic.judge(self.p, "T-054", self.s.root)
+        self.assertIn("- a map", seen[0])
+        self.assertNotIn("reachable", seen[0])
+
+    def step(self, reply, tid="T-054"):
+        """What the worker reads from `windvane critic` when there's no verdict, and its exit."""
+        if reply is not None:
+            d = critic.pack_dir(self.p, tid)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "notes.md").write_text("User-facing: yes\nit works\n")
+        out, cwd = io.StringIO(), os.getcwd()
+        os.chdir(self.s.root)
+        self.addCleanup(os.chdir, cwd)
+        with mock.patch.object(critic, "run_claude", lambda *a, **kw: (reply, None, None)), redirect_stdout(out), \
+                mock.patch.dict(self.p.critic, enabled=True), self.assertRaises(SystemExit):
+            cli.cmd_critic(argparse.Namespace(ticket=tid), self.p)
+        return out.getvalue().strip().splitlines()[-1]
+
+    def test_no_verdict_says_why_and_only_a_missing_pack_says_fix_the_pack(self):
+        cases = {
+            None: "no critic pack. Write ",
+            "Fine, no line.": "the critic's reply has no CRITIC line.",
+            "Checks:\n- shown: yes\nCRITIC: T-099 fixes=0 g": "the critic's CRITIC line is for T-099, not T-054.",
+            "Checks:\n- the demo: yes\n- `speed`: no\nCRITIC: T-054 fixes=0 g":
+                "no answer the driver could match to a check (labels it saw: the demo, `speed`; the scale's ids: shown, "
+                "safe, failures, class, quoted, awake, reachable, fair).",
+        }
+        for reply, why in cases.items():
+            with self.subTest(reply=reply):
+                last = self.step(reply)
+                self.assertTrue(last.startswith(f"CRITIC STEP: none. No verdict: {why}"), last)
+                self.assertEqual("pack isn't the problem" in last, reply is not None)
+                self.assertEqual("notes.md, then run" in last, reply is None)
+        self.assertEqual(read_jsonl(self.p.state / "critic.jsonl"), [])
 
 
 if __name__ == "__main__":
