@@ -511,14 +511,17 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
                  "revisions": n, "step": "unavailable", "gist": cut(plain_error(error)), "critique": ""}
         append_jsonl(p.state / "critic.jsonl", entry)
         return entry, f"Critic unavailable ({cut(plain_error(error))})."  # the worker reads it
-    why = unread(p, tid, lad, text)
+    why, asked = unread(p, tid, lad, text), {}
     if why and session.get("id"):  # one more turn in the same session reads its context cached, not fresh (T-116)
-        again, _, error = run_claude(p, "critic", f"{tid}-critic-reask", reask(tid, why, lad), system_prompt(p, cwd),
-                                     cwd, deny=DENY, usage=usage, stop_if=stop_if, ticket=tid, resume=session["id"])
-        if not error:
-            text, why = again, unread(p, tid, lad, again)
+        again, killed, error = run_claude(p, "critic", f"{tid}-critic-reask", reask(tid, why, lad),
+                                          system_prompt(p, cwd), cwd, deny=DENY, usage=usage, stop_if=stop_if,
+                                          ticket=tid, resume=session["id"])
+        if killed or error:  # no reply to it: the first reply stands, and the log says the re-ask failed
+            asked = {"reask_failed": cut(killed or plain_error(error))}
+        else:
+            text, why, asked = again, unread(p, tid, lad, again), {"reasked": True}
     if why:
-        return none(p, tid, text, why, reasked=bool(session.get("id")))
+        return none(p, tid, text, why, **asked)
     _, dims, fixes, gist = verdict(text)
     if lad:
         return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n)
@@ -595,12 +598,14 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
     return entry, critique
 
 
-def none(p, tid, text, why, rerun=True, reasked=False):
+def none(p, tid, text, why, rerun=True, reasked=False, reask_failed=None):
     """judge's (None, reply) when there's no verdict, the reply ending in the step that says why. Only a missing pack
     is the worker's to fix: a reply the driver can't read is the critic's slip, and "fix the pack" sent a worker with
-    a sound pack to pay for a second run (R-001). Logged as `step: none` (`reasked`: after the same-session re-ask),
-    so `windvane stats` can count what no verdict costs; `history()` leaves these lines out."""
-    append_jsonl(p.state / "critic.jsonl", {"ticket": tid, "step": "none", "why": why, "reasked": reasked})
+    a sound pack to pay for a second run (R-001). Logged as `step: none`, so `windvane stats` can count what no
+    verdict costs: `reasked` only when the same-session re-ask replied, `reask_failed` why one didn't (an API error,
+    the deadline). `history()` leaves these lines out."""
+    append_jsonl(p.state / "critic.jsonl", {"ticket": tid, "step": "none", "why": why, "reasked": reasked,
+                                            **({"reask_failed": reask_failed} if reask_failed else {})})
     todo = (f" Your pack isn't the problem: run `windvane critic {tid}` again; if the critic keeps failing, go on."
             if rerun else "")
     return None, f"{text}\n\nCRITIC STEP: none. No verdict: {why}{todo}".lstrip()

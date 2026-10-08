@@ -5,6 +5,7 @@ import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -101,6 +102,25 @@ class Reask(unittest.TestCase):
         with redirect_stdout(io.StringIO()) as shown:
             stats.critic_stats(argparse.Namespace(last=10, since=None), self.p)
         self.assertIn("no critic verdicts yet", shown.getvalue())
+
+    def test_a_reask_that_fails_is_logged_as_failed_not_as_asked(self):
+        os.environ["FAKE_ERROR_FOR"] = "^The driver couldn't read"  # the re-ask's first line: an API error
+        out, calls, recs = self.critic(UNREAD, GOOD)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("CRITIC STEP: none. No verdict: no answer the driver could match", out, "the first reply's why")
+        self.assertEqual([(r["step"], r["reasked"]) for r in recs], [("none", False)])
+        self.assertTrue(recs[0]["reask_failed"])
+
+    def test_a_reask_cut_off_at_the_deadline_is_logged_as_failed(self):
+        os.environ["FAKE_CRITIC_TEXT"] = UNREAD
+        p, real = self.p, critic.run_claude
+        resumed = lambda *a, **kw: ("", "deadline", None) if kw.get("resume") else real(*a, **kw)
+        with mock.patch.object(critic, "run_claude", resumed), redirect_stdout(io.StringIO()):
+            entry, text = critic.judge(p, "T-001", self.s.root)
+        self.assertIsNone(entry)
+        self.assertIn("CRITIC STEP: none", text)
+        self.assertEqual([(r["reasked"], r["reask_failed"]) for r in read_jsonl(p.state / "critic.jsonl")],
+                         [(False, "deadline")])
 
 
 if __name__ == "__main__":
