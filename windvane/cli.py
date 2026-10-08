@@ -484,8 +484,7 @@ def cmd_critic(a, p):
     entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage),
                                    retry=critic_retry(p))
     print(text)
-    if entry is None:
-        print("\nCRITIC STEP: none. Fix the pack and run it again; if the critic itself keeps failing, go on.")
+    if entry is None:  # the text ends with its CRITIC STEP line
         sys.exit(1)
     pr = driver.pr_for(p, gout(os.getcwd(), "branch", "--show-current"))
     if not critic_mod.comment(p, entry, pr):

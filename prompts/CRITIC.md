@@ -32,7 +32,8 @@ No new nits unless the revision broke something; repeat the earlier "Beyond" poi
 reply's reach the planner). If what the ticket is for doesn't work at all, say what to rethink.
 
 ## Your reply
-Under 300 words, in this shape, ending with exactly one CRITIC line (`fixes=` counts "Fix in this ticket"):
+Under 300 words, in this shape, each check's label its id alone as the scale writes it (`- shown: yes`), ending with
+exactly one CRITIC line (`fixes=` counts "Fix in this ticket"):
 ```
 Checks:
 - <check id>: yes, <evidence, a few words>

@@ -41,6 +41,9 @@ HEAD_RE = re.compile(r"^#{2,}[ \t]+`?([\w-]+)")
 RUNG_RE = re.compile(r"^[ \t]*[-*][ \t]*(\d+(?:\.\d+)?)[ \t]+`?([\w-]+)`?[ \t]*:[ \t]*(.+)$")
 ANSWER_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?(?:[\w-]+(?:\.|[ \t]+(?=\d)))?(?:\d+(?:\.\d+)?[ \t]+)?([\w-]+)`?[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
                        r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$", re.I)
+# Any label before the answer (`on the course 3 reachable: yes`); `named()` keeps those the scale knows
+LABEL_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?([^:\n]+?)[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
+                      r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$", re.I)
 LISTS_RE = re.compile(r"^[ \t#*_-]*(?:(?:fix in|beyond) this ticket\b|beyond[*_]*:)", re.I | re.M)
 CHECKS_RE = re.compile(r"^[ \t#*_]*Checks[*_]*:[*_]*[ \t]*\n?", re.I | re.M)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
@@ -107,17 +110,47 @@ def verdict(text):
     return None
 
 
+class Scale(dict):
+    """ladder()'s {dimension: [(rung, check id, question)]}, with `heads`, {a heading's full text: dimension}: the id
+    is the heading's first word, and a critic copies `## on the course` whole as its label (R-003)."""
+
+    def __init__(self, dims=(), heads=None):
+        super().__init__(dims)
+        self.heads = heads or {}
+
+
+def words(label):
+    """A label's words, lower case, without markup (`` ` ``, `*`, `_` around a word) or dots: `**works.shown**`
+    reads as ["works", "shown"]."""
+    plain = re.sub(r"(?<!\w)_+|_+(?!\w)", "", re.sub(r"[`*]", "", label))
+    return plain.lower().replace(".", " ").split()
+
+
 def ladder(text):
     """A scale written as ladders: {dimension: [(rung, check id, question)]}, in the scale's order, rungs low to
     high; {} for an old numeric scale. A dimension is a `## <name>` heading and its checks are `- <rung> <id>:
     <question>` lines under it."""
-    out, dim = {}, None
+    out, heads, dim = {}, {}, None
     for line in (text or "").splitlines():
         if m := HEAD_RE.match(line):
             dim = m.group(1).lower()
+            heads[" ".join(words(line.lstrip("#")))] = dim
         elif dim and (m := RUNG_RE.match(line)):
             out.setdefault(dim, []).append((float(m.group(1)), m.group(2).lower(), m.group(3).strip()))
-    return {d: sorted(cs, key=lambda c: c[0]) for d, cs in out.items()}
+    return Scale({d: sorted(cs, key=lambda c: c[0]) for d, cs in out.items()},
+                 {h: d for h, d in heads.items() if d in out})
+
+
+def named(lad, label):
+    """The check id or dimension a critic's answer label names in the scale, or None. A label ending in a check id
+    answers it whatever comes before (`works shown`, `works.shown`, `on the course 3 reachable`); a label that is a
+    dimension's id or its full heading answers the dimension (`on the course: -`). Critics write all of these: a
+    reply in `works shown: yes` form once matched nothing and cost a second critic run (R-001)."""
+    w = words(label)
+    if w and w[-1] in {cid for cs in lad.values() for _, cid, _ in cs}:
+        return w[-1]
+    whole = " ".join(w)
+    return whole if whole in lad else getattr(lad, "heads", {}).get(whole)
 
 
 def shared(lad):
@@ -145,26 +178,37 @@ def rubric(p, cwd):
     return ladder(f.read_text()) if f.is_file() else {}
 
 
-def answers(text):
-    """The critic's answers before its CRITIC line: {check id or dimension: (answer, evidence)}, the answer `yes`,
-    `no`, `scope` (`no (out of scope: <why>)`, the why kept as evidence) or `-` (a dimension the ticket doesn't
-    touch). A check may be named `safe`, `works.safe`, `5 safe` or `works 5 safe`: the critic reads all of those in
-    the scale, the calibration and `overview`. The first answer to an id wins: the Checks block comes first, and a
-    later follow-up line that happens to read `safe: no ...` mustn't overturn it. Only the Checks block counts, up
-    to the "Fix in this ticket" / "Beyond this ticket" lists after it, so a follow-up never answers a check the block
-    left out, and a reply that puts a list or its verdict first keeps its answers. With no `Checks:` line, the
-    lines above the first list count."""
-    out = {}
+def block(text):
+    """The lines that may answer checks: the Checks block, up to the "Fix in this ticket" / "Beyond this ticket"
+    lists after it, so a follow-up never answers a check the block left out, and a reply that puts a list or its
+    verdict first keeps its answers. With no `Checks:` line, the lines above the first list count."""
     body = (text or "").rsplit("CRITIC:", 1)[0]
     if m := CHECKS_RE.search(body):
         body = body[m.end():]
-    body = LISTS_RE.split(body, 1)[0]
-    for line in body.splitlines():
-        if m := ANSWER_RE.match(line):
+    return LISTS_RE.split(body, 1)[0].splitlines()
+
+
+def answers(text, lad=None):
+    """The critic's answers before its CRITIC line: {check id or dimension: (answer, evidence)}, the answer `yes`,
+    `no`, `scope` (`no (out of scope: <why>)`, the why kept as evidence) or `-` (a dimension the ticket doesn't
+    touch). With the scale `lad`, each label is read by what it names in it (`named`); without, a check may be
+    named `safe`, `works.safe`, `5 safe` or `works 5 safe`. The first answer to an id wins: the Checks block comes
+    first, and a later follow-up line that happens to read `safe: no ...` mustn't overturn it. Only `block()` counts."""
+    out = {}
+    for line in block(text):
+        m = LABEL_RE.match(line) if lad else ANSWER_RE.match(line)
+        key = m and (named(lad, m.group(1)) if lad else m.group(1).lower())
+        if key:
             a = "scope" if m.group(3) else m.group(2).lower()
             why = re.sub(r"^\s*out of scope\b[:,\s]*", "", m.group(3) or "", flags=re.I)
-            out.setdefault(m.group(1).lower(), (a, clip("; ".join(filter(None, [why.strip(), m.group(4).strip()])))))
+            out.setdefault(key, (a, clip("; ".join(filter(None, [why.strip(), m.group(4).strip()])))))
     return out
+
+
+def labels(text):
+    """The labels of the answer-shaped lines in the Checks block, matched to the scale or not: what a no-verdict
+    message shows, so the worker sees how the critic wrote them."""
+    return [m.group(1).strip() for line in block(text) if (m := LABEL_RE.match(line))]
 
 
 def climb(lad, ans, bar):
@@ -241,11 +285,14 @@ def step(p, dims, fixes, revs, floor=None):
     return "revise" if next(iter(dims.values())) >= (c["floor"] if floor is None else floor) else "rethink"
 
 
-def unscored(critique):
-    """An earlier critique without its score lines, so a revision is judged afresh, not as "last time +1"."""
+def unscored(critique, lad=None):
+    """An earlier critique without its score lines, so a revision is judged afresh, not as "last time +1". With the
+    scale, an answer goes in any form `answers()` reads."""
+    def answer(l):
+        return bool((m := LABEL_RE.match(l)) and named(lad, m.group(1))) if lad else bool(ANSWER_RE.match(l))
     return "\n".join(l for l in critique.splitlines()
                      if not re.match(r"\s*(Scores?:|CRITIC:|Nearest anchor:|Capped by the driver:|Unanswered)", l)
-                     and not CAP_RE.match(l) and not ANSWER_RE.match(l)).strip()
+                     and not CAP_RE.match(l) and not answer(l)).strip()
 
 
 def beyond(critique):
@@ -382,7 +429,8 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     to run it again; when it says no, the record's step is "unavailable", with no score, so it never counts as one."""
     notes, images, facing = pack(p, tid)
     if notes is None:
-        return None, f"No critic pack: write {pack_dir(p, tid)}/notes.md first."
+        return none(tid, "", f"no critic pack. Write {pack_dir(p, tid)}/notes.md, then run `windvane critic {tid}`.",
+                    rerun=False)
     past = history(p, tid)
     n = revisions(past)
     if not facing:
@@ -392,7 +440,8 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         return entry, "Not user-facing: no critique."
     ticket = gout(cwd, "show", f"{rev}:{p.tickets_rel}/{tid}.md")
     stat = "\n".join(gout(cwd, "diff", "--stat", f"{p.upstream}...{rev}").splitlines()[-40:])
-    earlier = [unscored(e["critique"]) for e in past if e.get("critique")]
+    lad = rubric(p, cwd)
+    earlier = [unscored(e["critique"], lad) for e in past if e.get("critique")]
     prompt = "\n\n".join(filter(None, [
         f"Critique {tid}. Follow the critic rules in your system prompt and end with the CRITIC line.",
         f"## The ticket\n{ticket[:6000]}",
@@ -412,14 +461,15 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         append_jsonl(p.state / "critic.jsonl", entry)
         return entry, f"Critic unavailable ({cut(plain_error(error))})."  # the worker reads it
     v = verdict(text)
-    if not v or p.norm(v[0]) != tid:
-        return None, text or "The critic ended without a verdict."
+    if not v:
+        return none(tid, text, "the critic's reply has no CRITIC line.")
+    if p.norm(v[0]) != tid:
+        return none(tid, text, f"the critic's CRITIC line is for {v[0]}, not {tid}.")
     _, dims, fixes, gist = v
-    lad = rubric(p, cwd)
     if lad:
         return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n)
     if not dims:
-        return None, text
+        return none(tid, text, "the critic's CRITIC line has no scores, and the scale has no checks to work them out.")
     caps, anchor = checks(text)
     dims, was = capped(dims, caps)
     hits = [f"{d}<={c:g}" for d, c, hit in caps if hit]
@@ -441,9 +491,12 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
     """judge's ending on a ladder: the driver scores the critic's check answers (`climb`), and the failed checks under
     the bar join its "Fix in this ticket" points. A reply that answers no check at all is no verdict: counting every
     check as `no` would send good work back for the critic's own slip."""
-    ans = answers(text)
+    ans = answers(text, lad)
     if not any(cid in ans for cs in lad.values() for _, cid, _ in cs):
-        return None, text or "The critic answered none of the scale's checks."
+        seen = labels(text)
+        return none(tid, text, "no answer the driver could match to a check (labels it saw: "
+                    f"{', '.join(seen[:5]) + ('…' if len(seen) > 5 else '') if seen else 'none'}; the scale's ids: "
+                    f"{', '.join(cid for cs in lad.values() for _, cid, _ in cs)}).")
     dims, said, block, scoped, missing = climb(lad, ans, p.critic["pass"])
     eff = fixes + len(block)
     scores = " ".join(f"{d}={dims[d]:g}" if d in dims else f"{d}=-" for d in lad)
@@ -463,6 +516,15 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
              "failed": [cid for _, _, cid, _, _ in block], "scoped": scoped, "unanswered": missing}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
+
+
+def none(tid, text, why, rerun=True):
+    """judge's (None, reply) when there's no verdict, the reply ending in the step that says why. Only a missing pack
+    is the worker's to fix: a reply the driver can't read is the critic's slip, and "fix the pack" sent a worker with
+    a sound pack to pay for a second run (R-001)."""
+    todo = (f" Your pack isn't the problem: run `windvane critic {tid}` again; if the critic keeps failing, go on."
+            if rerun else "")
+    return None, f"{text}\n\nCRITIC STEP: none. No verdict: {why}{todo}".lstrip()
 
 
 def comment(p, entry, pr):
@@ -571,7 +633,7 @@ def joined(p, lad, pick, got, open_ids, sha):
     dims, said, sections, users, failed, points = {}, {}, [], [], [], []
     for d in pick:
         text, killed, error = got[d]
-        ans = answers(text)
+        ans = answers(text, lad)
         if killed or error or not any(cid in ans for _, cid, _ in lad[d]):
             why = killed or (plain_error(error) if error else "it answered none of the checks")
             failed.append(d)
