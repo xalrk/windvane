@@ -38,6 +38,39 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
 TIMED_OUT = "out of time"  # run_limited's reason when `until` passes
 
 
+def teardown(p):
+    """The project's `teardown`, once at a run's real end: it stops the helpers the project's tools started on purpose
+    outside the sessions' process groups (a shared emulator, an adb server), which no session kill reaches. It runs in
+    the ci worktree (the checkout with isolate off), or in a throwaway one when a failed setup left none, so the
+    user's checkout is never touched. A failure or a timeout is only logged: the run is over either way."""
+    cmd = p.cfg["teardown"]
+    if not cmd:
+        return
+    path, temp = p.ci_dir, None
+    if path != p.main_root() and not (path / ".git").exists():
+        temp = path = p.state / "teardown"
+        shutil.rmtree(temp, ignore_errors=True)
+        git(p.main_root(), "worktree", "prune")
+        r = git(p.main_root(), "worktree", "add", "--detach", str(temp), p.upstream)  # no fetch: offline it'd hang
+        if r.returncode:
+            log(p, f"teardown `{cmd}` not run: can't create a worktree for it: {r.stderr.strip()}")
+            return
+    limit = p.cfg["teardown_minutes"]
+    try:
+        code, why, lines = run_limited(cmd, path, now() + timedelta(minutes=limit), keep=15)
+    finally:
+        if temp:
+            git(p.main_root(), "worktree", "remove", "--force", str(temp))
+            shutil.rmtree(temp, ignore_errors=True)
+    if code or why:
+        how = f"timed out after {limit:g} min (killed)" if why else f"failed (exit {code})"
+        log(p, f"teardown `{cmd}` {how} in {short_path(p, path)}: {lines[-1] if lines else 'no output'}")
+        if len(lines) > 1:
+            log(p, "\n".join(["its last lines:", *lines]), echo=False)
+    else:
+        log(p, f"teardown `{cmd}` done")
+
+
 def short_path(p, path):
     """`path` as the user knows it: relative to the state dir (`work-1`), else its last two parts."""
     try:

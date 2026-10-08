@@ -38,7 +38,7 @@ from .questions import (answered, desk_answers, give_answer, mode, note, parts, 
 from .queue import Queue
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
-from .worktree import TIMED_OUT, SetupFailed, clean_detach, ensure_worktree
+from .worktree import TIMED_OUT, SetupFailed, clean_detach, ensure_worktree, teardown
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
@@ -1529,6 +1529,10 @@ class Pilot(Desk, Periodic):
                 push("windvane stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                      "checkered_flag", ("Usage=usage",))
             self.save()
+            # After the push (a hung teardown can't hold it up) and under the lock (the next run's helpers are safe).
+            # A crash `supervise` restarts goes on with this run's helpers; it tears down when it gives up.
+            if not (crashed and os.environ.get(SUPERVISED)):
+                tear_down(p)
             self.lockfile.close()
         return ready
 
@@ -1601,12 +1605,21 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             stop = asked()
         if stop:
             log(p, f"driver crashed ({why}); not restarted: {stop}")
+            tear_down(p)
             push("windvane stopped", whole("Why: the driver crashed (", why, f"); not restarted: {stop}.",
                                           log=lambda m: log(p, m)) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             return rc
         args = selfupdate.restart_args(args, deadline)
         env["WINDVANE_RESTARTED"] = "1"
+
+
+def tear_down(p):
+    """The project's `teardown` at a run's real end; nothing in it may cost the run its end (the lock, the state)."""
+    try:
+        teardown(p)
+    except Exception as e:  # noqa: BLE001 (a git or OS error: the run is over either way)
+        log(p, f"teardown `{p.cfg['teardown']}` not run: {e}")
 
 
 def locked(p):

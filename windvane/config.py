@@ -33,6 +33,8 @@ DEFAULTS = {
     "check": "",  # the project's CI command, run by `windvane check` (empty: no check)
     "setup": "",  # run once in a fresh worktree (e.g. "npm ci"); failing stops the run
     "setup_minutes": 20,  # a setup still running then is killed and fails (a hung `npm ci` never wedges a run)
+    "teardown": "",  # run once when a run ends (e.g. stopping a shared emulator its tools started); failing is logged
+    "teardown_minutes": 5,  # a teardown still running then is killed, its children too
     "isolate": True,  # work in the autopilot's own worktrees; false: in the checkout itself (huge builds)
     "goal": "",  # what `windvane plan` aims at when given no goal
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
@@ -186,10 +188,11 @@ def periodic(entries):
     return out
 
 
-def setup_minutes(v, where=""):
-    """A `setup_minutes` value, top-level or a [[periodic]]'s (`where`): any number of minutes above 0."""
+def setup_minutes(v, where="", key="setup_minutes"):
+    """A `setup_minutes` (or `teardown_minutes`) value, top-level or a [[periodic]]'s (`where`): any number of
+    minutes above 0."""
     if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
-        raise SystemExit(f"windvane: {where}setup_minutes = {v!r} in config.toml: use a number of minutes above 0")
+        raise SystemExit(f"windvane: {where}{key} = {v!r} in config.toml: use a number of minutes above 0")
     return v
 
 
@@ -249,6 +252,7 @@ class Project:
         self.critic = c["critic"]
         self.ap = c["autopilot"]
         setup_minutes(c["setup_minutes"])
+        setup_minutes(c["teardown_minutes"], key="teardown_minutes")
         actions_budget(c)
         self.periodic = periodic(c.get("periodic", []))
         self.perms, self.perm_problems = permissions(c["permissions"], self.periodic)
