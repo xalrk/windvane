@@ -268,10 +268,11 @@ class Ladder(unittest.TestCase):
     def test_a_reply_that_answers_no_check_is_no_verdict(self):
         entry, text = Checks.judge(self, PLAIN.replace("T-040", "T-054"), "T-054")
         self.assertIsNone(entry)
-        self.assertEqual(read_jsonl(self.p.state / "critic.jsonl"), [])
+        self.assertEqual([r["step"] for r in read_jsonl(self.p.state / "critic.jsonl")], ["none"], "logged, no verdict")
+        self.assertEqual(critic.history(self.p, "T-054"), [])
 
     def test_answers_parse_the_ways_a_critic_writes_them(self):
-        ans = critic.answers("- `safe`: **no** (out of scope) the lock\n* shown: Yes: transcript\nclear: -\n"
+        ans = critic.answers("- `safe`: **no** (out of scope) the lock\n* shown: Yes: transcript\n- clear: -\n"
                              "Fix in this ticket:\n1. nothing: no\nBeyond this ticket:\n- shown: no tests for X yet\n"
                              "CRITIC: T-1 fixes=0 g\n- class: yes")
         self.assertEqual(ans["safe"], ("scope", "the lock"))
@@ -354,7 +355,7 @@ class Labels(unittest.TestCase):
 
     def test_the_old_forms_still_parse_and_unknown_labels_are_ignored(self):
         self.assertEqual(self.ans("- works 2 shown: no, nothing")["shown"], ("no", "nothing"))
-        self.assertEqual(self.ans("works.shown: yes")["shown"][0], "yes")
+        self.assertEqual(self.ans("- works.shown: yes")["shown"][0], "yes")
         self.assertEqual(self.ans("- works/shown: yes")["shown"][0], "yes")
         self.assertEqual(self.ans("- `on.reachable`: no (out of scope: T-9)")["reachable"][0], "scope")
         self.assertEqual(self.ans("- clear: -"), {"clear": ("-", "")})
@@ -421,7 +422,7 @@ class Labels(unittest.TestCase):
                 self.assertTrue(last.startswith(f"CRITIC STEP: none. No verdict: {why}"), last)
                 self.assertEqual("pack isn't the problem" in last, reply is not None)
                 self.assertEqual("notes.md, then run" in last, reply is None)
-        self.assertEqual(read_jsonl(self.p.state / "critic.jsonl"), [])
+        self.assertEqual({r["step"] for r in read_jsonl(self.p.state / "critic.jsonl")}, {"none"})
 
 
 if __name__ == "__main__":

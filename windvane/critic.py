@@ -40,11 +40,16 @@ CAP_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?[`*_]*(\w[\w \t./-]*?)[`*_ \t]*(?:<=
 NEW_RE = re.compile(r"CRITIC: (\S+) fixes=(\d+)[ \t]*(.*)")
 HEAD_RE = re.compile(r"^#{2,}[ \t]+`?([\w-]+)")
 RUNG_RE = re.compile(r"^[ \t]*[-*][ \t]*(\d+(?:\.\d+)?)[ \t]+`?([\w-]+)`?[ \t]*:[ \t]*(.+)$")
-ANSWER_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?`?(?:[\w-]+(?:\.|[ \t]+(?=\d)))?(?:\d+(?:\.\d+)?[ \t]+)?([\w-]+)`?[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
+# An answer is a bulleted line (`-`, `*`, `1.`): a prose line in the Checks block ("overall it's safe: yes") answers
+# nothing (T-116)
+BULLET = r"^[ \t]*(?:[-*]|\d+\.)[ \t]+"
+ANSWER_RE = re.compile(BULLET + r"`?(?:[\w-]+(?:\.|[ \t]+(?=\d)))?(?:\d+(?:\.\d+)?[ \t]+)?([\w-]+)`?[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
                        r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$", re.I)
 # Any label before the answer (`on the course 3 reachable: yes`); `named()` keeps those the scale knows
-LABEL_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?([^:\n]+?)[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
-                      r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$", re.I)
+LABEL = (r"([^:\n]+?)[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
+         r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$")
+LABEL_RE = re.compile(BULLET + LABEL, re.I)
+SAID_RE = re.compile(r"^[ \t]*(?:(?:[-*]|\d+\.)[ \t]*)?" + LABEL, re.I)  # bulleted or not: what `labels()` shows
 LISTS_RE = re.compile(r"^[ \t#*_-]*(?:(?:fix in|beyond) this ticket\b|beyond[*_]*:)", re.I | re.M)
 CHECKS_RE = re.compile(r"^[ \t#*_]*Checks[*_]*:[*_]*[ \t]*\n?", re.I | re.M)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
@@ -87,7 +92,9 @@ def pack(p, tid):
 
 
 def history(p, tid):
-    return [e for e in read_jsonl(p.state / "critic.jsonl") if e.get("ticket") == tid]
+    """A ticket's verdicts, oldest first. A no-verdict line (`step: none`, `none()`) is a log for `stats`, not a
+    verdict: the gate and the reviewer read the last real one."""
+    return [e for e in read_jsonl(p.state / "critic.jsonl") if e.get("ticket") == tid and e.get("step") != "none"]
 
 
 def revisions(records):
@@ -154,10 +161,18 @@ def named(lad, label):
     return whole if whole in lad else getattr(lad, "heads", {}).get(whole)
 
 
+def dimension(lad, label):
+    """The dimension a check's label names before its id (`works safe`, `works.5.safe`, `on the course 3 reachable`),
+    or None: how `answers()` tells two `safe` checks apart."""
+    w = [x for x in words(label)[:-1] if not re.fullmatch(r"\d+(?:\.\d+)?", x)]
+    whole = " ".join(w)
+    return whole if whole in lad else getattr(lad, "heads", {}).get(whole)
+
+
 def shared(lad):
-    """{check id: [dimensions]} for each id a ladder uses more than once. The critic answers by id alone, so
-    `answers()` can't tell two `safe` checks apart: both get the first answer. Reported, not fatal: the scale is the
-    project's file, and a typo there mustn't stop a run."""
+    """{check id: [dimensions]} for each id a ladder uses more than once. A label that names the dimension
+    (`works safe`) answers only that one; the id alone answers both (`answers()`). Reported, not fatal: the scale is
+    the project's file, and a typo there mustn't stop a run."""
     dims = {}
     for d, cs in lad.items():
         for _, cid, _ in cs:
@@ -194,22 +209,30 @@ def answers(text, lad=None):
     `no`, `scope` (`no (out of scope: <why>)`, the why kept as evidence) or `-` (a dimension the ticket doesn't
     touch). With the scale `lad`, each label is read by what it names in it (`named`); without, a check may be
     named `safe`, `works.safe`, `5 safe` or `works 5 safe`. The first answer to an id wins: the Checks block comes
-    first, and a later follow-up line that happens to read `safe: no ...` mustn't overturn it. Only `block()` counts."""
-    out = {}
+    first, and a later follow-up line that happens to read `safe: no ...` mustn't overturn it. Only `block()`'s
+    bulleted lines count. An id two dimensions share is keyed (dimension, id): a label naming the dimension answers
+    that one, the id alone every one not answered yet (T-116)."""
+    out, both = {}, shared(lad) if lad else {}
     for line in block(text):
         m = LABEL_RE.match(line) if lad else ANSWER_RE.match(line)
         key = m and (named(lad, m.group(1)) if lad else m.group(1).lower())
         if key:
             a = "scope" if m.group(3) else m.group(2).lower()
             why = re.sub(r"^\s*out of scope\b[:,\s]*", "", m.group(3) or "", flags=re.I)
-            out.setdefault(key, (a, clip("; ".join(filter(None, [why.strip(), m.group(4).strip()])))))
+            got = (a, clip("; ".join(filter(None, [why.strip(), m.group(4).strip()]))))
+            if key in both:
+                d = dimension(lad, m.group(1))
+                for k in [(d, key)] if d in both[key] else [(x, key) for x in both[key]]:
+                    out.setdefault(k, got)
+            else:
+                out.setdefault(key, got)
     return out
 
 
 def labels(text):
     """The labels of the answer-shaped lines in the Checks block, matched to the scale or not: what a no-verdict
     message shows, so the worker sees how the critic wrote them."""
-    return [m.group(1).strip() for line in block(text) if (m := LABEL_RE.match(line))]
+    return [m.group(1).strip() for line in block(text) if (m := SAID_RE.match(line))]
 
 
 def climb(lad, ans, bar):
@@ -227,7 +250,7 @@ def climb(lad, ans, bar):
         top = next((r for r, _, _ in cs if r >= bar), cs[-1][0])
         score, held = 0.0, set()
         for r, cid, q in cs:
-            a, ev = ans.get(cid, ("none", ""))
+            a, ev = ans.get((d, cid)) or ans.get(cid, ("none", ""))
             said[cid] = a
             missing += [cid] * (a == "none")
             if a != "yes":
@@ -456,7 +479,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     to run it again; when it says no, the record's step is "unavailable", with no score, so it never counts as one."""
     notes, images, facing = pack(p, tid)
     if notes is None:
-        return none(tid, "", f"no critic pack. Write {pack_dir(p, tid)}/notes.md, then run `windvane critic {tid}`.",
+        return none(p, tid, "", f"no critic pack. Write {pack_dir(p, tid)}/notes.md, then run `windvane critic {tid}`.",
                     rerun=False)
     past = history(p, tid)
     n = revisions(past)
@@ -477,9 +500,10 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         f"## Files the change touches\n{stat}",
         "## Your earlier critiques of this ticket, oldest first\n" + "\n---\n".join(earlier) if earlier else "",
     ]))
+    session = {}
     while True:
         text, _, error = run_claude(p, "critic", f"{tid}-critic", prompt, system_prompt(p, cwd), cwd, deny=DENY,
-                                    usage=usage, stop_if=stop_if, ticket=tid)
+                                    usage=usage, stop_if=stop_if, ticket=tid, session=session)
         if not error or not retry or not retry(error):
             break
     if error:
@@ -487,16 +511,20 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
                  "revisions": n, "step": "unavailable", "gist": cut(plain_error(error)), "critique": ""}
         append_jsonl(p.state / "critic.jsonl", entry)
         return entry, f"Critic unavailable ({cut(plain_error(error))})."  # the worker reads it
-    v = verdict(text)
-    if not v:
-        return none(tid, text, "the critic's reply has no CRITIC line.")
-    if p.norm(v[0]) != tid:
-        return none(tid, text, f"the critic's CRITIC line is for {v[0]}, not {tid}.")
-    _, dims, fixes, gist = v
+    why, asked = unread(p, tid, lad, text), {}
+    if why and session.get("id"):  # one more turn in the same session reads its context cached, not fresh (T-116)
+        again, killed, error = run_claude(p, "critic", f"{tid}-critic-reask", reask(tid, why, lad),
+                                          system_prompt(p, cwd), cwd, deny=DENY, usage=usage, stop_if=stop_if,
+                                          ticket=tid, resume=session["id"])
+        if killed or error:  # no reply to it: the first reply stands, and the log says the re-ask failed
+            asked = {"reask_failed": cut(killed or plain_error(error))}
+        else:
+            text, why, asked = again, unread(p, tid, lad, again), {"reasked": True}
+    if why:
+        return none(p, tid, text, why, **asked)
+    _, dims, fixes, gist = verdict(text)
     if lad:
         return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n)
-    if not dims:
-        return none(tid, text, "the critic's CRITIC line has no scores, and the scale has no checks to work them out.")
     caps, anchor = checks(text)
     dims, was = capped(dims, caps)
     hits = [f"{d}<={c:g}" for d, c, hit in caps if hit is True]
@@ -518,16 +546,37 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     return entry, critique
 
 
+def unread(p, tid, lad, text):
+    """Why the critic's reply is no verdict, or None when the driver can read one. A ladder reply that answers no
+    check at all is none: counting every check as `no` would send good work back for the critic's own slip."""
+    v = verdict(text)
+    if not v:
+        return "the critic's reply has no CRITIC line."
+    if p.norm(v[0]) != tid:
+        return f"the critic's CRITIC line is for {v[0]}, not {tid}."
+    if not lad:
+        return None if v[1] else "the critic's CRITIC line has no scores, and the scale has no checks to work them out."
+    ans = answers(text, lad)
+    if any(cid in ans or (d, cid) in ans for d, cs in lad.items() for _, cid, _ in cs):
+        return None
+    seen = labels(text)
+    return ("no answer the driver could match to a check (labels it saw: "
+            f"{', '.join(seen[:5]) + ('…' if len(seen) > 5 else '') if seen else 'none'}; the scale's ids: "
+            f"{', '.join(cid for cs in lad.values() for _, cid, _ in cs)}).")
+
+
+def reask(tid, why, lad):
+    """The one follow-up turn a reply the driver can't read gets, in the critic's own session: a fresh critic run
+    cost the worker a whole second review for a slip of format (T-116)."""
+    shape = ", each check on its own line labelled by its id: `- <id>: yes|no, <evidence>`" if lad else ""
+    return (f"The driver couldn't read that reply: {why} Write your whole reply again in the shape your rules "
+            f"give{shape}, ending with its CRITIC line for {tid}.")
+
+
 def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
     """judge's ending on a ladder: the driver scores the critic's check answers (`climb`), and the failed checks under
-    the bar join its "Fix in this ticket" points. A reply that answers no check at all is no verdict: counting every
-    check as `no` would send good work back for the critic's own slip."""
+    the bar join its "Fix in this ticket" points."""
     ans = answers(text, lad)
-    if not any(cid in ans for cs in lad.values() for _, cid, _ in cs):
-        seen = labels(text)
-        return none(tid, text, "no answer the driver could match to a check (labels it saw: "
-                    f"{', '.join(seen[:5]) + ('…' if len(seen) > 5 else '') if seen else 'none'}; the scale's ids: "
-                    f"{', '.join(cid for cs in lad.values() for _, cid, _ in cs)}).")
     dims, said, block, scoped, missing = climb(lad, ans, p.critic["pass"])
     eff = fixes + len(block)
     scores = " ".join(f"{d}={dims[d]:g}" if d in dims else f"{d}=-" for d in lad)
@@ -549,10 +598,14 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
     return entry, critique
 
 
-def none(tid, text, why, rerun=True):
+def none(p, tid, text, why, rerun=True, reasked=False, reask_failed=None):
     """judge's (None, reply) when there's no verdict, the reply ending in the step that says why. Only a missing pack
     is the worker's to fix: a reply the driver can't read is the critic's slip, and "fix the pack" sent a worker with
-    a sound pack to pay for a second run (R-001)."""
+    a sound pack to pay for a second run (R-001). Logged as `step: none`, so `windvane stats` can count what no
+    verdict costs: `reasked` only when the same-session re-ask replied, `reask_failed` why one didn't (an API error,
+    the deadline). `history()` leaves these lines out."""
+    append_jsonl(p.state / "critic.jsonl", {"ticket": tid, "step": "none", "why": why, "reasked": reasked,
+                                            **({"reask_failed": reask_failed} if reask_failed else {})})
     todo = (f" Your pack isn't the problem: run `windvane critic {tid}` again; if the critic keeps failing, go on."
             if rerun else "")
     return None, f"{text}\n\nCRITIC STEP: none. No verdict: {why}{todo}".lstrip()
