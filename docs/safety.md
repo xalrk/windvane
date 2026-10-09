@@ -84,7 +84,8 @@ of it; a plan's merge or push (its planner session dies at once); a periodic rou
 pushing held branches at a run's start. So a signal never leaves a half-done merge, an `index.lock`, or a pushed branch
 with nothing recorded. Those steps are bounded by their own network timeouts, and a wait for the network ends on the
 signal. A ticket's merge runs in its slot's thread and stops through the same session kill. Ctrl-C inside one of
-those steps works the same way: the step finishes, then the run stops (a second Ctrl-C changes nothing). Outside them
+those steps works the same way: the step finishes, then the run stops (a second Ctrl-C changes nothing). The step's
+git commands run in a process group of their own, so the terminal's Ctrl-C reaches only the driver, not git. Outside them
 Ctrl-C stops at once. A step that fails while a signal waits still has its error named, in the log and the "stopped"
 push's why.
 

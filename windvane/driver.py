@@ -25,7 +25,8 @@ import traceback
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 
-from . import actions, critic, install, net, phone, renumber, requests, scratch, selfupdate, statedir, worktree
+from . import (actions, critic, install, net, phone, renumber, requests, scratch, selfupdate, statedir, util,
+               worktree)
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .held import author_ident, push_held
@@ -1659,14 +1660,15 @@ class Pilot(Desk, Periodic):
     def critical(self):
         """A main-thread step that changes git state or the remote (a merge, a push, a pull, recording what it did):
         a SIGTERM or SIGHUP inside it kills the sessions at once (`on_signal`) but unwinds the run only when the step
-        ends, so it never leaves a half-done merge, an index.lock or a pushed branch with nothing recorded. Bounded by
+        ends, so it never leaves a half-done merge, an index.lock or a pushed branch with nothing recorded (Ctrl-C too:
+        its commands get a process group of their own, `util.shielded`, out of the terminal's reach). Bounded by
         the steps' own network timeouts; an outage wait ends on the signal (`wait_online`). Off the main thread (a
         slot's merge) it's no guard: signals never land there, and `kill_all` stops those threads."""
         if threading.current_thread() is not threading.main_thread():
             yield
             return
         self.guarded += 1
-        error = None
+        util.shielded, error = True, None
         try:
             yield
         except Exception as e:
@@ -1674,6 +1676,7 @@ class Pilot(Desk, Periodic):
             raise
         finally:
             self.guarded -= 1
+            util.shielded = bool(self.guarded)
             if not self.guarded and self.signalled and not self.ending:
                 if error:  # Signalled replaces it: its text goes in the log and the stopped push's why
                     said = traceback.format_exception_only(error)[-1].strip()

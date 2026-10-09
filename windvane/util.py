@@ -10,8 +10,16 @@ from datetime import datetime
 from pathlib import Path
 
 
+# Set while the driver's main thread is in a guarded step (`Pilot.critical`): the commands it runs then get a process
+# group of their own and no terminal input, so a Ctrl-C at the terminal (sent to the whole foreground group) reaches
+# only the driver, which lets the step finish, and never git in the middle of a merge.
+shielded = False
+
+
 def run(cmd, cwd, timeout=None, env=None):
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
+    own = shielded and threading.current_thread() is threading.main_thread()
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env,
+                          **({"process_group": 0, "stdin": subprocess.DEVNULL} if own else {}))
 
 
 def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1):

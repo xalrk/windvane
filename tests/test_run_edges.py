@@ -22,6 +22,21 @@ from test_pipeline import args  # noqa: E402
 from test_signal_steps import HOOK, Base, Merging, wait_for  # noqa: E402
 import test_schedule_next as sn  # noqa: E402
 
+# A driver in a process group of its own (so the test's killpg reaches nobody else) merging under a guard.
+GUARDED_MERGE = """import signal, sys
+sys.path[:0] = sys.argv[3:5]
+from windvane import driver, util
+from windvane.config import Project
+from test_pipeline import args
+pilot = driver.Pilot(Project(sys.argv[1]), args())
+signal.signal(signal.SIGINT, pilot.on_signal)
+try:
+    with pilot.critical():
+        r = util.git(sys.argv[2], "-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-ff", "-m", "m", "side")
+        print("merge exit", r.returncode, flush=True)
+except driver.Signalled:
+    print("then stopped", flush=True)
+"""
 CTRL_C = f"Why: {driver.SIGNALLED[signal.SIGINT]}; the running sessions were killed."
 
 
@@ -82,6 +97,20 @@ class CtrlC(Edges):
         self.assertClean()  # no index.lock, no MERGE_HEAD
         self.assertTrue(self.pilot.kill_all)
         self.assertEqual(self.log().count("stopping now"), 1)  # the second one changed nothing
+
+    def test_a_terminal_ctrl_c_to_the_whole_group_never_reaches_a_guarded_git(self):
+        """The terminal sends Ctrl-C to its whole foreground process group: the driver and its children alike."""
+        here = Path(__file__).resolve()
+        child = subprocess.Popen([sys.executable, "-c", GUARDED_MERGE, str(self.s.root), str(self.repo),
+                                  str(here.parents[1]), str(here.parent)], stdout=subprocess.PIPE, text=True,
+                                 start_new_session=True)
+        self.assertTrue(wait_for(self.started))
+        os.killpg(child.pid, signal.SIGINT)
+        out, _ = child.communicate(timeout=60)
+        said = [line for line in out.splitlines() if not line[:4].isdigit()]  # past the log's dated lines
+        self.assertEqual(said, ["merge exit 0", "then stopped"])
+        self.assertTrue(self.merged())
+        self.assertClean()
 
     def test_ctrl_c_outside_a_guard_stops_at_once(self):
         t = time.monotonic()
