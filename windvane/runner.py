@@ -149,6 +149,9 @@ def sweep_nested(p):
     return n
 
 
+PROBE_S = 180  # a usage probe's time box: a hung one is killed, its row says `killed: time`
+
+
 class Usage:
     """Latest 5-hour and weekly utilisation, in percent."""
 
@@ -174,19 +177,40 @@ class Usage:
         return f"5h {f(self.five)}% · week {f(self.week)}%"
 
     def probe(self, p):
-        """A tiny Haiku call, only to read the current usage."""
+        """A tiny Haiku call, only to read the current usage. It still spends tokens, so its result goes to the
+        ledger as a `probe` row, the fields a session's row has, and `stats` shows what the probes cost."""
         d = p.state / "probe"
         d.mkdir(parents=True, exist_ok=True)
+        started, killed = time.time(), None
         try:
-            out = subprocess.run(["claude", "-p", "ok", "--model", "haiku", "--output-format", "stream-json",
-                                  "--verbose", "--no-session-persistence", "--setting-sources", "local",
-                                  "--strict-mcp-config"], cwd=d, capture_output=True, text=True, timeout=180,
-                                 env=env()).stdout
-        except subprocess.TimeoutExpired:
-            return
-        for line in out.splitlines():
-            if '"rate_limit_event"' in line:
-                self.update(json.loads(line).get("rate_limit_info", {}))
+            proc = subprocess.run(["claude", "-p", "ok", "--model", "haiku", "--output-format", "stream-json",
+                                   "--verbose", "--no-session-persistence", "--setting-sources", "local",
+                                   "--strict-mcp-config"], cwd=d, capture_output=True, timeout=PROBE_S, env=env())
+            out, code = proc.stdout, proc.returncode
+        except subprocess.TimeoutExpired as e:  # killed: what it streamed before still cost
+            out, code, killed = e.stdout or b"", None, "time"
+        final, seen = {}, {}
+        for line in out.decode(errors="replace").splitlines():
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("type") == "rate_limit_event":
+                self.update(ev.get("rate_limit_info", {}))
+            elif ev.get("type") == "assistant":
+                msg = ev.get("message") or {}
+                seen[msg.get("id") or len(seen)] = msg.get("usage") or {}
+            elif ev.get("type") == "result":
+                final = ev
+        if final or seen:  # nothing streamed, nothing spent
+            end, error = ("killed", None) if killed else ending(final, code, [])
+            append_jsonl(p.state / "ledger.jsonl", {
+                "role": "probe", "label": "probe", "ticket": "", "model": "haiku", "effort": None,
+                "minutes": round((time.time() - started) / 60, 1), **spent(final, seen), "base": first_turn(seen),
+                "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error,
+                "exit": code, "stream": None})
 
 
 # The built-in tools each windvane role starts with (`--tools`). Every tool's description is re-read on every turn,
@@ -219,6 +243,21 @@ def first_turn(seen):
     prompt), cached or not. What the session reads per turn beyond this is its own growth."""
     u = next(iter(seen.values()), {})
     return sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+
+
+def spent(final, seen):
+    """A ledger row's turns and tokens, from the result event; a session killed or crashed before it gets what its
+    stream showed (`estimated`)."""
+    u, turns = final.get("usage"), final.get("num_turns")
+    estimated = not u and bool(seen)
+    if estimated:
+        u = {k: sum(m.get(k) or 0 for m in seen.values()) for k in
+             ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
+        turns = len(seen)
+    u = u or {}
+    return {"turns": turns, "estimated": estimated, "input": u.get("input_tokens", 0),
+            "output": u.get("output_tokens", 0), "cache_read": u.get("cache_read_input_tokens", 0),
+            "cache_write": u.get("cache_creation_input_tokens", 0)}
 
 
 def settings_json(allow=(), deny=()):
@@ -368,18 +407,9 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         killed, error = error, None
     if session is not None:
         session["id"] = final.get("session_id")
-    u, turns = final.get("usage"), final.get("num_turns")
-    estimated = not u and bool(seen)
-    if estimated:  # killed or crashed before its result event: add up what the stream showed
-        u = {k: sum(m.get(k) or 0 for m in seen.values()) for k in
-             ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
-        turns = len(seen)
-    u = u or {}
     append_jsonl(p.state / "ledger.jsonl", {
         "role": role, "label": label, "ticket": ticket, "model": model, "effort": effort,
-        "minutes": round((time.time() - started) / 60, 1), "turns": turns, "estimated": estimated,
-        "input": u.get("input_tokens", 0), "output": u.get("output_tokens", 0),
-        "cache_read": u.get("cache_read_input_tokens", 0), "cache_write": u.get("cache_creation_input_tokens", 0),
+        "minutes": round((time.time() - started) / 60, 1), **spent(final, seen),
         "base": first_turn(seen), "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error,
         "exit": code, "stream": raw.name})
     actions.refresh(p)  # the next worker start reads a fresh total from the cache, never waits on a count
