@@ -17,7 +17,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import driver, selfupdate  # noqa: E402
+from windvane import desk, driver, selfupdate  # noqa: E402
+from windvane.worktree import ensure_worktree  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -146,6 +147,62 @@ class Run(Merging):
                       stopped[0])
         self.assertIn("Merged: none.", stopped[0])  # no ticket started after the signal
         self.assertNotIn("T-001: worker", self.log())
+
+
+class DeskSteps(Base):
+    """The other main-thread git steps a desk PR goes through: its check's merge with main, and the stash of the
+    checkout's changes before it (isolate off)."""
+
+    def setUp(self):
+        super().setUp()
+        self.started = self.s.tmp / "hook-started"
+
+    def test_a_desk_prs_check_merge_finishes_and_its_check_never_starts(self):
+        self.s.git("switch", "-q", "-c", "pr")
+        self.s.write("pr.txt", "pr")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-qm", "pr")  # local only: git merges the PR's head by its sha
+        head = self.s.git("rev-parse", "HEAD")
+        self.s.git("switch", "-q", "main")
+        self.s.write("main.txt", "main")
+        self.s.publish("main moved")  # past the PR's base: its check runs on the merge
+        hook = self.s.root / ".git/hooks/pre-merge-commit"
+        hook.write_text(f"#!/bin/sh\n: > {self.started}\nsleep {HOOK}\n")
+        hook.chmod(0o755)
+        pilot = driver.Pilot(self.p, args())
+        ensure_worktree(self.p, pilot.cd, setup=False)
+        subprocess.run(["git", "-C", str(pilot.cd), "fetch", "-q", "origin"], check=True)
+        self.addCleanup(signal.signal, signal.SIGTERM, signal.signal(signal.SIGTERM, pilot.on_signal))
+        pid, checks = os.getpid(), []
+        threading.Thread(target=lambda: wait_for(self.started) and os.kill(pid, signal.SIGTERM), daemon=True).start()
+        with mock.patch.object(desk, "check", lambda *a: checks.append(a) or (True, "ok", "")):
+            with self.assertRaises(driver.Signalled):
+                pilot.desk_check(head)
+        self.assertEqual(checks, [])  # stopped before the check, not in it
+        git_dir = Path(self.s.git("-C", str(pilot.cd), "rev-parse", "--absolute-git-dir"))
+        self.assertFalse((git_dir / "index.lock").exists())
+        self.assertFalse((git_dir / "MERGE_HEAD").exists())
+        parents = self.s.git("-C", str(pilot.cd), "log", "-1", "--format=%P").split()
+        self.assertEqual(len(parents), 2)  # the merge was made whole
+
+    def test_the_stash_of_the_users_changes_finishes(self):
+        self.config("isolate = false\n")
+        self.s.write("mine.txt", "the user's work")
+        pilot = driver.Pilot(self.p, args())
+        self.addCleanup(signal.signal, signal.SIGTERM, signal.signal(signal.SIGTERM, pilot.on_signal))
+        real = driver.git
+
+        def git(cwd, *a, **k):
+            if a[:1] == ("stash",):
+                os.kill(os.getpid(), signal.SIGTERM)  # lands as the stash starts
+            return real(cwd, *a, **k)
+
+        with mock.patch.object(driver, "git", git), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(driver.Signalled):
+                pilot.keep_changes("checking desk PR #7")
+        self.assertIn("windvane kept:", self.s.git("stash", "list"))
+        self.assertEqual(self.s.git("status", "--porcelain"), "")
+        self.assertFalse((self.s.root / "mine.txt").exists())  # in the stash, whole
 
 
 class Teardown(Base):

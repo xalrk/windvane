@@ -78,7 +78,8 @@ can tell is the same one, by its start time (`/proc`, or `ps` on macOS), as a re
 other programs. What it killed is counted in the ledger (a `swept` row).
 
 A SIGTERM or SIGHUP (a shutdown, a closed terminal or tmux session) stops a run as `stop --now` does, but a git step
-the driver is in the middle of between tickets finishes first: a desk PR's merge, its branch's deletion and the record
+the driver is in the middle of between tickets finishes first: the stash of your checkout's changes (`isolate` off);
+a desk PR's merge with `main` for its check (not the check itself), its merge, its branch's deletion and the record
 of it; a plan's merge or push (its planner session dies at once); a periodic round's land; the self-update's pull; and
 pushing held branches at a run's start. So a signal never leaves a half-done merge, an `index.lock`, or a pushed branch
 with nothing recorded. Those steps are bounded by their own network timeouts, and a wait for the network ends on the

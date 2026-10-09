@@ -673,7 +673,8 @@ class Pilot(Desk, Periodic):
             self.stash_failed.discard(why)  # cleared: a later failure for it is news again
             return True
         msg = f"windvane kept: {now():%Y-%m-%d %H:%M} ({why})"
-        r = git(cd, "stash", "push", "-u", "-m", msg)
+        with self.critical():  # half a stash -u loses the user's untracked files from view
+            r = git(cd, "stash", "push", "-u", "-m", msg)
         if r.returncode == 0 and not gout(cd, "status", "--porcelain"):
             self.stash_failed.discard(why)
             self.log(f"{why}: stashed the checkout's uncommitted changes as \"{msg}\"")
