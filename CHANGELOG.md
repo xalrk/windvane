@@ -1,8 +1,8 @@
 # Changelog
 
 All notable changes to windvane are listed here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/).
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). A version is its release date (`2026.10.9`); a second
+release on the same day adds a number (`2026.10.9.1`).
 
 ## Unreleased
 
