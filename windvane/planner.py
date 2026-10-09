@@ -78,7 +78,8 @@ def closed_prs(p, branches):
     found closed is remembered in closed_plans.json and not asked about again (each query takes ~0.8 s, and the
     closed ones pile up, since their paid-for branches are kept). One list of the open PRs per call notices a
     reopened one: its branch leaves the file and claims its ids again, or a new plan would reuse them; when that
-    list fails, no branch counts as closed and the file stays."""
+    list fails, no branch counts as closed and the file stays. Requests `requests.reopen` sent back to the inbox
+    from a closed plan are held on it again once it reopens."""
     if p.cfg["forge"] != "github":
         return set()
     f = p.state / "closed_plans.json"
@@ -96,14 +97,21 @@ def closed_prs(p, branches):
                             "-q", ".[].state").split())
         if states == {"CLOSED"}:
             closed.add(b)
-    if closed != known:  # a deleted branch's line goes too
-        save_json(f, sorted(closed))
+    keep = closed
     if any(e["requests"] for e in p.periodic.values()):  # only the triaging project's branches hold accepts
         try:  # every closed one, each time: a plan closed before this existed, or a move cut off, is caught next time
             for rid, b in requests.reopen(closed).items():
                 log(p, f"{rid}: back in the request inbox: {b}, which held its ticket, was closed unmerged")
         except OSError as e:
             log(p, f"requests held on closed plans not reopened yet ({e}): tried again next time")
+        try:  # once per reopened plan: its line leaves the file only when this went through
+            for rid, b in requests.rehold(reopened & known).items():
+                log(p, f"{rid}: held on {b} again: its PR was reopened")
+        except OSError as e:
+            keep = closed | (reopened & known)
+            log(p, f"requests on reopened plans not held again yet ({e}): tried again next time")
+    if keep != known:  # a deleted branch's line goes too
+        save_json(f, sorted(keep))
     return closed
 
 

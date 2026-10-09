@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import subprocess
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -55,6 +56,21 @@ def files(done=None):
     where = {False: [d], True: [d / "done"], None: [d, d / "done"]}[done]
     found = (f for w in where if w.is_dir() for f in w.glob("R-*.md") if re.fullmatch(r"R-\d+", f.stem))
     return sorted(found, key=lambda f: int(f.stem[2:]))
+
+
+def write_whole(f, text):
+    """Write `f` in one step: a temp file beside it, then `os.replace`, so a full disk or a kill mid-write leaves the
+    old file (or none), never a cut one that triage would read and a retry would skip as already there."""
+    fd, tmp = tempfile.mkstemp(prefix=f".{f.name}.", suffix=".tmp", dir=f.parent)
+    try:
+        with os.fdopen(fd, "w") as out:
+            out.write(text)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp, f)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def read(f):
@@ -131,12 +147,67 @@ def tree():
 
 
 def role_here():
-    """Who runs this: the env's `WINDVANE_ROLE` (the session's finer role), unless it says desk (or nothing) inside
-    windvane's state dir or inside a session. A worker's shell can set the env, not where its tree is: run from a tree,
+    """Who runs this: the session it runs under, found from its process's ancestors (`process_role`), which nothing it
+    runs can change; outside any, the env's `WINDVANE_ROLE` (the session's finer role), unless it says desk (or
+    nothing) inside windvane's state dir or inside a session. A worker's shell can set the env, not where its tree is: run from a tree,
     `WINDVANE_ROLE=desk` (or `desk:anything`) is still that tree's session; run from elsewhere (a `cd` away, an
     `isolate = false` run in the user's checkout), it's still the session `WINDVANE_SESSION` names."""
+    found = process_role()
+    if found:
+        return found
     said = os.environ.get(ROLE, "") or "desk"
     return (tree()[0] or session_role() or said) if said.split(":")[0] == "desk" else said
+
+
+def process_role():
+    """The role runner.py recorded for the nearest session among this process's ancestors, or "" under none, as in
+    the user's own shell."""
+    return process_session()[1]
+
+
+def process_session():
+    """(name, role) of the nearest session among this process's ancestors (a `nested/<name>/session` file's first
+    field is its pid), or ("", "") under none. A pid recorded by a session that ended may be someone else's now: it
+    counts only if that process started before its file was written. A recorded desk is "session": no session is
+    the desk."""
+    recorded = {}
+    for f in user_dir("XDG_STATE_HOME", ".local/state").glob("*/nested/*/session"):
+        try:
+            pid, mtime = f.read_text(errors="replace").split()[0], f.stat().st_mtime
+        except (OSError, IndexError):
+            continue
+        if pid.isdigit():
+            recorded.setdefault(int(pid), []).append((f.parent, mtime))
+    if not recorded:
+        return "", ""
+    from .runner import started_at
+    for pid in ancestors():
+        for d, mtime in recorded.get(pid, ()):
+            t = started_at(pid)
+            if t is not None and t <= mtime + 2:  # /proc's boot time and ps's are in whole seconds
+                try:
+                    role = (d / "role").read_text(errors="replace").strip()
+                except OSError:
+                    role = ""
+                return d.name, (role if role and role.split(":")[0] != "desk" else "session")
+    return "", ""
+
+
+def ancestors(most=30):
+    """This process's parent, its parent, and so on (at most `most`), from /proc on Linux and `ps` elsewhere."""
+    from .runner import PROC
+    out, pid = [], os.getppid()
+    while pid > 1 and len(out) < most:
+        out.append(pid)
+        try:
+            if PROC.is_dir():
+                pid = int((PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[1])
+            else:
+                pid = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True,
+                                         timeout=10).stdout.strip())
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+            break
+    return out
 
 
 def session_role():
@@ -164,7 +235,7 @@ def file(title, body):
     body = clean(body.strip(), root, name) or "(no details given)"
     if len(body) > MOST:
         body = body[:MOST] + "\n… (cut)"
-    session = os.environ.get(NEST, "") or run_key()
+    session = process_session()[0] or os.environ.get(NEST, "") or run_key()  # the env's name can be changed
     with locked() as d:
         count = d / ".sessions" / session if role.startswith("worker") and session else None
         prune(d / ".sessions")
@@ -175,20 +246,19 @@ def file(title, body):
         stamp = f"{now():%Y-%m-%d %H:%M}"
         same = next((f for f in files(False) if similar(fields(read(f))[0], title) >= SIMILAR), None)
         if same:
-            with same.open("a") as out:
-                out.write(f"\n## Also from {name} (commit {commit}, {role}, {stamp}, root {key})\n{title}\n\n{body}\n")
+            write_whole(same, read(same)
+                        + f"\n## Also from {name} (commit {commit}, {role}, {stamp}, root {key})\n{title}\n\n{body}\n")
             line = f"{same.stem}: near-duplicate of \"{fields(read(same))[0]}\": your report was added to it"
         else:
             last = max((int(f.stem[2:]) for f in files()), default=0)
             same = d / f"R-{last + 1:03d}.md"
             text = (f"# {same.stem}: {title}\n- From: {name}\n- Root: {key}\n- Commit: {commit}\n- Role: {role}\n"
                     f"- Date: {stamp}\n- Verdict: none yet\n\n## Report\n{body}\n")
-            with os.fdopen(os.open(same, os.O_WRONLY | os.O_CREAT | os.O_EXCL), "w") as out:
-                out.write(text)
+            write_whole(same, text)  # under the lock, numbered past every R-file: no other has its name
             line = f"{same.stem} filed: windvane's own autopilot triages it; `windvane request --status` shows the verdict"
         if count:
             count.parent.mkdir(exist_ok=True)
-            count.write_text(str(n + 1))
+            write_whole(count, str(n + 1))
     return 0, line
 
 
@@ -241,7 +311,7 @@ def answer(rid, text):
         if not f.is_file() or not asking(fields(read(f))[1]):
             return 1, f"windvane request: {rid} isn't waiting on an answer (windvane request --status lists them)"
         body = set_verdict(read(f), "answered, back to triage")
-        f.write_text(body + f"\n## Answer from the user ({now():%Y-%m-%d %H:%M})\n{text}\n")
+        write_whole(f, body + f"\n## Answer from the user ({now():%Y-%m-%d %H:%M})\n{text}\n")
     return 0, f"{f.stem}: answered; windvane's next run triages it again with your answer"
 
 
@@ -319,9 +389,9 @@ def apply(reqs, text, landed, exists, log, held=None):
                     "question": f"question: {detail or '(none given)'}"}[kind]
             body = set_verdict(read(f), word) + f"\n## Verdict ({now():%Y-%m-%d %H:%M})\n{word}\n"
             if kind == "question":
-                f.write_text(body)
+                write_whole(f, body)
             else:
-                (d / "done" / f.name).write_text(body)
+                write_whole(d / "done" / f.name, body)
                 f.unlink()
             done[rid] = (kind, word)
     return done
@@ -339,12 +409,37 @@ def reopen(branches):
         for f in files(True) if branches else ():
             text = read(f)
             m = held.search(text.split("\n## ", 1)[0])
-            if not m or m.group(1) not in branches or (d / f.name).exists():
+            if not m or m.group(1) not in branches:
+                continue
+            b, there = m.group(1), d / f.name
+            if there.exists():  # a move cut off after its whole inbox copy was written: only the unlink is left
+                if f"): {b}, which held its ticket" in read(there).rsplit("\n## Reopened (", 1)[-1][:200]:
+                    f.unlink()
+                continue
+            write_whole(there, set_verdict(text, f"reopened: {b} was closed unmerged")
+                        + f"\n## Reopened ({now():%Y-%m-%d %H:%M}): {b}, which held its ticket, was closed unmerged\n")
+            f.unlink()
+            moved[f.stem] = b
+    return moved
+
+
+def rehold(branches):
+    """`reopen` undone for plans whose PRs came back (`branches`): a request it moved to the inbox that no triage has
+    taken since goes back to `done/` with its held accept, or the next triage could ticket it twice. One already
+    triaged again is left alone, and once moved there's nothing left to move. Returns {R-id: the branch} moved."""
+    moved = {}
+    with locked() as d:
+        for f in files(False) if branches else ():
+            text = read(f)
+            m = re.search(r"^- Verdict: reopened: (\S+) was closed unmerged$", text.split("\n## ", 1)[0], re.M)
+            if not m or m.group(1) not in branches:
                 continue
             b = m.group(1)
-            (d / f.name).write_text(set_verdict(text, f"reopened: {b} was closed unmerged")
-                                    + f"\n## Reopened ({now():%Y-%m-%d %H:%M}): {b}, which held its ticket, "
-                                    "was closed unmerged\n")
+            was = re.findall(rf"^## Verdict \([^)\n]*\)\n(accepted → \S+ \(held on {re.escape(b)}\))$", text, re.M)
+            if not was:
+                continue
+            write_whole(d / "done" / f.name, set_verdict(text, was[-1])
+                        + f"\n## Held again ({now():%Y-%m-%d %H:%M}): {b} was reopened\n")
             f.unlink()
             moved[f.stem] = b
     return moved
