@@ -155,6 +155,32 @@ class Driver(unittest.TestCase):
         self.assertIn("windvane restarting with its new code", self.log())
         self.assertNotIn("T-001", self.pilot.running)  # restarted between tickets, none was running
 
+    def test_a_failed_restart_ends_the_run_with_its_own_error(self):
+        """An exec that fails (a moved or broken interpreter) ends the run with that error in the log and the last
+        push, and the teardown still runs under the lock it kept."""
+        pushes = []
+        orig, driver.push = driver.push, lambda title, msg, *a, **k: pushes.append((title, msg))
+        self.addCleanup(setattr, driver, "push", orig)
+
+        def execv(path, argv):
+            self.calls.append(argv)
+            raise FileNotFoundError(2, "No such file or directory")  # as a real exec's: no file named
+        self.pilot.execv = execv
+        self.i.commit("windvane/driver.py", "v2\n")
+        with redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError):
+            self.pilot.run(now() + timedelta(hours=2))
+        why = (f"driver error: windvane couldn't restart on its new code ({self.calls[0][0]}: no such file or "
+               "directory); run `windvane doctor`, then start the run again")
+        self.assertIn(why, self.log())
+        self.assertNotIn("closed file", self.log())
+        [msg] = [m for t, m in pushes if t == "windvane stopped"]
+        self.assertIn(why, msg)
+        self.assertEqual((self.p.state / "lock").read_text(), "")  # torn down: emptied, then let go
+        self.assertNotIn("WINDVANE_RESTARTED", driver.os.environ)
+        again = driver.Pilot(self.p, args(parallel=1))
+        again.take_lock()
+        again.lockfile.close()
+
     def test_dirty_install_is_left_alone_with_one_log_line(self):
         self.i.commit("windvane/driver.py", "v2\n")
         old = self.i.head()
@@ -175,9 +201,11 @@ class Driver(unittest.TestCase):
         self.pilot.merged, self.pilot.failed, self.pilot.skip, self.pilot.plans = ["T-001"], ["T-002"], {"T-002"}, 1
         self.i.commit("windvane/driver.py", "v2\n")
         self.pilot.take_lock()  # as run() would have
+        self.assertFalse(driver.os.get_inheritable(self.pilot.lockfile.fileno()))  # a real exec lets it go
         self.pilot.deadline = now() + timedelta(hours=2)
         with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
             self.pilot.self_update()
+        self.pilot.lockfile.close()  # as the exec would have
         again = driver.Pilot(self.p, args(parallel=1))
         again.home = self.i.home
         with redirect_stdout(io.StringIO()):

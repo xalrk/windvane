@@ -1506,10 +1506,16 @@ class Pilot(Desk, Periodic):
             self.log(f"windvane restarting with its new code (so far merged: {names(self.merged)}; "
                      f"failed: {names(self.failed)})")
             self.hand_over()
-            self.lockfile.close()  # the restarted driver takes it again
+            # The lock stays open: its fd closes on exec (Python's are non-inheritable), so the restarted driver takes
+            # it again, and an exec that fails leaves the lock held for this run's own teardown.
             os.environ["WINDVANE_RESTARTED"] = "1"  # no second "windvane started" push; it reads restart.json
             cmd = [*exe(), *selfupdate.restart_args(self.argv, self.end())]
-            self.execv(cmd[0], cmd)
+            try:
+                self.execv(cmd[0], cmd)
+            except OSError as e:  # a moved or broken interpreter: the run ends with why (exec's own error names no file)
+                os.environ.pop("WINDVANE_RESTARTED", None)  # the teardown's helpers aren't a restarted driver's
+                raise RuntimeError(f"windvane couldn't restart on its new code ({cmd[0]}: {e.strerror.lower()}); "
+                                   "run `windvane doctor`, then start the run again") from e
 
     def hand_over(self):
         """Leaves the run's memory for the driver that replaces this one (`carry_over`)."""
