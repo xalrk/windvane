@@ -166,7 +166,7 @@ def give_answer(p, tid, option=None, text=None):
 
 def phone_answer(p, tid):
     """"ANSWER <letter>\t<text>", "LATER" or "" from the phone."""
-    return phone.answer(p.qid(tid))
+    return phone.answer(p.qid(tid), in_pass=True)
 
 
 # ---------- what the user was shown (`shown.json` in the state dir): each question reaches them once

@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -43,6 +44,7 @@ REASON = 300  # bytes of a reason or a log or session line: a set-aside or stop 
 REST = " (the rest is in the log)"
 ASKED = 200  # bytes a question push adds around its question and options: the letters, the line on typed answers
 SEND_WAIT = 30  # seconds the user's `notify` / `notify-ask` get: a stalled network must not hold up the run's loop
+LATE_FOR = 86400  # seconds a timed-out question's late phone answer still gets told what is being built
 
 
 def cut(text, most=REASON, *, log=None):
@@ -214,11 +216,7 @@ def push(title, msg, prio=3, tags="", buttons=()):
         args = ["notify", "-t", title, "-p", str(prio), "-g", tags]
         for b in buttons[:3]:
             args += ["-a", b]
-        try:
-            return subprocess.run(args + [msg], timeout=SEND_WAIT, check=False, stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL).returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            return False
+        return (tool(args + [msg], SEND_WAIT) or (1,))[0] == 0
     c = conf()
     return on(c) and send(c, title, msg, prio, tags, buttons)
 
@@ -245,6 +243,28 @@ def fit(msg, most=NTFY):
     return keep + (REST if keep else REST.lstrip())
 
 
+def tool(args, wait):
+    """(exit code, stdout) of the user's `notify` / `notify-ask`, or None when it failed to start or ran past `wait`
+    seconds. It runs in a session of its own, so a timeout kills its whole group: a `curl` it started must not post a
+    question late, after the next pass has sent it again."""
+    try:
+        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                text=True, start_new_session=True)
+    except OSError:
+        return None
+    try:
+        out, _ = proc.communicate(timeout=max(wait, 0.01))
+        return proc.returncode, out
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:  # the group is gone already, or out of reach: at least the script itself
+            proc.kill()
+        proc.stdout.close()  # a child that left the group may hold it open: wait for the script alone
+        proc.wait()
+        return None
+
+
 # ---------- questions
 
 def ask(qid, question, options):
@@ -253,12 +273,8 @@ def ask(qid, question, options):
     options = [cut(o, min(MOST, NTFY // 2 // max(len(options), 1)), log=whole_to_log) for o in options]
     room = NTFY - ASKED - sum(len(f"\nX: {o}".encode()) for o in options)  # the options keep at least half the push
     question = fit(titled(question), room)
-    if shutil.which("notify-ask"):
-        try:
-            return subprocess.run(["notify-ask", qid, question, *options], capture_output=True,
-                                  timeout=SEND_WAIT).returncode == 0
-        except (OSError, subprocess.SubprocessError):  # a timeout too: the next pass sends it again
-            return False
+    if shutil.which("notify-ask"):  # a timeout is a failed send too: the next pass sends it again
+        return (tool(["notify-ask", qid, question, *options], SEND_WAIT) or (1,))[0] == 0
     c = conf()
     if not on(c):
         return None
@@ -275,14 +291,16 @@ def ask(qid, question, options):
     return send(c, f"Question ({qid})", fit(f"{question}\n{lines}{typed}"), 4, "question", buttons)
 
 
-def answer(qid):
-    """"ANSWER <letter>\t<text>", "LATER" or "" (not answered yet)."""
+_pass_end = 0.0  # when the current pass's looks for answers must be done (see pump)
+
+
+def answer(qid, in_pass=False):
+    """"ANSWER <letter>\t<text>", "LATER" or "" (not answered yet). `in_pass`: one of a pass's looks, which share
+    the pass's SEND_WAIT, so a stalled network holds a pass over five questions for 30 s, not 2.5 min."""
     if shutil.which("notify-ask"):
-        try:
-            out = subprocess.run(["notify-ask", "--get", qid], capture_output=True, text=True,
-                                 timeout=SEND_WAIT).stdout.strip()
-        except (OSError, subprocess.SubprocessError):  # not answered yet, as far as this pass can tell
-            return ""
+        wait = _pass_end - time.time() if in_pass else SEND_WAIT
+        got = tool(["notify-ask", "--get", qid], wait) if wait > 0 else None
+        out = got[1].strip() if got else ""  # none: not answered yet, as far as this pass can tell
         return out if out.startswith(("ANSWER", "LATER")) else ""
     try:
         a = json.loads((state_dir() / "answers" / f"{qid}.json").read_text())
@@ -291,15 +309,68 @@ def answer(qid):
     return "LATER" if a.get("later") else f"ANSWER {a['option']}\t{a['text']}"
 
 
+def building(qid, key, rec):
+    return (f"{qid}: no answer came in time, so it's already building {rec}; change it with "
+            f"`windvane answer {key} <letter>`.")
+
+
 def timed_out(qid, key, rec):
     """Question `qid` (`windvane answer`'s `key`) waited out its time and `rec` is being built: a phone answer that
-    comes after it gets told so, not "recorded" and then never read. Only the built-in phone keeps questions here;
-    the user's own `notify-ask` keeps its own."""
+    comes after it gets told so, not "recorded" and then never read. The built-in phone marks its question file;
+    with the user's own `notify-ask`, `late.json` lists it for pump to look at."""
+    if shutil.which("notify-ask"):
+        try:
+            with late_lock(block=True) as late:
+                late[qid] = [key, rec, time.time()]
+        except (OSError, TypeError):
+            pass
+        return
     q = state_dir() / "questions" / f"{qid}.json"
     try:
         q.write_text(json.dumps({**json.loads(q.read_text()), "built": rec, "key": key}))
     except (OSError, ValueError):
         pass
+
+
+class late_lock:
+    """`late.json` ({qid: [key, rec, when timed out]}) under a lock, written back on leaving. Without `block`, None
+    when another process holds it: one run on this machine looks at the late answers, so none is told twice."""
+    def __init__(self, block=False):
+        self.f, self.block, self.late = state_dir() / "late.json", block, None
+
+    def __enter__(self):
+        self.f.parent.mkdir(parents=True, exist_ok=True)
+        self.lock = open(self.f.with_suffix(".lock"), "w")
+        try:
+            fcntl.flock(self.lock, fcntl.LOCK_EX | (0 if self.block else fcntl.LOCK_NB))
+        except OSError:
+            self.lock.close()
+            return None
+        try:
+            self.late = json.loads(self.f.read_text())
+        except (OSError, ValueError):
+            self.late = {}
+        return self.late
+
+    def __exit__(self, *exc):
+        if self.late is not None:
+            try:
+                self.f.write_text(json.dumps(self.late))
+            finally:
+                self.lock.close()
+
+
+def late_answers():
+    """Each timed-out question's phone answer, looked at once a pass (on the pass's budget) for a day: one that isn't
+    what is being built gets one push saying so; after it, or the day, the question is dropped."""
+    with late_lock() as late:
+        for qid, (key, rec, when) in list((late or {}).items()):
+            if time.time() - when >= LATE_FOR:
+                late.pop(qid)
+                continue
+            got = answer(qid, in_pass=True)
+            if got and (got.split()[1:2] == [rec] or push("Answer not taken", building(qid, key, rec))):
+                late.pop(qid)
 
 
 # ---------- projects the phone's commands reach
@@ -383,8 +454,7 @@ def answer_question(c, qid, letter, note=""):
     except (OSError, ValueError, KeyError):
         return reply(c, "Answer not taken", f"No open question {qid}.")
     if asked.get("built"):
-        return reply(c, "Answer not taken", f"{qid}: no answer came in time, so it's already building "
-                     f"{asked['built']}; change it with `windvane answer {asked['key']} <letter>`.")
+        return reply(c, "Answer not taken", building(qid, asked["key"], asked["built"]))
     if letter not in opts:
         return reply(c, "Answer not taken", f"{qid} has options {', '.join(sorted(opts))}.")
     (d / "answers").mkdir(parents=True, exist_ok=True)
@@ -412,9 +482,12 @@ def built(f):
 
 def answer_newest(c, letter):
     d = state_dir() / "questions"
-    qs = sorted((f for f in d.glob("*.json") if not built(f)), key=lambda f: f.stat().st_mtime) if d.exists() else []
-    if not qs:
-        return reply(c, "Answer not taken", f"No open question to answer with {letter}.")
+    every = sorted(d.glob("*.json"), key=lambda f: f.stat().st_mtime) if d.exists() else []
+    qs = [f for f in every if not built(f)]
+    recent = [f for f in every if time.time() - f.stat().st_mtime < LATE_FOR]
+    if not qs:  # only timed-out ones: the newest of the last day says what it's building instead
+        return answer_question(c, recent[-1].stem, letter) if recent else reply(
+            c, "Answer not taken", f"No open question to answer with {letter}.")
     older = f"\n({len(qs) - 1} older open: answer <id> {letter} for those.)" if len(qs) > 1 else ""
     answer_question(c, qs[-1].stem, letter, older)
 
@@ -522,9 +595,20 @@ def start_run(p):
 def pump():
     """A run's own look at the reply topic, at most every PUMP_EVERY seconds: answers and `stop` reach it even
     without the listener service. Nothing when the listener (or the user's ntfy-listen) already reads it. How many
-    messages it acted on, so a waiting run wakes up for an answer."""
-    global _last_pump
-    if shutil.which("notify-ask") or time.time() - _last_pump < PUMP_EVERY or not on(conf()):
+    messages it acted on, so a waiting run wakes up for an answer. It starts a pass: the pass's looks for answers
+    (late ones here, then the driver's) share one SEND_WAIT."""
+    global _last_pump, _pass_end
+    _pass_end = time.time() + SEND_WAIT
+    if time.time() - _last_pump < PUMP_EVERY:
+        return 0
+    if shutil.which("notify-ask"):
+        _last_pump = time.time()
+        try:
+            late_answers()
+        except Exception:  # the phone must never stop a run
+            pass
+        return 0
+    if not on(conf()):
         return 0
     _last_pump = time.time()
     try:

@@ -10,14 +10,14 @@ import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from windvane import runner  # noqa: E402
+from windvane import runner, util  # noqa: E402
 
 
 @unittest.skipUnless(shutil.which("ps"), "no ps on this system")
 class RealPs(unittest.TestCase):
     def setUp(self):
-        self.proc = runner.started_at(os.getpid()) if runner.PROC.is_dir() else None
-        patch = unittest.mock.patch.object(runner, "PROC", Path(__file__).parent / "no-such-proc")
+        self.proc = runner.started_at(os.getpid()) if util.PROC.is_dir() else None
+        patch = unittest.mock.patch.object(util, "PROC", Path(__file__).parent / "no-such-proc")
         patch.start()
         self.addCleanup(patch.stop)
 
