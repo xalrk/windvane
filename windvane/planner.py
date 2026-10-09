@@ -54,7 +54,12 @@ def pending_ids(p):
     """Ticket ids on unmerged remote `plan-*` and `periodic-*` branches: tickets whose PR is still open have claimed
     them, and so do local ones (a plan whose push was refused, waiting to be pushed by hand). A branch whose PR was
     closed unmerged frees its ids (its branch is left alone)."""
-    ids = set()
+    return set(pending_branches(p))
+
+
+def pending_branches(p):
+    """`pending_ids` as {ticket id: the branch it waits on}: a request accepted into a held ticket names its branch."""
+    ids = {}
     remote = gout(p.main_root(), "branch", "-r", "--no-merged", p.upstream, "--format=%(refname:short)").split()
     local = gout(p.main_root(), "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split()
     heads = {b: b.removeprefix(f"{p.remote}/") if b in remote else b for b in remote + local}
@@ -63,7 +68,7 @@ def pending_ids(p):
     for b, name in heads.items():
         if name not in closed:
             names = gout(p.main_root(), "ls-tree", "--name-only", b, p.tickets_rel + "/").split()
-            ids |= {p.norm(Path(n).stem) for n in names if n.endswith(".md")} - {None}
+            ids.update((t, name) for n in names if n.endswith(".md") for t in [p.norm(Path(n).stem)] if t)
     return ids
 
 
