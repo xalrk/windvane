@@ -363,7 +363,8 @@ class Periodic:
         if reply:
             body += f"\n\n## Its final reply\n{cut_lines(reply, 80)}"
         branch = f"periodic-{now():%Y%m%d-%H%M}"
-        ok, where = land_on_main(p, cd, branch, title, body)
+        with self.critical():  # a signal waits until the land is pushed
+            ok, where = land_on_main(p, cd, branch, title, body)
         how = {"near": f"right after {anchor}" if anchor else "at the top", "next": "at the top",
                "end": "at the end", "hold": "held for the desk"}.get(land, "")
         what = f"{', '.join(tickets)}, {how}" if tickets else "no new tickets"

@@ -88,7 +88,8 @@ class Desk:
             return self.desk_done(d)
         self.log(f"desk PR #{n}: {pr['title'][:60]} at {head[:7]}")
         files = self.desk_conflicts(cd, head)
-        renumbered = None if files is None else self.desk_renumber(n, branch, head, files)
+        with self.critical():  # a merge and a push to the PR's branch
+            renumbered = None if files is None else self.desk_renumber(n, branch, head, files)
         if renumbered is not None:
             files, head = None, gout(cd, "rev-parse", "HEAD")
         if files is not None:
@@ -102,6 +103,12 @@ class Desk:
             return self.desk_problem(pr, d, head, "check fails", f"The check ran on {where}: {summary}\n```\n"
                                                                  f"{tail(logf, 40)}\n```")
         self.desk_comment(n, f"**windvane check: PASSED** on {where}: {summary}. Merging.")
+        with self.critical():  # a signal waits until the merge is done and recorded
+            return self.desk_land(pr, d, head, summary, renumbered)
+
+    def desk_land(self, pr, d, head, summary, renumbered):
+        """Merge a checked desk PR at `head`, delete its branch and record it."""
+        p, n, branch = self.p, str(pr["number"]), pr["headRefName"]
         r = net.call(["gh", "pr", "merge", n, "--merge", "--match-head-commit", head], p.main_root())
         if r.returncode:
             now_head = self.desk_head(n)
@@ -133,10 +140,11 @@ class Desk:
         if git(cd, "merge-base", "--is-ancestor", p.upstream, head).returncode == 0:
             return (*self.check_at(head), head[:7])
         where = f"{head[:7]} merged with {p.main} at {gout(cd, 'rev-parse', '--short=7', p.upstream)}"
-        if not clean_detach(p, cd, p.upstream) or git(cd, *author_ident(p), "merge", "-q", "--no-ff", "-m",
-                                                      f"Check {head[:7]} merged with {p.main}", head).returncode:
-            git(cd, "merge", "--abort")
-            return False, f"couldn't merge it with {p.main}", "", where
+        with self.critical():  # the merge (or its abort) ends before a signal stops the run, not the check
+            if not clean_detach(p, cd, p.upstream) or git(cd, *author_ident(p), "merge", "-q", "--no-ff", "-m",
+                                                          f"Check {head[:7]} merged with {p.main}", head).returncode:
+                git(cd, "merge", "--abort")
+                return False, f"couldn't merge it with {p.main}", "", where
         return (*check(p, cd), where)
 
     def desk_renumber(self, n, branch, head, files):
