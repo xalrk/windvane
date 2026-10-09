@@ -328,6 +328,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     own = p.state / "nested" / raw.stem / "session"  # alive, so a run's start never sweeps what it started
     own.parent.mkdir(parents=True, exist_ok=True)
     own.write_text(owner_line(proc.pid))
+    (own.parent / "role").write_text(role)  # `windvane request` from outside its tree: who it is (requests.py)
     if mark:
         mark.parent.mkdir(parents=True, exist_ok=True)
         mark.touch()

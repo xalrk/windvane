@@ -87,6 +87,8 @@ Only branches windvane kept this way are pushed again: not your own `plan-...` c
 It doesn't: a plan branch whose PRs were all closed frees its ids and is remembered in
 `~/.local/state/windvane/<name>/closed_plans.json`, so it isn't looked up again. Its branch is kept. Reopen that PR
 and the next plan notices (one list of open PRs) and keeps its ids.
+A request accepted into a ticket held on that plan goes back to the request inbox, with a `## Reopened` line,
+so the next triage looks at it again.
 
 **`gh` errors on a GitHub project.**
 Run `gh auth status`. Workers open pull requests and the driver merges them with `gh`; it needs push and merge rights

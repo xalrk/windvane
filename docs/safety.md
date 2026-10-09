@@ -77,6 +77,19 @@ process that owns it, so a desk `windvane plan` still running beside the run kee
 can tell is the same one, by its start time (`/proc`, or `ps` on macOS), as a reboot may have handed the numbers to
 other programs. What it killed is counted in the ledger (a `swept` row).
 
+A SIGTERM or SIGHUP (a shutdown, a closed terminal or tmux session) stops a run as `stop --now` does, but a git step
+the driver is in the middle of between tickets finishes first: the stash of your checkout's changes (`isolate` off);
+a desk PR's merge with `main` for its check (not the check itself), its merge, its branch's deletion and the record
+of it; a plan's merge or push (its planner session dies at once); a periodic round's land; the self-update's pull; and
+pushing held branches at a run's start. So a signal never leaves a half-done merge, an `index.lock`, or a pushed branch
+with nothing recorded. Those steps are bounded by their own network timeouts, and a wait for the network ends on the
+signal. A ticket's merge runs in its slot's thread and stops through the same session kill. Ctrl-C still stops at
+once.
+
+A run killed outright (SIGKILL, the OOM killer) leaves its process id in the run's lock file; the next run sees it, runs
+the project's `teardown` before its setup and logs that. A teardown that fails at a run's end sends a second push
+after the "stopped" one, with the command to run by hand.
+
 ## The heavy lock
 
 Some checks and commands need the whole machine: a game engine, a render, a large build. Two of them at once, or one
@@ -111,8 +124,9 @@ from a session that may have read anything: it is censored and its outside paths
 triage session reads it fenced as data, never as instructions. A request can't change config, prompts or permissions:
 the triage writes tickets only, which become code through the normal worker, critic and reviewer, and they land at the
 queue's end. Only the desk answers a triage question (`request --answer` refuses a session), since the question is a
-call for the user. The role checks and a worker's cap of 2 are kept by the command from the environment the runner
-sets, so they stop mistakes, not a shell set on getting round them; a worker's edit tools are denied the inbox and
+call for the user. The role checks and a worker's cap of 2 are kept by the command from where it runs and the
+environment the runner sets (a session that claims to be the desk is still the session its `WINDVANE_SESSION`
+names, from any directory), so they stop mistakes, not a shell set on getting round them; a worker's edit tools are denied the inbox and
 windvane's files, but its shell could still write there: that is why every R-file is read as untrusted.
 
 ## Secrets and personal data
