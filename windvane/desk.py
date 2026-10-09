@@ -88,7 +88,8 @@ class Desk:
             return self.desk_done(d)
         self.log(f"desk PR #{n}: {pr['title'][:60]} at {head[:7]}")
         files = self.desk_conflicts(cd, head)
-        renumbered = None if files is None else self.desk_renumber(n, branch, head, files)
+        with self.critical():  # a merge and a push to the PR's branch
+            renumbered = None if files is None else self.desk_renumber(n, branch, head, files)
         if renumbered is not None:
             files, head = None, gout(cd, "rev-parse", "HEAD")
         if files is not None:
@@ -102,6 +103,12 @@ class Desk:
             return self.desk_problem(pr, d, head, "check fails", f"The check ran on {where}: {summary}\n```\n"
                                                                  f"{tail(logf, 40)}\n```")
         self.desk_comment(n, f"**windvane check: PASSED** on {where}: {summary}. Merging.")
+        with self.critical():  # a signal waits until the merge is done and recorded
+            return self.desk_land(pr, d, head, summary, renumbered)
+
+    def desk_land(self, pr, d, head, summary, renumbered):
+        """Merge a checked desk PR at `head`, delete its branch and record it."""
+        p, n, branch = self.p, str(pr["number"]), pr["headRefName"]
         r = net.call(["gh", "pr", "merge", n, "--merge", "--match-head-commit", head], p.main_root())
         if r.returncode:
             now_head = self.desk_head(n)
