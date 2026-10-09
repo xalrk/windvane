@@ -211,15 +211,15 @@ def waiting_line(info, n):
 
 
 def gave_up(log):
-    """What a heavy job whose output went to `log` waited for and never got, "the machine lock (held by ...)", from
-    the line `run` said at the timeout (its last); None when it ran: the exit code can't tell, a command may exit 75
-    itself."""
+    """What a heavy job whose output went to `log` waited for and never got, "the machine lock (held by ...)", and
+    whether a stop rather than the timeout ended the wait, from the line `run` said then (its last); None when it
+    ran: the exit code can't tell, a command may exit 75 itself."""
     try:
         lines = Path(log).read_text(errors="replace").splitlines()
     except OSError:
         return None
     m = re.match(f"({re.escape(GAVE_UP)}|{re.escape(STOPPED)})" + r"( lock)?: (.*)", lines[-1] if lines else "")
-    return m and f"the machine{m.group(2) or ''} ({m.group(3)}" + ("; stopped)" if m.group(1) == STOPPED else ")")
+    return m and (f"the machine{m.group(2) or ''} ({m.group(3)})", m.group(1) == STOPPED)
 
 
 def take(lock, entry, deadline, say, stopped=lambda: False):

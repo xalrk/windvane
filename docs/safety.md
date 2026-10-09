@@ -100,7 +100,8 @@ A check that gave up says `CHECK NOT RUN: waited N min for the machine lock (hel
 machine says nothing about the change, so it isn't a failure (its ledger row says not run, `stats` lists it apart),
 and the driver's merge gate runs it again, logging each wait, until the run's stop or deadline, without a worker run
 or a bounce. A check's wait also ends as soon as the run is stopped (`windvane stop`, with or without `--now`): it
-says `stopped while waiting for the machine` and counts as not run; a check that finds the machine free still runs.
+says `CHECK NOT RUN: stopped waiting for the machine lock (held by ...) after N min; the run is stopping, so don't run
+it again now`, and the next run's gate checks it; a check that finds the machine free still runs.
 
 ## Requests to windvane
 

@@ -16,7 +16,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import heavy, jobs  # noqa: E402
+from windvane.config import Project  # noqa: E402
 from windvane.runner import TICKET  # noqa: E402
+from helpers import Sandbox  # noqa: E402
 from test_heavy_check_wait import hold, machine  # noqa: E402
 
 ROOT = Path(__file__).parents[1]
@@ -110,9 +112,31 @@ class HeavyStop(unittest.TestCase):
             ok, summary, log = jobs.check(p, self.d, ticket="T-1")
         self.assertLess(time.time() - start, 5)
         self.assertIsNone(ok)
-        self.assertRegex(summary, rf"^CHECK NOT RUN: waited 0 min for the machine lock \(held by pid {holder.pid} "
-                                  r"\(render.sh in game/work, since \d\d:\d\d\); stopped\); run it again$")
+        self.assertRegex(summary, rf"^CHECK NOT RUN: stopped waiting for the machine lock \(held by pid {holder.pid} "
+                                  r"\(render.sh in game/work, since \d\d:\d\d\)\) after 0 min; the run is stopping, "
+                                  "so don't run it again now$")
         self.assertNotIn("checked", log.read_text())
+        self.assertEqual(jobs.waited(summary), "not run, " + summary[15:summary.index("; the run")])
+
+    def test_a_sessions_check_during_a_stop_says_not_to_retry(self):
+        """A worker's `windvane check` after `windvane stop`, the machine busy: not run at once, exit 75, and no
+        "run it again" (each retry would be cut the same way)."""
+        sb = Sandbox()
+        self.addCleanup(sb.close)
+        sb.write(".windvane/config.toml", 'name = "sandbox"\nforge = "git"\ncheck = "echo checked"\nheavy_check = true\n')
+        sb.git("commit", "-qam", "heavy check")
+        hold(self, self.d)
+        p = Project(sb.root)
+        p.state.mkdir(parents=True, exist_ok=True)
+        (p.state / "STOP").touch()
+        start = time.time()
+        out = subprocess.run(["windvane", "check"], cwd=sb.root, capture_output=True, text=True,
+                             env={**os.environ, **machine(self.d, 60)}, timeout=30)
+        self.assertLess(time.time() - start, 10)
+        self.assertEqual(out.returncode, heavy.TIMED_OUT, out.stderr)
+        self.assertIn("CHECK NOT RUN: stopped waiting for the machine lock (held by pid", out.stdout)
+        self.assertIn("the run is stopping, so don't run it again now", out.stdout)
+        self.assertNotIn("run it again\n", out.stdout)
 
     @unittest.skipUnless(Path("/proc/self/stat").exists(), "needs /proc")
     def test_a_paused_waiter_at_the_head_lets_the_next_one_in(self):

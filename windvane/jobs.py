@@ -31,11 +31,12 @@ KEEP_PASSED = 3 * 86400
 KEEP_ANY = 21 * 86400
 KEEP_FAILED = 5
 NOT_RUN, AGAIN = "CHECK NOT RUN: ", "; run it again"  # a heavy check that never got the machine
+STOPPING = "; the run is stopping, so don't run it again now"  # ...because a stop ended its wait: a retry would too
 
 
 def waited(summary):
     """A not-run check's summary as the driver logs it: it runs the check again itself, so no "run it again"."""
-    return f"not run, {summary.removeprefix(NOT_RUN).removesuffix(AGAIN)}"
+    return f"not run, {summary.removeprefix(NOT_RUN).removesuffix(AGAIN).removesuffix(STOPPING)}"
 
 
 def tree_key(p, cwd):
@@ -71,7 +72,10 @@ def check(p, cwd, quiet=False, ticket=None):
     log = logs / log_name()
     code, mins, waited = run_logged(p, ticket, cmd, cwd, log)
     if waited:
-        return None, f"{NOT_RUN}waited {mins:.0f} min for {waited}{AGAIN}", log
+        what, stopped = waited
+        if stopped:
+            return None, f"{NOT_RUN}stopped waiting for {what} after {mins:.0f} min{STOPPING}", log
+        return None, f"{NOT_RUN}waited {mins:.0f} min for {what}{AGAIN}", log
     if code == 0:
         if key and tree_key(p, cwd) == key:
             passes.mkdir(parents=True, exist_ok=True)

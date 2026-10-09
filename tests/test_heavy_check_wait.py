@@ -168,7 +168,7 @@ class GateRunsItAgain(unittest.TestCase):
                                  "check")
         self.assertIsNone(ok)
         self.assertEqual((len(runs), self.lines),
-                         (1, ["T-001: check: not run, x; the autopilot runs it again, nothing to do"]))
+                         (1, ["T-001: check: not run, x; the next run checks it again, nothing to do"]))
 
 
 if __name__ == "__main__":
