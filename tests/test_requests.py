@@ -144,8 +144,9 @@ class Requests(unittest.TestCase):
         self.assertIn("- Verdict: accepted → T-004", done["R-004"])
         # a question keeps its request open, waiting on the user, and says how to answer it
         self.assertIn("- Verdict: question: A or B?", self.inbox()["R-003"])
-        self.assertEqual(self.pushes[1:], [("windvane request R-003 asks", 'Request: Rename the critic\nQuestion: A or B?\nNot answerable from the phone: answer '
-                                        'at the desk: windvane request --answer R-003 "<your answer>"')])
+        self.assertEqual(self.pushes[1:], [("windvane request R-003 asks",
+                                            'Request: Rename the critic\nQuestion: A or B?\nNot answerable from the '
+                                            'phone: answer at the desk: windvane request --answer R-003 "<your answer>"')])
         # the session was told what the bodies are, and each sat inside its fence
         prompt = next(json.loads(line)["prompt"] for line in (self.s.tmp / "calls.jsonl").read_text().splitlines()
                       if "## Requests" in json.loads(line)["prompt"])

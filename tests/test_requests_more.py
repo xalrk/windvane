@@ -71,6 +71,9 @@ class RequestsMore(unittest.TestCase):
         code, out = self.file("Quiet hours on Sunday", **desk)
         self.assertEqual(code, 1)
         self.assertIn("refused: a worker run files at most 2 requests", out)
+        code, out = self.file("Quiet hours on Sunday", **{requests.ROLE: "desk:x"})  # any desk role, not just "desk"
+        self.assertEqual(code, 1)
+        self.assertIn("refused: a worker run files at most 2 requests", out)
         self.assertIn("- Role: worker", self.inbox()["R-002"])
         with unittest.mock.patch.dict(os.environ, desk):
             code, out = self.cli("request", "--answer", "R-001", "A")

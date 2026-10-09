@@ -133,9 +133,9 @@ def tree():
 def role_here():
     """Who runs this: the env's `WINDVANE_ROLE` (the session's finer role), unless it says desk (or nothing) inside
     windvane's state dir. A worker's shell can set the env, not where its tree is: run from a tree, `WINDVANE_ROLE=desk`
-    is still that tree's session."""
+    (or `desk:anything`) is still that tree's session."""
     said = os.environ.get(ROLE, "") or "desk"
-    return (tree()[0] or said) if said == "desk" else said
+    return (tree()[0] or said) if said.split(":")[0] == "desk" else said
 
 
 def file(title, body):
