@@ -34,7 +34,9 @@ def session_dir(p, key):
 
 
 def drop(p, key):
+    """A ticket's leftovers once it ends: its sessions' TMPDIR and its `windvane bg` jobs (jobs.job_base)."""
     shutil.rmtree(p.state / "tmp" / key, ignore_errors=True)
+    shutil.rmtree(p.state / "bg" / key, ignore_errors=True)
 
 
 def busy():

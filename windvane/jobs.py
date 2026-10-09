@@ -212,10 +212,17 @@ def tail(path, n=40):
         return ""
 
 
+def job_base(p, name):
+    """A bg job's files, minus their suffix. A ticket's sessions keep theirs under the ticket's own dir, so tickets
+    running side by side that pick the same name (`check`) each start and await their own job; the desk's (no
+    ticket) stay right under bg/. Dropped with the ticket's scratch (scratch.drop)."""
+    ticket = os.environ.get(TICKET)
+    return p.state / "bg" / (ticket or "") / name
+
+
 def bg(p, name, cmd, cwd, heavy=False):
-    d = p.state / "bg"
-    d.mkdir(parents=True, exist_ok=True)
-    base = d / name
+    base = job_base(p, name)
+    base.parent.mkdir(parents=True, exist_ok=True)
     pid = Path(f"{base}.pid")
     if pid.exists() and not Path(f"{base}.exit").exists():
         try:
@@ -241,9 +248,9 @@ def bg(p, name, cmd, cwd, heavy=False):
 
 def await_(p, name, lines=40, limit=570):
     """Block until a bg job ends, at most `limit` seconds (under one tool call's 10 minutes)."""
-    base = p.state / "bg" / name
+    base, ticket = job_base(p, name), os.environ.get(TICKET)
     if not Path(f"{base}.start").exists():
-        sys.exit(f"await: nothing started as '{name}'")
+        sys.exit(f"await: nothing started as '{name}'" + (f" for {ticket}" if ticket else ""))
     end = time.time() + limit
     exit_f = Path(f"{base}.exit")
     while not exit_f.exists() and time.time() < end:
