@@ -59,7 +59,8 @@ def cmd_stats(a, p):
 
 
 def check_runs(p, checks):
-    """(the checks that ran, reused passes, checks still running). Ran: the end rows that didn't reuse a pass, plus
+    """(the checks that ran, reused passes, checks still running, heavy checks that never ran: their wait for the
+    machine timed out, which is no failure). Ran: the end rows that didn't reuse a pass or wait in vain, plus
     a start row no end row matches (same ticket and start) whose check isn't running any more: it was killed, and
     counts as cut off like an end row with `finished: false`, timed from its start to its log's last write (the
     check's heartbeat keeps that within a minute of the kill; 0 with no log)."""
@@ -68,8 +69,9 @@ def check_runs(p, checks):
     open_ = [r for r in checks if r.get("event") == "check-start" and (r["ticket"], r.get("start")) not in ended]
     live = [r for r in open_ if jobs.running(p, r)]
     killed = [{**r, "minutes": killed_minutes(p, r), "finished": False} for r in open_ if r not in live]
-    ran = [r for r in ends if not r.get("reused")]
-    return ran + killed, len(ends) - len(ran), len(live)
+    ran = [r for r in ends if not r.get("reused") and not r.get("not_run")]
+    not_run = [r for r in ends if r.get("not_run")]
+    return ran + killed, sum(bool(r.get("reused")) for r in ends), len(live), not_run
 
 
 def killed_minutes(p, start_row):
@@ -86,7 +88,7 @@ def check_stats(checks, by, p):
     the ticket whose checks took longest. Not in the table: a check spends time, not tokens."""
     if not checks:
         return
-    ran, reused, live = check_runs(p, checks)
+    ran, reused, live, not_run = check_runs(p, checks)
     mins = sum(r.get("minutes") or 0 for r in ran)
     m = lambda x: f"{x:.0f}" if x >= 10 else f"{x:.1f}"
     cut = sum(r.get("finished") is False for r in ran)
@@ -98,7 +100,9 @@ def check_stats(checks, by, p):
         t[1] += r.get("minutes") or 0
     print(f"checks: {plural(len(ran), 'run')}, {m(mins)} min" + (f" ({mins / len(per):.1f} min a ticket checked)"
           if per else "") + (f", {failed} failed" if failed else "") + (f", {cut} cut off" if cut else "")
-          + (f", {reused} reused a pass" if reused else "") + (f", {live} still running" if live else ""))
+          + (f", {reused} reused a pass" if reused else "") + (f", {live} still running" if live else "")
+          + (f", {len(not_run)} not run (waited {m(sum(r.get('minutes') or 0 for r in not_run))} min for the machine)"
+             if not_run else ""))
     if by == "ticket" and per:
         top = max(per, key=lambda t: (per[t][1], per[t][0]))
         print(f"most check time: {top}, {plural(per[top][0], 'run')}, {m(per[top][1])} min")

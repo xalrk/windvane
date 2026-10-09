@@ -15,6 +15,11 @@ All notable changes to windvane are listed here. The format follows
   by the driver, renumbering the branch's colliding entries and its references to them, without another worker run.
 
 ### Fixed
+- A heavy check that waited its whole `heavy_wait` (new in `machine.toml`, default 60 minutes) for the machine lock
+  says `CHECK NOT RUN` with who held it, exits 75, and isn't counted as failed; the driver runs it again instead of
+  sending the ticket back to its worker.
+- A `windvane bg` job a session started before windvane updated itself is still found by `await` (and not started
+  twice) when it runs in the session's worktree; one that can't be tied to it is named in one line.
 - A ticket that asks several questions at once gets each to you as `T-007.q1`, `T-007.q2`: pushed, listed in
   `status` and preflight, answered (`windvane answer T-007.q2 B`) and timed out one by one; before, only the first
   reached you. `status` names a ticket's several provisional answers as `T-007.p1`, `T-007.p2`.

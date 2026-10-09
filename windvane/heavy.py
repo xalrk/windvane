@@ -7,6 +7,7 @@ that tool, waiting on its own lock); instead it waits until no process matching 
 
     busy = ["UnrealEditor", "ShaderCompile", "blender"]   # process-name regexes (pgrep) of heavy work started elsewhere
     min_free_gb = 6                                           # wait for this much MemAvailable before starting
+    heavy_wait = 60                                           # minutes to wait for the machine before giving up
 
 Free memory comes from Linux's /proc/meminfo; elsewhere (macOS) it isn't known, and only `busy` is waited on.
 """
@@ -24,7 +25,10 @@ from pathlib import Path
 from .config import user_dir
 
 # Process names, not command lines: `pgrep -f blender` would match any Claude session whose prompt says "blender".
-DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb": 6}
+DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb": 6, "heavy_wait": 60}
+# A wait that timed out: the exit code, and the start of the line said just before it (`gave_up` reads it back).
+TIMED_OUT = 75
+GAVE_UP = "heavy: gave up waiting for the machine"
 
 
 def machine_file():
@@ -73,7 +77,7 @@ def wait_until_clear(cfg, deadline, say):
         if not why:
             return True
         if time.time() >= deadline:
-            say(f"heavy: gave up waiting: {why}")
+            say(f"{GAVE_UP}: {why}")
             return False
         if why != said:
             say(f"heavy: waiting: {why}")
@@ -160,14 +164,28 @@ def claim(lock, cmd, cwd):
     os.write(lock, json.dumps(info).encode())
 
 
+def held_by(info):
+    if not info.get("pid"):
+        return "held by another heavy job"
+    # A clock time, not minutes held: the line is printed once and read later, when minutes would be stale.
+    since = time.strftime("%H:%M", time.localtime(info.get("since", time.time())))
+    return f"held by pid {info['pid']} ({info.get('cmd', '?')} in {info.get('cwd', '?')}, since {since})"
+
+
 def waiting_line(info, n):
-    if info.get("pid"):
-        # A clock time, not minutes held: the line is printed once and read later, when minutes would be stale.
-        since = time.strftime("%H:%M", time.localtime(info.get("since", time.time())))
-        who = f"held by pid {info['pid']} ({info.get('cmd', '?')} in {info.get('cwd', '?')}, since {since})"
-    else:
-        who = "held by another heavy job"
-    return f"heavy: waiting for the machine lock: {who}; " + (f"{n} ahead of this job" if n else "next in line")
+    return f"heavy: waiting for the machine lock: {held_by(info)}; " + (f"{n} ahead of this job" if n else "next in line")
+
+
+def gave_up(log):
+    """What a heavy job whose output went to `log` waited for and never got, "the machine lock (held by ...)", from
+    the line `run` said at the timeout (its last); None when it ran: the exit code can't tell, a command may exit 75
+    itself."""
+    try:
+        lines = Path(log).read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    m = re.match(re.escape(GAVE_UP) + r"( lock)?: (.*)", lines[-1] if lines else "")
+    return m and f"the machine{m.group(1) or ''} ({m.group(2)})"
 
 
 def take(lock, entry, deadline, say):
@@ -188,19 +206,20 @@ def take(lock, entry, deadline, say):
             say(waiting_line(info, n))
             said = key
         if time.time() >= deadline:
-            say("heavy: gave up waiting for the machine lock")
+            say(f"{GAVE_UP} lock: {held_by(info)}")
             return False
         time.sleep(1)
 
 
-def run(cmd, wait_s=3600, cwd=None):
-    """Run `cmd` under the machine-wide heavy lock. Returns its exit code (75 if the wait timed out).
+def run(cmd, wait_s=None, cwd=None):
+    """Run `cmd` under the machine-wide heavy lock. Returns its exit code (TIMED_OUT if the wait timed out, after
+    `wait_s` seconds, or machine.toml's `heavy_wait` minutes).
 
     Jobs run in arrival order: each joins a queue when it asks and waits there for the lock, then holds the lock
     while it waits for the machine to clear (busy processes, free memory), so it keeps its place throughout."""
     say = lambda m: print(m, file=sys.stderr, flush=True)
     cfg = machine()
-    deadline = time.time() + wait_s
+    deadline = time.time() + (cfg["heavy_wait"] * 60 if wait_s is None else wait_s)
     path = lock_path()
     env = {**os.environ, "WINDVANE_HEAVY_HELD": str(path)}
     if os.environ.get("WINDVANE_HEAVY_HELD") == str(path):  # nested: the outer one already holds it
@@ -209,13 +228,13 @@ def run(cmd, wait_s=3600, cwd=None):
     lock = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
     try:
         if not take(lock, entry, deadline, say):
-            return 75
+            return TIMED_OUT
         leave_queue(entry)  # the lock keeps this job's place now; the next waiter becomes the head and waits on it
         entry = None
         try:
             claim(lock, cmd, cwd)
             if not wait_until_clear(cfg, deadline, say):
-                return 75
+                return TIMED_OUT
             return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
         finally:
             os.ftruncate(lock, 0)
