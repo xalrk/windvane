@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import doctor, driver, install, jobs, net, phone, planner, preflight, questions, requests, schedule, watch
+from . import doctor, driver, heavy, install, jobs, net, phone, planner, preflight, questions, requests, schedule, watch
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, exe, find, slots, toplevel
@@ -465,10 +465,10 @@ def cmd_answer(a, p):
 
 def cmd_check(a, p):
     ok, summary, log = jobs.check(p, os.getcwd())
-    if not ok and log:
+    if ok is False and log:
         print(jobs.tail(log, a.lines))
     print(summary)
-    sys.exit(0 if ok else 1)
+    sys.exit(0 if ok else 1 if ok is False else heavy.TIMED_OUT)  # not run: not a failure
 
 
 CRITIC_WAIT = 8  # minutes of retry pauses `windvane critic` may spend: the worker's Bash call stops at 10
@@ -688,7 +688,8 @@ def main(argv=None):
     s.add_argument("name")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
-    s.add_argument("--wait", type=float, default=60, help="minutes to wait for the machine before giving up")
+    s.add_argument("--wait", type=float, help="minutes to wait for the machine before giving up "
+                                              "(default: machine.toml's heavy_wait, 60)")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("await", help="wait (up to ~9.5 min) for a bg command (this ticket's own)")
     s.add_argument("name")
@@ -735,9 +736,8 @@ def main(argv=None):
     if a.cmd == "request":
         return cmd_request(a)
     if a.cmd == "heavy":
-        from .heavy import run as heavy_run
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
-        sys.exit(heavy_run(cmd, a.wait * 60) if cmd else "heavy: give a command")
+        sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60) if cmd else "heavy: give a command")
     p = find()
     phone.use(p)
     if a.cmd == "run":

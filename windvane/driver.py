@@ -571,7 +571,9 @@ class Pilot(Desk, Periodic):
             return
         if not self.clean_wait(tid, f"checking {tid}"):
             return
-        ok, summary, logf = self.check_at(sha, tid)
+        ok, summary, logf = self.ran(tid, lambda: self.check_at(sha, tid), f"check on {sha[:7]}")
+        if ok is None:  # stopped while the machine was busy: the next run's worker finds the head and is READY again
+            return
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
         if not ok:
             self.feedback[tid] = f"The check fails on {sha[:12]}: {summary}\n```\n{tail(logf, 40)}\n```"
@@ -689,6 +691,19 @@ class Pilot(Desk, Periodic):
                  4, "warning")
         return False
 
+    def ran(self, tid, run, what):
+        """`run()` (a check) again until it runs: a heavy check whose wait for the machine timed out says nothing
+        about the ticket, so it costs no worker run and no bounce, only a line in the log for each wait. (None, ...)
+        when a stop or the deadline comes first."""
+        while True:
+            ok, summary, logf = run()
+            if ok is not None:
+                return ok, summary, logf
+            self.log(f"{tid}: {what}: {summary}")
+            if self.stopping_now() or (self.p.state / "STOP").exists() or now() >= self.end():
+                return ok, summary, logf
+            self.nap(now() + timedelta(seconds=STASH_WAIT))  # a short heavy_wait mustn't spin
+
     def check_at(self, rev, ticket=None):
         cd = self.cd
         if not clean_detach(self.p, cd, rev):
@@ -793,7 +808,9 @@ class Pilot(Desk, Periodic):
             if renumbered is not None:
                 self.log(f"{tid}: conflicted with {p.main} only in appended entries: {said(renumbered)}; resolved "
                          "without a worker run")
-            ok, summary, logf = check(p, cd, ticket=tid)
+            ok, summary, logf = self.ran(tid, lambda: check(p, cd, ticket=tid), "check on the merged tree")
+            if ok is None:
+                return None
             if not ok:
                 self.feedback[tid] = (f"Merged with the current {p.upstream}, your head {sha[:12]} fails the check: "
                                       f"{summary}\n```\n{tail(logf, 40)}\n```\nMerge {p.upstream} into your branch "

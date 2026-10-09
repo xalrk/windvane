@@ -95,6 +95,9 @@ class Desk:
             return self.desk_problem(pr, d, head, f"conflicts with {p.main}",
                                      f"`git merge-tree` finds conflicts in: {', '.join(files) or '(unnamed)'}")
         ok, summary, logf, where = self.desk_check(head)
+        if ok is None:  # the machine was busy: nothing the PR did, so no fix session; checked at the next listing
+            self.desk_prs, self.desk_looked = [], time.time()
+            return self.log(f"desk PR #{n}: {summary}")
         if not ok:
             return self.desk_problem(pr, d, head, "check fails", f"The check ran on {where}: {summary}\n```\n"
                                                                  f"{tail(logf, 40)}\n```")

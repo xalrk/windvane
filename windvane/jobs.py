@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import scratch
+from . import heavy, scratch
 from .config import exe
 from .runner import NEST, TICKET
 from .util import append_jsonl, gout, now, read_jsonl
@@ -49,7 +49,8 @@ def ledger(p, ticket, row, event="check"):
 
 
 def check(p, cwd, quiet=False, ticket=None):
-    """Run the project's check in `cwd`. Returns (passed, summary line, log path)."""
+    """Run the project's check in `cwd`. Returns (passed, summary line, log path); passed is None when a heavy check
+    never ran: its wait for the machine timed out, which says nothing about the tree, so callers try it again."""
     cmd = p.cfg["check"]
     if not cmd:
         return True, "CHECK PASSED (no check configured)", None
@@ -62,7 +63,9 @@ def check(p, cwd, quiet=False, ticket=None):
     logs.mkdir(parents=True, exist_ok=True)
     prune(p, logs)
     log = logs / log_name()
-    code, mins = run_logged(p, ticket, cmd, cwd, log)
+    code, mins, waited = run_logged(p, ticket, cmd, cwd, log)
+    if waited:
+        return None, f"CHECK NOT RUN: waited {mins:.0f} min for {waited}; run it again", log
     if code == 0:
         if key and tree_key(p, cwd) == key:
             passes.mkdir(parents=True, exist_ok=True)
@@ -86,9 +89,10 @@ def run_logged(p, ticket, cmd, cwd, log):
     stays locked while the check runs (the kernel drops the lock on a kill), so `running` tells a check still going
     from one cut off; the start row is written only once it's locked, or `stats` could catch it unlocked and call a
     check that just started cut off. A heartbeat touches the log while the check runs, so a kill is timed within
-    `HEARTBEAT` even when the check went quiet."""
+    `HEARTBEAT` even when the check went quiet. Returns (exit code, minutes, what a heavy check waited for and never
+    got, or None): such a row says `not_run`, and `stats` doesn't count it a failure."""
     start = time.time()
-    code = None
+    code = waited = None
     t = ticket or os.environ.get(TICKET)  # a ticket's check gets its scratch dir as TMPDIR, as its sessions do
     env = {**os.environ, **({"TMPDIR": str(scratch.session_dir(p, t))} if t else {})}
     try:
@@ -107,11 +111,13 @@ def run_logged(p, ticket, cmd, cwd, log):
                                           env=env).returncode
             finally:
                 beat.set()
+        if p.cfg["heavy_check"] and code == heavy.TIMED_OUT:
+            waited = heavy.gave_up(log)
     finally:
         mins = (time.time() - start) / 60
         ledger(p, ticket, {"minutes": round(mins, 2), "passed": code == 0, "reused": False, "start": round(start, 3),
-                           **({} if code is not None else {"finished": False})})
-    return code, mins
+                           **({} if code is not None else {"finished": False}), **({"not_run": True} if waited else {})})
+    return code, mins, waited
 
 
 def heartbeat(log):
@@ -153,7 +159,8 @@ def outcomes(p):
     start row names the log, its end row (same ticket and start) says how it went. A log no row names (a check at
     the desk, for no ticket) is in neither, and counts as not passed."""
     rows = read_jsonl(p.state / "ledger.jsonl")
-    ends = {(r.get("ticket"), r["start"]): r.get("passed") for r in rows if r.get("event") == "check" and "start" in r}
+    ends = {(r.get("ticket"), r["start"]): r.get("passed") or r.get("not_run")  # a check that never ran: no failure
+            for r in rows if r.get("event") == "check" and "start" in r}
     starts = [r for r in rows if r.get("event") == "check-start" and "log" in r]
     return ({r["log"] for r in starts if ends.get((r.get("ticket"), r.get("start")))},
             {r["log"]: r for r in starts if (r.get("ticket"), r.get("start")) not in ends})
@@ -220,18 +227,71 @@ def job_base(p, name):
     return p.state / "bg" / (ticket or "") / name
 
 
+def find_job(p, name):
+    """(the base of the job `name` the caller owns, an unscoped job of that name it can't tie to itself or None).
+
+    A ticket's job started by an older windvane (before job_base scoped them) sits at the unscoped path, and the
+    installed windvane updates under a running session: that job is the caller's when it runs in the caller's
+    worktree, by the cwd `bg` recorded or, for an older job, its live pid's. Any other stays another's (T-118)."""
+    base, old = job_base(p, name), p.state / "bg" / name
+    if base == old or Path(f"{base}.start").exists() or not Path(f"{old}.start").exists():
+        return base, None
+    where = job_cwd(old)
+    if where and worktree(where) == worktree(os.getcwd()):
+        return old, None
+    return base, old
+
+
+def job_cwd(base):
+    """Where a job runs: as `bg` recorded it, or for an older windvane's job, its live pid's working directory."""
+    try:
+        return Path(f"{base}.cwd").read_text().strip()
+    except OSError:
+        pass
+    try:
+        return os.readlink(f"/proc/{int(Path(f'{base}.pid').read_text())}/cwd")
+    except (OSError, ValueError):  # dead, or no /proc (macOS): nothing ties it to anyone
+        return None
+
+
+def worktree(path):
+    """The git worktree `path` is in (`path` itself outside one), or None when it's gone."""
+    try:
+        path = Path(path).resolve(strict=True)
+    except OSError:
+        return None
+    return Path(gout(path, "rev-parse", "--show-toplevel") or path).resolve()
+
+
+def alive(base):
+    """Whether a job runs: no exit written, and its pid is alive."""
+    if Path(f"{base}.exit").exists():
+        return False
+    try:
+        os.kill(int(Path(f"{base}.pid").read_text()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def stray_line(name, base):
+    """One line on an unscoped job the caller can't tie to itself, so a worker isn't left guessing where it went."""
+    exit_f = Path(f"{base}.exit")
+    how = (f"exited {exit_f.read_text().strip()}" if exit_f.exists() else "running" if alive(base) else
+           "not running, no exit recorded")
+    return (f"a '{name}' job outside this ticket (another worktree's, or one an older windvane started that can't be "
+            f"tied to it): {how}; log {base}.log")
+
+
 def bg(p, name, cmd, cwd, heavy=False):
+    if alive(find_job(p, name)[0]):
+        sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
     base = job_base(p, name)
     base.parent.mkdir(parents=True, exist_ok=True)
     pid = Path(f"{base}.pid")
-    if pid.exists() and not Path(f"{base}.exit").exists():
-        try:
-            os.kill(int(pid.read_text()), 0)
-            sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
-        except (OSError, ValueError):
-            pass
     Path(f"{base}.exit").unlink(missing_ok=True)
     Path(f"{base}.start").write_text(str(int(time.time())))
+    Path(f"{base}.cwd").write_text(str(Path(cwd).resolve()))  # ties it to its worktree, should job_base move again
     if heavy:
         cmd = [*exe(), "heavy", "--", *cmd]
     proc = subprocess.Popen(["bash", "-c", '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"', str(base), *cmd],
@@ -248,9 +308,10 @@ def bg(p, name, cmd, cwd, heavy=False):
 
 def await_(p, name, lines=40, limit=570):
     """Block until a bg job ends, at most `limit` seconds (under one tool call's 10 minutes)."""
-    base, ticket = job_base(p, name), os.environ.get(TICKET)
+    (base, stray), ticket = find_job(p, name), os.environ.get(TICKET)
     if not Path(f"{base}.start").exists():
-        sys.exit(f"await: nothing started as '{name}'" + (f" for {ticket}" if ticket else ""))
+        sys.exit(f"await: nothing started as '{name}'" + (f" for {ticket}" if ticket else "")
+                 + (f"\n{stray_line(name, stray)}" if stray else ""))
     end = time.time() + limit
     exit_f = Path(f"{base}.exit")
     while not exit_f.exists() and time.time() < end:

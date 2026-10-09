@@ -65,7 +65,7 @@ class SilentHang(Check):
         os.waitpid(child, 0)
         real = time.time() - self.starts()[0]["start"]
         self.assertEqual((self.logs / self.starts()[0]["log"]).stat().st_size, 0)  # it printed nothing
-        ran, _, live = stats.check_runs(self.p, read_jsonl(self.ledger))
+        ran, _, live, _ = stats.check_runs(self.p, read_jsonl(self.ledger))
         self.assertEqual((len(ran), ran[0]["finished"], live), (1, False, 0))
         self.assertGreater(real, hang)
         self.assertLess(abs(ran[0]["minutes"] * 60 - real), beat + 0.6)  # one beat, and the 0.01 min rounding
