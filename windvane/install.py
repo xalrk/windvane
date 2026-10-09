@@ -66,7 +66,7 @@ def changing():
             except BlockingIOError:
                 if time.time() > until:
                     raise TimeoutError(f"{manifest_path()} is busy: another windvane install, init or run is "
-                                       "changing it") from None
+                                       "changing it; try again in a moment") from None
                 time.sleep(0.1)
         m = load()
         before = json.dumps(m)
@@ -163,8 +163,7 @@ def uninstall(yes=False):
     except (Unreadable, TimeoutError) as e:
         print(f"windvane uninstall: nothing removed: {e}")
         return
-    if removed:
-        manifest_path().with_name("install.json.lock").unlink(missing_ok=True)
+    if removed:  # install.json.lock stays: removing it could let two later writers lock different files
         print(f"removed. {removal_hint()}")
 
 

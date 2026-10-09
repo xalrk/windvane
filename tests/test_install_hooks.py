@@ -2,6 +2,7 @@
 when it can't be read, a project's own hooks come back at its run's start, and old hooks are known for any name."""
 import argparse
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -84,6 +85,37 @@ class InstallHooks(unittest.TestCase):
         self.assertIn(f"phone hooks: not written: {f} can't be read", out.getvalue())
         self.assertEqual(out.getvalue().count("can't be read"), 1)
         self.assertFalse((self.ntfy / "stop.d").exists())
+
+    def test_a_busy_record_is_left_alone_by_init_and_a_run_which_say_so_and_carry_on(self):
+        f = install.manifest_path()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text('{"paths": [], "settings": ["kept"]}')
+        held = open(f.with_name("install.json.lock"), "a")  # another install, waiting on its questions
+        self.addCleanup(held.close)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        out = io.StringIO()
+        with mock.patch.object(install, "LOCK_WAIT", 0.3), contextlib.redirect_stdout(out):
+            cli.cmd_init(argparse.Namespace(dir=str(self.s.root), name=None, check="true", forge=None))
+            p = Project(self.s.root)
+            pilot = driver.Pilot(p, Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0, answer_wait=10,
+                                              replan=0, goal="", parallel=1))
+            pilot.run(now() + timedelta(minutes=5))
+        self.assertIn(f"phone hooks: not written: {f} is busy", out.getvalue())
+        self.assertIn("try again in a moment", out.getvalue())
+        self.assertEqual(pilot.stop_reason, "queue empty")
+        self.assertIn(f"phone hooks: not tidied ({f} is busy", (p.state / "autopilot.log").read_text())
+        self.assertEqual(f.read_text(), '{"paths": [], "settings": ["kept"]}')
+        self.assertFalse((self.ntfy / "stop.d").exists())
+
+    def test_uninstall_keeps_the_lock_file_so_later_writers_share_it(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.s.tmp / "claude-config")}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            install.install(yes=True)
+            lock = install.manifest_path().with_name("install.json.lock")
+            inode = lock.stat().st_ino
+            install.uninstall(yes=True)
+        self.assertFalse(install.manifest_path().exists())
+        self.assertEqual(lock.stat().st_ino, inode)
 
     def test_install_and_uninstall_leave_an_unreadable_record_as_it_is(self):
         f = install.manifest_path()
