@@ -671,7 +671,7 @@ def main(argv=None):
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
     s.add_argument("--wait", type=float, default=60, help="minutes to wait for the machine before giving up")
     s.add_argument("command", nargs=argparse.REMAINDER)
-    s = sub.add_parser("await", help="wait (up to ~9.5 min) for a bg command")
+    s = sub.add_parser("await", help="wait (up to ~9.5 min) for a bg command (this ticket's own)")
     s.add_argument("name")
     s.add_argument("lines", nargs="?", type=int, default=40)
     s = sub.add_parser("plan", help="a planner run writes tickets for a goal and the critic's follow-ups")
