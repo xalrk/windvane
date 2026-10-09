@@ -322,13 +322,14 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
              **(extra_env or {})}
     if limits:
         extra.update(WINDVANE_STOP_AT=str(limits[0].timestamp()), WINDVANE_CAPS=f"{limits[1]:g},{limits[2]:g}")
+    own = p.state / "nested" / raw.stem / "session"  # alive, so a run's start never sweeps what it started
+    own.parent.mkdir(parents=True, exist_ok=True)
+    # `windvane request` from outside its tree: who it is (requests.py), written first: the session may ask at once
+    (own.parent / "role").write_text(role)
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             start_new_session=True, env=env(extra))
     mark = p.state / "nested" / parent / str(proc.pid) if parent else None
-    own = p.state / "nested" / raw.stem / "session"  # alive, so a run's start never sweeps what it started
-    own.parent.mkdir(parents=True, exist_ok=True)
     own.write_text(owner_line(proc.pid))
-    (own.parent / "role").write_text(role)  # `windvane request` from outside its tree: who it is (requests.py)
     if mark:
         mark.parent.mkdir(parents=True, exist_ok=True)
         mark.touch()
