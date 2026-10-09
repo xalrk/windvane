@@ -71,7 +71,7 @@ class ManyQuestions(unittest.TestCase):
         pl.send_unsent()
         self.assertEqual([qid for qid, _ in self.asked], [self.p.qid("T-001.q1"), self.p.qid("T-001.q2")])
         self.assertTrue(self.p.qid("T-001.q2").endswith("-t-001-q2"))
-        self.assertIn("(T-001.q2): Big or small?", self.asked[1][1])
+        self.assertTrue(self.asked[1][1].startswith("do T-001 (T-001.q2): Big or small?"), self.asked[1][1])
         status = self.cli("status")
         self.assertIn("waiting on you: T-001.q1: Red or blue?", status)
         self.assertIn("waiting on you: T-001.q2: Big or small?", status)

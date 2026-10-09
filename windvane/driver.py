@@ -260,9 +260,10 @@ class Pilot(Desk, Periodic):
     def log(self, msg):
         log(self.p, msg)
 
-    def name(self, tid):
+    def name(self, tid, key=None):
+        """The ticket's title and id; `key` shows instead of the id (one of its several questions: `T-003.q2`)."""
         t = self.queue.titles.get(tid, "") if hasattr(self, "queue") else ""
-        return f"{t} ({tid})" if t else tid
+        return f"{t} ({key or tid})" if t else key or tid
 
     def end(self):
         """The run's deadline, live: `windvane deadline` moves it by writing DEADLINE in the state dir, and every
@@ -973,8 +974,7 @@ class Pilot(Desk, Periodic):
         wait = "" if q["must_wait"] or not q["rec"] else (
             f" No answer in {self.a.answer_wait:g} min: I go with {q['rec']} and mark it to revisit.")
         opts = [q["opts"][k] for k in sorted(q["opts"])]
-        which = f" ({key})" if key != tid else ""
-        sent = phone.ask(self.p.qid(key), f"{self.name(tid)}{which}: {q['q']}{wait}", opts)
+        sent = phone.ask(self.p.qid(key), f"{self.name(tid, key)}: {q['q']}{wait}", opts)
         if sent is None:
             self.log(f"{key}: no phone; answer at the desk with `windvane answer {key} <letter>`")
         elif sent:  # the Done push then names it in one line, without the question
