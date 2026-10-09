@@ -119,7 +119,7 @@ def cmd_run(a, p):
         sys.exit(f"already running in tmux session {p.tmux}")
     st = not os.environ.get(driver.SUPERVISED) and schedule.state(p)  # (not the window's own)
     if st and st["waiting"]:
-        sys.exit(f"a schedule is {schedule.word(st)}; change it with windvane stop, then run again")
+        sys.exit(f"a schedule is {schedule.word(st)}; cancel it with windvane stop, then run again")
     if driver.locked(p) or st:
         sys.exit("already running: stop it with windvane stop")
     if not a.no_preflight and sys.stdin.isatty():  # never blocks a run started from a script

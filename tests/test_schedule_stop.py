@@ -70,7 +70,7 @@ class ScheduleStop(unittest.TestCase):
                 self.stop()
         self.during_wait = wait
         self.go("--from", "12:00", "--until", "20:00")
-        self.assertEqual(said, ["a schedule is waiting: starts 12:00 (until 20:00); change it with windvane stop, "
+        self.assertEqual(said, ["a schedule is waiting: starts 12:00 (until 20:00); cancel it with windvane stop, "
                                 "then run again"])
 
     def test_a_daily_windows_stopped_push_names_the_next_window_and_the_last_one_doesnt(self):
