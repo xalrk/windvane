@@ -162,7 +162,8 @@ elif system.startswith("# windvane critic") and prompt.startswith("Critique the 
     beyond = os.environ.get(f"FAKE_PROJECT_BEYOND_{dim}", f"- improve {dim} (new)").replace("|", "\n")
     text += f"Fine.\nBeyond:\n{beyond}\nFor the user: decide {dim}\nCRITIC: PROJECT fixes=0 {dim} ok"
 elif system.startswith("# windvane critic"):
-    tid = re.search(r"Critique (\S+)\.", prompt).group(1)
+    m = re.search(r"Critique (\S+)\.", prompt)  # a re-ask in the same session: its ticket from the env
+    tid = m.group(1) if m else os.environ["WINDVANE_TICKET"]
     if os.environ.get("FAKE_CRITIC_PID"):  # a slow critic, to be killed with its worker
         import time
         open(os.environ["FAKE_CRITIC_PID"], "w").write(str(os.getpid()))
@@ -173,6 +174,8 @@ elif system.startswith("# windvane critic"):
             f"CRITIC: {score}/10 {tid} fixes={fixes} good")
     if os.environ.get("FAKE_CRITIC_TEXT"):  # a whole critique, `{tid}` filled in
         text = os.environ["FAKE_CRITIC_TEXT"].replace("{tid}", tid)
+    if "--resume" in args and os.environ.get("FAKE_CRITIC_REASK"):  # its reply to the driver's re-ask
+        text = os.environ["FAKE_CRITIC_REASK"].replace("{tid}", tid)
 elif system.startswith("# windvane planner run"):
     ids = re.search(r"## Ids for new tickets.*\n(.*)", prompt).group(1).split(", ")
     os.makedirs(".windvane/tickets", exist_ok=True)
@@ -246,7 +249,7 @@ elif system.startswith("# windvane preflight"):  # FAKE_PREFLIGHT: the questions
     text = found + "\nPREFLIGHT: " + ("1 questions" if found else "NONE")
 emit({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", "text": text}], "usage": {
     "input_tokens": 3, "cache_creation_input_tokens": 4000, "cache_read_input_tokens": 6000}}})  # the first turn
-emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01,
+emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01, "session_id": "fake-session",
       "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100}})
 '''
 

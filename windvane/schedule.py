@@ -7,6 +7,7 @@ schedule stopped: a waiting one ends at once, a running window after its current
 `windvane deadline` moves the end of the running window, or of the next one while waiting. Nothing outlives the tmux
 session: a reboot ends the schedule.
 """
+import contextlib
 import fcntl
 import re
 import time
@@ -15,7 +16,7 @@ from datetime import datetime, timedelta
 from . import driver, questions, selfupdate
 from .util import hhmm, load_json, log, now, save_json
 
-STATE, LOCK, STOPPED = "schedule.json", "schedule.lock", "schedule-stop"  # in the project's state dir
+STATE, LOCK, STOPPED, TURN = "schedule.json", "schedule.lock", "schedule-stop", "schedule.turn"  # in the state dir
 POLL = 10  # seconds between looks at the clock and for a stop while waiting
 
 
@@ -115,7 +116,13 @@ def run(p, argv, window, daily=None, start=None, sleep=time.sleep):
                 log(p, f"schedule ended by windvane stop, before {hhmm(s)}")
                 break
             e = moved(p, s) or e
-            save_json(p.state / STATE, {"start": iso(s), "end": iso(e), "daily": daily, "waiting": False})
+            nxt = daily and next_window(daily, e, s)  # for the window's stopped push
+            with turn(p):  # a stop lands before this (nothing starts) or sees the window running (it stops)
+                if stopped(p):
+                    log(p, f"schedule ended by windvane stop, as the {hhmm(s)} window was starting")
+                    break
+                save_json(p.state / STATE, {"start": iso(s), "end": iso(e), "daily": daily, "waiting": False,
+                                            "next": nxt and [iso(nxt[0]), iso(nxt[1])]})
             rc = driver.supervise(p, window_args(argv, e), e, start=start, sleep=sleep)
             (p.state / "DEADLINE").unlink(missing_ok=True)  # moved this window's end only
             if stopped(p):
@@ -129,6 +136,14 @@ def run(p, argv, window, daily=None, start=None, sleep=time.sleep):
             (p.state / f).unlink(missing_ok=True)
         lock.close()
     return rc
+
+
+@contextlib.contextmanager
+def turn(p):
+    """Held while the schedule starts a window and while `stop` reads and marks it, so `stop` says what happens."""
+    with open(p.state / TURN, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
 
 
 def wait(p, start, sleep):
@@ -191,6 +206,24 @@ def stop(p):
 
 def stopped(p):
     return (p.state / STOPPED).exists()
+
+
+def called_off(p):
+    """A running schedule was stopped: its window's driver keeps the STOP that `stop` left, even one it starts
+    with (it clears an earlier run's otherwise)."""
+    return stopped(p) and state(p) is not None
+
+
+def next_line(p):
+    """The window driver's stopped push's last line, "Next window: tomorrow 12:00-20:00", or "" when no window
+    follows (not daily, or stopped)."""
+    nxt = (load_json(p.state / STATE, None) or {}).get("next")
+    if not nxt or stopped(p) or state(p) is None:
+        return ""
+    s, e = map(datetime.fromisoformat, nxt)
+    days = (s.date() - now().date()).days
+    day = "today" if days == 0 else "tomorrow" if days == 1 else f"{s:%a %d %b}"
+    return f"\nNext window: {day} {s:%H:%M}-{e:%H:%M}."
 
 
 def what(daily, end):

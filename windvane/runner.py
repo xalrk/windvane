@@ -297,8 +297,9 @@ def ending(final, code, noise):
 
 
 def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=None, stop_if=None, ticket="",
-               limits=None, extra_env=None):
-    """Run one headless session to its end. `stop_if()` returns a reason to kill it (deadline, usage cap);
+               limits=None, extra_env=None, resume=None, session=None):
+    """Run one headless session to its end. `resume` continues an earlier session by its id, so a follow-up turn
+    reads that context from the cache instead of paying for it fresh; `session`, a dict, gets this one's id. `stop_if()` returns a reason to kill it (deadline, usage cap);
     `limits` (kill time, 5-hour cap, weekly cap) passes the same rule on to sessions started inside this one.
     Returns (final text, why it was stopped or None, why it failed or None): a failure is the session's own
     (API error, crash), never the ticket's, so callers can retry it; a session out of its own turns or budget comes
@@ -314,7 +315,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     raw.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["claude", "-p", prompt, "--model", model, "--effort", effort, "--permission-mode", "auto",
            "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local",
-           *lean_flags(p, role), "--settings", settings_json(allow, deny), "--append-system-prompt", system]
+           *lean_flags(p, role), "--settings", settings_json(allow, deny), "--append-system-prompt", system,
+           *(["--resume", resume] if resume else [])]
     started, parent = time.time(), os.environ.get(NEST)
     extra = {NEST: raw.stem, TICKET: ticket, ROLE: role, "TMPDIR": str(scratch.session_dir(p, ticket or label)),
              **(extra_env or {})}
@@ -384,6 +386,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     end, error = ("killed", None) if killed else ending(final, code, noise)
     if end == "budget":  # stopped by its own limit: the caller treats it as a killed run, never retries it
         killed, error = error, None
+    if session is not None:
+        session["id"] = final.get("session_id")
     u, turns = final.get("usage"), final.get("num_turns")
     estimated = not u and bool(seen)
     if estimated:  # killed or crashed before its result event: add up what the stream showed
