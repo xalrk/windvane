@@ -195,6 +195,8 @@ class Usage:
                 ev = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(ev, dict):
+                continue
             if ev.get("type") == "rate_limit_event":
                 self.update(ev.get("rate_limit_info", {}))
             elif ev.get("type") == "assistant":

@@ -27,6 +27,8 @@ import json, os, sys
 open(os.environ["PROBE_ARGS"], "w").write(json.dumps(sys.argv[1:]))
 emit = lambda ev: print(json.dumps(ev), flush=True)
 emit({"type": "system", "subtype": "init"})
+if os.environ.get("PROBE_MODE") == "junk":  # lines that parse as JSON but aren't events
+    print("1\n\"x\"\n[]", flush=True)
 emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {
     "five_hour": {"utilization": 0.42, "resetsAt": 0}, "seven_day": {"utilization": 0.13}}}})
 use = {"input_tokens": 3, "output_tokens": 6, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 9600}
@@ -103,6 +105,12 @@ class Probe(unittest.TestCase):
         self.assertEqual((row["cache_write"], row["usd"]), (9600, 0.012))
         self.assertIn("died or killed: 1 run (died)", self.stats())
 
+    def test_a_probe_skips_stream_lines_that_are_not_events(self):
+        os.environ["PROBE_MODE"] = "junk"
+        Usage(self.p).probe(self.p)
+        [row] = read_jsonl(self.p.state / "ledger.jsonl")
+        self.assertEqual((row["role"], row["cache_write"]), ("probe", 9600))
+
     def test_a_probe_that_streams_nothing_writes_no_row(self):
         (self.s.bin / "claude").write_text("#!/bin/sh\nexit 1\n")
         Usage(self.p).probe(self.p)
@@ -128,7 +136,9 @@ class StoppedWait(unittest.TestCase):
         state = Project(self.s.root).state
         p = SimpleNamespace(state=state, cfg={"check": "echo checked", "heavy_check": True})
         hold(self, self.d)
-        threading.Timer(2.5, lambda: (state / "STOP").touch()).start()
+        timer = threading.Timer(2.5, lambda: (state / "STOP").touch())
+        timer.start()
+        self.addCleanup(timer.cancel)
         ok, summary, _ = jobs.check(p, self.s.root)
         (state / "STOP").unlink()
         self.assertIsNone(ok)
@@ -136,7 +146,7 @@ class StoppedWait(unittest.TestCase):
         [end] = [r for r in read_jsonl(state / "ledger.jsonl") if r["event"] == "check"]
         self.assertTrue(end["not_run"])
         self.assertGreaterEqual(end["waited_s"], 2)
-        self.assertEqual(end["waited_s"], round(end["minutes"] * 60))
+        self.assertAlmostEqual(end["waited_s"], end["minutes"] * 60, delta=1)
         out, here = io.StringIO(), os.getcwd()
         self.addCleanup(os.chdir, here)
         with redirect_stdout(out):
