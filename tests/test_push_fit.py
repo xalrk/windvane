@@ -157,6 +157,15 @@ def killed(p, patch, s):
     return {"windvane stopped": ("killed (SIGKILL)", "Not restarted.")}
 
 
+def teardown_failed(p, patch, s):
+    cfg = s.root / ".windvane/config.toml"
+    cfg.write_text(f'teardown = "exit 3 # {LONG}"\n' + cfg.read_text())
+    s.publish("config")
+    driver.tear_down(Project(s.root), tell=True)
+    return {"windvane teardown failed": ("helpers may still be up (exit 3)", "Run it by hand: exit 3 # API Error",
+                                         "reset by the peer")}
+
+
 def crashing(p, stop):
     p.state.mkdir(parents=True, exist_ok=True)
     if stop:
@@ -231,7 +240,7 @@ def tmp_full(p, patch, s):
 
 
 SITES = [set_aside, own_limit, dollar_budget, partials, stashed, not_stashed, merged, failed, no_answer,
-         quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, restarted, crashed_stopped,
+         quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, teardown_failed, restarted, crashed_stopped,
          held, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full]
 
 

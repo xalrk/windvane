@@ -4,7 +4,7 @@ import fcntl
 import re
 from pathlib import Path
 
-from . import actions, critic, net
+from . import actions, critic, net, requests
 from .held import author_ident, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
 from .queue import Queue
@@ -98,6 +98,12 @@ def closed_prs(p, branches):
             closed.add(b)
     if closed != known:  # a deleted branch's line goes too
         save_json(f, sorted(closed))
+    if any(e["requests"] for e in p.periodic.values()):  # only the triaging project's branches hold accepts
+        try:  # every closed one, each time: a plan closed before this existed, or a move cut off, is caught next time
+            for rid, b in requests.reopen(closed).items():
+                log(p, f"{rid}: back in the request inbox: {b}, which held its ticket, was closed unmerged")
+        except OSError as e:
+            log(p, f"requests held on closed plans not reopened yet ({e}): tried again next time")
     return closed
 
 

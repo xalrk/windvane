@@ -115,7 +115,8 @@ class Teardown(unittest.TestCase):
     def test_a_failing_one_is_logged_and_the_push_still_goes(self):
         self.config(f'teardown = "touch {self.marker}; echo first; echo cannot reach adb; exit 4"\n')
         self.run_until()
-        self.assertEqual([t for t, *_ in self.pushes], ["windvane started", "windvane stopped"])
+        self.assertEqual([t for t, *_ in self.pushes], ["windvane started", "windvane stopped",
+                                                         "windvane teardown failed"])  # after the summary went out
         self.assertIn("` failed (exit 4) in ci: cannot reach adb", self.log())
         self.assertIn("its last lines:\nfirst\ncannot reach adb", self.log())
         self.assertFalse(driver.locked(self.p))
@@ -126,7 +127,10 @@ class Teardown(unittest.TestCase):
                     "teardown_minutes = 0.05\n")
         _, took = self.run_until()
         self.assertLess(took, 30)
-        self.assertEqual([t for t, *_ in self.pushes], ["windvane started", "windvane stopped"])
+        self.assertEqual([t for t, *_ in self.pushes], ["windvane started", "windvane stopped",
+                                                         "windvane teardown failed"])
+        self.assertIn("Its helpers may still be up (timed out after 0.05 min). Run it by hand: sleep 600 &",
+                      self.pushes[-1][1])
         self.assertIn("` timed out after 0.05 min (killed) in ci: stopping", self.log())
         pid = int(child.read_text())
         for _ in range(50):  # the killed child is reaped by init

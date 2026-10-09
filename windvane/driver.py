@@ -22,7 +22,7 @@ import re
 import subprocess
 import time
 import traceback
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 
 from . import actions, critic, install, net, phone, renumber, requests, scratch, selfupdate, statedir, worktree
@@ -205,6 +205,8 @@ class Pilot(Desk, Periodic):
         self.stop_reason = "unknown"
         self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
         self.signalled, self.ending = None, False  # the SIGTERM or SIGHUP that ended the run; past its `finally`
+        self.guarded = 0  # how deep the main thread is in `critical` steps: a signal waits for them to end
+        self.left = ""  # the pid in the lock file a run that ended without its teardown left (`take_lock`)
         self.worker_rules, self.review_rules = rules(p, "WORKER.md"), rules(p, "REVIEW.md")
         # Parallel slots: each has its own work and ci worktrees, made when first used. Merges and fetches are
         # serialized. `n` is the most at once; the queue's Touches and the usage window decide how many really run.
@@ -316,7 +318,7 @@ class Pilot(Desk, Periodic):
 
     def wait_online(self):
         """Wait out a network outage; False when a stop or the deadline ended the wait."""
-        return net.wait(self.p, self.end, lambda: (self.p.state / "STOP").exists(), self.sleep)
+        return net.wait(self.p, self.end, lambda: self.signalled or (self.p.state / "STOP").exists(), self.sleep)
 
     def crashed(self, label, error, tid=""):
         """A session died for a reason outside its ticket (API overload, network, not logged in): pause, longer each
@@ -671,7 +673,8 @@ class Pilot(Desk, Periodic):
             self.stash_failed.discard(why)  # cleared: a later failure for it is news again
             return True
         msg = f"windvane kept: {now():%Y-%m-%d %H:%M} ({why})"
-        r = git(cd, "stash", "push", "-u", "-m", msg)
+        with self.critical():  # half a stash -u loses the user's untracked files from view
+            r = git(cd, "stash", "push", "-u", "-m", msg)
         if r.returncode == 0 and not gout(cd, "status", "--porcelain"):
             self.stash_failed.discard(why)
             self.log(f"{why}: stashed the checkout's uncommitted changes as \"{msg}\"")
@@ -1436,8 +1439,9 @@ class Pilot(Desk, Periodic):
                     continue
                 if self.a.replan and self.plans < self.a.replan:
                     self.plans += 1
-                    n = plan(p, self.a.goal or p.cfg["goal"], True, self.usage,
-                             self.stopper(now() + timedelta(minutes=40)), merge=True)
+                    with self.critical():  # its session dies at its next poll on a signal; the merge finishes
+                        n = plan(p, self.a.goal or p.cfg["goal"], True, self.usage,
+                                 self.stopper(now() + timedelta(minutes=40)), merge=True)
                     if n:
                         continue
                 self.stop_reason = kind
@@ -1458,7 +1462,8 @@ class Pilot(Desk, Periodic):
             return
         self.pulled = (time.time(), len(self.merged))
         said = []
-        again = selfupdate.pull(self.home, said)
+        with self.critical():
+            again = selfupdate.pull(self.home, said)
         for line in said:
             if line not in self.update_said:
                 self.log(line)
@@ -1493,12 +1498,18 @@ class Pilot(Desk, Periodic):
     def take_lock(self):
         """One driver per project; `locked` reads this lock to tell the phone a run is on."""
         self.p.state.mkdir(parents=True, exist_ok=True)
-        self.lockfile = open(self.p.state / "lock", "w")
+        self.lockfile = open(self.p.state / "lock", "a+")  # not "w": that would empty a live run's pid
         until = time.time() + statedir.WAIT
         while True:
             try:
                 fcntl.flock(self.lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 (self.p.state / statedir.CLEANING).unlink(missing_ok=True)  # one a killed doctor left
+                self.lockfile.seek(0)
+                left = self.lockfile.read().strip()  # a run's end empties it: a pid here ended without its teardown
+                self.left = left if left != str(os.getpid()) else ""  # (a self-update's restart keeps the pid)
+                self.lockfile.truncate(0)
+                self.lockfile.write(str(os.getpid()))
+                self.lockfile.flush()
                 return
             except OSError:  # a run, or `doctor --clean` for a few seconds (it may be removing a slot's tree)
                 if not (self.p.state / statedir.CLEANING).exists() or time.time() > until:
@@ -1531,6 +1542,9 @@ class Pilot(Desk, Periodic):
         swept = sweep_nested(p)  # under the lock: no live run owns them
         if swept:
             self.log(f"killed {swept} process group{'s' * (swept > 1)} left running by an earlier run's sessions")
+        if self.left and not restarted and p.cfg["teardown"]:  # we hold its lock now, so that driver is gone
+            self.log(f"the last run (pid {self.left}) ended without its teardown (killed?): running it before setup")
+            tear_down(p)  # a failure is named in the "started" push
         self.clean_tmp(between=False)
         ready, crashed = False, None
         handlers, streams = self.catch_signals(), (sys.stdout, sys.stderr)
@@ -1557,7 +1571,8 @@ class Pilot(Desk, Periodic):
                 if self.stop_reason == "deadline" and not restarted:  # cut short during setup
                     self.stop_reason = "deadline reached during setup; nothing ran"
             if ready and not stopped_first:
-                push_held(p)  # a plan a failed push kept locally, once a run: the network may be back
+                with self.critical():
+                    push_held(p)  # a plan a failed push kept locally, once a run: the network may be back
                 self.loop()
         except Signalled:
             pass  # on_signal set the stop reason
@@ -1588,7 +1603,8 @@ class Pilot(Desk, Periodic):
             # After the push (a hung teardown can't hold it up) and under the lock (the next run's helpers are safe).
             # A crash `supervise` restarts goes on with this run's helpers; it tears down when it gives up.
             if not (crashed and os.environ.get(SUPERVISED)):
-                tear_down(p)
+                tear_down(p, tell=True)
+                self.lockfile.truncate(0)  # torn down: the next run has nothing left to tear down
             self.lockfile.close()
             for sig, h in handlers.items():
                 signal.signal(sig, h)
@@ -1615,7 +1631,28 @@ class Pilot(Desk, Periodic):
         log(self.p, f"{SIGNALLED[sig]}: stopping now")
         if not self.ending:
             self.stop_reason = f"{SIGNALLED[sig]}; the running sessions were killed"
+            if self.guarded:
+                log(self.p, "  the step under way (a merge, a push, a pull) finishes first")
+                return
             raise Signalled(sig)
+
+    @contextmanager
+    def critical(self):
+        """A main-thread step that changes git state or the remote (a merge, a push, a pull, recording what it did):
+        a SIGTERM or SIGHUP inside it kills the sessions at once (`on_signal`) but unwinds the run only when the step
+        ends, so it never leaves a half-done merge, an index.lock or a pushed branch with nothing recorded. Bounded by
+        the steps' own network timeouts; an outage wait ends on the signal (`wait_online`). Off the main thread (a
+        slot's merge) it's no guard: signals never land there, and `kill_all` stops those threads."""
+        if threading.current_thread() is not threading.main_thread():
+            yield
+            return
+        self.guarded += 1
+        try:
+            yield
+        finally:
+            self.guarded -= 1
+            if not self.guarded and self.signalled and not self.ending:
+                raise Signalled(self.signalled)
 
 
     def summary(self):
@@ -1668,7 +1705,7 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
                 log(p, f"{why}; not restarted: its sessions may still be running in the worktrees")
                 push("windvane stopped", whole("Why: ", why, ". Not restarted.", log=lambda m: log(p, m))
                      + "\nIts sessions may still be running in the worktrees.", 4, "rotating_light", ("Status=status",))
-                tear_down(p, lock=True)  # its `finally` never ran (a SIGTERM's or SIGHUP's did: it tore down itself)
+                tear_down(p, lock=True, tell=True)  # its `finally` never ran (a SIGTERM's or SIGHUP's did: it tore down itself)
             return rc  # its own end (a stop, the deadline, the queue, a failed setup), or a kill
         why = info["error"]
         try:
@@ -1692,16 +1729,17 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             push("windvane stopped", whole("Why: the driver crashed (", why, f"); not restarted: {stop}.",
                                           log=lambda m: log(p, m)) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
-            tear_down(p, lock=True)  # after the push, as the driver's own end does
+            tear_down(p, lock=True, tell=True)  # after the push, as the driver's own end does
             return rc
         args = selfupdate.restart_args(args, deadline)
         env["WINDVANE_RESTARTED"] = "1"
 
 
-def tear_down(p, lock=False):
+def tear_down(p, lock=False, tell=False):
     """The project's `teardown` at a run's real end; nothing in it may cost the run its end (the lock, the state).
     `lock`: `supervise` takes the run's lock for it, as the dead driver no longer holds it, so a run started meanwhile
-    keeps its helpers."""
+    keeps its helpers, and empties the dead driver's pid there once done (`take_lock`). `tell`: a failure gets a push
+    of its own, as the run's "stopped" one has gone out already (a hung teardown mustn't hold it up)."""
     if not p.cfg["teardown"]:
         return
     try:
@@ -1712,9 +1750,14 @@ def tear_down(p, lock=False):
                 except OSError:
                     return log(p, "teardown not run: a new run has started and uses the helpers")
             teardown(p)
+            if lock:
+                fh.truncate(0)
     except Exception as e:  # noqa: BLE001 (a git or OS error: the run is over either way)
         log(p, f"teardown `{p.cfg['teardown']}` not run: {e}")
         worktree.failed(p, p.cfg["teardown"], "not run", str(e))
+    if tell and (f := load_json(p.state / TEARDOWN_FAILED, None)):
+        push("windvane teardown failed", whole(f"Its helpers may still be up ({f['how']}). Run it by hand: ", f["cmd"],
+                                               log=lambda m: log(p, m)), 4, "warning")
 
 
 def failed_teardown(p):
