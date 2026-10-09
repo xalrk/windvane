@@ -161,8 +161,8 @@ def started_at(pid):
     whose `lstart` has a fixed format under LC_ALL=C, in UTC so the hour clocks go back can't read an hour off."""
     if not PROC.is_dir():
         try:
-            out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=PS_WAIT,
-                                 env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}).stdout
+            out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+                                 timeout=PS_WAIT, env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}).stdout
             return calendar.timegm(time.strptime(" ".join(out.split()), "%a %b %d %H:%M:%S %Y"))
         except (OSError, ValueError, subprocess.SubprocessError):
             return None
