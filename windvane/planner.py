@@ -4,7 +4,7 @@ import fcntl
 import re
 from pathlib import Path
 
-from . import actions, critic, net
+from . import actions, critic, net, requests
 from .held import author_ident, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
 from .queue import Queue
@@ -98,6 +98,10 @@ def closed_prs(p, branches):
             closed.add(b)
     if closed != known:  # a deleted branch's line goes too
         save_json(f, sorted(closed))
+    if any(e["requests"] for e in p.periodic.values()):  # only the triaging project's branches hold accepts
+        for b in sorted(closed - known):
+            for rid in requests.reopen(b):
+                log(p, f"{rid}: back in the request inbox: {b}, which held its ticket, was closed unmerged")
     return closed
 
 

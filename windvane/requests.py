@@ -132,17 +132,31 @@ def tree():
 
 def role_here():
     """Who runs this: the env's `WINDVANE_ROLE` (the session's finer role), unless it says desk (or nothing) inside
-    windvane's state dir. A worker's shell can set the env, not where its tree is: run from a tree, `WINDVANE_ROLE=desk`
-    (or `desk:anything`) is still that tree's session."""
+    windvane's state dir or inside a session. A worker's shell can set the env, not where its tree is: run from a tree,
+    `WINDVANE_ROLE=desk` (or `desk:anything`) is still that tree's session; run from elsewhere (a `cd` away, an
+    `isolate = false` run in the user's checkout), it's still the session `WINDVANE_SESSION` names."""
     said = os.environ.get(ROLE, "") or "desk"
-    return (tree()[0] or said) if said.split(":")[0] == "desk" else said
+    return (tree()[0] or session_role() or said) if said.split(":")[0] == "desk" else said
+
+
+def session_role():
+    """The role runner.py recorded for the session the env's `WINDVANE_SESSION` names ("session" when there's no
+    record, or it says desk: no session is the desk); "" when no session is named, as in the user's own shell."""
+    nest = os.environ.get(NEST, "")
+    if not nest:
+        return ""
+    found = (user_dir("XDG_STATE_HOME", ".local/state").glob(f"*/nested/{nest}/role")
+             if re.fullmatch(r"[\w-][\w.-]*", nest) else ())
+    role = next((r for f in found for r in [f.read_text(errors="replace").strip()] if r), "")
+    return role if role and role.split(":")[0] != "desk" else "session"
 
 
 def file(title, body):
     """File a request from the checkout this runs in. Returns (exit code, the line to print)."""
     role = role_here()
     if role.split(":")[0] not in ("desk", "worker"):
-        return 1, f"windvane request: only desk sessions and workers file requests (this is a {role} session)"
+        who = "a windvane session" if role == "session" else f"a {role} session"  # one with no recorded role
+        return 1, f"windvane request: only desk sessions and workers file requests (this is {who})"
     name, commit, root, key = source()
     title = " ".join(clean(title, root, name).split())[:200]
     if not title:
@@ -250,7 +264,9 @@ def unseen(p):
     out = []
     for f in files():
         title, head, _ = fields(read(f))
-        key = f.stem if f.parent.name == "done" else f"{f.stem}:{read(f).count(chr(10) + '## Verdict (')}"  # each question
+        again = read(f).count("\n## Reopened (")  # a reopened accept's next verdict is news again
+        key = (f.stem + (f":r{again}" if again else "") if f.parent.name == "done"
+               else f"{f.stem}:{read(f).count(chr(10) + '## Verdict (')}")  # each question
         ours = any(r == mine if r else n == p.name for n, r in sources(read(f), head))  # an old R-file: by name
         if ours and key not in seen and (f.parent.name == "done" or asking(head)):
             said = verdict_text(head).replace("accepted → ", "accepted → windvane's ")  # not this project's ticket
@@ -308,6 +324,25 @@ def apply(reqs, text, landed, exists, log, held=None):
                 f.unlink()
             done[rid] = (kind, word)
     return done
+
+
+def reopen(branch):
+    """Accepts held on `branch` back in the inbox, once its PR was closed unmerged: their ticket won't land from
+    there, and a request left in `done/` would never be looked at again. Each gets a `## Reopened` line, so the next
+    triage sees why. Returns the R-ids moved."""
+    held = re.compile(rf"^- Verdict: accepted → \S+ \(held on {re.escape(branch)}\)$", re.M)
+    moved = []
+    with locked() as d:
+        for f in files(True):
+            text = read(f)
+            if not held.search(text.split("\n## ", 1)[0]) or (d / f.name).exists():
+                continue
+            (d / f.name).write_text(set_verdict(text, f"reopened: {branch} was closed unmerged")
+                                    + f"\n## Reopened ({now():%Y-%m-%d %H:%M}): {branch}, which held its ticket, "
+                                    "was closed unmerged\n")
+            f.unlink()
+            moved.append(f.stem)
+    return moved
 
 
 def worker_deny(p):
