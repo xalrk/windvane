@@ -101,7 +101,7 @@ class Doctor(unittest.TestCase):
 
 class OffLinux(unittest.TestCase):
     def test_heavy_without_meminfo_or_pgrep(self):
-        with mock.patch.object(heavy, "Path", side_effect=lambda *a: Path("/nonexistent/meminfo")):
+        with mock.patch.object(heavy.util, "PROC", Path("/nonexistent")):
             self.assertIsNone(heavy.free_gb())
         with mock.patch.dict(os.environ, {"PATH": str(tmpdir(self))}):
             self.assertIsNone(heavy.busy(["blender"]))
