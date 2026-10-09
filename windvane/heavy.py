@@ -55,7 +55,7 @@ def lock_path():
 
 def free_gb():
     try:
-        m = re.search(r"^MemAvailable:\s+(\d+) kB", Path("/proc/meminfo").read_text(), re.M)
+        m = re.search(r"^MemAvailable:\s+(\d+) kB", (util.PROC / "meminfo").read_text(), re.M)
         return int(m.group(1)) / 1048576 if m else None
     except OSError:
         return None
@@ -162,7 +162,8 @@ def paused(pid):
     if asked is not None and now - asked < PS_KEEP:
         return was
     try:
-        out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=10).stdout
+        out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True,
+                             timeout=util.PS_WAIT).stdout
     except (OSError, subprocess.SubprocessError):  # a hung `ps` mustn't stall the wait
         out = ""
     for p in [p for p, (at, _) in _ps_seen.items() if now - at >= PS_KEEP]:

@@ -195,7 +195,7 @@ def process_session():
 
 def ancestors(most=30):
     """This process's parent, its parent, and so on (at most `most`), from /proc on Linux and `ps` elsewhere."""
-    from .util import PROC
+    from .util import PROC, PS_WAIT
     out, pid = [], os.getppid()
     while pid > 1 and len(out) < most:
         out.append(pid)
@@ -204,7 +204,7 @@ def ancestors(most=30):
                 pid = int((PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[1])
             else:
                 pid = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True,
-                                         timeout=10).stdout.strip())
+                                         timeout=PS_WAIT).stdout.strip())
         except (OSError, ValueError, IndexError, subprocess.SubprocessError):
             break
     return out

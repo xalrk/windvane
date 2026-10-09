@@ -11,6 +11,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import util
+
 PREFIX = "windvane-"  # what the tests and tools/check_pythons.sh name their temp dirs, so the cleaner knows them
 AGE = 3600  # seconds a leftover must have sat untouched: a running check writes into its dirs all the time
 FULL = 90  # percent of the temp dir's inodes or space at which doctor warns and the driver pushes
@@ -43,16 +45,16 @@ def busy():
     """The cwd and TMPDIR of every process we can see (Linux /proc; elsewhere only the age rule protects a dir)."""
     out = set()
     try:
-        pids = [d for d in os.listdir("/proc") if d.isdigit()]
+        pids = [d for d in os.listdir(util.PROC) if d.isdigit()]
     except OSError:
         return out
     for pid in pids:
         try:
-            out.add(os.readlink(f"/proc/{pid}/cwd"))
+            out.add(os.readlink(util.PROC / pid / "cwd"))
         except OSError:
             pass
         try:
-            env = Path(f"/proc/{pid}/environ").read_bytes()
+            env = (util.PROC / pid / "environ").read_bytes()
         except OSError:
             continue
         for var in env.split(b"\0"):
