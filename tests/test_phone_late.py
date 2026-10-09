@@ -125,6 +125,33 @@ class GroupKill(Late):
         self.assertLess(time.time() - t, 5, "waited for the hung script itself")
 
 
+# Forks a child that leaves the group (as a daemonized `curl` would) and holds stdout open, then hangs.
+ESCAPES = """#!/usr/bin/env python3
+import os, time
+if os.fork() == 0:
+    os.setsid()
+    open(os.environ["FAKE_CHILD"], "w").write(str(os.getpid()))
+    time.sleep(30)
+    os._exit(0)
+time.sleep(30)
+"""
+
+
+class EscapedChild(Late):
+    def test_a_child_outside_the_group_holding_stdout_does_not_hold_the_pass(self):
+        self.tool("notify-ask", ESCAPES)
+        child = self.s.tmp / "child"
+        with mock.patch.dict(os.environ, FAKE_CHILD=str(child)):
+            t = time.time()
+            self.assertIsNone(phone.tool(["notify-ask", "--get", "x"], 0.5))
+            self.assertLess(time.time() - t, 3)
+        for _ in range(50):
+            if child.exists() and child.read_text():
+                break
+            time.sleep(0.05)
+        os.kill(int(child.read_text()), 9)
+
+
 class OnePassBudget(Late):
     def test_three_hung_looks_take_one_send_wait(self):
         pl = driver.Pilot(self.p, driver_args(answer_wait=60))

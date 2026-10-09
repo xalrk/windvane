@@ -260,7 +260,8 @@ def tool(args, wait):
             os.killpg(proc.pid, signal.SIGKILL)
         except OSError:  # the group is gone already, or out of reach: at least the script itself
             proc.kill()
-        proc.communicate()
+        proc.stdout.close()  # a child that left the group may hold it open: wait for the script alone
+        proc.wait()
         return None
 
 
