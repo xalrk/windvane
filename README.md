@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.png" alt="windvane: tickets in, merges out. An autopilot for Claude Code." width="100%">
+  <img src="docs/assets/banner.png" alt="windvane: ideas in, results out. An autopilot for Claude Code." width="100%">
 </p>
 
 <p align="center">
