@@ -214,7 +214,7 @@ def checks(p=None):
     add(shutil.which("notify") and shutil.which("notify-ask") or phone.on(phone.conf()), False,
         "phone pushes and questions (ntfy)", "windvane phone setup; without it, questions wait for `windvane answer`")
     add(shutil.which("windvane"), True, "`windvane` on PATH",
-        "windvane install" if CHECKOUT else "add ~/.local/bin to PATH (pipx ensurepath does it)")
+        "windvane install" if CHECKOUT else f"{install.PATH_LINE} (and in your shell's startup file)")
     skill = install.claude_dir() / "skills/windvane"
     if skill.is_symlink() and not skill.exists():  # e.g. pipx reinstalled windvane on a newer Python
         add(False, False, f"the windvane skill in {skill.parent}: a broken link to {os.readlink(skill)}",

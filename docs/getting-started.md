@@ -26,6 +26,9 @@ Without either, from a clone:
 git clone https://github.com/xalrk/windvane
 sh windvane/install.sh     # a venv in ~/.local/share/windvane, the command in ~/.local/bin
 ```
+If `~/.local/bin` isn't on your `PATH` yet, install.sh prints the line that puts it there. To try all of this first
+on a machine that has never seen windvane, in a clone: `tools/clean_machine_check.sh --shell` (podman or docker)
+opens a throwaway container with it installed, and lists the steps to a first run.
 Then:
 ```sh
 windvane doctor     # what this machine lacks, with the command that fixes each
@@ -97,7 +100,7 @@ can keep working at the desk.
 Each ticket that makes it through the critic, the check and the review is merged into `main` by the driver; one that
 can't be finished is left on its branch with the reason in the log. No new ticket starts in the last 30 minutes
 (`min_slot`); at the deadline any session still running is stopped (its branch keeps the work for the next run), and
-a summary is printed and pushed.
+a summary is printed and pushed. A run shorter than `min_slot` is refused, with a message saying so.
 
 ```sh
 windvane stop             # stop after the current ticket

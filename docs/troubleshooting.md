@@ -11,6 +11,13 @@ The autopilot reads tickets from the remote's `main`, not from your checkout: co
 check `windvane queue`: a ticket waits while anything in its `Depends on:` line is unmerged, and `parked:` tickets
 never start.
 
+**`windvane run` refuses to start.**
+`no ticket starts in a run's last 30 minutes (min_slot), so this run would do nothing`: give the run longer than
+`min_slot` (`--for 2h`), or lower it (`--min-slot 0`). `` windvane run needs Claude Code (`claude`) on PATH ``: install
+and log in to Claude Code; `windvane doctor` gives the command. After installing windvane itself, `windvane: command
+not found` means `~/.local/bin` isn't on your `PATH`: run `export PATH="$HOME/.local/bin:$PATH"` and add that line
+to your shell's startup file.
+
 **A ticket never starts beside the others (`T-024 waits: no Touches line, so it runs alone`).**
 A ticket without a `Touches:` line can't be proven independent of the running ones, so it waits for them. Add the
 line. Other `waits:` lines name the overlapping ticket and file.

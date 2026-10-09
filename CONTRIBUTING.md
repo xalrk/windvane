@@ -43,6 +43,12 @@ class MyTest(unittest.TestCase):
 The phone tests use a local fake ntfy server in the same spirit, and `tests/test_docs.py` keeps these docs in step
 with the code: every config key documented, every command mentioned, every relative link resolving.
 
+`tests/test_clean_machine.py` walks a new user's first hour (install.sh into an empty home, `doctor`, `install`,
+`init`, `new`, and a run that merges the ticket) with nothing but the system's tools and the fake `claude`. To run
+the same on a machine that has never seen windvane, `tools/clean_machine_check.sh` runs it in a throwaway podman or
+docker container from a pinned Debian image; it downloads, so it's by hand, never part of the check. Its `--shell`
+leaves you in such a container with windvane installed, to try the first run with the real `claude`.
+
 ## What we look for
 These are what make windvane safe to leave running overnight, so every change keeps them:
 - **Nothing to install.** windvane needs only git, Python 3.11+ and `claude`, and uses the standard library alone.

@@ -15,6 +15,8 @@ from pathlib import Path
 
 from .config import CHECKOUT, HOME, NAME_CHARS, exe, user_dir
 
+# How to put ~/.local/bin (where install.sh, pipx and uv put the command) on PATH: in sh, bash, zsh and fish alike
+PATH_LINE = 'export PATH="$HOME/.local/bin:$PATH"'
 LOCK_WAIT = 10  # seconds: an `install` waiting on its questions holds the lock that long at most for the others
 
 
@@ -136,7 +138,7 @@ def install(yes=False):
         return
     tidy_phone_hooks()
     if not shutil.which("windvane"):
-        print("windvane isn't on PATH yet: add ~/.local/bin to PATH (pipx users: pipx ensurepath)")
+        print(f"windvane isn't on PATH yet: run `{PATH_LINE}`, and add it to your shell's startup file")
     print("next: windvane doctor (what this machine still lacks); windvane uninstall takes all of this back")
 
 
