@@ -195,7 +195,7 @@ def process_session():
 
 def ancestors(most=30):
     """This process's parent, its parent, and so on (at most `most`), from /proc on Linux and `ps` elsewhere."""
-    from .runner import PROC
+    from .util import PROC
     out, pid = [], os.getppid()
     while pid > 1 and len(out) < most:
         out.append(pid)

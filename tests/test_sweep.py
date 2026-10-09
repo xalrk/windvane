@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import runner  # noqa: E402
+from windvane import runner, util  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import read_jsonl  # noqa: E402
 import test_hangs  # noqa: E402
@@ -56,7 +56,7 @@ class NoProc(Sweep):
         (self.s.bin / "ps").write_text(FAKE_PS)
         (self.s.bin / "ps").chmod(0o755)
         os.environ["FAKE_PS"] = str(self.ps)
-        patch = unittest.mock.patch.object(runner, "PROC", self.s.tmp / "no-proc")
+        patch = unittest.mock.patch.object(util, "PROC", self.s.tmp / "no-proc")
         patch.start()
         self.addCleanup(patch.stop)
 

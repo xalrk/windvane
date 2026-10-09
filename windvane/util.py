@@ -1,4 +1,5 @@
 """Small shared helpers: git, the log, phone pushes, JSON state files."""
+import calendar
 import json
 import os
 import signal
@@ -139,3 +140,24 @@ def last_match(regex, text):
     for m in regex.finditer(text or ""):
         pass
     return m
+
+
+PROC = Path("/proc")
+
+
+def started_at(pid):
+    """When process `pid` started (epoch seconds), or None when it's gone. /proc on Linux; elsewhere (macOS) `ps`,
+    whose `lstart` has a fixed format under LC_ALL=C, in UTC so the hour clocks go back can't read an hour off."""
+    if not PROC.is_dir():
+        try:
+            out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10,
+                                 env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}).stdout
+            return calendar.timegm(time.strptime(" ".join(out.split()), "%a %b %d %H:%M:%S %Y"))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
+    try:
+        ticks = int((PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[19])
+        boot = next(int(l.split()[1]) for l in (PROC / "stat").read_text().splitlines() if l.startswith("btime"))
+        return boot + ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
