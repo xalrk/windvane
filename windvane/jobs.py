@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import heavy, scratch
+from . import heavy, scratch, util
 from .config import exe
 from .runner import NEST, ROLE, TICKET
 from .util import append_jsonl, gout, now, read_jsonl
@@ -265,7 +265,7 @@ def job_cwd(base):
     except OSError:
         pass
     try:
-        return os.readlink(f"/proc/{int(Path(f'{base}.pid').read_text())}/cwd")
+        return os.readlink(util.PROC / str(int(Path(f"{base}.pid").read_text())) / "cwd")
     except (OSError, ValueError):  # dead, or no /proc (macOS): nothing ties it to anyone
         return None
 
