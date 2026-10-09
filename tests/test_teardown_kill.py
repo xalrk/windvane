@@ -4,6 +4,7 @@ push, once. And `run --daily` tears down at the end of each window."""
 import contextlib
 import io
 import os
+import pty
 import signal
 import subprocess
 import sys
@@ -126,19 +127,44 @@ class Foreground(Base):
         self.assertIn("tmux session closed (SIGHUP)", self.pushes[-1][1])
         self.assertEqual(self.runs(), ["x"])
 
-    def test_the_process_then_dies_of_the_signal(self):
-        """`windvane run` as the shell or `supervise` starts it: the exit code is the signal's, after the teardown."""
+    def cli_run(self, sig, tty=False):
+        """`windvane run` as the shell or `supervise` starts it, sent `sig` mid-ticket: (its exit code, its pushes).
+        `tty`: it runs on a terminal that is closed first, as a closed terminal window or tmux pane leaves it."""
         self.config()
         streamed = self.hang_worker()
+        bin_, sent = self.s.tmp / "notify-bin", self.s.tmp / "notified"
+        bin_.mkdir()
+        (bin_ / "notify").write_text(f'#!/bin/sh\necho "$2" >> {sent}\n')  # a phone: each push's title
+        (bin_ / "notify").chmod(0o755)
+        master, slave = pty.openpty() if tty else (None, subprocess.DEVNULL)
         proc = subprocess.Popen([sys.executable, "-m", "windvane", "-C", str(self.s.root), "run", "--for", "1h",
-                                 "--parallel", "1", "--no-preflight"], cwd=REPO, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, env={**os.environ, "PYTHONPATH": str(REPO)})
+                                 "--parallel", "1", "--no-preflight"], cwd=REPO, stdin=subprocess.DEVNULL,
+                                stdout=slave, stderr=slave,
+                                env={**os.environ, "PYTHONPATH": str(REPO), "PATH": f"{bin_}:{os.environ['PATH']}"})
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        if tty:
+            os.close(slave)
         self.assertTrue(wait_for(streamed))
-        proc.send_signal(signal.SIGTERM)
-        self.assertEqual(proc.wait(60), -signal.SIGTERM)
+        if tty:
+            os.close(master)  # a write to the terminal now fails with EIO
+        proc.send_signal(sig)
+        rc = proc.wait(60)
+        return rc, sent.read_text().splitlines() if sent.exists() else []
+
+    def test_the_process_then_dies_of_the_signal(self):
+        rc, pushes = self.cli_run(signal.SIGTERM)
+        self.assertEqual(rc, -signal.SIGTERM)
+        self.assertEqual(pushes, ["Sandbox windvane started", "Sandbox windvane stopped"])
         self.assertEqual(self.runs(), ["x"])
         self.assertIn("the driver got SIGTERM (a kill or a shutdown): stopping now", self.log())
+
+    def test_a_closed_terminal_still_ends_well(self):
+        rc, pushes = self.cli_run(signal.SIGHUP, tty=True)
+        self.assertEqual(rc, -signal.SIGHUP)
+        self.assertEqual(pushes, ["Sandbox windvane started", "Sandbox windvane stopped"])
+        self.assertEqual(self.runs(), ["x"])
+        self.assertIn("Why: the driver's terminal or tmux session closed (SIGHUP); the running sessions were killed.",
+                      self.log())
 
 
 class FailedTeardown(Base):

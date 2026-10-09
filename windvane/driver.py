@@ -1501,7 +1501,7 @@ class Pilot(Desk, Periodic):
             self.log(f"killed {swept} process group{'s' * (swept > 1)} left running by an earlier run's sessions")
         self.clean_tmp(between=False)
         ready, crashed = False, None
-        handlers = self.catch_signals()
+        handlers, streams = self.catch_signals(), (sys.stdout, sys.stderr)
         try:
             ready = self.rules_ok() and self.prepare(0)  # before any session or push: a bad rule or a failed setup
             # ends the run with a single push
@@ -1557,6 +1557,9 @@ class Pilot(Desk, Periodic):
             self.lockfile.close()
             for sig, h in handlers.items():
                 signal.signal(sig, h)
+            if sys.stdout is not streams[0]:  # on_signal's /dev/null
+                sys.stdout.close()
+            sys.stdout, sys.stderr = streams
         return ready
 
     def catch_signals(self):
@@ -1572,6 +1575,8 @@ class Pilot(Desk, Periodic):
         if self.signalled:
             return
         self.signalled, self.kill_all = sig, True
+        if sig == signal.SIGHUP:  # its terminal is gone: a print there fails (EIO) and would cost the run its end
+            sys.stdout = sys.stderr = open(os.devnull, "w")
         log(self.p, f"{SIGNALLED[sig]}: stopping now")
         if not self.ending:
             self.stop_reason = f"{SIGNALLED[sig]}; the running sessions were killed"
