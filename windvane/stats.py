@@ -344,18 +344,20 @@ def critic_stats(a, p):
 
 def no_verdicts(p, recs, since):
     """What replies with no verdict cost (T-116): the `step: none` runs, and the same-session re-asks that try to
-    save one (replied or failed, from critic.jsonl), with the re-ask sessions' tokens from the ledger by their
-    `-critic-reask` label. Nothing when there were none."""
+    save one, from critic.jsonl (a verdict they saved says `reasked`, as does a none they didn't, or `reask_failed`),
+    with the re-ask sessions' tokens from the ledger by their `-critic-reask` label. Nothing when there were none."""
     nones = [r for r in recs if r.get("step") == "none"]
+    saved = sum(r.get("reasked") is True and r.get("step") != "none" for r in recs)
     replied, failed = sum(r.get("reasked") is True for r in nones), sum(bool(r.get("reask_failed")) for r in nones)
     runs = [r for r in read_jsonl(p.state / "ledger.jsonl") if not r.get("event") and r.get("at", "") >= since
             and str(r.get("label", "")).endswith("-critic-reask")]
     if nones:
         print(f"no verdict: {plural(len(nones), 'critic run')} (step: none)")
-    parts = [f"{replied} replied"] * bool(replied) + [f"{failed} failed"] * bool(failed)
-    parts += [f"{plural(len(runs), 'session')}, {k(sum(map(weighted, runs)))} weighted tokens"] * bool(runs)
-    if parts:
-        print(f"re-asks: {', '.join(parts)}")
+    parts = ([f"{saved} saved a verdict"] * bool(saved) + [f"{replied} still no verdict"] * bool(replied)
+             + [f"{failed} failed"] * bool(failed))
+    cost = f"{plural(len(runs), 'session')}, {k(sum(map(weighted, runs)))} weighted tokens" if runs else ""
+    if parts or cost:
+        print(f"re-asks: {', '.join(parts)}" + (f" ({cost})" if parts and cost else cost))
 
 
 def critic_since(p, when):

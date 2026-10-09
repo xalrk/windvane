@@ -78,8 +78,9 @@ bouncing its ticket to a worker. `waits, worker: 12 min in await, 3.0 min for th
 spent blocked rather than working, one line per role, longest first: in `windvane await` (its `await` rows) and
 waiting for the heavy lock before a check ran (a check row's `waited_s`; the gate's checks are `driver`). These cost
 time, not tokens; no line without any. `stats --critic` ends with `no verdict: 2 critic runs (step: none)` and
-`re-asks: 1 replied, 1 failed, 2 sessions, 14k weighted tokens`: the same-session re-asks that try to save a reply
-the driver couldn't read, and what their sessions (labelled `-critic-reask`) cost.
+`re-asks: 2 saved a verdict, 1 still no verdict, 1 failed (4 sessions, 20k weighted tokens)`: the same-session
+re-asks that try to save a reply the driver couldn't read, how they went, and what their sessions (labelled
+`-critic-reask`) cost.
 
 Check logs (`state/checks/`) are pruned when a check starts: a passed check's log after 3 days, any after 3 weeks,
 but never one still running or one of the 5 newest that failed or were cut off. A killed check's log gets its

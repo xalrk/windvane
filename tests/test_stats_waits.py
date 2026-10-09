@@ -69,14 +69,16 @@ class StatsWaits(unittest.TestCase):
     def test_critic_no_verdicts_and_reasks_with_their_tokens(self):
         crit = self.p.state / "critic.jsonl"
         append_jsonl(crit, {"ticket": "T-001", "sha": "a", "score": 8, "step": "pass", "revisions": 0})
+        append_jsonl(crit, {"ticket": "T-004", "sha": "b", "score": 9, "step": "pass", "reasked": True})  # saved
         append_jsonl(crit, {"ticket": "T-002", "step": "none", "why": "x", "reasked": True})
         append_jsonl(crit, {"ticket": "T-003", "step": "none", "why": "x", "reasked": False, "reask_failed": "API"})
         self.row(role="critic", ticket="T-002", label="T-002-critic", input=50000)  # the first ask: not a re-ask
         self.row(role="critic", ticket="T-002", label="T-002-critic-reask", input=2000, cache_read=100000)  # 12k
         self.row(role="critic", ticket="T-003", label="T-003-critic-reask", input=1000, output=200)  # 2k
+        self.row(role="critic", ticket="T-004", label="T-004-critic-reask", input=3000)  # 3k
         out = self.cli("stats", "--critic")
         self.assertIn("no verdict: 2 critic runs (step: none)\n", out)
-        self.assertIn("re-asks: 1 replied, 1 failed, 2 sessions, 14k weighted tokens\n", out)
+        self.assertIn("re-asks: 1 saved a verdict, 1 still no verdict, 1 failed (3 sessions, 17k weighted tokens)\n", out)
 
     def test_critic_lines_absent_without_any(self):
         append_jsonl(self.p.state / "critic.jsonl", {"ticket": "T-001", "sha": "a", "score": 8, "step": "pass"})

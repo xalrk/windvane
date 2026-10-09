@@ -523,8 +523,9 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     if why:
         return none(p, tid, text, why, **asked)
     _, dims, fixes, gist = verdict(text)
+    saved = {"reasked": True} if asked else {}  # the re-ask saved this verdict: `stats --critic` counts it
     if lad:
-        return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n)
+        return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved)
     caps, anchor = checks(text)
     dims, was = capped(dims, caps)
     hits = [f"{d}<={c:g}" for d, c, hit in caps if hit is True]
@@ -541,7 +542,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
              "dims": dims, "fixes": fixes, "effective": max(fixes, len(hits)), "revisions": n, "gist": cut(gist),
              "step": step(p, dims, max(fixes, len(hits)), n),
              "critique": critique, "scale": scale(p, cwd), "checks": len(caps),
-             "hits": hits, "scoped": scoped, "capped": was, "anchor": anchor}
+             "hits": hits, "scoped": scoped, "capped": was, "anchor": anchor, **saved}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
 
@@ -573,7 +574,7 @@ def reask(tid, why, lad):
             f"give{shape}, ending with its CRITIC line for {tid}.")
 
 
-def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
+def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None):
     """judge's ending on a ladder: the driver scores the critic's check answers (`climb`), and the failed checks under
     the bar join its "Fix in this ticket" points."""
     ans = answers(text, lad)
@@ -593,7 +594,8 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n):
              "dims": dims, "fixes": fixes, "effective": eff, "revisions": n, "gist": cut(gist),
              "step": step(p, dims, eff, n, floor=next(iter(lad.values()))[0][0]),
              "critique": critique, "scale": scale(p, cwd), "answers": said,
-             "failed": [cid for _, _, cid, _, _ in block], "scoped": scoped, "unanswered": missing}
+             "failed": [cid for _, _, cid, _, _ in block], "scoped": scoped, "unanswered": missing,
+             **(saved or {})}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
 
