@@ -38,7 +38,7 @@ class AskOnce(unittest.TestCase):
         stack = ExitStack()
         self.addCleanup(stack.close)
         self.patch = lambda obj, name, value: stack.enter_context(mock.patch.object(obj, name, value))
-        self.patch(driver, "push", lambda title, msg="", *a, **k: self.sent.append((title, msg)))
+        self.patch(driver, "push", lambda title, msg="", *a, **k: self.sent.append((title, msg)) or True)
         self.patch(phone, "ask", lambda qid, q, opts: self.sent.append(("Question", f"{q} {opts}")) or True)
         self.addCleanup(os.chdir, os.getcwd())
 

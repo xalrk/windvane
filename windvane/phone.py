@@ -41,6 +41,7 @@ NTFY = 4096  # bytes ntfy takes for a whole message; past it the push arrives as
 MOST = 1500  # bytes of free text one push carries (an error, a reason, an option): two fit in a push with room left
 REASON = 300  # bytes of a reason or a log or session line: a set-aside or stop reason, a critic's gist, git's refusal
 REST = " (the rest is in the log)"
+ASKED = 200  # bytes a question push adds around its question and options: the letters, the line on typed answers
 
 
 def cut(text, most=REASON, *, log=None):
@@ -205,32 +206,42 @@ def titled(text):
 
 
 def push(title, msg, prio=3, tags="", buttons=()):
-    """A push through the user's `notify` when it's on PATH, else the built-in one when the phone is on."""
+    """A push through the user's `notify` when it's on PATH, else the built-in one when the phone is on. True only
+    when it went out (`notify` exited 0, or ntfy took it): an answer counts as shown on the phone only then."""
     title, msg = titled(title), fit(msg)
     if shutil.which("notify"):
         args = ["notify", "-t", title, "-p", str(prio), "-g", tags]
         for b in buttons[:3]:
             args += ["-a", b]
-        subprocess.run(args + [msg], timeout=30, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
+        try:
+            return subprocess.run(args + [msg], timeout=30, check=False, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
     c = conf()
     return on(c) and send(c, title, msg, prio, tags, buttons)
 
 
-def fit(msg):
-    """The last guard on ntfy's 4,096 bytes, past which a push turns into an attachment: a message over it (most text
-    is already bounded by `cut`) keeps its lines that fit, and the log gets it whole, once."""
-    if len(msg.encode()) <= NTFY:
-        return msg
-    keep = msg.encode()[:NTFY - len(REST.encode())].decode(errors="ignore")
-    where = "at a line end" if "\n" in keep else "mid-line"
-    keep = (keep[:keep.rfind("\n")] if "\n" in keep else keep).rstrip()
-    line = f"push cut {where} to fit ntfy; the whole message: {msg}"
+def whole_to_log(line):
+    """A cut push's whole text, for the project's log (stderr outside a project)."""
     if _p:
         log(_p, line, echo=False)
     else:
         print(line, file=sys.stderr, flush=True)
-    return keep + REST
+
+
+def fit(msg, most=NTFY):
+    """The last guard on ntfy's 4,096 bytes, past which a push turns into an attachment: a message over `most` (most
+    text is already bounded by `cut`) keeps its lines that fit, or a line's start when even the first doesn't, and
+    the log gets it whole, once."""
+    if len(msg.encode()) <= most:
+        return msg
+    keep = msg.encode()[:most - len(REST.encode())].decode(errors="ignore")
+    keep = keep[:keep.rfind("\n")] if "\n" in keep else keep
+    where = "at a line end" if msg[len(keep):].startswith("\n") else "mid-line"  # decided on what the cut left
+    keep = keep.rstrip()
+    whole_to_log(f"push cut {where} to fit ntfy; the whole message: {msg}")
+    return keep + (REST if keep else REST.lstrip())
 
 
 # ---------- questions
@@ -238,10 +249,14 @@ def fit(msg):
 def ask(qid, question, options):
     """Send a question with buttons for A and B and "Answer on computer" (C to E are typed). True when sent, False
     when the push failed (worth another try), None when there's no phone: it then waits for `windvane answer`."""
-    question = titled(question)
+    options = [cut(o, min(MOST, NTFY // 2 // max(len(options), 1)), log=whole_to_log) for o in options]
+    room = NTFY - ASKED - sum(len(f"\nX: {o}".encode()) for o in options)  # the options keep at least half the push
+    question = fit(titled(question), room)
     if shutil.which("notify-ask"):
-        subprocess.run(["notify-ask", qid, question, *options], capture_output=True)
-        return True
+        try:
+            return subprocess.run(["notify-ask", qid, question, *options], capture_output=True).returncode == 0
+        except OSError:
+            return False
     c = conf()
     if not on(c):
         return None
@@ -255,7 +270,7 @@ def ask(qid, question, options):
     more = [k for k in opts if k > "B"]
     typed = f"\nFor {'/'.join(more)}, send the letter (or: answer {qid} {more[0]})" if more else ""
     buttons = [f"{k}=answer {qid} {k}" for k in list(opts)[:2]] + [f"Answer on computer=later {qid}"]
-    return send(c, f"Question ({qid})", f"{question}\n{lines}{typed}", 4, "question", buttons)
+    return send(c, f"Question ({qid})", fit(f"{question}\n{lines}{typed}"), 4, "question", buttons)
 
 
 def answer(qid):
