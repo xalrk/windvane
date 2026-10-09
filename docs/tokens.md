@@ -43,6 +43,10 @@ costliest wasted check: T-060, 18 min, cut off
 died or killed: 1 run (1 died, 0 killed for time), 948k weighted tokens, 3% of all
 ```
 
+The usage probe, the tiny Haiku call that reads the limits (at a run's start, before a ticket when the last reading
+is over 5 minutes old, and for the phone's `usage`), has its own `probe` line: about 17k tokens of context, 10k
+weighted, each. So every `claude -p` windvane makes is in the table.
+
 | Column | Meaning |
 |---|---|
 | `runs` | sessions started |
@@ -76,7 +80,8 @@ failed or was cut off, the time that bought nothing; no line when every check pa
 `not-run checks: 2 (no bounce)` counts heavy checks whose wait for the machine timed out: each ran again instead of
 bouncing its ticket to a worker. `waits, worker: 12 min in await, 3.0 min for the heavy lock` is the wall time a role
 spent blocked rather than working, one line per role, longest first: in `windvane await` (its `await` rows) and
-waiting for the heavy lock before a check ran (a check row's `waited_s`; the gate's checks are `driver`). These cost
+waiting for the heavy lock before a check ran (a check row's `waited_s`, a wait a stop cut short included; the
+gate's checks are `driver`). These cost
 time, not tokens; no line without any. `stats --critic` ends with `no verdict: 2 critic runs (step: none)` and
 `re-asks: 2 saved a verdict, 1 still no verdict, 1 failed (4 sessions, 20k weighted tokens)`: the same-session
 re-asks that try to save a reply the driver couldn't read, how they went, and what their sessions (labelled

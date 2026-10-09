@@ -149,7 +149,8 @@ class OwnBudget(Base):
         self.assertEqual((pilot.crashes, pilot.ticket_crashes, self.waits), (0, {}, []))
         self.assertEqual({"T-001", "T-002"} - pilot.skip, set())  # each set aside like a run out of its time box
         self.assertNotIn("died", pilot.stop_reason)
-        ends = [(r["end"], r["killed"], r["error"]) for r in read_jsonl(self.p.state / "ledger.jsonl")]
+        ends = [(r["end"], r["killed"], r["error"]) for r in read_jsonl(self.p.state / "ledger.jsonl")
+                if r["role"] != "probe"]
         self.assertEqual(ends, [("budget", "max turns", None)] * 2)
 
     def test_ending_tells_its_own_budget_from_an_api_error(self):

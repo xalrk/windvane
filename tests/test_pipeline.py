@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import critic, driver, jobs, planner, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
-from windvane.util import now  # noqa: E402
+from windvane.util import now, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
 
@@ -54,8 +54,9 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(self.s.git("rev-parse", "--abbrev-ref", "HEAD"), "main")
         roles = [c["system"].split(" run")[0] for c in self.calls() if c["system"]]  # not the usage probe
         self.assertEqual(roles, ["# windvane worker", "# windvane review"] * 2)
-        ledger = [l for l in (self.p.state / "ledger.jsonl").read_text().splitlines() if '"event"' not in l]
-        self.assertEqual(len(ledger), 4)  # sessions; each ticket's checks are rows of their own
+        ledger = [r for r in read_jsonl(self.p.state / "ledger.jsonl") if not r.get("event")]
+        self.assertEqual(sum(r["role"] == "probe" for r in ledger), 1)  # the run's usage probe has a row too
+        self.assertEqual(len(ledger), 5)  # and the sessions; each ticket's checks are rows of their own
 
     def test_merge_that_doesnt_land_keeps_the_branches(self):
         hook = self.s.remote / "hooks" / "post-receive"  # accepts the push to main, then puts main back
@@ -133,7 +134,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(self.waits, [60] * 9)  # 3 minutes, then 6
         self.assertEqual(self.roles(), ["worker"] * 3 + ["review", "worker", "review"])
         ends = [(r["end"], r["error"]) for r in map(json.loads, (self.p.state / "ledger.jsonl").read_text().splitlines())
-                if not r.get("event")]
+                if not r.get("event") and r["role"] != "probe"]
         self.assertEqual(ends[0], ("error", 'API Error: 529 {"type":"overloaded_error","message":"Overloaded"}'))  # whole
         self.assertEqual(ends[1], ("no result", "no result event (exit 1): Error: socket hang up"))
         self.assertEqual(ends[2], ("ok", None))
