@@ -13,12 +13,15 @@ A worker that needs a call it may not make writes it into `.windvane/QUESTIONS.m
 The driver sends it to the phone (phone.py), if there is one, and skips the ticket until it's answered (phone, or
 `windvane answer` at the desk). Several blocks for one ticket are several questions (ids `T-003.q1`, `T-003.q2`): the
 ticket waits until every one is answered or timed out. No answer in `answer_wait` minutes: the next run builds the
-recommendation and records it under `## Provisional`. In a quiet time (`quiet.txt`) nothing is asked: runs build the recommendation.
+recommendation and records it under `## Provisional`. In a quiet time nothing is asked: runs build the recommendation,
+and a question already waiting gets its recommendation built at once. Quiet times are the user's own, for every
+project (`~/.config/windvane/quiet.txt`), plus the project's (`quiet.txt` in its state dir).
 """
 import re
 from datetime import datetime, timedelta
 
 from . import phone
+from .config import user_dir
 from .util import load_json, save_json
 
 OPT_RE = re.compile(r"^- \*\*([A-E])\*\*:?\s*(.+)$", re.M)
@@ -134,22 +137,74 @@ def quiet_until(lines, at):
         end = max(ext)
 
 
+QUIET_LEAD = timedelta(hours=2)  # a quiet time starting this soon is named before it starts
+
+
+def quiet_next(lines, at):
+    """(start, end) of the next quiet time after `at` (a daily one within a day), or None."""
+    starts = [s for s, _ in windows(lines, at) if s > at]
+    return (min(starts), quiet_until(lines, min(starts))) if starts else None
+
+
+def quiet_files(p):
+    """The user's quiet times for every project, then this project's own: a run keeps both."""
+    return [user_dir("XDG_CONFIG_HOME", ".config") / "quiet.txt", p.state / "quiet.txt"]
+
+
+def quiet_lines(p):
+    """The lines of every quiet-times file that reads, and the first error (naming its file) or None: a typo in one
+    file mustn't drop the other's quiet times."""
+    lines, err = [], None
+    for f in quiet_files(p):
+        try:
+            got = f.read_text().splitlines() if f.exists() else []
+            windows(got, datetime.now())
+        except OSError as e:
+            err = err or f"can't read {f}: {e.strerror or e}"
+        except ValueError as e:
+            err = err or f"{e} in {f}"
+        else:
+            lines += got
+    return lines, err
+
+
 def quiet_now(p, at=None):
     """(end of the current quiet time or None, error text or None)."""
-    f = p.state / "quiet.txt"
-    try:
-        return quiet_until(f.read_text().splitlines() if f.exists() else [], at or datetime.now()), None
-    except ValueError as e:
-        return None, str(e)
-    except OSError as e:
-        return None, f"can't read {f}: {e.strerror or e}"
+    lines, err = quiet_lines(p)
+    return quiet_until(lines, at or datetime.now()), err
 
 
-def mode(p):
-    end, err = quiet_now(p)
+def mode(p, at=None):
+    """What `windvane mode` tells a worker about to ask: right now, so a session that runs into a quiet time learns
+    it at the question."""
+    at = at or datetime.now()
+    lines, err = quiet_lines(p)
+    end, soon = quiet_until(lines, at), quiet_next(lines, at)
     if end:
         return f"provisional (the user is in a quiet time until {end:%a %H:%M}): build your recommendation"
-    return "ask" + (f" (quiet times unreadable: {err})" if err else "")
+    return ("ask" + (f" (a quiet time starts {soon[0]:%a %H:%M}: a question still unanswered then gets its "
+                     "recommendation built)" if soon and soon[0] - at <= QUIET_LEAD else "")
+            + (f" (a quiet-times file is ignored: {err})" if err else ""))
+
+
+def quiet_note(p, until=None, at=None):
+    """The worker's system prompt's section on quiet times, or "": in one, when it ends; one starting before `until`
+    (the session's end, else QUIET_LEAD from now), when it starts. Times are absolute, so the note stays true all
+    session; `windvane mode` says what holds at the moment of a question."""
+    at = at or datetime.now()
+    lines, _ = quiet_lines(p)
+    end, soon = quiet_until(lines, at), quiet_next(lines, at)
+    if end:
+        return (f"\n\n## Quiet hours\nThe user is in quiet hours until {end:%a %H:%M}: asleep or away, they can't "
+                "answer anything. Make every product call the provisional way (Decisions above): build your "
+                "recommendation, and the phone tells them what you chose so they can change it later. Ask only what "
+                f"must wait for the user; it stays unasked until {end:%H:%M}.")
+    if soon and soon[0] <= (until or at + QUIET_LEAD):
+        return (f"\n\n## Quiet hours\nThe user's quiet hours start at {soon[0]:%a %H:%M} and last until "
+                f"{soon[1]:%a %H:%M}: then they can't answer anything. Until {soon[0]:%H:%M}, ask as usual; from then "
+                "on `windvane mode` says provisional, and a question still unanswered at the start gets its "
+                "recommendation built at once, so give each question a recommendation you'd stand by.")
+    return ""
 
 
 # ---------- answers (from the phone through notify-ask, or `windvane answer` at the desk)

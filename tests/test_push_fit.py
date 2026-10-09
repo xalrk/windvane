@@ -115,7 +115,7 @@ def no_answer(p, patch, s):
 def quiet_unreadable(p, patch, s):
     patch(driver, "quiet_now", lambda p: (None, LONG))
     pilot(p).quiet_check()
-    return {"quiet times ignored": ("API Error", "asking as usual")}
+    return {"quiet times ignored": ("API Error", "that file is ignored")}
 
 
 def quiet_over(p, patch, s):

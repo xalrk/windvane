@@ -61,7 +61,7 @@ Options of `windvane run`:
 | `windvane stats --critic [--last 10] [--since <YYYY-MM-DD\|commit>]` | How the critic's scores spread over the last N tickets, and each check's yes rate (first head, any head), naming one to sharpen (always yes) or lower (never yes, except a dimension's top rung, rare by design) and any check id two dimensions share; on an old numeric scale, how often its cap checks were answered and lowered a score; `--since` keeps only verdicts at or after a date or a commit's author time (say, the one that changed `CALIBRATION.md`). |
 | `windvane stats --periodic [--days 7]` | Each [[periodic]] entry's `score=<n>` over time, oldest first, with its last summary. |
 | `windvane mode` | How a design question is handled right now: asked, or built provisionally (quiet time). |
-| `windvane quiet` | Show the quiet times file and what it means now. See [Quiet times](configuration.md#quiet-times). |
+| `windvane quiet` | Show the quiet times files (yours and the project's) and what they mean now. See [Quiet times](configuration.md#quiet-times). |
 
 ## Machine-heavy work
 

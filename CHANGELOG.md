@@ -14,6 +14,12 @@ All notable changes to windvane are listed here. The format follows
 - `[[append_only]]`: a conflict only in entries appended to a numbered log (decisions, ADRs, migrations) is resolved
   by the driver, renumbering the branch's colliding entries and its references to them, without another worker run.
 
+- Quiet times of your own for every project: `~/.config/windvane/quiet.txt`, beside each project's. In a quiet time a
+  question already waiting for you gets its recommendation built at once (a push says which), not held all night,
+  and a worker's system prompt says when the quiet time ends, or when one starts before its session can end.
+- Pushes and the run's summary show a ticket's first critic score beside its final one (`2→8`); `overview` and
+  `stats --critic` warn about a scale whose ladder stops under 10, since that caps every ticket's score.
+
 ### Fixed
 - A heavy check that waited its whole `heavy_wait` (new in `machine.toml`, default 60 minutes) for the machine lock
   says `CHECK NOT RUN` with who held it, exits 75, and isn't counted as failed; the driver runs it again instead of

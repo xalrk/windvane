@@ -193,11 +193,16 @@ reuses them.
 
 ## Quiet times
 
-Not a TOML file: `~/.local/state/windvane/<name>/quiet.txt` lists times when nobody should be asked anything, one
-per line:
+Not TOML files: times when nobody should be asked anything, one per line, in `~/.config/windvane/quiet.txt` (yours,
+for every project: when you sleep) and `~/.local/state/windvane/<name>/quiet.txt` (one project's own). A run keeps
+both:
 ```
 daily 23:00-08:00
 2026-10-02 13:00-15:00
 ```
 In a quiet time workers build their recommended option for any product question and mark it provisional instead of
-asking. `windvane quiet` shows the file and what it means right now; `windvane mode` prints only the latter.
+asking, and a question already waiting for you gets its recommendation built at once; either way your phone is told
+what was chosen and how to change it. Only questions that must wait for you (money, licences, undoing merged work)
+wait until the quiet time ends. A worker's system prompt says when the quiet time ends, or when one starts before
+its session can end. `windvane quiet` shows both files and what they mean right now; `windvane mode` prints only the
+latter.

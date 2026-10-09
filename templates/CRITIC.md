@@ -6,7 +6,9 @@ The critic answers yes or no to each check of each dimension a ticket touches; t
 score is its highest rung whose checks and every lower rung's are all `yes`; the ticket's is its lowest dimension.
 Name 2-4 dimensions as `## <name>` headings, the first being whether the ticket works at all (failing its first rung
 means start over). Under each, rungs as `- <rung> <id>: <check>`, ids unique across the scale: a few checks in all,
-each one someone reading the evidence pack could answer yes or no, and that some tickets fail. An example:
+each one someone reading the evidence pack could answer yes or no, and that some tickets fail. Take every ladder to
+10, with rungs above the pass mark (`[critic] pass`, 8 by default) that a good ticket can reach: a ladder that stops
+at 8 holds every ticket at 8 or under. An example:
 
 ## works
 What the ticket promises, failure paths included.

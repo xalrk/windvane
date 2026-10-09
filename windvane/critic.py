@@ -97,6 +97,34 @@ def history(p, tid):
     return [e for e in read_jsonl(p.state / "critic.jsonl") if e.get("ticket") == tid and e.get("step") != "none"]
 
 
+def first_score(p, tid):
+    """The first score the critic gave a ticket, or None: shown beside the final one, which alone says little
+    once workers revise until they pass."""
+    return next((r["score"] for r in history(p, tid) if r.get("score") is not None), None)
+
+
+def trail(first, final):
+    """`2→8`, or `8` when the first score was the final one."""
+    return f"{final:g}" if first is None or first == final else f"{first:g}→{final:g}"
+
+
+def ceilings(lad):
+    """{dimension: its top rung} for each ladder that stops under 10. The ticket scores its lowest dimension, so
+    one of these caps every ticket; with the pass mark at that rung, every merged ticket reads the same number."""
+    return {d: cs[-1][0] for d, cs in lad.items() if cs and cs[-1][0] < 10}
+
+
+def ceiling_line(p, lad):
+    """overview's and `stats --critic`'s word on a capped ladder, or ""."""
+    low = ceilings(lad)
+    if not low:
+        return ""
+    cap = min(low.values())
+    return (f"Critic scale: {', '.join(f'{d} tops out at {r:g}' for d, r in low.items())}, so no ticket can score "
+            f"above {cap:g}{' (the pass mark, so every merged ticket scores it)' if cap <= p.critic['pass'] else ''}: "
+            f"give {'each' if len(low) > 1 else 'it'} a 10 rung in {p.rubric_rel}.")
+
+
 def revisions(records):
     return sum(r.get("step") in ("revise", "rethink") for r in records)
 
@@ -432,9 +460,10 @@ def unanswered(recs, last=10, least=3):
 
 def advice(first, ever, n, top=False, least=5):
     """What to do about a check, from its rates, once `least` tickets touched it: one that every first head passes
-    can't tell good work from weak, and one no head ever passes only holds every score down. Except the `top` rung
-    of its dimension: a 10 is meant to be rare (few tickets aim for one), so "never yes" there is the scale working,
-    and naming it in every `stats` and `overview` would bury the advice that matters. Left out, not reworded."""
+    can't tell good work from weak, and one no head ever passes only holds every score down. Except a `top` rung,
+    one over the pass mark or its dimension's last: work beyond the bar is meant to be rare (workers stop revising at the bar), so "never
+    yes" there is the scale working, and naming it in every `stats` and `overview` would bury the advice that
+    matters. Left out, not reworded."""
     if n < least:
         return ""
     if first == n:

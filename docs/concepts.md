@@ -144,7 +144,10 @@ four dimensions, each a ladder of rungs (say 2, 5, 8, 10) with a few yes/no chec
 it crashes or loses work`). The first dimension is always whether the ticket works at all. The critic answers every
 check of each dimension the ticket touches, `yes`, `no` or `no (out of scope: <why>)`, with a clause of evidence,
 and never writes a number: a dimension's score is its highest rung whose checks and every lower rung's are all
-`yes`, and the ticket's is the lowest dimension. A check left unanswered counts as `no`, and the log names it. (A
+`yes`, and the ticket's is the lowest dimension. So give every ladder a 10 rung, reachable by a good ticket: one
+that stops at 8 holds every ticket at 8 or under (`overview` and `stats --critic` say so). Pushes and the run's
+summary show a ticket's first score beside its final one (`2→8`): with the pass mark at 8, the final one alone says
+little. A check left unanswered counts as `no`, and the log names it. (A
 scale without rungs still works the old way, the critic writing the numbers; `overview` says how to convert it.)
 
 **The verdict** splits its points into "Fix in this ticket" and "Beyond this ticket". The critic never sees the pass
@@ -190,10 +193,12 @@ What happens next depends on the time:
   reaches the phone once: when the ticket merges, its Done push names the answer built in one line. A ticket with
   several questions at once asks each on its own as `T-007.q1`, `T-007.q2` (answer them by those ids) and waits
   until every one is answered or timed out.
-- **In a quiet time** (see [configuration](configuration.md#quiet-times)) nobody is asked: the worker builds its
-  recommendation at once, records it under `## Provisional` with what to change to pick another option, and lists it
-  in the pull request. Its Done push spells the question out, since you never saw it; when the quiet time ends,
-  the phone gets a list of any provisional answers no push has shown yet (none: no list).
+- **In a quiet time** (see [configuration](configuration.md#quiet-times); yours in `~/.config/windvane/quiet.txt`
+  covers every project) nobody is asked. The worker builds its recommendation at once, records it under
+  `## Provisional` with what to change to pick another option, and lists it in the pull request; its Done push spells
+  the question out, since you never saw it. A question already waiting when the quiet time starts gets its
+  recommendation built at once, with a push saying which. When the quiet time ends, the phone gets a list of any
+  provisional answers no push has shown yet (none: no list).
 - Questions marked `Waits for the user:` (spending money, assets of unclear licence, undoing merged work) are never
   answered by default: they are asked even in a quiet time, and wait for you.
 

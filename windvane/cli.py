@@ -387,10 +387,10 @@ def check_line(p, recs):
                 f"checks, like {HOME / 'templates/CRITIC.md'}.")
     rates = critic_mod.rates(recs)
     said = [f"{d}.{cid} {a}" for d, cs in lad.items() for r, cid, _ in cs
-            if cid in rates and (a := critic_mod.advice(*rates[cid], top=r == cs[-1][0]))]
+            if cid in rates and (a := critic_mod.advice(*rates[cid], top=r > p.critic["pass"] or r == cs[-1][0]))]
     gaps = [f"Critic left {cid} unanswered in {k} of the last {n}: check its wording in {p.rubric_rel} or "
             f"windvane's {HOME / 'prompts/CRITIC.md'}." for cid, k, n in critic_mod.unanswered(recs)]
-    return "\n".join(filter(None, [shared_line(p, lad),
+    return "\n".join(filter(None, [shared_line(p, lad), critic_mod.ceiling_line(p, lad),
                                     f"Critic checks, last 10 tickets: {'; '.join(said)}." if said else "", *gaps]))
 
 
@@ -564,9 +564,14 @@ def cmd_mode(a, p):
 
 
 def cmd_quiet(a, p):
-    f = p.state / "quiet.txt"
-    print(f"{f} (`daily 23:00-08:00` or `2026-10-02 13:00-15:00`, one per line)")
-    print(f.read_text() if f.exists() else "(none)")
+    """Both quiet-times files, yours for every project first, then this project's: a run keeps both."""
+    print("Quiet times: `daily 23:00-08:00` or `2026-10-02 13:00-15:00`, one per line, in either file.")
+    for f, whose in zip(questions.quiet_files(p), ("yours, every project", "this project only")):
+        print(f"{f} ({whose}):")
+        try:
+            print(f.read_text().rstrip() or "(empty)" if f.exists() else "(none)")
+        except OSError as e:
+            print(f"(can't read it: {e.strerror or e})")
     print("now:", questions.mode(p))
 
 
@@ -713,7 +718,7 @@ def main(argv=None):
     s.add_argument("--last", type=int, default=10, help="with --critic: over the last N tickets (default 10)")
     s.add_argument("--since", help="with --critic: only verdicts at or after a date (YYYY-MM-DD) or a commit")
     sub.add_parser("mode", help="how a design question is handled right now")
-    sub.add_parser("quiet", help="show the quiet times")
+    sub.add_parser("quiet", help="show the quiet times (yours for every project, and this project's)")
     s = sub.add_parser("watch", help="follow the running sessions live (costs no tokens)")
     s.add_argument("-n", type=int, default=30, help="start with this many past events")
     s.add_argument("-o", type=int, default=6, help="lines of each command's output (0 hides output)")

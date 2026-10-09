@@ -329,8 +329,9 @@ def critic_stats(a, p):
     for t, rs in c["tickets"]:
         print(f"  {t:8} {' → '.join(g(r['score']) for r in rs):14} {rs[-1].get('step', '')}")
     no_verdicts(p, recs, since)
-    if line := shared_line(p, lad):
-        print(line)
+    for line in (shared_line(p, lad), critic_mod.ceiling_line(p, lad)):
+        if line:
+            print(line)
     rates = critic_mod.rates(recs, a.last)
     if lad and rates:
         print("checks, yes on the first head / on any head, of the tickets that touched them:")
@@ -339,7 +340,7 @@ def critic_stats(a, p):
                 if cid in rates:
                     first, ever, k = rates[cid]
                     print(f"  {d + ' ' + g(r):9} {cid:10} {first:>2}/{k:<2} {ever:>2}/{k:<2} "
-                          f"{critic_mod.advice(first, ever, k, top=r == cs[-1][0])}".rstrip())
+                          f"{critic_mod.advice(first, ever, k, top=r > c['bar'] or r == cs[-1][0])}".rstrip())
 
 
 def no_verdicts(p, recs, since):
