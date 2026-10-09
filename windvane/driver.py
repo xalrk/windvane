@@ -1544,7 +1544,10 @@ class Pilot(Desk, Periodic):
                     self.log(f"windvane {self.newer} is out: pipx upgrade windvane")
             if ready:
                 actions.refresh(p)  # status and the phone read only the cached count
-            if ready and not restarted:
+            stopped_first = ready and not restarted and (p.state / "STOP").exists()
+            if stopped_first:  # a stop as it came up (a schedule's window called off as it starts): nothing is spent
+                self.stop_reason = self.stop_check()
+            elif ready and not restarted:
                 self.usage.probe(p)
                 push("windvane started", f"Until {hhmm(deadline)}. {self.usage.text()}.{failed_teardown(p)}", 2,
                      "rocket", ("Status=status", "Stop=stop"))
@@ -1553,7 +1556,7 @@ class Pilot(Desk, Periodic):
                 self.stop_reason = self.halt or self.stop_check()
                 if self.stop_reason == "deadline" and not restarted:  # cut short during setup
                     self.stop_reason = "deadline reached during setup; nothing ran"
-            if ready:
+            if ready and not stopped_first:
                 push_held(p)  # a plan a failed push kept locally, once a run: the network may be back
                 self.loop()
         except Signalled:

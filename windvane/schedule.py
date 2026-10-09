@@ -78,6 +78,12 @@ def next_window(daily, at, after=None):
     return max(start, at), end
 
 
+def following(daily, start):
+    """The `daily` window after the one that started at `start`, as of now, when that one ends: its end as `deadline`
+    left it, or earlier (a stop, an empty queue). A window the moved end overlaps starts at that end."""
+    return next_window(daily, now(), start)
+
+
 def first(from_, until, for_, daily, at=None):
     """The first window of a scheduled run, or None for a plain one. ValueError says what's wrong."""
     at = at or now()
@@ -116,13 +122,11 @@ def run(p, argv, window, daily=None, start=None, sleep=time.sleep):
                 log(p, f"schedule ended by windvane stop, before {hhmm(s)}")
                 break
             e = moved(p, s) or e
-            nxt = daily and next_window(daily, e, s)  # for the window's stopped push
             with turn(p):  # a stop lands before this (nothing starts) or sees the window running (it stops)
                 if stopped(p):
                     log(p, f"schedule ended by windvane stop, as the {hhmm(s)} window was starting")
                     break
-                save_json(p.state / STATE, {"start": iso(s), "end": iso(e), "daily": daily, "waiting": False,
-                                            "next": nxt and [iso(nxt[0]), iso(nxt[1])]})
+                save_json(p.state / STATE, {"start": iso(s), "end": iso(e), "daily": daily, "waiting": False})
             rc = driver.supervise(p, window_args(argv, e), e, start=start, sleep=sleep)
             (p.state / "DEADLINE").unlink(missing_ok=True)  # moved this window's end only
             if stopped(p):
@@ -130,7 +134,7 @@ def run(p, argv, window, daily=None, start=None, sleep=time.sleep):
                 break
             if not daily:
                 break
-            s, e = next_window(daily, now(), s)
+            s, e = following(daily, s)
     finally:
         for f in (STATE, STOPPED):
             (p.state / f).unlink(missing_ok=True)
@@ -216,11 +220,12 @@ def called_off(p):
 
 def next_line(p):
     """The window driver's stopped push's last line, "Next window: tomorrow 12:00-20:00", or "" when no window
-    follows (not daily, or stopped)."""
-    nxt = (load_json(p.state / STATE, None) or {}).get("next")
-    if not nxt or stopped(p) or state(p) is None:
+    follows (not daily, or stopped). Worked out as the window ends, as the schedule then does, so a `deadline` that
+    moved this window's end past the next start names the window that really comes next."""
+    st = state(p)
+    if not st or not st["daily"] or st["waiting"] or stopped(p):
         return ""
-    s, e = map(datetime.fromisoformat, nxt)
+    s, e = following(st["daily"], st["start"])
     days = (s.date() - now().date()).days
     day = "today" if days == 0 else "tomorrow" if days == 1 else f"{s:%a %d %b}"
     return f"\nNext window: {day} {s:%H:%M}-{e:%H:%M}."
