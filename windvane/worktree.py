@@ -5,7 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from . import net
-from .util import git, log, now, run_limited
+from .util import git, log, now, run_limited, save_json
 
 
 def ensure_worktree(p, path, setup=True, stop=lambda: ""):
@@ -36,13 +36,15 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
 
 
 TIMED_OUT = "out of time"  # run_limited's reason when `until` passes
+TEARDOWN_FAILED = "teardown.json"  # the last teardown's failure, for the next run's "started" push
 
 
 def teardown(p):
     """The project's `teardown`, once at a run's real end: it stops the helpers the project's tools started on purpose
     outside the sessions' process groups (a shared emulator, an adb server), which no session kill reaches. It runs in
     the ci worktree (the checkout with isolate off), or in a throwaway one when a failed setup left none, so the
-    user's checkout is never touched. A failure or a timeout is only logged: the run is over either way."""
+    user's checkout is never touched. A failure or a timeout is logged and recorded (TEARDOWN_FAILED) for the next
+    run's "started" push, since its helpers may still be up; one that ends well clears that record."""
     cmd = p.cfg["teardown"]
     if not cmd:
         return
@@ -54,7 +56,7 @@ def teardown(p):
         r = git(p.main_root(), "worktree", "add", "--detach", str(temp), p.upstream)  # no fetch: offline it'd hang
         if r.returncode:
             log(p, f"teardown `{cmd}` not run: can't create a worktree for it: {r.stderr.strip()}")
-            return
+            return failed(p, cmd, "not run", r.stderr.strip())
     limit = p.cfg["teardown_minutes"]
     try:
         code, why, lines = run_limited(cmd, path, now() + timedelta(minutes=limit), keep=15)
@@ -67,8 +69,16 @@ def teardown(p):
         log(p, f"teardown `{cmd}` {how} in {short_path(p, path)}: {lines[-1] if lines else 'no output'}")
         if len(lines) > 1:
             log(p, "\n".join(["its last lines:", *lines]), echo=False)
+        failed(p, cmd, f"timed out after {limit:g} min" if why else f"exit {code}", lines[-1] if lines else "")
     else:
         log(p, f"teardown `{cmd}` done")
+        (p.state / TEARDOWN_FAILED).unlink(missing_ok=True)
+
+
+def failed(p, cmd, how, last):
+    """Records a failed teardown: when, the command, how it failed (exit, timeout) and its last line."""
+    save_json(p.state / TEARDOWN_FAILED, {"at": now().isoformat(timespec="seconds"), "cmd": cmd, "how": how,
+                                          "last": last})
 
 
 def short_path(p, path):

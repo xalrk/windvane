@@ -147,7 +147,12 @@ def cmd_run(a, p):
     if a.supervise:  # the detached run: the driver in a process of its own, restarted after a crash
         argv = [x for x in sys.argv[1:] if x != "--supervise"]
         sys.exit(schedule.run(p, argv, window, a.daily) if window else driver.supervise(p, argv, deadline))
-    if not driver.Pilot(p, a).run(deadline):
+    pilot = driver.Pilot(p, a)
+    ready = pilot.run(deadline)
+    if pilot.signalled:  # its end is done: now die of the signal, as `supervise` and the shell expect
+        signal.signal(pilot.signalled, signal.SIG_DFL)
+        os.kill(os.getpid(), pilot.signalled)
+    if not ready:
         sys.exit(1)  # it couldn't start (a failed setup): scripts see it
 
 
