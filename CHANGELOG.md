@@ -18,6 +18,9 @@ All notable changes to windvane are listed here. The format follows
 - `windvane init` picks `forge = "git"` for a remote that isn't on GitHub (or without `gh`), and says which it chose.
 - `windvane queue` names tickets that aren't pushed yet, instead of "no tickets yet".
 - `windvane install` without a terminal names `--yes`; getting started explains letting Claude set windvane up.
+- The phone's `stop` and `overview` hooks aren't lost: `install`, `init` and a run's start change install.json one
+  at a time, never save over one they can't read (they say so instead), and a run puts back its project's own hooks
+  when they went while its repo was away.
 
 ## 0.1.0 - 2026-10-02
 
