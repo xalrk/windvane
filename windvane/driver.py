@@ -34,8 +34,8 @@ from .phone import MOST, REASON, cut, whole
 from .planner import plan
 from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
-from .questions import (answered, desk_answers, give_answer, mode, note, parts, phone_answer, provisional, qkey,
-                        quiet_now, section, shown, unseen)
+from .questions import (answered, desk_answers, give_answer, keys, mode, note, parts, phone_answer, provisional, qkey,
+                        quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on, with_ids)
 from .queue import Queue
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
@@ -188,7 +188,7 @@ class Pilot(Desk, Periodic):
         self.state_file = p.state / "state.json"
         s = load_json(self.state_file, {})
         self.feedback = s.get("feedback", {})  # ticket -> what its next worker run must act on
-        self.questions = s.get("questions", {})  # ticket -> its open question for the user
+        self.questions = s.get("questions", {})  # question id (questions.keys) -> a question for the user
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.skip, self.merged, self.failed = set(), [], []
@@ -260,9 +260,10 @@ class Pilot(Desk, Periodic):
     def log(self, msg):
         log(self.p, msg)
 
-    def name(self, tid):
+    def name(self, tid, key=None):
+        """The ticket's title and id; `key` shows instead of the id (one of its several questions: `T-003.q2`)."""
         t = self.queue.titles.get(tid, "") if hasattr(self, "queue") else ""
-        return f"{t} ({tid})" if t else tid
+        return f"{t} ({key or tid})" if t else key or tid
 
     def end(self):
         """The run's deadline, live: `windvane deadline` moves it by writing DEADLINE in the state dir, and every
@@ -380,7 +381,7 @@ class Pilot(Desk, Periodic):
     def others_left(self, tid):
         """Whether a ticket other than `tid` is running or could start: the session that tells a ticket's own
         failure from a broken API."""
-        q, blocked = self.queue, set(self.questions)
+        q, blocked = self.queue, tickets(self.questions)
         return any(t != tid for t in self.running) or any(
             t != tid and t not in self.skip and q.status(t, blocked) in ("wip", "todo") for t in q.order)
 
@@ -917,15 +918,15 @@ class Pilot(Desk, Periodic):
         showed gets one line without its text; only one built without the user ever seeing it (a quiet time) is
         spelled out. Once the push went out, either way it counts as pushed: the end-of-quiet digest leaves it out."""
         p = self.p
-        picks = [q for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
+        picks = [q for q in with_ids(provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")))
                  if p.norm(q["ticket"]) == tid]
         if not picks:
             return "", []
         with self.lock:
             new = unseen(picks, shown(p)["asked"].get(tid, []))
-        how = f"to change: windvane answer {tid} <letter>."
-        return "".join(f"\n{q['question']} Built {q['built']} without asking you: {q['option']}; {how}" if q in new
-                       else f"\nBuilt {q['built']} for {tid}: {q['option']}; {how}" for q in picks), picks
+        how = lambda q: f"to change: windvane answer {q['id']} <letter>."  # noqa: E731
+        return "".join(f"\n{q['question']} Built {q['built']} without asking you: {q['option']}; {how(q)}" if q in new
+                       else f"\nBuilt {q['built']} for {tid}: {q['option']}; {how(q)}" for q in picks), picks
 
     def fail(self, tid, why):
         self.skip.add(tid)
@@ -948,82 +949,95 @@ class Pilot(Desk, Periodic):
         p = self.p
         self.fetch()
         text = gout(p.main_root(), "show", f"{p.remote}/{branch}:{p.questions_rel}") if branch else ""
-        sec = section(text, tid)
-        opts, rec, must_wait, q = parts(sec)
+        found = [x for x in map(parts, sections(text, tid)) if len(x[0]) >= 2]
         self.skip.add(tid)
         self.fail_streak = 0
-        if len(opts) < 2:
+        if not found:
             return self.fail(tid, f"BLOCKED, but no question with options under ## Open on {branch}: {gist}")
-        self.questions[tid] = {"q": q or gist, "opts": opts, "rec": rec, "must_wait": must_wait, "branch": branch,
-                               "asked": None}
-        self.log(f"{tid}: question for the user: {q or gist}")
-        self.save()  # the loop's next pass sends it (state.json keeps it unsent across a restart)
+        for key, (opts, rec, must_wait, q) in zip(keys(tid, len(found)), found):
+            self.questions[key] = {"ticket": tid, "q": q or gist, "opts": opts, "rec": rec, "must_wait": must_wait,
+                                   "branch": branch, "asked": None}
+            self.log(f"{key}: question for the user: {q or gist}")
+        self.save()  # the loop's next pass sends them (state.json keeps them unsent across a restart)
 
     def send_unsent(self):
         """Send every stored question not yet sent: held through a quiet time, or left by an earlier run."""
-        for tid, q in list(self.questions.items()):
+        for key, q in list(self.questions.items()):
             if q["asked"] is None:
-                self.send_question(tid)
+                self.send_question(key)
                 self.save()
 
-    def send_question(self, tid):
-        q = self.questions[tid]
+    def send_question(self, key):
+        q = self.questions[key]
+        tid = ticket_of(key, q)
         q["asked"] = time.time()
         wait = "" if q["must_wait"] or not q["rec"] else (
             f" No answer in {self.a.answer_wait:g} min: I go with {q['rec']} and mark it to revisit.")
         opts = [q["opts"][k] for k in sorted(q["opts"])]
-        sent = phone.ask(self.p.qid(tid), f"{self.name(tid)}: {q['q']}{wait}", opts)
+        sent = phone.ask(self.p.qid(key), f"{self.name(tid, key)}: {q['q']}{wait}", opts)
         if sent is None:
-            self.log(f"{tid}: no phone; answer at the desk with `windvane answer {tid} <letter>`")
+            self.log(f"{key}: no phone; answer at the desk with `windvane answer {key} <letter>`")
         elif sent:  # the Done push then names it in one line, without the question
             with self.lock:
                 note(self.p, lambda s: s["asked"].setdefault(tid, []).append(q["q"]))
         elif not sent:  # the next pass sends it again; the wait for an answer starts once it's out
             q["asked"] = None
             if not q.get("send_failed"):
-                self.log(f"{tid}: the phone push failed; trying again on the next pass")
+                self.log(f"{key}: the phone push failed; trying again on the next pass")
             q["send_failed"] = True
 
     def poll_questions(self):
+        """Settle each sent question on its own (an answer, or its recommendation once its wait runs out); a ticket
+        runs again once all of its questions are settled, with one feedback naming each."""
         p = self.p
         phone.pump()
-        desk = desk_answers(p)
-        for tid, q in list(self.questions.items()):
-            if q["asked"] is None:
+        desk, settled = desk_answers(p), []
+        for key, q in list(self.questions.items()):
+            if q["asked"] is None or "result" in q:
                 continue
-            got, letter, text = desk.get(tid), None, None
+            tid = ticket_of(key, q)
+            got, letter, text = desk.get(key), None, None
             if got:
                 letter, text = got.get("option"), got.get("text")
             else:
-                ph = phone_answer(p, tid)
+                ph = phone_answer(p, key)
                 if ph.startswith("ANSWER"):
                     letter = ph.split()[1]
                 elif ph == "LATER":
                     q["later"] = True
             if letter or text:
                 opt = q["opts"].get(letter or "", "")
-                self.feedback[tid] = (f"The user answered your question \"{q['q']}\": "
-                                      + (f"option {letter} ({opt})" if letter else "")
-                                      + (f" They added: {text}" if text else "")
-                                      + ". Build that, and move the question to ## Answered with the answer.")
-                self.log(f"{tid}: answered {letter or ''} {text or ''}".rstrip())
+                q["result"] = (f"The user answered your question \"{q['q']}\": "
+                               + (f"option {letter} ({opt})" if letter else "")
+                               + (f" They added: {text}" if text else "")
+                               + ". Build that, and move the question to ## Answered with the answer.")
+                self.log(f"{key}: answered {letter or ''} {text or ''}".rstrip())
                 with self.lock:  # answered, so never mistaken for a reworded copy of a later provisional answer
                     note(p, lambda s: s["asked"].update({tid: [a for a in s["asked"].get(tid, []) if a != q["q"]]}))
             elif (not q.get("later") and not q["must_wait"] and q["rec"]
                   and time.time() - q["asked"] > self.a.answer_wait * 60):
-                self.feedback[tid] = (f"The user didn't answer your question \"{q['q']}\" within "
-                                      f"{self.a.answer_wait:g} minutes: build your recommendation ({q['rec']}), and "
-                                      "move the question to ## Provisional with its `Built:` line.")
-                self.log(f"{tid}: no answer in {self.a.answer_wait:g} min; building {q['rec']}")
+                q["result"] = (f"The user didn't answer your question \"{q['q']}\" within "
+                               f"{self.a.answer_wait:g} minutes: build your recommendation ({q['rec']}), and "
+                               "move the question to ## Provisional with its `Built:` line.")
+                self.log(f"{key}: no answer in {self.a.answer_wait:g} min; building {q['rec']}")
                 opt = q["opts"].get(q["rec"], "")
-                push(f"No answer: {self.name(tid)}", whole(f"Going with {q['rec']}: ", opt, ".", log=self.log)
-                     + f"\nTo change it later: windvane answer {tid} <letter>.", 3, "hourglass")
+                if key != tid:  # one of several: `windvane answer <key>` finds its provisional answer once merged
+                    with self.lock:
+                        note(p, lambda s: s["built"].update({key: q["q"]}))
+                push(f"No answer: {self.name(tid, key)}", whole(f"Going with {q['rec']}: ", opt, ".", log=self.log)
+                     + f"\nTo change it later: windvane answer {key} <letter>.", 3, "hourglass")
             else:
                 continue
-            del self.questions[tid]
-            desk.pop(tid, None)
-            self.skip.discard(tid)
-        save_json(p.state / "answers.json", desk)
+            settled.append(key)
+        for tid in tickets(self.questions):
+            mine = {k: q for k, q in self.questions.items() if ticket_of(k, q) == tid}
+            if all("result" in q for q in mine.values()):
+                self.feedback[tid] = "\n".join(q["result"] for q in mine.values())
+                for k in mine:
+                    del self.questions[k]
+                self.skip.discard(tid)
+        if settled:  # read again: an answer `windvane answer` gave meanwhile (during a push) must not be lost
+            save_json(p.state / "answers.json", {k: v for k, v in desk_answers(p).items() if k not in settled})
         self.save()
 
     def quiet_check(self):
@@ -1138,7 +1152,7 @@ class Pilot(Desk, Periodic):
         counts as half one: it's under way."""
         if self.usage.five is not None and self.usage.five < self.a.cap / 2:
             return ""
-        q, blocked = self.queue, set(self.questions)
+        q, blocked = self.queue, tickets(self.questions)
         left = sum(t not in self.skip and q.status(t, blocked) in ("wip", "todo", "waiting") for t in q.order)
         m = self.ticket_minutes()
         if (left - len(self.running) / 2) * m > (self.end() - now()).total_seconds() / 60 - self.a.min_slot:
@@ -1200,15 +1214,15 @@ class Pilot(Desk, Periodic):
         avoid = set(self.skip) | set(busy)
         self.waits = []
         extra = self.outside(busy)  # once a pass: two git calls a running ticket
-        ahead = q.to_run(avoid, set(self.questions))  # those waiting on a clash too: a free slot isn't "run out"
+        ahead = q.to_run(avoid, tickets(self.questions))  # those waiting on a clash too: a free slot isn't "run out"
         for t in q.order:
-            why = ("" if t in avoid or q.status(t, set(self.questions)) not in ("wip", "todo")
+            why = ("" if t in avoid or q.status(t, tickets(self.questions)) not in ("wip", "todo")
                    else f"last, {ahead[0]} still to run" if ahead and t in q.last else self.clash(t, busy, extra))
             if why:
                 avoid.add(t)
                 self.waits.append(f"{t} waits: {why}")
         while True:
-            tid, *rest = q.pick(avoid, set(self.questions))
+            tid, *rest = q.pick(avoid, tickets(self.questions))
             if tid is None:
                 return None, rest[0], None, None
             own = next((i for i, o in self.owner.items() if o == tid), None)
@@ -1398,7 +1412,7 @@ class Pilot(Desk, Periodic):
                     continue
                 if self.questions:
                     if not self.idle:
-                        self.log(f"waiting for answers on {', '.join(self.questions)}")
+                        self.log(f"waiting for answers on {', '.join(waiting_on(self.questions))}")
                         self.idle = True
                     self.nap(now() + timedelta(minutes=1), answers=True)
                     continue
@@ -1600,7 +1614,7 @@ class Pilot(Desk, Periodic):
                 + (f"Desk PRs merged: {', '.join('#' + n for n in self.desk_merged)}.\n" if self.desk_merged else "")
                 + (f"Critic (/10): {crit}.\n" if crit else "") + side
                 + (f"Held for you (parked in QUEUE.md): {names(self.held)}.\n" if self.held else "")
-                + f"Waiting on you: {names(self.questions)}.\n"
+                + f"Waiting on you: {names(sorted(tickets(self.questions)))}.\n"
                 + (f"Provisional answers to check: {'; '.join(f'{q[0]} (built {q[1]})' for q in picks[:6])}"
                    + (f" and {len(picks) - 6} more" if len(picks) > 6 else "") + ". "
                    "To change one: windvane answer <ID> <letter>.\n" if picks else "")

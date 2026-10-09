@@ -187,7 +187,9 @@ What happens next depends on the time:
 - **Normally**, the worker stops `BLOCKED`, the question goes to your phone (if set up), and the ticket waits while
   others run. Answer with a tap, or at the desk with `windvane answer T-007 B` (or free text in quotes). With no
   answer in `answer_wait` minutes, the next run builds the recommendation and marks it provisional. Each question
-  reaches the phone once: when the ticket merges, its Done push names the answer built in one line.
+  reaches the phone once: when the ticket merges, its Done push names the answer built in one line. A ticket with
+  several questions at once asks each on its own as `T-007.q1`, `T-007.q2` (answer them by those ids) and waits
+  until every one is answered or timed out.
 - **In a quiet time** (see [configuration](configuration.md#quiet-times)) nobody is asked: the worker builds its
   recommendation at once, records it under `## Provisional` with what to change to pick another option, and lists it
   in the pull request. Its Done push spells the question out, since you never saw it; when the quiet time ends,

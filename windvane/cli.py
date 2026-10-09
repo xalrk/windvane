@@ -250,11 +250,11 @@ def cmd_status(a, p):
     st = load_json(p.state / "state.json", {})
     for tid, slot in sorted(st.get("running", {}).items(), key=lambda kv: kv[1]) if on else ():
         print(f"slot {slot}: {tid}")
-    for tid, q in st.get("questions", {}).items():
-        print(f"waiting on you: {tid}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
-    for q in questions.provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")):
+    for key, q in questions.waiting_on(st.get("questions", {})).items():
+        print(f"waiting on you: {key}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
+    for q in questions.with_ids(questions.provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))):
         print(f"provisional: {q['ticket']}: {q['question']} Built {q['built'] or '?'}"
-              + (f": {q['option']}" if q["option"] else "") + f". To change: windvane answer {q['ticket']} <letter>")
+              + (f": {q['option']}" if q["option"] else "") + f". To change: windvane answer {q['id']} <letter>")
     for line in requests.unseen(p):
         print(f"windvane request {line}")
     print("\n".join(held_text(p, subject=None) + last_log(p, 12)))
@@ -422,7 +422,7 @@ def cmd_queue(a, p):
     git(p.main_root(), "fetch", "-q", p.remote)
     st = load_json(p.state / "state.json", {})
     q = Queue(p)
-    print(q.listing(set(st.get("questions", {}))) or f"no tickets on {p.upstream} yet")
+    print(q.listing(questions.tickets(st.get("questions", {}))) or f"no tickets on {p.upstream} yet")
     local = sorted(t for t in (p.norm(f.stem) for f in (p.root / p.tickets_rel).glob("*.md")) if t and t not in q.files)
     if local:
         print(f"not on {p.upstream} yet (the autopilot can't see them): {' '.join(local)}; commit and push")
@@ -434,19 +434,33 @@ def cmd_queue(a, p):
             print(f"{e['name']} runs while windvane's inbox has requests: {n} untriaged (windvane request --status)")
 
 
+def waits_for(p, given):
+    """The ids of the waiting questions `given` names: its own id (`T-003.q2`), or every one of its ticket's."""
+    waits = questions.waiting_on(load_json(p.state / "state.json", {}).get("questions", {}))
+    exact = [k for k in waits if k.lower() == given.strip().lower()]
+    return exact or [k for k, q in waits.items() if questions.ticket_of(k, q) == p.norm(given)]
+
+
 def cmd_answer(a, p):
     letter = a.answer.upper() if re.fullmatch(r"[A-Ea-e]", a.answer) else None
-    waits = load_json(p.state / "state.json", {}).get("questions", {})
-    x = preflight.lookup(p, a.ticket) if p.norm(a.ticket) not in waits else None
+    keys = waits_for(p, a.ticket)
+    if len(keys) > 1:  # which one the letter is for can't be told
+        sys.exit(f"{p.norm(a.ticket)} has {len(keys)} open questions: answer each by its id ({', '.join(keys)}), "
+                 f"e.g. windvane answer {keys[0]} <letter>")
+    x = preflight.lookup(p, a.ticket) if not keys else None
     if x:  # a preflight question: recorded on main for the ticket's worker
         print(f"{x['ticket']}: {preflight.record(p, [(x, letter, None if letter else a.answer)])}")
         return
-    tid = p.norm(a.ticket) or sys.exit("give a ticket id, or a question's id from preflight (T-003.1)")
-    if tid not in waits:
-        sys.exit(f"{tid}: no question of it waits for an answer (open, provisional on {p.main}, or from preflight)")
-    questions.give_answer(p, tid, letter, None if letter else a.answer)
-    preflight.forget(p, {tid})  # preflight lists an open phone question under its ticket id
-    print(f"{tid}: answer recorded; the autopilot builds it on the ticket's next run")
+    if not keys:
+        p.norm(a.ticket.split(".")[0]) or sys.exit("give a ticket id, or a question's id from preflight (T-003.1)")
+        if a.ticket.upper() in {k.upper() for k in questions.shown(p)["built"]}:
+            sys.exit(f"{a.ticket}: its recommendation is being built and isn't on {p.main} yet; once its ticket "
+                     "merges, answer again (`windvane status` then lists it)")
+        sys.exit(f"{p.norm(a.ticket) or a.ticket}: no question of it waits for an answer (open, provisional on "
+                 f"{p.main}, or from preflight)")
+    questions.give_answer(p, keys[0], letter, None if letter else a.answer)
+    preflight.forget(p, {keys[0]})  # preflight lists an open phone question under the same id
+    print(f"{keys[0]}: answer recorded; the autopilot builds it on the ticket's next run")
 
 
 def cmd_check(a, p):
