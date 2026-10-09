@@ -69,9 +69,8 @@ def parts(sec):
             bool(re.search(r"^Waits for the user:", sec, re.M)), q.group(1).strip() if q else "")
 
 
-def provisional(text, ids=False):
-    """[{ticket, question, built, option}] under ## Provisional; with `ids`, each also has the id `windvane answer`
-    takes: its ticket's, or preflight's `T-003.p2` when the ticket has several."""
+def provisional(text):
+    """[{ticket, question, built, option}] under ## Provisional."""
     out = []
     for m in re.finditer(r"^### (\S+?):?\s+(.*?)$(.*?)(?=^### |\Z)", part(text, "Provisional"), re.M | re.S):
         opts = dict(OPT_RE.findall(m.group(3)))
@@ -79,11 +78,16 @@ def provisional(text, ids=False):
         letter = built.group(1) if built else ""
         out.append({"ticket": m.group(1), "question": m.group(2).strip(), "built": letter,
                     "option": opts.get(letter, "")})
-    if ids:
-        for q in out:
-            mine = [x for x in out if x["ticket"] == q["ticket"]]
-            q["id"] = q["ticket"] if len(mine) == 1 else f"{q['ticket']}.p{mine.index(q) + 1}"
     return out
+
+
+def with_ids(picks):
+    """`provisional`'s answers, each with the id `windvane answer` takes: its ticket's, or preflight's `T-003.p2` when
+    the ticket has several."""
+    for q in picks:
+        mine = [x for x in picks if x["ticket"] == q["ticket"]]
+        q["id"] = q["ticket"] if len(mine) == 1 else f"{q['ticket']}.p{mine.index(q) + 1}"
+    return picks
 
 
 def blocks(text):
@@ -173,8 +177,9 @@ def qkey(q):
 
 def shown(p):
     """{"asked": {ticket: [questions sent to the phone]}, "pushed": [keys of provisional answers pushed],
-    "preflight": [keys of provisional answers offered at the desk]}."""
-    return {"asked": {}, "pushed": [], "preflight": [], **load_json(p.state / "shown.json", {})}
+    "preflight": [keys of provisional answers offered at the desk], "built": {`T-003.q2`: its question, built on a
+    timeout}}."""
+    return {"asked": {}, "pushed": [], "preflight": [], "built": {}, **load_json(p.state / "shown.json", {})}
 
 
 def note(p, change):

@@ -35,7 +35,7 @@ from .planner import plan
 from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail
 from .questions import (answered, desk_answers, give_answer, keys, mode, note, parts, phone_answer, provisional, qkey,
-                        quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on)
+                        quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on, with_ids)
 from .queue import Queue
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
@@ -918,7 +918,7 @@ class Pilot(Desk, Periodic):
         showed gets one line without its text; only one built without the user ever seeing it (a quiet time) is
         spelled out. Once the push went out, either way it counts as pushed: the end-of-quiet digest leaves it out."""
         p = self.p
-        picks = [q for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"), ids=True)
+        picks = [q for q in with_ids(provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")))
                  if p.norm(q["ticket"]) == tid]
         if not picks:
             return "", []
@@ -1021,11 +1021,11 @@ class Pilot(Desk, Periodic):
                                "move the question to ## Provisional with its `Built:` line.")
                 self.log(f"{key}: no answer in {self.a.answer_wait:g} min; building {q['rec']}")
                 opt = q["opts"].get(q["rec"], "")
-                one = key == tid  # one of several: once merged it's preflight's `.pN`, which `status` names
-                push(f"No answer: {self.name(tid)}",
-                     whole(f"Going with {q['rec']}{'' if one else ' for ' + key}: ", opt, ".", log=self.log)
-                     + f"\nTo change it later: windvane answer {tid if one else '<its id in windvane status>'} "
-                       "<letter>.", 3, "hourglass")
+                if key != tid:  # one of several: `windvane answer <key>` finds its provisional answer once merged
+                    with self.lock:
+                        note(p, lambda s: s["built"].update({key: q["q"]}))
+                push(f"No answer: {self.name(tid, key)}", whole(f"Going with {q['rec']}: ", opt, ".", log=self.log)
+                     + f"\nTo change it later: windvane answer {key} <letter>.", 3, "hourglass")
             else:
                 continue
             desk.pop(key, None)

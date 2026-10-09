@@ -252,7 +252,7 @@ def cmd_status(a, p):
         print(f"slot {slot}: {tid}")
     for key, q in questions.waiting_on(st.get("questions", {})).items():
         print(f"waiting on you: {key}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
-    for q in questions.provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"), ids=True):
+    for q in questions.with_ids(questions.provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))):
         print(f"provisional: {q['ticket']}: {q['question']} Built {q['built'] or '?'}"
               + (f": {q['option']}" if q["option"] else "") + f". To change: windvane answer {q['id']} <letter>")
     for line in requests.unseen(p):
@@ -453,6 +453,9 @@ def cmd_answer(a, p):
         return
     if not keys:
         p.norm(a.ticket.split(".")[0]) or sys.exit("give a ticket id, or a question's id from preflight (T-003.1)")
+        if a.ticket.upper() in {k.upper() for k in questions.shown(p)["built"]}:
+            sys.exit(f"{a.ticket}: its recommendation is being built and isn't on {p.main} yet; once its ticket "
+                     "merges, answer again (`windvane status` then lists it)")
         sys.exit(f"{p.norm(a.ticket) or a.ticket}: no question of it waits for an answer (open, provisional on "
                  f"{p.main}, or from preflight)")
     questions.give_answer(p, keys[0], letter, None if letter else a.answer)

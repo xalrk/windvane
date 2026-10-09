@@ -105,11 +105,23 @@ class ManyQuestions(unittest.TestCase):
         pl.questions["T-001.q1"]["asked"] = time.time() - 11 * 60  # its own wait ran out; .q2's hasn't
         pl.poll_questions()
         self.assertNotIn("T-001", pl.feedback)
-        self.assertIn("Going with A for T-001.q1: red.", self.pushes[-1][1])
+        self.assertEqual(self.pushes[-1], ("No answer: do T-001 (T-001.q1)",
+                                           "Going with A: red.\nTo change it later: windvane answer T-001.q1 <letter>."))
         self.cli("answer", "T-001.q2", "B")
         pl.poll_questions()
         self.assertIn("didn't answer your question \"Red or blue?\" within 10 minutes", pl.feedback["T-001"])
         self.assertIn("\"Big or small?\": option B (small)", pl.feedback["T-001"])
+        self.assertIn("isn't on main yet; once its ticket merges, answer again", self.cli("answer", "T-001.q1", "B"))
+        # its worker builds A and moves it to ## Provisional (after another of the ticket's), and the ticket merges
+        self.s.write(".windvane/QUESTIONS.md", "# Q\n\n## Open\n\n## Provisional\n" + SIZE + "Built: A; y\n"
+                     + COLOUR + "Built: A; x\n\n## Answered\n")
+        self.s.publish("merged")
+        self.assertIn("To change: windvane answer T-001.p2 <letter>", self.cli("status"))
+        self.assertIn("1 answer recorded on main", self.cli("answer", "T-001.q1", "B"))  # the push's id still works
+        self.s.git("pull", "-q", "--ff-only", "origin", "main")
+        answered = questions.part((self.s.root / ".windvane/QUESTIONS.md").read_text(), "Answered")
+        self.assertIn("### T-001: Red or blue?", answered)
+        self.assertNotIn("Big or small?", answered)
 
     def test_one_question_keeps_the_ticket_id(self):
         self.branch(COLOUR)

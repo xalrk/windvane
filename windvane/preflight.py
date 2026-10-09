@@ -138,7 +138,16 @@ def lookup(p, key):
         return x
     git(p.main_root(), "fetch", "-q", p.remote)
     qtext = gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")
-    return pick(provisionals(qtext)) or pick(provisionals(qtext, "Open", "stuck"))
+    return pick(provisionals(qtext)) or pick(provisionals(qtext, "Open", "stuck")) or built_answer(p, key, qtext)
+
+
+def built_answer(p, key, qtext):
+    """The provisional answer on main of `T-003.q2`, one of a ticket's several questions its timeout built (its No
+    answer push names that id), found by its question; None before it merges, or if the worker reworded it."""
+    m = re.fullmatch(r"(?i)(.+)\.q(\d+)", key.strip())
+    q = shown(p)["built"].get(f"{p.norm(m.group(1))}.q{m.group(2)}") if m and p.norm(m.group(1)) else None
+    hit = [x for x in provisionals(qtext) if q and x["ticket"] == p.norm(m.group(1)) and x["question"] == q]
+    return hit[0] if len(hit) == 1 else None
 
 
 # ---------- recording answers
