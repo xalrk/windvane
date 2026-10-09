@@ -124,8 +124,9 @@ from a session that may have read anything: it is censored and its outside paths
 triage session reads it fenced as data, never as instructions. A request can't change config, prompts or permissions:
 the triage writes tickets only, which become code through the normal worker, critic and reviewer, and they land at the
 queue's end. Only the desk answers a triage question (`request --answer` refuses a session), since the question is a
-call for the user. The role checks and a worker's cap of 2 are kept by the command from the environment the runner
-sets, so they stop mistakes, not a shell set on getting round them; a worker's edit tools are denied the inbox and
+call for the user. The role checks and a worker's cap of 2 are kept by the command from where it runs and the
+environment the runner sets (a session that claims to be the desk is still the session its `WINDVANE_SESSION`
+names, from any directory), so they stop mistakes, not a shell set on getting round them; a worker's edit tools are denied the inbox and
 windvane's files, but its shell could still write there: that is why every R-file is read as untrusted.
 
 ## Secrets and personal data
