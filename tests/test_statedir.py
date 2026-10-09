@@ -285,7 +285,7 @@ class DoctorClean(Base):
         with statedir.lock(self.p) as free:
             self.assertTrue(free)
             self.assertFalse(driver.locked(self.p))  # the phone's status and `run` see no run
-            run = subprocess.Popen(["windvane", "run", "--for", "30m", "--no-preflight"], cwd=self.s.root,
+            run = subprocess.Popen(["windvane", "run", "--for", "1h", "--no-preflight"], cwd=self.s.root,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             time.sleep(1.5)
             self.assertIsNone(run.poll())  # waiting for the clean, not refused
