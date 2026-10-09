@@ -16,8 +16,8 @@ AGE = 3600  # seconds a leftover must have sat untouched: a running check writes
 FULL = 90  # percent of the temp dir's inodes or space at which doctor warns and the driver pushes
 DAY = 86400  # seconds an old leak must have sat untouched: a `tmpXXXXXXXX` dir might be anyone's work in progress
 LEAK = re.compile(r"tmp[a-z0-9_]{8}")  # tempfile.mkdtemp's names, which the tests used before they named theirs
-OURS = {"runs", "settings.json", "windvane-mentioned", "Critic", "critic.jsonl", "windvane-heavy.lock", "state.json",
-        "answers.json"}  # all an old leak holds when it was a session's state dir
+OURS = {"runs", "settings.json", "windvane-mentioned", "Critic", "critic.jsonl", "windvane-heavy.lock",
+        "windvane-heavy.queue", "state.json", "answers.json"}  # all an old leak holds when it was a session's state dir
 ORIGIN = re.compile(r'^\[remote "origin"\]\s*$((?:\n[^\[].*$)*)', re.M)
 
 

@@ -87,6 +87,9 @@ beside the user's own engine session, can exhaust memory. `windvane heavy -- <co
   Blender);
 - once at least `min_free_gb` of memory is available (Linux).
 
+Jobs waiting for the lock run in arrival order: each joins a queue beside the lock when it asks, so a job that
+arrives just as the lock frees can't overtake one that has waited, and a waiter that dies drops out of the line. While
+it waits, its log says who holds the lock (pid, command, since when) and how many jobs are ahead of it.
 It waits up to `--wait` minutes (default 60) for the machine. It never takes another tool's lock, so a heavy command
 that is itself a locking tool can't deadlock waiting on itself. Set `heavy_check = true` to run the project's check
 this way; sessions use `windvane bg --heavy` for long heavy jobs.
