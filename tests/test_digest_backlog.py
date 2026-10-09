@@ -34,7 +34,7 @@ class Backlog(unittest.TestCase):
         stack = ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(mock.patch.object(driver, "push", lambda title, msg="", *a, **k:
-                                              self.sent.append((title, msg))))
+                                              self.sent.append((title, msg)) or True))
         stack.enter_context(mock.patch.object(driver, "quiet_now", lambda p: (None, None)))
         self.addCleanup(os.chdir, os.getcwd())
 
