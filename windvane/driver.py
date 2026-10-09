@@ -991,7 +991,7 @@ class Pilot(Desk, Periodic):
         runs again once all of its questions are settled, with one feedback naming each."""
         p = self.p
         phone.pump()
-        desk = desk_answers(p)
+        desk, settled = desk_answers(p), []
         for key, q in list(self.questions.items()):
             if q["asked"] is None or "result" in q:
                 continue
@@ -1028,7 +1028,7 @@ class Pilot(Desk, Periodic):
                      + f"\nTo change it later: windvane answer {key} <letter>.", 3, "hourglass")
             else:
                 continue
-            desk.pop(key, None)
+            settled.append(key)
         for tid in tickets(self.questions):
             mine = {k: q for k, q in self.questions.items() if ticket_of(k, q) == tid}
             if all("result" in q for q in mine.values()):
@@ -1036,7 +1036,8 @@ class Pilot(Desk, Periodic):
                 for k in mine:
                     del self.questions[k]
                 self.skip.discard(tid)
-        save_json(p.state / "answers.json", desk)
+        if settled:  # read again: an answer `windvane answer` gave meanwhile (during a push) must not be lost
+            save_json(p.state / "answers.json", {k: v for k, v in desk_answers(p).items() if k not in settled})
         self.save()
 
     def quiet_check(self):

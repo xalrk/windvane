@@ -123,6 +123,19 @@ class ManyQuestions(unittest.TestCase):
         self.assertIn("### T-001: Red or blue?", answered)
         self.assertNotIn("Big or small?", answered)
 
+    def test_an_answer_given_during_a_poll_isnt_lost(self):
+        self.branch(COLOUR + SIZE)
+        pl = self.pilot(wait=10)
+        pl.ask("T-001", "t-001-x", "Red or blue?")
+        pl.send_unsent()
+        pl.questions["T-001.q1"]["asked"] = time.time() - 11 * 60
+        with mock.patch.object(driver, "push", lambda *a, **k: self.cli("answer", "T-001.q2", "B")):
+            pl.poll_questions()  # .q1's No answer push goes out while the user answers .q2
+        self.assertEqual(questions.desk_answers(self.p)["T-001.q2"]["option"], "B")
+        pl.poll_questions()
+        self.assertIn("\"Big or small?\": option B (small)", pl.feedback["T-001"])
+        self.assertEqual(questions.desk_answers(self.p), {})
+
     def test_one_question_keeps_the_ticket_id(self):
         self.branch(COLOUR)
         pl = self.pilot()
