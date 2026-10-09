@@ -118,8 +118,10 @@ if system.startswith("# windvane worker run"):
         open("NOTES.md", "w").write(nt + f"\n## {tid}\nFound things.\n")
     elif notes == "edit":
         sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
-    if behaviour == "question" and "answered" not in prompt and "didn't answer" not in prompt:
-        q = open(".windvane/QUESTIONS.md").read().replace("## Open\n", f"## Open\n### {tid}: Red or blue?\nContext.\n- **A**: red\n- **B**: blue\nRecommendation: A, because.\n", 1)
+    if behaviour in ("question", "questions") and "answered" not in prompt and "didn't answer" not in prompt:
+        more = (f"### {tid}: Big or small?\n- **A**: big\n- **B**: small\nRecommendation: A, because.\n"
+                * (behaviour == "questions"))  # questions: two at once
+        q = open(".windvane/QUESTIONS.md").read().replace("## Open\n", f"## Open\n### {tid}: Red or blue?\nContext.\n- **A**: red\n- **B**: blue\nRecommendation: A, because.\n{more}", 1)
         open(".windvane/QUESTIONS.md", "w").write(q)
         sh("git", "add", "-A"); sh("git", "commit", "-qm", "question"); sh("git", "push", "-q", "-u", "origin", "HEAD")
         text = f"RESULT: BLOCKED {tid} Red or blue?"

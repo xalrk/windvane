@@ -15,6 +15,9 @@ All notable changes to windvane are listed here. The format follows
   by the driver, renumbering the branch's colliding entries and its references to them, without another worker run.
 
 ### Fixed
+- A ticket that asks several questions at once gets each to you as `T-007.q1`, `T-007.q2`: pushed, listed in
+  `status` and preflight, answered (`windvane answer T-007.q2 B`) and timed out one by one; before, only the first
+  reached you. `status` names a ticket's several provisional answers as `T-007.p1`, `T-007.p2`.
 - `windvane init` picks `forge = "git"` for a remote that isn't on GitHub (or without `gh`), and says which it chose.
 - `windvane queue` names tickets that aren't pushed yet, instead of "no tickets yet".
 - `windvane install` without a terminal names `--yes`; getting started explains letting Claude set windvane up.

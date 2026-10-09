@@ -12,8 +12,8 @@ A worker that needs a call it may not make writes it into `.windvane/QUESTIONS.m
 
 The driver sends it to the phone (phone.py), if there is one, and skips the ticket until it's answered (phone, or
 `windvane answer` at the desk). Several blocks for one ticket are several questions (ids `T-003.q1`, `T-003.q2`): the
-ticket waits until every one is answered or timed out. No answer in `answer_wait` minutes: the next run builds the recommendation and
-records it under `## Provisional`. In a quiet time (`quiet.txt`) nothing is asked: runs build the recommendation.
+ticket waits until every one is answered or timed out. No answer in `answer_wait` minutes: the next run builds the
+recommendation and records it under `## Provisional`. In a quiet time (`quiet.txt`) nothing is asked: runs build the recommendation.
 """
 import re
 from datetime import datetime, timedelta

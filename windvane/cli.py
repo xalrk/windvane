@@ -453,8 +453,8 @@ def cmd_answer(a, p):
         return
     if not keys:
         p.norm(a.ticket.split(".")[0]) or sys.exit("give a ticket id, or a question's id from preflight (T-003.1)")
-        sys.exit(f"{p.norm(a.ticket) or a.ticket}: no question of it waits for an answer (open, provisional on {p.main}, or from "
-                 "preflight)")
+        sys.exit(f"{p.norm(a.ticket) or a.ticket}: no question of it waits for an answer (open, provisional on "
+                 f"{p.main}, or from preflight)")
     questions.give_answer(p, keys[0], letter, None if letter else a.answer)
     preflight.forget(p, {keys[0]})  # preflight lists an open phone question under the same id
     print(f"{keys[0]}: answer recorded; the autopilot builds it on the ticket's next run")
