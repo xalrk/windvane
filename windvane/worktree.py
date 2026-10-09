@@ -36,7 +36,8 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
 
 
 TIMED_OUT = "out of time"  # run_limited's reason when `until` passes
-TEARDOWN_FAILED = "teardown.json"  # the last teardown's failure, for the next run's "started" push
+# The last teardown's failure, for the next run's "started" push unless "told" (its own push said it)
+TEARDOWN_FAILED = "teardown.json"
 
 
 def teardown(p):
