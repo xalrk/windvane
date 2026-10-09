@@ -11,9 +11,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from windvane import jobs, scratch  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from windvane import cli, jobs, scratch  # noqa: E402
+from windvane.config import Project  # noqa: E402
 from windvane.runner import NEST, TICKET  # noqa: E402
+from helpers import Sandbox  # noqa: E402
 
 
 class BgScope(unittest.TestCase):
@@ -84,6 +87,33 @@ class BgScope(unittest.TestCase):
         self.assertFalse((self.p.state / "bg" / "T-1").exists())
         self.assertFalse((self.p.state / "tmp" / "T-1").exists())
         self.assertTrue((self.p.state / "bg" / "check.exit").exists())  # the desk's job isn't the ticket's
+
+
+class BgCommand(unittest.TestCase):
+    """The same through the `windvane bg`/`windvane await` a worker types, in the Sandbox's project."""
+    def setUp(self):
+        self.s = Sandbox()
+        self.addCleanup(self.s.close)
+        self.state = Project(self.s.root).state
+
+    def cli(self, ticket, *argv):
+        os.environ[TICKET] = ticket
+        self.addCleanup(os.environ.pop, TICKET, None)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cli.main(["-C", str(self.s.root), *argv])
+        return out.getvalue()
+
+    def test_two_tickets_run_and_await_their_own_check(self):
+        first = self.cli("T-1", "bg", "check", "--", "bash", "-c", "sleep 1; echo one; exit 3")
+        self.assertIn("bg/T-1/check.log", first)
+        self.assertIn("bg/T-2/check.log", self.cli("T-2", "bg", "check", "--", "bash", "-c", "echo two"))
+        two, one = self.cli("T-2", "await", "check"), self.cli("T-1", "await", "check")
+        self.assertEqual(two.splitlines()[1:], ["two"])
+        self.assertIn("DONE check exit 0", two)
+        self.assertEqual(one.splitlines()[1:], ["one"])
+        self.assertIn("DONE check exit 3", one)
+        self.assertTrue((self.state / "bg" / "T-1" / "check.exit").exists())
 
 
 if __name__ == "__main__":
