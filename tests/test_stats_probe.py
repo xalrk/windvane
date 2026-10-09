@@ -14,7 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import cli, jobs  # noqa: E402
+from windvane import cli, jobs, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.runner import ROLE, TICKET, Usage  # noqa: E402
 from windvane.util import read_jsonl  # noqa: E402
@@ -31,8 +31,12 @@ emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unif
     "five_hour": {"utilization": 0.42, "resetsAt": 0}, "seven_day": {"utilization": 0.13}}}})
 use = {"input_tokens": 3, "output_tokens": 6, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 9600}
 emit({"type": "assistant", "message": {"id": "m1", "usage": use, "content": [{"type": "text", "text": "ok"}]}})
-emit({"type": "result", "subtype": "success", "result": "ok", "num_turns": 1, "total_cost_usd": 0.012,
-      "usage": use})
+mode = os.environ.get("PROBE_MODE")
+if mode == "hang":  # streamed its first message, then hangs until the probe's time box kills it
+    import time
+    time.sleep(30)
+emit({"type": "result", "subtype": "success", "is_error": mode == "error", "num_turns": 1, "total_cost_usd": 0.012,
+      "result": "API Error: 500 Internal server error" if mode == "error" else "ok", "usage": use})
 '''
 
 
@@ -44,6 +48,7 @@ class Probe(unittest.TestCase):
         fake.write_text(PROBE)
         self.args = self.s.tmp / "args.json"
         os.environ["PROBE_ARGS"] = str(self.args)
+        os.environ.pop("PROBE_MODE", None)
         self.p = Project(self.s.root)
 
     def stats(self, *more):
@@ -76,6 +81,27 @@ class Probe(unittest.TestCase):
         self.assertEqual(sum(ln.startswith("probe") for ln in lines), 1)
         by_ticket = self.stats("--by", "ticket")
         self.assertRegex(by_ticket, r"\nprobe\s+3 ")  # no ticket: grouped under its role there too
+
+    def test_a_hung_probe_killed_at_its_time_box_still_writes_what_it_streamed(self):
+        os.environ["PROBE_MODE"] = "hang"
+        u = Usage(self.p)
+        with mock.patch.object(runner, "PROBE_S", 1):
+            u.probe(self.p)
+        self.assertEqual(u.five, 42.0)
+        [row] = read_jsonl(self.p.state / "ledger.jsonl")
+        self.assertEqual((row["role"], row["end"], row["killed"], row["exit"]), ("probe", "killed", "time", None))
+        self.assertEqual((row["estimated"], row["turns"], row["cache_write"], row["usd"]), (True, 1, 9600, None))
+        [probe] = [ln for ln in self.stats().splitlines() if ln.startswith("probe ")]
+        self.assertRegex(probe, r"^probe\s+1\s+1\s+1\s+10k\s+0k\s+0k\s+12k\s+\?\s+0$")  # lost; no $ known
+
+    def test_a_probe_the_api_failed_says_so(self):
+        os.environ["PROBE_MODE"] = "error"
+        Usage(self.p).probe(self.p)
+        [row] = read_jsonl(self.p.state / "ledger.jsonl")
+        self.assertEqual((row["end"], row["error"], row["killed"]), ("error", "API Error: 500 Internal server error",
+                                                                     None))
+        self.assertEqual((row["cache_write"], row["usd"]), (9600, 0.012))
+        self.assertIn("died or killed: 1 run (died)", self.stats())
 
     def test_a_probe_that_streams_nothing_writes_no_row(self):
         (self.s.bin / "claude").write_text("#!/bin/sh\nexit 1\n")

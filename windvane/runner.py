@@ -171,6 +171,9 @@ def sweep_nested(p):
     return n
 
 
+PROBE_S = 180  # a usage probe's time box: a hung one is killed, its row says `killed: time`
+
+
 class Usage:
     """Latest 5-hour and weekly utilisation, in percent."""
 
@@ -200,16 +203,16 @@ class Usage:
         ledger as a `probe` row, the fields a session's row has, and `stats` shows what the probes cost."""
         d = p.state / "probe"
         d.mkdir(parents=True, exist_ok=True)
-        started = time.time()
+        started, killed = time.time(), None
         try:
             proc = subprocess.run(["claude", "-p", "ok", "--model", "haiku", "--output-format", "stream-json",
                                    "--verbose", "--no-session-persistence", "--setting-sources", "local",
-                                   "--strict-mcp-config"], cwd=d, capture_output=True, text=True, timeout=180,
-                                  env=env())
-        except subprocess.TimeoutExpired:
-            return
+                                   "--strict-mcp-config"], cwd=d, capture_output=True, timeout=PROBE_S, env=env())
+            out, code = proc.stdout, proc.returncode
+        except subprocess.TimeoutExpired as e:  # killed: what it streamed before still cost
+            out, code, killed = e.stdout or b"", None, "time"
         final, seen = {}, {}
-        for line in proc.stdout.splitlines():
+        for line in out.decode(errors="replace").splitlines():
             try:
                 ev = json.loads(line)
             except ValueError:
@@ -222,12 +225,12 @@ class Usage:
             elif ev.get("type") == "result":
                 final = ev
         if final or seen:  # nothing streamed, nothing spent
-            end, error = ending(final, proc.returncode, [])
+            end, error = ("killed", None) if killed else ending(final, code, [])
             append_jsonl(p.state / "ledger.jsonl", {
                 "role": "probe", "label": "probe", "ticket": "", "model": "haiku", "effort": None,
                 "minutes": round((time.time() - started) / 60, 1), **spent(final, seen), "base": first_turn(seen),
-                "usd": final.get("total_cost_usd"), "killed": None, "end": end, "error": error,
-                "exit": proc.returncode, "stream": None})
+                "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error,
+                "exit": code, "stream": None})
 
 
 # The built-in tools each windvane role starts with (`--tools`). Every tool's description is re-read on every turn,
