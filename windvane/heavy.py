@@ -29,6 +29,8 @@ DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb":
 # A wait that timed out: the exit code, and the start of the line said just before it (`gave_up` reads it back).
 TIMED_OUT = 75
 GAVE_UP = "heavy: gave up waiting for the machine"
+# A wait cut short by the project's STOP file (its path in this env var, set by the check's runner): its last line.
+STOP_ENV, STOPPED = "WINDVANE_HEAVY_STOP", "heavy: stopped while waiting for the machine"
 
 
 def machine_file():
@@ -66,7 +68,14 @@ def busy(patterns):
     return None
 
 
-def wait_until_clear(cfg, deadline, say):
+def nap(seconds, stopped):
+    """Sleep up to `seconds`, waking each second to see a stop."""
+    end = time.time() + seconds
+    while time.time() < end and not stopped():
+        time.sleep(min(1, end - time.time()))
+
+
+def wait_until_clear(cfg, deadline, say, stopped=lambda: False):
     said = None
     while True:
         b = busy(cfg["busy"])
@@ -76,13 +85,16 @@ def wait_until_clear(cfg, deadline, say):
                else None)
         if not why:
             return True
+        if stopped():  # only once it has to wait: a clear machine still runs the job
+            say(f"{STOPPED}: {why}")
+            return False
         if time.time() >= deadline:
             say(f"{GAVE_UP}: {why}")
             return False
         if why != said:
             say(f"heavy: waiting: {why}")
             said = why
-        time.sleep(10)
+        nap(10, stopped)
 
 
 def queue_dir():
@@ -126,9 +138,31 @@ def alive(path):
         os.close(fd)
 
 
+def paused(pid):
+    """Whether process `pid` is stopped (Ctrl-Z, SIGSTOP): from /proc on Linux, else `ps`; False when unknown."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] in ("T", "t")
+    except (OSError, IndexError):
+        if Path("/proc/self").exists():  # Linux and the process is gone
+            return False
+    try:
+        out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+    return out.strip()[:1] in ("T", "t")
+
+
+def entry_pid(name):
+    try:
+        return int(name.rsplit("-", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
+
 def ahead(entry):
     """How many live waiters arrived before this one. Clears dead entries on the way (and a waiter's hidden one
-    left by a kill between creating and renaming it)."""
+    left by a kill between creating and renaming it). A paused waiter (Ctrl-Z) doesn't count: it keeps its entry,
+    but would hold up the whole line until its wait times out; resumed, it gets in line again."""
     q, mine, n = entry[1].parent, entry[1].name, 0
     for name in sorted(os.listdir(q)):
         path = q / name
@@ -138,7 +172,7 @@ def ahead(entry):
                     alive(path)
             except OSError:
                 pass
-        elif name < mine and alive(path):
+        elif name < mine and alive(path) and not paused(entry_pid(name)):
             n += 1
     return n
 
@@ -184,13 +218,14 @@ def gave_up(log):
         lines = Path(log).read_text(errors="replace").splitlines()
     except OSError:
         return None
-    m = re.match(re.escape(GAVE_UP) + r"( lock)?: (.*)", lines[-1] if lines else "")
-    return m and f"the machine{m.group(1) or ''} ({m.group(2)})"
+    m = re.match(f"({re.escape(GAVE_UP)}|{re.escape(STOPPED)})" + r"( lock)?: (.*)", lines[-1] if lines else "")
+    return m and f"the machine{m.group(2) or ''} ({m.group(3)}" + ("; stopped)" if m.group(1) == STOPPED else ")")
 
 
-def take(lock, entry, deadline, say):
+def take(lock, entry, deadline, say, stopped=lambda: False):
     """Wait for this job's turn, then take the lock: only the oldest live waiter tries it, so a job that arrives
-    just as the lock frees can't overtake one that has been waiting (R-007). True once held, False at the deadline."""
+    just as the lock frees can't overtake one that has been waiting (R-007). True once held, False at the deadline
+    or a stop."""
     said = None
     while True:
         n = ahead(entry)
@@ -205,6 +240,9 @@ def take(lock, entry, deadline, say):
         if key != said:  # reprinted only when the holder or the line ahead changes, not every minute
             say(waiting_line(info, n))
             said = key
+        if stopped():
+            say(f"{STOPPED} lock: {held_by(info)}")
+            return False
         if time.time() >= deadline:
             say(f"{GAVE_UP} lock: {held_by(info)}")
             return False
@@ -213,7 +251,8 @@ def take(lock, entry, deadline, say):
 
 def run(cmd, wait_s=None, cwd=None):
     """Run `cmd` under the machine-wide heavy lock. Returns its exit code (TIMED_OUT if the wait timed out, after
-    `wait_s` seconds, or machine.toml's `heavy_wait` minutes).
+    `wait_s` seconds, or machine.toml's `heavy_wait` minutes, or as soon as the STOP file named in `STOP_ENV`
+    appears while it waits).
 
     Jobs run in arrival order: each joins a queue when it asks and waits there for the lock, then holds the lock
     while it waits for the machine to clear (busy processes, free memory), so it keeps its place throughout."""
@@ -221,19 +260,22 @@ def run(cmd, wait_s=None, cwd=None):
     cfg = machine()
     deadline = time.time() + (cfg["heavy_wait"] * 60 if wait_s is None else wait_s)
     path = lock_path()
-    env = {**os.environ, "WINDVANE_HEAVY_HELD": str(path)}
+    stop = os.environ.get(STOP_ENV)
+    stopped = lambda: bool(stop) and os.path.exists(stop)
+    env = {k: v for k, v in os.environ.items() if k != STOP_ENV}  # the stop is for this wait, not the command's own
+    env["WINDVANE_HEAVY_HELD"] = str(path)
     if os.environ.get("WINDVANE_HEAVY_HELD") == str(path):  # nested: the outer one already holds it
         return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
     entry = join_queue()
     lock = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
     try:
-        if not take(lock, entry, deadline, say):
+        if not take(lock, entry, deadline, say, stopped):
             return TIMED_OUT
         leave_queue(entry)  # the lock keeps this job's place now; the next waiter becomes the head and waits on it
         entry = None
         try:
             claim(lock, cmd, cwd)
-            if not wait_until_clear(cfg, deadline, say):
+            if not wait_until_clear(cfg, deadline, say, stopped):
                 return TIMED_OUT
             return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
         finally:
@@ -242,3 +284,31 @@ def run(cmd, wait_s=None, cwd=None):
         if entry:
             leave_queue(entry)
         os.close(lock)  # frees the lock
+
+
+def status():
+    """Who holds the lock and who waits, in order, without waiting or taking either: the holder's line (it writes it
+    in when it takes the lock, and empties it on the way out), then a line per live waiter."""
+    try:
+        info = json.loads(lock_path().read_text() or "{}")
+    except (OSError, ValueError):
+        info = {}
+    lines = [held_by(info) if info.get("pid") and lives(info["pid"]) else "free"]  # a killed holder leaves its line
+    q = queue_dir()
+    for name in sorted(os.listdir(q)) if q.is_dir() else []:
+        pid = entry_pid(name)
+        if name.startswith(".") or not pid or not alive(q / name):
+            continue
+        since = time.strftime("%H:%M", time.localtime(int(name.split("-")[0]) / 1e9))
+        lines.append(f"waiting: pid {pid}, since {since}" + (" (paused: skipped)" if paused(pid) else ""))
+    return lines
+
+
+def lives(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # someone else's
+        pass
+    return True

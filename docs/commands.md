@@ -68,6 +68,7 @@ Options of `windvane run`:
 | Command | What it does |
 |---|---|
 | `windvane heavy [--wait <min>] -- <command>` | Run a machine-heavy command (engine, render, big build) one at a time on this machine, waiting up to `--wait` minutes (default: `machine.toml`'s `heavy_wait`, 60), then exiting 75 without running it. See [the heavy lock](safety.md#the-heavy-lock). |
+| `windvane heavy --status` | Who holds the heavy lock (pid, command, folder, since when) and each live waiter in line (pid, waiting since, `paused` for one stopped with Ctrl-Z), or `free`. Never waits, takes no lock and no place in line. |
 
 ## Used by the sessions
 

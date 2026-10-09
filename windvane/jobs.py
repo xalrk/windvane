@@ -111,7 +111,8 @@ def run_logged(p, ticket, cmd, cwd, log):
                     code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
                                            "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd,
                                           stdout=f, stderr=subprocess.STDOUT,
-                                          env={**env, "PYTHONPATH": str(Path(__file__).parents[1])}).returncode
+                                          env={**env, "PYTHONPATH": str(Path(__file__).parents[1]),
+                                               heavy.STOP_ENV: str(p.state / "STOP")}).returncode  # a stop ends the wait
                 else:
                     code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
                                           env=env).returncode
