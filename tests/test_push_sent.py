@@ -50,7 +50,9 @@ class Base(unittest.TestCase):
         self.s.publish()
         self.p = Project(self.s.root)
         self.sent_file = self.s.tmp / "sent.jsonl"
-        os.environ["FAKE_SENT"] = str(self.sent_file)
+        env = mock.patch.dict(os.environ, FAKE_SENT=str(self.sent_file))  # gone again after each test
+        env.start()
+        self.addCleanup(env.stop)
         self.addCleanup(phone.use, None)
         self.addCleanup(os.chdir, os.getcwd())
 
@@ -121,7 +123,8 @@ class Digest(Base):
         msg = call["args"][-1]
         self.assertLess(len(msg.encode()), phone.NTFY)
         self.assertEqual(msg.count(" Built A."), 8, "each of the first eight is named, a long one cut")
-        self.assertTrue(msg.endswith("\nAlso 202 more; windvane status lists them."), msg[-200:])
+        rest = [f"T-{108 + i}" for i in range(2)] + [f"T-{200 + i}" for i in range(200)]
+        self.assertTrue(msg.endswith(f"\nAlso: {', '.join(rest)}; windvane status lists them."), msg[-200:])
         self.assertIn(f"whole text: {LONG}7?", (self.p.state / "autopilot.log").read_text())
 
     def test_a_long_non_ascii_backlog_is_one_push_under_ntfys_bytes_through_send(self):
@@ -212,6 +215,13 @@ class Fit(unittest.TestCase):
         out, err = self.fit("short line\n" + "y" * 5000)
         self.assertEqual(out, "short line" + phone.REST)
         self.assertIn("push cut at a line end", err)
+
+
+class NoEnvLeft(unittest.TestCase):
+    def test_no_fake_variable_outlives_its_test(self):
+        for cls in (Digest, Done, Ask):
+            unittest.TextTestRunner(stream=io.StringIO()).run(unittest.defaultTestLoader.loadTestsFromTestCase(cls))
+            self.assertFalse({"FAKE_SENT", "FAKE_EXIT"} & set(os.environ), cls.__name__)
 
 
 class AlsoBytes(unittest.TestCase):

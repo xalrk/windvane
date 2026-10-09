@@ -42,6 +42,7 @@ MOST = 1500  # bytes of free text one push carries (an error, a reason, an optio
 REASON = 300  # bytes of a reason or a log or session line: a set-aside or stop reason, a critic's gist, git's refusal
 REST = " (the rest is in the log)"
 ASKED = 200  # bytes a question push adds around its question and options: the letters, the line on typed answers
+SEND_WAIT = 30  # seconds the user's `notify` / `notify-ask` get: a stalled network must not hold up the run's loop
 
 
 def cut(text, most=REASON, *, log=None):
@@ -214,7 +215,7 @@ def push(title, msg, prio=3, tags="", buttons=()):
         for b in buttons[:3]:
             args += ["-a", b]
         try:
-            return subprocess.run(args + [msg], timeout=30, check=False, stdout=subprocess.DEVNULL,
+            return subprocess.run(args + [msg], timeout=SEND_WAIT, check=False, stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL).returncode == 0
         except (OSError, subprocess.SubprocessError):
             return False
@@ -254,8 +255,9 @@ def ask(qid, question, options):
     question = fit(titled(question), room)
     if shutil.which("notify-ask"):
         try:
-            return subprocess.run(["notify-ask", qid, question, *options], capture_output=True).returncode == 0
-        except OSError:
+            return subprocess.run(["notify-ask", qid, question, *options], capture_output=True,
+                                  timeout=SEND_WAIT).returncode == 0
+        except (OSError, subprocess.SubprocessError):  # a timeout too: the next pass sends it again
             return False
     c = conf()
     if not on(c):
@@ -276,14 +278,28 @@ def ask(qid, question, options):
 def answer(qid):
     """"ANSWER <letter>\t<text>", "LATER" or "" (not answered yet)."""
     if shutil.which("notify-ask"):
-        r = subprocess.run(["notify-ask", "--get", qid], capture_output=True, text=True)
-        out = r.stdout.strip()
+        try:
+            out = subprocess.run(["notify-ask", "--get", qid], capture_output=True, text=True,
+                                 timeout=SEND_WAIT).stdout.strip()
+        except (OSError, subprocess.SubprocessError):  # not answered yet, as far as this pass can tell
+            return ""
         return out if out.startswith(("ANSWER", "LATER")) else ""
     try:
         a = json.loads((state_dir() / "answers" / f"{qid}.json").read_text())
     except (OSError, ValueError):
         return ""
     return "LATER" if a.get("later") else f"ANSWER {a['option']}\t{a['text']}"
+
+
+def timed_out(qid, key, rec):
+    """Question `qid` (`windvane answer`'s `key`) waited out its time and `rec` is being built: a phone answer that
+    comes after it gets told so, not "recorded" and then never read. Only the built-in phone keeps questions here;
+    the user's own `notify-ask` keeps its own."""
+    q = state_dir() / "questions" / f"{qid}.json"
+    try:
+        q.write_text(json.dumps({**json.loads(q.read_text()), "built": rec, "key": key}))
+    except (OSError, ValueError):
+        pass
 
 
 # ---------- projects the phone's commands reach
@@ -362,9 +378,13 @@ def answer_question(c, qid, letter, note=""):
     d = state_dir()
     q = d / "questions" / f"{qid}.json"
     try:
-        opts = json.loads(q.read_text())["options"]
-    except (OSError, ValueError):
+        asked = json.loads(q.read_text())
+        opts = asked["options"]
+    except (OSError, ValueError, KeyError):
         return reply(c, "Answer not taken", f"No open question {qid}.")
+    if asked.get("built"):
+        return reply(c, "Answer not taken", f"{qid}: no answer came in time, so it's already building "
+                     f"{asked['built']}; change it with `windvane answer {asked['key']} <letter>`.")
     if letter not in opts:
         return reply(c, "Answer not taken", f"{qid} has options {', '.join(sorted(opts))}.")
     (d / "answers").mkdir(parents=True, exist_ok=True)
@@ -382,9 +402,17 @@ def later(c, qid):
     reply(c, f"{qid} waits for you", "At the computer: windvane answer <ticket> <letter>.")
 
 
+def built(f):
+    """Whether question file `f` timed out to its recommendation: a bare letter answers only a question still open."""
+    try:
+        return bool(json.loads(f.read_text()).get("built"))
+    except (OSError, ValueError):
+        return False
+
+
 def answer_newest(c, letter):
     d = state_dir() / "questions"
-    qs = sorted(d.glob("*.json"), key=lambda f: f.stat().st_mtime) if d.exists() else []
+    qs = sorted((f for f in d.glob("*.json") if not built(f)), key=lambda f: f.stat().st_mtime) if d.exists() else []
     if not qs:
         return reply(c, "Answer not taken", f"No open question to answer with {letter}.")
     older = f"\n({len(qs) - 1} older open: answer <id> {letter} for those.)" if len(qs) > 1 else ""
