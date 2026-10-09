@@ -22,7 +22,9 @@ import time
 import tomllib
 from pathlib import Path
 
+from . import util
 from .config import user_dir
+from .util import started_at
 
 # Process names, not command lines: `pgrep -f blender` would match any Claude session whose prompt says "blender".
 DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb": 6, "heavy_wait": 60}
@@ -141,18 +143,32 @@ def alive(path):
         os.close(fd)
 
 
+# Without /proc (macOS) `paused` runs `ps`, and every waiter asks about each one ahead every second: a pid's answer
+# is kept this long, {pid: (when asked, paused)}.
+PS_KEEP = 10
+_ps_seen = {}
+
+
 def paused(pid):
-    """Whether process `pid` is stopped (Ctrl-Z, SIGSTOP): from /proc on Linux, else `ps`; False when unknown."""
-    try:
-        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] in ("T", "t")
-    except (OSError, IndexError):
-        if Path("/proc/self").exists():  # Linux and the process is gone
+    """Whether process `pid` is stopped (Ctrl-Z, SIGSTOP): from /proc on Linux, else `ps` (kept PS_KEEP seconds);
+    False when unknown."""
+    if util.PROC.is_dir():
+        try:
+            return (util.PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[0] in ("T", "t")
+        except (OSError, IndexError):  # gone
             return False
+    now = time.monotonic()
+    asked, was = _ps_seen.get(pid, (None, False))
+    if asked is not None and now - asked < PS_KEEP:
+        return was
     try:
         out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout
     except OSError:
-        return False
-    return out.strip()[:1] in ("T", "t")
+        out = ""
+    for p in [p for p, (at, _) in _ps_seen.items() if now - at >= PS_KEEP]:
+        del _ps_seen[p]
+    _ps_seen[pid] = (now, out.strip()[:1] in ("T", "t"))
+    return _ps_seen[pid][1]
 
 
 def entry_pid(name):
@@ -181,7 +197,7 @@ def ahead(entry):
 
 
 def holder(lock):
-    """Who holds the lock, as the holder wrote it in: {pid, since, cmd, cwd}, or {} (an older windvane)."""
+    """Who holds the lock, as the holder wrote it in: {pid, start, since, cmd, cwd}, or {} (an older windvane)."""
     try:
         os.lseek(lock, 0, os.SEEK_SET)
         return json.loads(os.read(lock, 4096) or b"{}")
@@ -194,16 +210,28 @@ def claim(lock, cmd, cwd):
     text = cmd if isinstance(cmd, str) else shlex.join(cmd)
     text = " ".join(text.split())
     where = Path(cwd or os.getcwd()).resolve().parts[-2:]
-    info = {"pid": os.getpid(), "since": time.time(), "cmd": text if len(text) <= 60 else text[:59] + "…",
+    info = {"pid": os.getpid(), "start": started_at(os.getpid()), "since": time.time(), "cmd": text if len(text) <= 60 else text[:59] + "…",
             "cwd": "/".join(where)}
     os.ftruncate(lock, 0)
     os.lseek(lock, 0, os.SEEK_SET)
     os.write(lock, json.dumps(info).encode())
 
 
+def still_held(info):
+    """Whether the holder named in the lock file still runs. A killed one leaves its line, and its pid may be reused
+    by some other process later: one that started at another time (2 s apart: /proc's boot time and ps's are in
+    whole seconds). A line without a start (an older windvane) or a start that can't be read goes by the pid alone."""
+    if not lives(info["pid"]):
+        return False
+    now = started_at(info["pid"]) if info.get("start") is not None else None
+    return now is None or abs(now - info["start"]) <= 2
+
+
 def held_by(info):
     if not info.get("pid"):
         return "held by another heavy job"
+    if not still_held(info):
+        return "free"
     # A clock time, not minutes held: the line is printed once and read later, when minutes would be stale.
     since = time.strftime("%H:%M", time.localtime(info.get("since", time.time())))
     return f"held by pid {info['pid']} ({info.get('cmd', '?')} in {info.get('cwd', '?')}, since {since})"
@@ -312,7 +340,10 @@ def status():
         info = json.loads(lock_path().read_text() or "{}")
     except (OSError, ValueError):
         info = {}
-    lines = [held_by(info) if info.get("pid") and lives(info["pid"]) else "free"]  # a killed holder leaves its line
+    line = held_by(info) if info.get("pid") else "free"
+    if line != "free" and paused(info["pid"]):
+        line += " (paused: everyone waits on it)"
+    lines = [line]
     q = queue_dir()
     for name in sorted(os.listdir(q)) if q.is_dir() else []:
         pid = entry_pid(name)
