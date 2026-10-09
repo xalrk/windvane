@@ -72,15 +72,36 @@ class RequestReopen(unittest.TestCase):
         self.assertEqual([f.stem for f in requests.pending()], ["R-001"])  # the next triage gets it
         self.assertIn(f"back in the request inbox: {CLOSED}", (self.p.state / "autopilot.log").read_text())
 
-        # a stale accept onto the same closed plan: the branch was dealt with once, and isn't again
-        self.accept("REQUEST: R-001 accept T-009", {"T-009": CLOSED})
-        planner.pending_branches(self.p)
-        self.assertEqual(self.inbox(), {})
-        self.assertEqual(self.inbox(done=True)["R-001"].count("\n## Reopened ("), 1)
+        planner.pending_branches(self.p)  # asked again: nothing more to do
+        self.assertEqual(self.inbox()["R-001"].count("\n## Reopened ("), 1)
         self.assertEqual((self.s.bin / "gh.log").read_text().count(f"--head {CLOSED} "), 1)
-        # the filer hears the new verdict, though it saw R-001's first one
-        self.assertEqual(requests.unseen(self.p), ["R-001 accepted → windvane's T-009 (held on "
-                                                   f"{CLOSED})  (Retry the check on a flaky network)"])
+        _, out = self.cli("request", "--status")
+        self.assertIn(f"R-001 reopened: {CLOSED} was closed unmerged  (sandbox", out)
+        # triaged again, the filer hears the new verdict, though it saw R-001's first one
+        self.accept("REQUEST: R-001 reject done another way", {})
+        self.assertEqual(requests.unseen(self.p), ["R-001 rejected: done another way  "
+                                                   "(Retry the check on a flaky network)"])
+
+    def test_a_plan_closed_earlier_or_a_reopen_cut_off_is_caught_next_time(self):
+        self.make(TRIAGE)
+        self.github()
+        self.plan_branch("T-009", CLOSED)
+        self.file("Retry the check on a flaky network")
+        self.accept("REQUEST: R-001 accept T-009", {"T-009": CLOSED})
+        self.p.state.mkdir(parents=True, exist_ok=True)
+        (self.p.state / "closed_plans.json").write_text(f'["{CLOSED}"]')  # known closed before this shipped
+        self.s.git("fetch", "-q", "origin")
+        inbox = requests.inbox()
+        inbox.chmod(0o500)  # a write error: the run goes on, the request stays where it was
+        try:
+            self.assertEqual(planner.pending_branches(self.p), {})
+        finally:
+            inbox.chmod(0o700)
+        self.assertEqual((list(self.inbox()), list(self.inbox(done=True))), ([], ["R-001"]))
+        self.assertIn("requests held on closed plans not reopened yet", (self.p.state / "autopilot.log").read_text())
+        planner.pending_branches(self.p)
+        self.assertEqual((list(self.inbox()), list(self.inbox(done=True))), (["R-001"], []))
+        self.assertNotIn(f"--head {CLOSED} ", (self.s.bin / "gh.log").read_text())  # still not asked about again
 
     def test_a_project_without_triage_leaves_the_inbox_alone(self):
         self.make()

@@ -99,9 +99,11 @@ def closed_prs(p, branches):
     if closed != known:  # a deleted branch's line goes too
         save_json(f, sorted(closed))
     if any(e["requests"] for e in p.periodic.values()):  # only the triaging project's branches hold accepts
-        for b in sorted(closed - known):
-            for rid in requests.reopen(b):
+        try:  # every closed one, each time: a plan closed before this existed, or a move cut off, is caught next time
+            for rid, b in requests.reopen(closed).items():
                 log(p, f"{rid}: back in the request inbox: {b}, which held its ticket, was closed unmerged")
+        except OSError as e:
+            log(p, f"requests held on closed plans not reopened yet ({e}): tried again next time")
     return closed
 
 

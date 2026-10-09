@@ -250,7 +250,8 @@ def status_lines():
     out = []
     for f in reversed(files()):
         title, head, srcs = fields(read(f))
-        state = verdict_text(head) if f.parent.name == "done" or asking(head) else "open"
+        state = (verdict_text(head) if f.parent.name == "done" or asking(head)
+                 or verdict_text(head).startswith("reopened:") else "open")
         out.append(f"{f.stem} {state}  ({', '.join(dict.fromkeys(srcs))}, {head.get('date', '?')[:10]}): {title}"
                    + (f"; {how_to_answer(f.stem)}" if asking(head) and f.parent.name != "done" else ""))
     return out or ["no requests yet"]
@@ -326,22 +327,26 @@ def apply(reqs, text, landed, exists, log, held=None):
     return done
 
 
-def reopen(branch):
-    """Accepts held on `branch` back in the inbox, once its PR was closed unmerged: their ticket won't land from
-    there, and a request left in `done/` would never be looked at again. Each gets a `## Reopened` line, so the next
-    triage sees why. Returns the R-ids moved."""
-    held = re.compile(rf"^- Verdict: accepted → \S+ \(held on {re.escape(branch)}\)$", re.M)
-    moved = []
+def reopen(branches):
+    """Accepts held on any of `branches` (plans whose PRs were closed unmerged) back in the inbox: their ticket won't
+    land from there, and a request left in `done/` would never be looked at again. Each gets a `## Reopened` line,
+    so the next triage sees why; a reopened request's verdict no longer names the branch, so asking again (each
+    `pending_branches`, which also catches a plan closed before this existed, or a move cut off) adds nothing.
+    Returns {R-id: the branch} moved."""
+    held = re.compile(r"^- Verdict: accepted → \S+ \(held on (\S+)\)$", re.M)
+    moved = {}
     with locked() as d:
-        for f in files(True):
+        for f in files(True) if branches else ():
             text = read(f)
-            if not held.search(text.split("\n## ", 1)[0]) or (d / f.name).exists():
+            m = held.search(text.split("\n## ", 1)[0])
+            if not m or m.group(1) not in branches or (d / f.name).exists():
                 continue
-            (d / f.name).write_text(set_verdict(text, f"reopened: {branch} was closed unmerged")
-                                    + f"\n## Reopened ({now():%Y-%m-%d %H:%M}): {branch}, which held its ticket, "
+            b = m.group(1)
+            (d / f.name).write_text(set_verdict(text, f"reopened: {b} was closed unmerged")
+                                    + f"\n## Reopened ({now():%Y-%m-%d %H:%M}): {b}, which held its ticket, "
                                     "was closed unmerged\n")
             f.unlink()
-            moved.append(f.stem)
+            moved[f.stem] = b
     return moved
 
 
