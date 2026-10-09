@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/assets/banner.png" alt="windvane: ideas in, results out. An autopilot for Claude Code." width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.png">
+    <img src="docs/assets/banner-light.png" alt="windvane: ideas in, results out. An autopilot for Claude Code." width="100%">
+  </picture>
 </p>
 
 <p align="center">
