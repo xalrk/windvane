@@ -108,16 +108,24 @@ class CtrlC(Edges):
 
 
 class TeardownTold(Base):
-    def test_a_failed_teardown_is_pushed_once_and_not_again_at_the_next_start(self):
+    def two_runs(self, sent):
+        """Two runs whose teardown fails, with pushes that go out (`sent`) or not; the second run's "started" push."""
         self.config('teardown = "adb kill-server; exit 3"\n')
-        for _ in range(2):
-            with contextlib.redirect_stdout(io.StringIO()):
-                driver.Pilot(self.p, args()).run(now() + timedelta(hours=1))
+        with mock.patch.object(driver, "push", lambda title, msg="", *a, **k: self.pushes.append((title, msg)) or sent):
+            for _ in range(2):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    driver.Pilot(self.p, args()).run(now() + timedelta(hours=1))
         titles = [t for t, _ in self.pushes]
-        first = titles.index("windvane started", 1)  # the second run's
-        self.assertEqual(titles[:first].count("windvane teardown failed"), 1)  # the first run's end
-        self.assertNotIn("teardown", self.pushes[first][1])
-        self.assertTrue(driver.load_json(self.p.state / driver.TEARDOWN_FAILED, {}).get("told"))
+        second = titles.index("windvane started", 1)
+        self.assertEqual(titles[:second].count("windvane teardown failed"), 1)  # the first run's end
+        return self.pushes[second][1]
+
+    def test_a_failed_teardown_is_pushed_once_and_not_again_at_the_next_start(self):
+        self.assertNotIn("teardown", self.two_runs(sent=True))
+        self.assertTrue(driver.load_json(self.p.state / driver.TEARDOWN_FAILED, {}).get("told"))  # kept, marked
+
+    def test_a_teardown_push_that_never_went_out_is_said_at_the_next_start(self):
+        self.assertIn("Last run's teardown failed: adb kill-server; exit 3 (exit 3)", self.two_runs(sent=False))
 
 
 class CalledOff(unittest.TestCase):

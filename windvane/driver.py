@@ -1785,9 +1785,9 @@ def tear_down(p, lock=False, tell=False):
     if tell and (f := load_json(p.state / TEARDOWN_FAILED, None)):
         if f.get("told"):
             return
-        push("windvane teardown failed", whole(f"Its helpers may still be up ({f['how']}). Run it by hand: ", f["cmd"],
-                                               log=lambda m: log(p, m)), 4, "warning")
-        save_json(p.state / TEARDOWN_FAILED, {**f, "told": True})  # the next "started" push needn't say it again
+        if push("windvane teardown failed", whole(f"Its helpers may still be up ({f['how']}). Run it by hand: ",
+                                                  f["cmd"], log=lambda m: log(p, m)), 4, "warning"):
+            save_json(p.state / TEARDOWN_FAILED, {**f, "told": True})  # the next "started" push needn't say it again
 
 
 def failed_teardown(p):
