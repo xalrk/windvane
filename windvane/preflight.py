@@ -15,7 +15,7 @@ from .config import slots
 from .driver import REVIEW_DENY
 from .held import land
 from .planner import pending_ids
-from .questions import BLOCK_RE, OPT_RE, blocks, give_answer, note, part, qkey, shown
+from .questions import BLOCK_RE, OPT_RE, blocks, give_answer, note, part, qkey, shown, ticket_of, waiting_on
 from .queue import Queue
 from .runner import rules, run_claude
 from .util import git, gout, load_json, log, now, read_jsonl, save_json
@@ -68,8 +68,8 @@ def waiting(p, qtext):
     offered at the desk (one skipped stays in `windvane status` and the run's last push, and `windvane answer` still
     takes it)."""
     out = []
-    for tid, q in load_json(p.state / "state.json", {}).get("questions", {}).items():
-        out.append({"id": tid, "ticket": tid, "kind": "open", "question": q["q"], "context": "",
+    for key, q in waiting_on(load_json(p.state / "state.json", {}).get("questions", {})).items():
+        out.append({"id": key, "ticket": ticket_of(key, q), "kind": "open", "question": q["q"], "context": "",
                     "options": q["opts"], "recommendation": q["rec"], "why": "", "built": "", "change_at": ""})
     prov = provisionals(qtext)
     keys = {qkey(x) for x in prov}
@@ -224,7 +224,7 @@ def record(p, answers):
     Returns a line for the user."""
     phone = [a for a in answers if a[0]["kind"] == "open"]
     for x, letter, text in phone:
-        give_answer(p, x["ticket"], letter, text)
+        give_answer(p, x["id"], letter, text)
     forget(p, {x["id"] for x, _, _ in answers})
     filed = [a for a in answers if a[0]["kind"] != "open"]
     if not filed:

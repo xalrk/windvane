@@ -298,10 +298,12 @@ class Project:
         m = re.fullmatch(rf"(?i){re.escape(self.prefix)}-(\d+)([a-z]?)", tid.strip())
         return f"{self.prefix}-{m.group(1)}{m.group(2).lower()}" if m else None
 
-    def qid(self, tid):
-        """A notify-ask id for a ticket's question: 2-40 chars, a-z0-9-, starting with a letter."""
+    def qid(self, key):
+        """A notify-ask id for a ticket's question (`T-003`, or `T-003.q2` of several): 2-40 chars, a-z0-9-, starting
+        with a letter."""
+        key = key.lower().replace(".", "-")
         name = self.name if self.name[0].isalpha() else "p" + self.name
-        return f"{name[:39 - len(tid)].rstrip('-')}-{tid.lower()}"
+        return f"{name[:39 - len(key)].rstrip('-')}-{key}"
 
 
 def find(start=None):

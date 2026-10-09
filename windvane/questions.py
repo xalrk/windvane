@@ -11,7 +11,8 @@ A worker that needs a call it may not make writes it into `.windvane/QUESTIONS.m
     Waits for the user: <why>        (only for money, licences, undoing merged work)
 
 The driver sends it to the phone (phone.py), if there is one, and skips the ticket until it's answered (phone, or
-`windvane answer` at the desk). No answer in `answer_wait` minutes: the next run builds the recommendation and
+`windvane answer` at the desk). Several blocks for one ticket are several questions (ids `T-003.q1`, `T-003.q2`): the
+ticket waits until every one is answered or timed out. No answer in `answer_wait` minutes: the next run builds the recommendation and
 records it under `## Provisional`. In a quiet time (`quiet.txt`) nothing is asked: runs build the recommendation.
 """
 import re
@@ -29,9 +30,35 @@ def part(text, heading):
     return text.split(f"\n## {heading}", 1)[1].split("\n## ", 1)[0] if f"\n## {heading}" in text else ""
 
 
+def sections(text, tid, heading="Open"):
+    """Every `### <tid>` block under `heading`, in order: a worker may ask several questions at once."""
+    return [m.group(0).strip()
+            for m in re.finditer(rf"^### {re.escape(tid)}\b.*?(?=^### |\Z)", part(text, heading), re.M | re.S)]
+
+
 def section(text, tid, heading="Open"):
-    m = re.search(rf"^### {re.escape(tid)}\b.*?(?=^### |\Z)", part(text, heading), re.M | re.S)
-    return m.group(0).strip() if m else ""
+    return next(iter(sections(text, tid, heading)), "")
+
+
+def keys(tid, n):
+    """The ids of a ticket's `n` open questions: the ticket's own for one (the common case reads as before), else
+    `<tid>.q1`, `<tid>.q2`... (like preflight's `.p1`): each is asked, answered and timed out on its own."""
+    return [tid] if n == 1 else [f"{tid}.q{i}" for i in range(1, n + 1)]
+
+
+def ticket_of(key, q):
+    """The ticket a stored question is for (state.json from before several questions a ticket keys it by ticket)."""
+    return q.get("ticket") or key
+
+
+def waiting_on(qs):
+    """{key: question} of state.json's questions still waiting for the user (one settled waits for its siblings)."""
+    return {k: q for k, q in qs.items() if "result" not in q}
+
+
+def tickets(qs):
+    """The tickets state.json's questions hold back."""
+    return {ticket_of(k, q) for k, q in qs.items()}
 
 
 def parts(sec):
@@ -42,8 +69,9 @@ def parts(sec):
             bool(re.search(r"^Waits for the user:", sec, re.M)), q.group(1).strip() if q else "")
 
 
-def provisional(text):
-    """[{ticket, question, built, option}] under ## Provisional."""
+def provisional(text, ids=False):
+    """[{ticket, question, built, option}] under ## Provisional; with `ids`, each also has the id `windvane answer`
+    takes: its ticket's, or preflight's `T-003.p2` when the ticket has several."""
     out = []
     for m in re.finditer(r"^### (\S+?):?\s+(.*?)$(.*?)(?=^### |\Z)", part(text, "Provisional"), re.M | re.S):
         opts = dict(OPT_RE.findall(m.group(3)))
@@ -51,6 +79,10 @@ def provisional(text):
         letter = built.group(1) if built else ""
         out.append({"ticket": m.group(1), "question": m.group(2).strip(), "built": letter,
                     "option": opts.get(letter, "")})
+    if ids:
+        for q in out:
+            mine = [x for x in out if x["ticket"] == q["ticket"]]
+            q["id"] = q["ticket"] if len(mine) == 1 else f"{q['ticket']}.p{mine.index(q) + 1}"
     return out
 
 
