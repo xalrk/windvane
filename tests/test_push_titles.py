@@ -2,6 +2,7 @@
 import contextlib
 import io
 import os
+import re
 import sys
 import unittest
 from datetime import timedelta
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import cli, driver, phone  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
-from helpers import REPO, Sandbox  # noqa: E402
+from helpers import Sandbox  # noqa: E402
 from test_pipeline import args  # noqa: E402
 
 # the user's own scripts, faked: `notify` records each title, `notify-ask` each question (and never has an answer)
@@ -99,6 +100,19 @@ class Titles(unittest.TestCase):
         self.assertEqual(Project(self.s.root).display, "Sandbox")
         self.assertTrue(self.cli("status", "--line").startswith("Sandbox: autopilot off"))
         self.assertTrue(self.cli("overview").startswith("Sandbox: "))
+
+    def test_a_project_named_windvane_says_windvane_once(self):
+        cfg = self.s.root / ".windvane/config.toml"
+        cfg.write_text(re.sub(r'(?m)^name = .*$', 'name = "windvane"', cfg.read_text()))
+        self.display("windvane")
+        p = Project(self.s.root)
+        self.assertEqual((p.name, p.display), ("windvane", "windvane"))
+        phone.use(p)
+        phone.push("windvane started", "Until 04:10.")
+        phone.push("Done: T-041 names", "merged")
+        phone.ask("windvane-t-041", "T-041: Red or blue?", ["red", "blue"])
+        self.assertEqual(self.sent(), (["windvane started", "windvane: Done: T-041 names"],
+                                       ["windvane: T-041: Red or blue?"]))
 
 
 if __name__ == "__main__":
