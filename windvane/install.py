@@ -2,15 +2,25 @@
 asking before each change, and take back exactly what it added. What it added is listed in
 `~/.local/state/windvane/install.json`, so uninstall never touches anything the user made or changed themselves, and
 puts `settings.json` back byte for byte when nothing else in it changed meanwhile."""
+import contextlib
+import fcntl
 import json
 import os
 import re
 import shlex
 import shutil
 import sys
+import time
 from pathlib import Path
 
-from .config import CHECKOUT, HOME, exe, user_dir
+from .config import CHECKOUT, HOME, NAME_CHARS, exe, user_dir
+
+LOCK_WAIT = 10  # seconds: an `install` waiting on its questions holds the lock that long at most for the others
+
+
+class Unreadable(Exception):
+    """install.json is there but can't be read: saving over it would lose the list of what windvane placed, so
+    uninstall couldn't take it back."""
 
 
 def manifest_path():
@@ -18,10 +28,17 @@ def manifest_path():
 
 
 def load():
+    """The record of what windvane placed: empty when there's none yet; Unreadable when there is one it can't read."""
+    f = manifest_path()
     try:
-        return json.loads(manifest_path().read_text())
-    except (OSError, ValueError):
+        m = json.loads(f.read_text())
+    except FileNotFoundError:
         return {"paths": [], "settings": []}
+    except (OSError, ValueError) as e:
+        raise Unreadable(f"{f} can't be read ({e}), so it's left as it is: fix or delete it") from None
+    if not (isinstance(m, dict) and isinstance(m.get("paths"), list) and isinstance(m.get("settings"), list)):
+        raise Unreadable(f"{f} isn't a windvane install record, so it's left as it is: fix or delete it")
+    return m
 
 
 def save(m):
@@ -30,7 +47,32 @@ def save(m):
         f.unlink(missing_ok=True)
         return
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(m, indent=2) + "\n")
+    write_json(f, m)
+
+
+@contextlib.contextmanager
+def changing():
+    """install.json to change, loaded under a lock held until the change is saved, so an `init`, an `install` and
+    runs starting at the same moment don't lose each other's entries. Saved only when the block changed it and
+    didn't raise. Raises Unreadable (nothing changed) for a record it can't read, TimeoutError when it stays busy."""
+    lock = manifest_path().with_name("install.json.lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "a") as fh:
+        until = time.time() + LOCK_WAIT
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() > until:
+                    raise TimeoutError(f"{manifest_path()} is busy: another windvane install, init or run is "
+                                       "changing it") from None
+                time.sleep(0.1)
+        m = load()
+        before = json.dumps(m)
+        yield m
+        if json.dumps(m) != before:
+            save(m)
 
 
 def claude_dir():
@@ -86,7 +128,19 @@ def place_link(target, source, what, yes, m):
 
 
 def install(yes=False):
-    m = load()
+    try:
+        with changing() as m:
+            install_into(m, yes)
+    except (Unreadable, TimeoutError) as e:
+        print(f"windvane install: nothing changed: {e}")
+        return
+    tidy_phone_hooks()
+    if not shutil.which("windvane"):
+        print("windvane isn't on PATH yet: add ~/.local/bin to PATH (pipx users: pipx ensurepath)")
+    print("next: windvane doctor (what this machine still lacks); windvane uninstall takes all of this back")
+
+
+def install_into(m, yes):
     if CHECKOUT:  # pipx, uv and install.sh put the installed command on PATH themselves
         place_link(Path.home() / ".local/bin/windvane", HOME / "bin/windvane", "the windvane command", yes, m)
     skill = claude_dir() / "skills/windvane"
@@ -100,29 +154,37 @@ def install(yes=False):
         make_dirs(settings.parent, m)
         if add_keyword_hook(settings):
             m["settings"].append({"path": str(settings), "command": hook_command(), "before": before})
-    save(m)
-    tidy_phone_hooks()
-    if not shutil.which("windvane"):
-        print("windvane isn't on PATH yet: add ~/.local/bin to PATH (pipx users: pipx ensurepath)")
-    print("next: windvane doctor (what this machine still lacks); windvane uninstall takes all of this back")
 
 
 def uninstall(yes=False):
-    m = load()
+    try:
+        with changing() as m:
+            removed = uninstall_from(m, yes)
+    except (Unreadable, TimeoutError) as e:
+        print(f"windvane uninstall: nothing removed: {e}")
+        return
+    if removed:
+        manifest_path().with_name("install.json.lock").unlink(missing_ok=True)
+        print(f"removed. {removal_hint()}")
+
+
+def uninstall_from(m, yes):
+    """Take back what `m` lists, emptying it; whether it did."""
     items = [e["path"] for e in m["paths"] if e["kind"] != "dir"] + [f"the mention hook in {s['path']}"
                                                                        for s in m["settings"]]
     if not items:
         print("nothing to remove: windvane install hasn't added anything (or it was removed already)")
-        return
+        return False
     print("windvane added:\n  " + "\n  ".join(items))
     if not ask("remove all of it?", yes):
-        return
+        return False
     for s in reversed(m["settings"]):
         remove_keyword_hook(Path(s["path"]), s["command"], s["before"])
     for e in reversed(m["paths"]):
         remove_path(e)
-    save({"paths": [], "settings": []})
-    print(f"removed. {removal_hint()}")
+    m["paths"].clear()
+    m["settings"].clear()
+    return True
 
 
 def removal_hint():
@@ -166,14 +228,24 @@ def phone_hooks(p):
     base = ntfy_dir()
     if not base.exists():
         return []
-    m, cmd = load(), shlex.join(exe())
-    for kind, args in (("stop.d", "stop --if-running"), ("overview.d", "overview")):
-        write_hook(base / kind / f"windvane-{p.name}", f"{p.name}: `{args.split()[0]}`",
-                   f"{cmd} -C {shlex.quote(str(p.main_root()))} {args}", m)
-    write_status_hook(m)
-    tidy_hooks(m)
-    save(m)
+    try:
+        with changing() as m:
+            write_project_hooks(p, m)
+            write_status_hook(m)
+            tidy_hooks(m)
+    except (Unreadable, TimeoutError) as e:
+        print(f"  phone hooks: not written: {e}")
+        return []
     return [str(base / k) for k in ("status.d", "stop.d", "overview.d")]
+
+
+def write_project_hooks(p, m, missing_only=False):
+    """A project's `stop` and `overview` hooks (with `missing_only`, only those that aren't there)."""
+    cmd = shlex.join(exe())
+    for kind, args in (("stop.d", "stop --if-running"), ("overview.d", "overview")):
+        f = ntfy_dir() / kind / f"windvane-{p.name}"
+        if not (missing_only and (f.exists() or f.is_symlink())):
+            write_hook(f, f"{p.name}: `{args.split()[0]}`", f"{cmd} -C {shlex.quote(str(p.main_root()))} {args}", m)
 
 
 def ntfy_dir():
@@ -200,7 +272,7 @@ def write_status_hook(m):
 
 
 # A per-project hook as windvane writes it: hooks written before install.json listed them are known by this shape.
-OURS = re.compile(r"#!/usr/bin/env bash\n# windvane [a-z0-9-]+: `(status|stop|overview)` from the phone "
+OURS = re.compile(rf"#!/usr/bin/env bash\n# windvane [{NAME_CHARS}]+: `(status|stop|overview)` from the phone "
                   r"\(ntfy-listen\)\nexec [^\n]+ -C [^\n]+\n")
 
 
@@ -239,21 +311,15 @@ def hook_root_exists(f):
         return True
 
 
-def tidy_phone_hooks():
-    """At a run's start: an install made before the shared `status` hook gets it now, and hooks of deleted repos go,
-    without waiting for an `init` (which is what writes the hooks)."""
-    try:
-        json.loads(manifest_path().read_text())
-    except ValueError:  # an unreadable record: saving over it would lose what install added
-        return
-    except OSError:
-        pass
-    m = load()
-    before = json.dumps(m)
-    if tidy_hooks(m):
-        write_status_hook(m)
-    if json.dumps(m) != before:
-        save(m)
+def tidy_phone_hooks(p=None):
+    """At a run's start: an install made before the shared `status` hook gets it now, hooks of deleted repos go,
+    and `p`'s own `stop` and `overview` come back when they're missing (tidied while its repo was away), without
+    waiting for an `init`. Raises Unreadable or TimeoutError, changing nothing, as `changing` does."""
+    with changing() as m:
+        if tidy_hooks(m):
+            write_status_hook(m)
+        if p and ntfy_dir().exists():
+            write_project_hooks(p, m, missing_only=True)
 
 
 def _groups(data):

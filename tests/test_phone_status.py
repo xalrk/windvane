@@ -144,7 +144,8 @@ class PhoneStatus(unittest.TestCase):
     def test_an_unreadable_install_record_is_neither_swept_by_nor_saved_over(self):
         shutil.rmtree(self.roots["gone"])
         install.manifest_path().write_text("{not json")
-        install.tidy_phone_hooks()
+        with self.assertRaises(install.Unreadable):
+            install.tidy_phone_hooks()
         self.assertEqual(install.manifest_path().read_text(), "{not json")
         self.assertIn("windvane-gone", self.hooks("overview.d"))
 

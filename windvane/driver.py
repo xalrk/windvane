@@ -1479,9 +1479,9 @@ class Pilot(Desk, Periodic):
         p = self.p
         self.take_lock()
         phone.start_run(p)
-        try:  # an older install's per-project `status` hooks, or a deleted repo's: never worth a run
-            install.tidy_phone_hooks()
-        except OSError as e:
+        try:  # an older install's per-project `status` hooks, a deleted repo's, and this one's back if they went
+            install.tidy_phone_hooks(p)
+        except (OSError, install.Unreadable) as e:
             self.log(f"phone hooks: not tidied ({e})")
         restarted = os.environ.pop("WINDVANE_RESTARTED", None)
         from . import schedule  # (it imports this module)

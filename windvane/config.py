@@ -20,6 +20,8 @@ PKG = Path(__file__).resolve().parent
 HOME = PKG if (PKG / "prompts").is_dir() else PKG.parent
 CHECKOUT = HOME == PKG.parent
 DIR = ".windvane"
+# What a project's name is made of (Project.name), so what's named after it can be recognised by it.
+NAME_CHARS = "a-z0-9-"
 
 DEFAULTS = {
     "name": "",  # state dir, phone ids, tmux session; default: the repo's directory name
@@ -240,7 +242,8 @@ class Project:
         self.exists = f.is_file()
         self.cfg = _merge(DEFAULTS, tomllib.loads(f.read_text()) if self.exists else {})
         c = self.cfg
-        self.name = re.sub(r"[^a-z0-9-]+", "-", (c["name"] or self.main_root().name).lower()).strip("-") or "project"
+        name = (c["name"] or self.main_root().name).lower()
+        self.name = re.sub(f"[^{NAME_CHARS}]+", "-", name).strip("-") or "project"
         self.display = c["display_name"] or self.name[0].upper() + self.name[1:]
         self.prefix = c["prefix"].upper()
         self.id_re = rf"{re.escape(self.prefix)}-\d+[a-z]?"
