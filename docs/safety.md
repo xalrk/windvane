@@ -77,6 +77,18 @@ process that owns it, so a desk `windvane plan` still running beside the run kee
 can tell is the same one, by its start time (`/proc`, or `ps` on macOS), as a reboot may have handed the numbers to
 other programs. What it killed is counted in the ledger (a `swept` row).
 
+A SIGTERM or SIGHUP (a shutdown, a closed terminal or tmux session) stops a run as `stop --now` does, but a git step
+the driver is in the middle of between tickets finishes first: a desk PR's merge, its branch's deletion and the record
+of it; a plan's merge or push (its planner session dies at once); a periodic round's land; the self-update's pull; and
+pushing held branches at a run's start. So a signal never leaves a half-done merge, an `index.lock`, or a pushed branch
+with nothing recorded. Those steps are bounded by their own network timeouts, and a wait for the network ends on the
+signal. A ticket's merge runs in its slot's thread and stops through the same session kill. Ctrl-C still stops at
+once.
+
+A run killed outright (SIGKILL, the OOM killer) leaves its process id in the run's lock file; the next run sees it, runs
+the project's `teardown` before its setup and logs that. A teardown that fails at a run's end sends a second push
+after the "stopped" one, with the command to run by hand.
+
 ## The heavy lock
 
 Some checks and commands need the whole machine: a game engine, a render, a large build. Two of them at once, or one
