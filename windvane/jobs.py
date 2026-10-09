@@ -322,6 +322,15 @@ def bg(p, name, cmd, cwd, heavy=False):
     print(f"started '{name}' (log {base}.log); wait with: windvane await {name}")
 
 
+def exit_code(exit_f, patience=2.0):
+    """A job's exit code from its exit file. The shell creates the file before it writes the code into it, so a
+    file seen the moment it appears can still be empty: wait a moment for the code rather than print none."""
+    end = time.time() + patience
+    while not (code := exit_f.read_text().strip()) and time.time() < end:
+        time.sleep(0.05)
+    return code or "?"
+
+
 def await_(p, name, lines=40, limit=570):
     """Block until a bg job ends, at most `limit` seconds (under one tool call's 10 minutes). The seconds it blocked
     go to the ledger as an `await` row (a ticket's only), so `stats` shows the time each role spends waiting."""
@@ -345,7 +354,7 @@ def await_(p, name, lines=40, limit=570):
         ledger(p, None, {"name": name, "seconds": blocked}, event="await")
     mins = (time.time() - int(Path(f"{base}.start").read_text())) / 60
     if exit_f.exists():
-        print(f"DONE {name} exit {exit_f.read_text().strip()} after {mins:.0f} min")
+        print(f"DONE {name} exit {exit_code(exit_f)} after {mins:.0f} min")
         print(tail(f"{base}.log", lines))
     else:
         print(f"RUNNING {name} ({mins:.0f} min so far); call windvane await {name} again")

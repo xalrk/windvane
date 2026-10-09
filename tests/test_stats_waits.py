@@ -145,6 +145,14 @@ class RowsWritten(unittest.TestCase):
             jobs.await_(self.p, "nap")  # already done: no time blocked, no row
         self.assertEqual(sum(r["event"] == "await" for r in read_jsonl(self.p.state / "ledger.jsonl")), 1)
 
+    def test_an_exit_file_caught_before_its_code_is_written_waits_for_it(self):
+        exit_f = self.d / "job.exit"
+        exit_f.write_text("")  # what `echo $? > job.exit` leaves for a moment
+        threading.Timer(0.3, exit_f.write_text, ["0\n"]).start()
+        self.assertEqual(jobs.exit_code(exit_f), "0")
+        exit_f.write_text("")
+        self.assertEqual(jobs.exit_code(exit_f, patience=0.1), "?")
+
 
 if __name__ == "__main__":
     unittest.main()
