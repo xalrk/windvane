@@ -30,7 +30,7 @@ from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .held import author_ident, push_held
 from .periodic import Periodic
-from .phone import MOST, REASON, cut, whole
+from .phone import NTFY, REASON, cut, whole
 from .planner import plan
 from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail, waited
@@ -51,6 +51,7 @@ BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
            "critic": ("the critic", "critic", "revisions", 1, "one more for a READY without the evidence pack"),
            "check": ("the check", "autopilot", "check_retries", 0, ""),
            "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0, "")}
+DIGEST_RETRY = 600  # seconds between tries to push provisional answers the phone missed, outside a quiet time
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
@@ -166,7 +167,7 @@ def pr_for(p, branch):
                   "-q", ".[0].number")
 
 
-def also(tickets, most=MOST):
+def also(tickets, most=NTFY):
     """The digest's line naming the answers past its first eight by ticket, each ticket once, or "". Kept under
     `most` bytes (what the push has left): a backlog too long for that ends with how many more."""
     ids = list(dict.fromkeys(tickets))
@@ -196,6 +197,7 @@ class Pilot(Desk, Periodic):
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
         self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
+        self.digest_tried = 0.0  # when a push last tried the phone's missed provisional answers (see quiet_check)
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
         # Sessions dead per ticket: ticket -> [crashes, self.oks at its first], and the sessions that ended well, so a
         # ticket whose own sessions keep dying can be told from a broken API. `suspect`: [ticket, error] set aside
@@ -929,15 +931,16 @@ class Pilot(Desk, Periodic):
         if picks:
             with self.lock:  # slots merge side by side
                 def told(s):
-                    if sent:  # a failed push leaves them to the end-of-quiet digest
+                    if sent:  # a failed push leaves them to a later digest
                         s["pushed"] += [qkey(q) for q in picks if qkey(q) not in s["pushed"]]
                     s["asked"].pop(tid, None)
                 note(p, told)
+            self.digest_tried = time.time()
 
     def built_lines(self, tid):
         """The Done push's lines for the ticket's provisional answers, and those answers. A question the phone already
         showed gets one line without its text; only one built without the user ever seeing it (a quiet time) is
-        spelled out. Once the push went out, either way it counts as pushed: the end-of-quiet digest leaves it out."""
+        spelled out. Once the push went out, either way it counts as pushed: the digest leaves it out."""
         p = self.p
         picks = [q for q in with_ids(provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")))
                  if p.norm(q["ticket"]) == tid]
@@ -1045,6 +1048,7 @@ class Pilot(Desk, Periodic):
                 if key != tid:  # one of several: `windvane answer <key>` finds its provisional answer once merged
                     with self.lock:
                         note(p, lambda s: s["built"].update({key: q["q"]}))
+                phone.timed_out(p.qid(key), key, q["rec"])
                 push(f"No answer: {self.name(tid, key)}", whole(f"Going with {q['rec']}: ", opt, ".", log=self.log)
                      + f"\nTo change it later: windvane answer {key} <letter>.", 3, "hourglass")
             else:
@@ -1073,13 +1077,17 @@ class Pilot(Desk, Periodic):
         if self.was_quiet and not end:
             self.log("quiet time over")
             self.digest()
+        elif not end and time.time() - self.digest_tried >= DIGEST_RETRY:  # a failed Done push or digest, again
+            self.digest()
         self.was_quiet = bool(end)
 
     def digest(self):
-        """At a quiet time's end: the provisional answers no push has shown yet (a Done push or an earlier digest
-        has the rest), or nothing. Past eight, the rest are named by ticket on one line, so a long backlog reaches
-        the user in one push, not one quiet time's end per eight. The record keeps only those still provisional."""
+        """At a quiet time's end, and every DIGEST_RETRY outside one: the provisional answers no push has shown yet (a
+        Done push or an earlier digest has the rest), or nothing. Past eight, the rest are named by ticket on one
+        line, so a long backlog reaches the user in one push, not one quiet time's end per eight. The record keeps
+        only those still provisional."""
         p = self.p
+        self.digest_tried = time.time()
         picks = provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
         with self.lock:
             new = [q for q in picks if qkey(q) not in set(shown(p)["pushed"])]
@@ -1089,7 +1097,7 @@ class Pilot(Desk, Periodic):
                     + "".join(f"\n{q['ticket']}: {cut(q['question'], log=self.log)} Built {q['built']}."
                               for q in new[:8]))
             sent = push(f"Review: {len(new)} provisional answer{'s' * (len(new) > 1)}",
-                        body + also([q["ticket"] for q in new[8:]], MOST - len(body.encode())), 3, "memo")
+                        body + also([q["ticket"] for q in new[8:]], NTFY - len(body.encode())), 3, "memo")
         with self.lock:  # marked only once the phone has them: a failed push leaves them for the next digest
             told = {qkey(q) for q in new} if sent else set()
             note(p, lambda s: s.update(pushed=[qkey(q) for q in picks if qkey(q) in told | set(s["pushed"])]))

@@ -61,9 +61,9 @@ class Backlog(unittest.TestCase):
         self.assertEqual(len(self.sent), 1, self.sent)
 
     def test_long_questions_and_a_long_backlog_stay_under_the_phones_bound(self):
-        self.morning(300, " Why" * 30)
+        self.morning(600, " Why" * 30)
         [(_, msg)] = self.sent
-        self.assertLessEqual(len(msg), phone.MOST)
+        self.assertLessEqual(len(msg.encode()), phone.NTFY)
         self.assertRegex(msg.splitlines()[-1], r"^Also: T-108, .* and \d+ more; windvane status lists them\.$")
 
     def test_three_have_no_also_line(self):
@@ -79,7 +79,7 @@ class AlsoLine(unittest.TestCase):
 
     def test_a_backlog_too_long_for_the_phone_ends_with_how_many_more(self):
         line = driver.also([f"T-{i}" for i in range(1000)])
-        self.assertLessEqual(len(line), phone.MOST)
+        self.assertLessEqual(len(line.encode()), phone.NTFY)
         shown = line.split(": ", 1)[1].split(" and ")[0].split(", ")
         self.assertTrue(line.endswith(f" and {1000 - len(shown)} more; windvane status lists them."), line)
         self.assertEqual(shown[:2], ["T-0", "T-1"])
