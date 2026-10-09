@@ -31,6 +31,9 @@ TIMED_OUT = 75
 GAVE_UP = "heavy: gave up waiting for the machine"
 # A wait cut short by the project's STOP file (its path in this env var, set by the check's runner): its last line.
 STOP_ENV, STOPPED = "WINDVANE_HEAVY_STOP", "heavy: stopped while waiting for the machine"
+# Said once the job got the machine after waiting, before its own output: a check reads it back (`waited`) for its
+# ledger row, so `stats` can tell the minutes a check queued from the minutes it ran.
+WAITED = "heavy: waited {} s for the machine"
 
 
 def machine_file():
@@ -222,6 +225,19 @@ def gave_up(log):
     return m and (f"the machine{m.group(2) or ''} ({m.group(3)})", m.group(1) == STOPPED)
 
 
+def waited(log, head=65536):
+    """The seconds a heavy job whose output went to `log` waited before it ran, from `run`'s WAITED line (0 when it
+    didn't wait). Only the log's head is read: the line comes before the command's own output, after a few waiting
+    lines."""
+    try:
+        with open(log, "rb") as f:
+            text = f.read(head).decode(errors="replace")
+    except OSError:
+        return 0
+    m = re.search("^" + re.escape(WAITED).replace(r"\{\}", r"(\d+)") + "$", text, re.M)
+    return int(m.group(1)) if m else 0
+
+
 def take(lock, entry, deadline, say, stopped=lambda: False):
     """Wait for this job's turn, then take the lock: only the oldest live waiter tries it, so a job that arrives
     just as the lock frees can't overtake one that has been waiting (R-007). True once held, False at the deadline
@@ -257,6 +273,7 @@ def run(cmd, wait_s=None, cwd=None):
     Jobs run in arrival order: each joins a queue when it asks and waits there for the lock, then holds the lock
     while it waits for the machine to clear (busy processes, free memory), so it keeps its place throughout."""
     say = lambda m: print(m, file=sys.stderr, flush=True)
+    t0 = time.time()
     cfg = machine()
     deadline = time.time() + (cfg["heavy_wait"] * 60 if wait_s is None else wait_s)
     path = lock_path()
@@ -277,6 +294,8 @@ def run(cmd, wait_s=None, cwd=None):
             claim(lock, cmd, cwd)
             if not wait_until_clear(cfg, deadline, say, stopped):
                 return TIMED_OUT
+            if (s := round(time.time() - t0)) >= 1:
+                say(WAITED.format(s))
             return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
         finally:
             os.ftruncate(lock, 0)

@@ -48,14 +48,16 @@ def cmd_stats(a, p):
     swept = sum(r.get("groups") or 0 for r in rows if r.get("event") == "swept")
     checks = [r for r in rows if r.get("event") in ("check", "check-start")]
     refusals = [r for r in rows if r.get("event") == "gh-refused"]
+    awaits = [r for r in rows if r.get("event") == "await"]
     rows = [r for r in rows if not r.get("event")]  # a periodic score, an outcome, a sweep, a check: not a session
     if not rows:
         print("no runs yet")
         check_stats(checks, a.by, p)
+        wait_stats(checks, awaits)
         orphans(swept)
         guard_stats(refusals, a.by)
     else:
-        session_stats(a, p, rows, swept, checks, refusals)
+        session_stats(a, p, rows, swept, checks, refusals, awaits)
 
 
 def check_runs(p, checks):
@@ -90,7 +92,6 @@ def check_stats(checks, by, p):
         return
     ran, reused, live, not_run = check_runs(p, checks)
     mins = sum(r.get("minutes") or 0 for r in ran)
-    m = lambda x: f"{x:.0f}" if x >= 10 else f"{x:.1f}"
     cut = sum(r.get("finished") is False for r in ran)
     failed = sum(not r.get("passed") for r in ran) - cut
     per = {}
@@ -100,9 +101,9 @@ def check_stats(checks, by, p):
         t[1] += r.get("minutes") or 0
     print(f"checks: {plural(len(ran), 'run')}, {m(mins)} min" + (f" ({mins / len(per):.1f} min a ticket checked)"
           if per else "") + (f", {failed} failed" if failed else "") + (f", {cut} cut off" if cut else "")
-          + (f", {reused} reused a pass" if reused else "") + (f", {live} still running" if live else "")
-          + (f", {len(not_run)} not run (waited {m(sum(r.get('minutes') or 0 for r in not_run))} min for the machine)"
-             if not_run else ""))
+          + (f", {reused} reused a pass" if reused else "") + (f", {live} still running" if live else ""))
+    if not_run:  # the gate (or the session) ran each again rather than bounce the ticket: its wait is under "waits"
+        print(f"not-run checks: {len(not_run)} (no bounce)")
     if by == "ticket" and per:
         top = max(per, key=lambda t: (per[t][1], per[t][0]))
         print(f"most check time: {top}, {plural(per[top][0], 'run')}, {m(per[top][1])} min")
@@ -111,6 +112,28 @@ def check_stats(checks, by, p):
         w = max(wasted, key=lambda r: r["minutes"])
         print(f"costliest wasted check: {w['ticket']}, {m(w['minutes'])} min, "
               + ("cut off" if w.get("finished") is False else "failed"))
+
+
+def m(x):
+    """Minutes, to a tenth below 10."""
+    return f"{x:.0f}" if x >= 10 else f"{x:.1f}"
+
+
+def wait_stats(checks, awaits):
+    """The time each role spent blocked rather than working: in `windvane await` (the ledger's `await` rows) and
+    waiting for the heavy lock (a heavy check's `waited_s`; a not-run check from before rows kept it waited all its
+    minutes). A check row with no role is the gate's. No line for a role that never waited."""
+    per = {}
+    for r in awaits:
+        per.setdefault(r.get("role") or "?", [0, 0])[0] += r.get("seconds") or 0
+    for r in checks:
+        if r.get("event") == "check":
+            s = r.get("waited_s") or (60 * (r.get("minutes") or 0) if r.get("not_run") else 0)
+            per.setdefault(r.get("role") or "driver", [0, 0])[1] += s
+    for role, (aw, hv) in sorted(per.items(), key=lambda kv: -sum(kv[1])):
+        parts = [f"{m(aw / 60)} min in await"] * bool(aw) + [f"{m(hv / 60)} min for the heavy lock"] * bool(hv)
+        if parts:
+            print(f"waits, {role}: {', '.join(parts)}")
 
 
 def orphans(swept):
@@ -140,7 +163,7 @@ def guard_stats(refusals, by):
     print(f"gh guard refused: {', '.join(parts)}" + (f" ({'; '.join(tail)})" if tail else ""))
 
 
-def session_stats(a, p, rows, swept=0, checks=(), refusals=()):
+def session_stats(a, p, rows, swept=0, checks=(), refusals=(), awaits=()):
     agg = {}
     key = (lambda r: r.get("ticket") or r["role"]) if a.by == "ticket" else (lambda r: r["role"])
     for r in rows:
@@ -169,6 +192,7 @@ def session_stats(a, p, rows, swept=0, checks=(), refusals=()):
     if outcome:
         stats_per_merged(agg, outcome)
     check_stats(checks, a.by, p)
+    wait_stats(checks, awaits)
     died, killed = (sum(g[f] for g in agg.values()) for f in ("died", "killed"))
     if died or killed:
         lost, total = sum(g["lost_w"] for g in agg.values()), sum(g["w"] for g in agg.values())
@@ -289,7 +313,7 @@ def critic_stats(a, p):
     c = critic_mod.calibration(recs, p.critic["pass"], a.last)
     if not c:
         print(f"no critic verdicts since {since}" if since else "no critic verdicts yet")
-        return
+        return no_verdicts(p, recs, since)
     n, g = len(c["tickets"]), lambda x: f"{x:g}"
     print(f"critic: last {plural(n, 'ticket')}, {plural(c['verdicts'], 'verdict')}"
           + (f" since {since}" if since else "") + f", pass mark {g(c['bar'])}/10")
@@ -304,6 +328,7 @@ def critic_stats(a, p):
               f"{c['capped']}; caps answered yes: {c['hits']} sent back, {c['scoped_caps']} out of scope")
     for t, rs in c["tickets"]:
         print(f"  {t:8} {' → '.join(g(r['score']) for r in rs):14} {rs[-1].get('step', '')}")
+    no_verdicts(p, recs, since)
     if line := shared_line(p, lad):
         print(line)
     rates = critic_mod.rates(recs, a.last)
@@ -315,6 +340,24 @@ def critic_stats(a, p):
                     first, ever, k = rates[cid]
                     print(f"  {d + ' ' + g(r):9} {cid:10} {first:>2}/{k:<2} {ever:>2}/{k:<2} "
                           f"{critic_mod.advice(first, ever, k, top=r == cs[-1][0])}".rstrip())
+
+
+def no_verdicts(p, recs, since):
+    """What replies with no verdict cost (T-116): the `step: none` runs, and the same-session re-asks that try to
+    save one, from critic.jsonl (a verdict they saved says `reasked`, as does a none they didn't, or `reask_failed`),
+    with the re-ask sessions' tokens from the ledger by their `-critic-reask` label. Nothing when there were none."""
+    nones = [r for r in recs if r.get("step") == "none"]
+    saved = sum(r.get("reasked") is True and r.get("step") != "none" for r in recs)
+    replied, failed = sum(r.get("reasked") is True for r in nones), sum(bool(r.get("reask_failed")) for r in nones)
+    runs = [r for r in read_jsonl(p.state / "ledger.jsonl") if not r.get("event") and r.get("at", "") >= since
+            and str(r.get("label", "")).endswith("-critic-reask")]
+    if nones:
+        print(f"no verdict: {plural(len(nones), 'critic run')} (step: none)")
+    parts = ([f"{saved} saved a verdict"] * bool(saved) + [f"{replied} still no verdict"] * bool(replied)
+             + [f"{failed} failed"] * bool(failed))
+    cost = f"{plural(len(runs), 'session')}, {k(sum(map(weighted, runs)))} weighted tokens" if runs else ""
+    if parts or cost:
+        print(f"re-asks: {', '.join(parts)}" + (f" ({cost})" if parts and cost else cost))
 
 
 def critic_since(p, when):

@@ -75,6 +75,7 @@ class Reask(unittest.TestCase):
     def test_each_dimension_scores_from_its_own_line(self):
         _, _, recs = self.critic(GOOD.replace("- works safe: yes, no crash", "- works safe: no, it crashes"))
         self.assertEqual((recs[-1]["dims"], recs[-1]["failed"]), ({"works": 2, "cost": 8}, ["safe"]))
+        self.assertNotIn("reasked", recs[-1], "a first reply's verdict: no re-ask to count")
         _, _, recs = self.critic(GOOD.replace("- cost safe: yes", "- cost safe: no, reruns"))
         self.assertEqual((recs[-1]["dims"], recs[-1]["failed"]), ({"works": 8, "cost": 0}, ["safe"]))
 
@@ -90,6 +91,11 @@ class Reask(unittest.TestCase):
         self.assertIn("- <id>: yes|no", calls[1]["prompt"])
         self.assertEqual([r["step"] for r in recs], ["pass"])
         self.assertIn("CRITIC STEP: pass", out)
+        self.assertIs(recs[0]["reasked"], True, "the re-ask saved this verdict: stats --critic counts it")
+        with redirect_stdout(io.StringIO()) as shown:
+            stats.critic_stats(argparse.Namespace(last=10, since=None), self.p)
+        self.assertIn("re-asks: 1 saved a verdict (1 session, ", shown.getvalue())
+        self.assertNotIn("no verdict:", shown.getvalue())
 
     def test_two_unreadable_replies_are_no_verdict_logged_once(self):
         out, calls, recs = self.critic(UNREAD, UNREAD)

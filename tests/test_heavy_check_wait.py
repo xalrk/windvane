@@ -80,7 +80,7 @@ class HeavyCheckWait(unittest.TestCase):
         with redirect_stdout(out):
             stats.check_stats(read_jsonl(self.p.state / "ledger.jsonl"), "role", self.p)
         self.assertIn("checks: 0 runs", out.getvalue())
-        self.assertIn("1 not run (waited", out.getvalue())
+        self.assertIn("not-run checks: 1 (no bounce)", out.getvalue())
         self.assertNotIn("failed", out.getvalue())
         self.assertNotIn("wasted", out.getvalue())
 
