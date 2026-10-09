@@ -167,9 +167,10 @@ class Driver(unittest.TestCase):
             raise FileNotFoundError(2, "No such file or directory")  # as a real exec's: no file named
         self.pilot.execv = execv
         self.i.commit("windvane/driver.py", "v2\n")
-        with redirect_stdout(io.StringIO()), self.assertRaises(FileNotFoundError):
+        with redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError):
             self.pilot.run(now() + timedelta(hours=2))
-        why = f"driver error: [Errno 2] couldn't restart on the new code: No such file or directory: '{self.calls[0][0]}'"
+        why = (f"driver error: windvane couldn't restart on its new code ({self.calls[0][0]}: no such file or "
+               "directory); run `windvane doctor`, then start the run again")
         self.assertIn(why, self.log())
         self.assertNotIn("closed file", self.log())
         [msg] = [m for t, m in pushes if t == "windvane stopped"]

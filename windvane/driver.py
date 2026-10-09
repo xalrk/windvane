@@ -1514,7 +1514,8 @@ class Pilot(Desk, Periodic):
                 self.execv(cmd[0], cmd)
             except OSError as e:  # a moved or broken interpreter: the run ends with why (exec's own error names no file)
                 os.environ.pop("WINDVANE_RESTARTED", None)  # the teardown's helpers aren't a restarted driver's
-                raise OSError(e.errno, f"couldn't restart on the new code: {e.strerror}", cmd[0]) from e
+                raise RuntimeError(f"windvane couldn't restart on its new code ({cmd[0]}: {e.strerror.lower()}); "
+                                   "run `windvane doctor`, then start the run again") from e
 
     def hand_over(self):
         """Leaves the run's memory for the driver that replaces this one (`carry_over`)."""
