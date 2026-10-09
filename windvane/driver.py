@@ -25,7 +25,7 @@ import traceback
 from contextlib import nullcontext
 from datetime import datetime, timedelta
 
-from . import actions, critic, install, net, phone, renumber, requests, scratch, selfupdate, statedir
+from . import actions, critic, install, net, phone, renumber, requests, scratch, selfupdate, statedir, worktree
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .held import author_ident, push_held
@@ -39,7 +39,7 @@ from .questions import (answered, desk_answers, give_answer, mode, note, parts, 
 from .queue import Queue
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
-from .worktree import TIMED_OUT, SetupFailed, clean_detach, ensure_worktree, teardown
+from .worktree import TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, ensure_worktree, teardown
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
@@ -58,6 +58,14 @@ RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; th
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
 # The environment variable set for a driver under `supervise`: it hands a crash over instead of pushing it
 SUPERVISED = "WINDVANE_SUPERVISED"
+SIGNALLED = {signal.SIGTERM: "the driver got SIGTERM (a kill or a shutdown)",
+             signal.SIGHUP: "the driver's terminal or tmux session closed (SIGHUP)"}
+
+
+class Signalled(BaseException):
+    """SIGTERM or SIGHUP, raised in the driver's main thread as Ctrl-C raises KeyboardInterrupt, so `run`'s `finally`
+    (the push, the save, the teardown) runs: Python's own handlers for these end the process on the spot. Not an
+    Exception, so it's no crash `supervise` would restart."""
 # Errors a ticket brings on itself, as (text in the error, lowercase; what to do), for its set-aside push
 SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it reads."),
                   ("context limit", "Split the ticket, or trim what it reads."),
@@ -196,6 +204,7 @@ class Pilot(Desk, Periodic):
         self.sleep = time.sleep  # the retry backoff's; tests make it instant
         self.stop_reason = "unknown"
         self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
+        self.signalled, self.ending = None, False  # the SIGTERM or SIGHUP that ended the run; past its `finally`
         self.worker_rules, self.review_rules = rules(p, "WORKER.md"), rules(p, "REVIEW.md")
         # Parallel slots: each has its own work and ci worktrees, made when first used. Merges and fetches are
         # serialized. `n` is the most at once; the queue's Touches and the usage window decide how many really run.
@@ -1492,6 +1501,7 @@ class Pilot(Desk, Periodic):
             self.log(f"killed {swept} process group{'s' * (swept > 1)} left running by an earlier run's sessions")
         self.clean_tmp(between=False)
         ready, crashed = False, None
+        handlers = self.catch_signals()
         try:
             ready = self.rules_ok() and self.prepare(0)  # before any session or push: a bad rule or a failed setup
             # ends the run with a single push
@@ -1504,8 +1514,9 @@ class Pilot(Desk, Periodic):
                 actions.refresh(p)  # status and the phone read only the cached count
             if ready and not restarted:
                 self.usage.probe(p)
-                push("windvane started", f"Until {hhmm(deadline)}. {self.usage.text()}.", 2, "rocket",
-                     ("Status=status", "Stop=stop"))
+                push("windvane started", f"Until {hhmm(deadline)}. {self.usage.text()}.{failed_teardown(p)}", 2,
+                     "rocket", ("Status=status", "Stop=stop"))
+                (p.state / TEARDOWN_FAILED).unlink(missing_ok=True)  # said once
             elif not ready:
                 self.stop_reason = self.halt or self.stop_check()
                 if self.stop_reason == "deadline" and not restarted:  # cut short during setup
@@ -1513,11 +1524,14 @@ class Pilot(Desk, Periodic):
             if ready:
                 push_held(p)  # a plan a failed push kept locally, once a run: the network may be back
                 self.loop()
+        except Signalled:
+            pass  # on_signal set the stop reason
         except Exception as e:
             self.stop_reason = f"driver error: {e}"
             crashed = traceback.format_exception_only(e)[-1].strip()
             raise
         finally:
+            self.ending = True
             for t in self.threads:  # the running tickets finish (their runs stop at the deadline at the latest)
                 t.join()
             self.clean_state(between=False)  # every slot's thread is done: its trees are idle
@@ -1541,7 +1555,27 @@ class Pilot(Desk, Periodic):
             if not (crashed and os.environ.get(SUPERVISED)):
                 tear_down(p)
             self.lockfile.close()
+            for sig, h in handlers.items():
+                signal.signal(sig, h)
         return ready
+
+    def catch_signals(self):
+        """SIGTERM and SIGHUP end the run as `stop --now` does (main thread only: a run in a test's thread keeps
+        Python's handlers). Returns the handlers they replace."""
+        if threading.current_thread() is not threading.main_thread():
+            return {}
+        return {sig: signal.signal(sig, self.on_signal) for sig in SIGNALLED}
+
+    def on_signal(self, sig, frame):
+        """The first SIGTERM or SIGHUP: every session is killed at its next poll, and the main thread unwinds to
+        `run`'s `finally`, unless it's there already. A second one changes nothing: the wind-down is under way."""
+        if self.signalled:
+            return
+        self.signalled, self.kill_all = sig, True
+        log(self.p, f"{SIGNALLED[sig]}: stopping now")
+        if not self.ending:
+            self.stop_reason = f"{SIGNALLED[sig]}; the running sessions were killed"
+            raise Signalled(sig)
 
 
     def summary(self):
@@ -1594,6 +1628,7 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
                 log(p, f"{why}; not restarted: its sessions may still be running in the worktrees")
                 push("windvane stopped", whole("Why: ", why, ". Not restarted.", log=lambda m: log(p, m))
                      + "\nIts sessions may still be running in the worktrees.", 4, "rotating_light", ("Status=status",))
+                tear_down(p, lock=True)  # its `finally` never ran (a SIGTERM's or SIGHUP's did: it tore down itself)
             return rc  # its own end (a stop, the deadline, the queue, a failed setup), or a kill
         why = info["error"]
         try:
@@ -1639,6 +1674,16 @@ def tear_down(p, lock=False):
             teardown(p)
     except Exception as e:  # noqa: BLE001 (a git or OS error: the run is over either way)
         log(p, f"teardown `{p.cfg['teardown']}` not run: {e}")
+        worktree.failed(p, p.cfg["teardown"], "not run", str(e))
+
+
+def failed_teardown(p):
+    """The "started" push's line for the last run's failed teardown (worktree.teardown records it), or ""."""
+    f = load_json(p.state / TEARDOWN_FAILED, None)
+    if not f:
+        return ""
+    return whole("\nLast run's teardown failed: ", f"{f['cmd']} ({f['how']})", "; its helpers may still be up.",
+                 log=lambda m: log(p, m))
 
 
 def locked(p):
