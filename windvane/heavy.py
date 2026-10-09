@@ -162,8 +162,8 @@ def paused(pid):
     if asked is not None and now - asked < PS_KEEP:
         return was
     try:
-        out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout
-    except OSError:
+        out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):  # a hung `ps` mustn't stall the wait
         out = ""
     for p in [p for p, (at, _) in _ps_seen.items() if now - at >= PS_KEEP]:
         del _ps_seen[p]
