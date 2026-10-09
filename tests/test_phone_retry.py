@@ -156,6 +156,12 @@ class LateAnswer(Base):
         self.assertIn(f"{self.qid}: no answer came in time, so it's already building A", msg)
         self.assertFalse((phone.state_dir() / "answers" / f"{self.qid}.json").exists())
 
+    def test_a_bare_letter_after_a_day_finds_no_question(self):
+        f = phone.state_dir() / "questions" / f"{self.qid}.json"
+        os.utime(f, (time.time() - phone.LATE_FOR - 1,) * 2)
+        phone.handle(self.c, "B")
+        self.assertEqual(self.got[-1], ("Answer not taken", "No open question to answer with B."))
+
     def test_a_bare_letter_prefers_an_open_question(self):
         phone.ask("other-q", "Which?", ["X", "Y"])
         phone.handle(self.c, "B")

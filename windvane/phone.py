@@ -483,8 +483,9 @@ def answer_newest(c, letter):
     d = state_dir() / "questions"
     every = sorted(d.glob("*.json"), key=lambda f: f.stat().st_mtime) if d.exists() else []
     qs = [f for f in every if not built(f)]
-    if not qs:  # only timed-out ones: the newest says what it's building instead
-        return answer_question(c, every[-1].stem, letter) if every else reply(
+    recent = [f for f in every if time.time() - f.stat().st_mtime < LATE_FOR]
+    if not qs:  # only timed-out ones: the newest of the last day says what it's building instead
+        return answer_question(c, recent[-1].stem, letter) if recent else reply(
             c, "Answer not taken", f"No open question to answer with {letter}.")
     older = f"\n({len(qs) - 1} older open: answer <id> {letter} for those.)" if len(qs) > 1 else ""
     answer_question(c, qs[-1].stem, letter, older)
