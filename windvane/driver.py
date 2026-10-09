@@ -60,11 +60,13 @@ RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at on
 # The environment variable set for a driver under `supervise`: it hands a crash over instead of pushing it
 SUPERVISED = "WINDVANE_SUPERVISED"
 SIGNALLED = {signal.SIGTERM: "the driver got SIGTERM (a kill or a shutdown)",
-             signal.SIGHUP: "the driver's terminal or tmux session closed (SIGHUP)"}
+             signal.SIGHUP: "the driver's terminal or tmux session closed (SIGHUP)",
+             signal.SIGINT: "Ctrl-C during a merge, a push or a pull"}  # outside such a step it's KeyboardInterrupt
 
 
 class Signalled(BaseException):
-    """SIGTERM or SIGHUP, raised in the driver's main thread as Ctrl-C raises KeyboardInterrupt, so `run`'s `finally`
+    """SIGTERM or SIGHUP (or a Ctrl-C a guarded step held back), raised in the driver's main thread as Ctrl-C raises
+    KeyboardInterrupt, so `run`'s `finally`
     (the push, the save, the teardown) runs: Python's own handlers for these end the process on the spot. Not an
     Exception, so it's no crash `supervise` would restart."""
 # Errors a ticket brings on itself, as (text in the error, lowercase; what to do), for its set-aside push
@@ -1568,7 +1570,13 @@ class Pilot(Desk, Periodic):
                 actions.refresh(p)  # status and the phone read only the cached count
             stopped_first = ready and not restarted and (p.state / "STOP").exists()
             if stopped_first:  # a stop as it came up (a schedule's window called off as it starts): nothing is spent
+                with self.critical():  # but a held plan, paid for already, still goes out; with STOP still there
+                    push_held(p)  # an outage wait ends at once
                 self.stop_reason = self.stop_check()
+                if st := schedule.state(p):  # which window, and that no other follows
+                    ends = "; the schedule ends: no later window starts" if st["daily"] else ""
+                    self.stop_reason = (f"asked to stop as this window ({schedule.what(st['daily'], st['end'])}) "
+                                        f"started; nothing ran{ends}")
             elif ready and not restarted:
                 self.usage.probe(p)
                 push("windvane started", f"Until {hhmm(deadline)}. {self.usage.text()}.{failed_teardown(p)}", 2,
@@ -1622,15 +1630,18 @@ class Pilot(Desk, Periodic):
         return ready
 
     def catch_signals(self):
-        """SIGTERM and SIGHUP end the run as `stop --now` does (main thread only: a run in a test's thread keeps
-        Python's handlers). Returns the handlers they replace."""
+        """SIGTERM and SIGHUP end the run as `stop --now` does, and so does Ctrl-C inside a guarded step (main thread
+        only: a run in a test's thread keeps Python's handlers). Returns the handlers they replace."""
         if threading.current_thread() is not threading.main_thread():
             return {}
         return {sig: signal.signal(sig, self.on_signal) for sig in SIGNALLED}
 
     def on_signal(self, sig, frame):
         """The first SIGTERM or SIGHUP: every session is killed at its next poll, and the main thread unwinds to
-        `run`'s `finally`, unless it's there already. A second one changes nothing: the wind-down is under way."""
+        `run`'s `finally`, unless it's there already. A second one changes nothing: the wind-down is under way.
+        Ctrl-C outside a guarded step is Python's own KeyboardInterrupt, at once, as without this handler."""
+        if sig == signal.SIGINT and not self.guarded:
+            raise KeyboardInterrupt
         if self.signalled:
             return
         self.signalled, self.kill_all = sig, True
@@ -1655,11 +1666,19 @@ class Pilot(Desk, Periodic):
             yield
             return
         self.guarded += 1
+        error = None
         try:
             yield
+        except Exception as e:
+            error = e
+            raise
         finally:
             self.guarded -= 1
             if not self.guarded and self.signalled and not self.ending:
+                if error:  # Signalled replaces it: its text goes in the log and the stopped push's why
+                    said = traceback.format_exception_only(error)[-1].strip()
+                    self.log(f"  the step under way failed: {said}")
+                    self.stop_reason += f"; the step under way failed: {said}"
                 raise Signalled(self.signalled)
 
 
@@ -1764,14 +1783,18 @@ def tear_down(p, lock=False, tell=False):
         log(p, f"teardown `{p.cfg['teardown']}` not run: {e}")
         worktree.failed(p, p.cfg["teardown"], "not run", str(e))
     if tell and (f := load_json(p.state / TEARDOWN_FAILED, None)):
+        if f.get("told"):
+            return
         push("windvane teardown failed", whole(f"Its helpers may still be up ({f['how']}). Run it by hand: ", f["cmd"],
                                                log=lambda m: log(p, m)), 4, "warning")
+        save_json(p.state / TEARDOWN_FAILED, {**f, "told": True})  # the next "started" push needn't say it again
 
 
 def failed_teardown(p):
-    """The "started" push's line for the last run's failed teardown (worktree.teardown records it), or ""."""
+    """The "started" push's line for the last run's failed teardown (worktree.teardown records it), or "" when there
+    was none or its own push told it already."""
     f = load_json(p.state / TEARDOWN_FAILED, None)
-    if not f:
+    if not f or f.get("told"):
         return ""
     return whole("\nLast run's teardown failed: ", f"{f['cmd']} ({f['how']})", "; its helpers may still be up.",
                  log=lambda m: log(p, m))

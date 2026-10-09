@@ -83,12 +83,15 @@ a desk PR's merge with `main` for its check (not the check itself), its merge, i
 of it; a plan's merge or push (its planner session dies at once); a periodic round's land; the self-update's pull; and
 pushing held branches at a run's start. So a signal never leaves a half-done merge, an `index.lock`, or a pushed branch
 with nothing recorded. Those steps are bounded by their own network timeouts, and a wait for the network ends on the
-signal. A ticket's merge runs in its slot's thread and stops through the same session kill. Ctrl-C still stops at
-once.
+signal. A ticket's merge runs in its slot's thread and stops through the same session kill. Ctrl-C inside one of
+those steps works the same way: the step finishes, then the run stops (a second Ctrl-C changes nothing). Outside them
+Ctrl-C stops at once. A step that fails while a signal waits still has its error named, in the log and the "stopped"
+push's why.
 
 A run killed outright (SIGKILL, the OOM killer) leaves its process id in the run's lock file; the next run sees it, runs
 the project's `teardown` before its setup and logs that. A teardown that fails at a run's end sends a second push
-after the "stopped" one, with the command to run by hand.
+after the "stopped" one, with the command to run by hand; the next run's "started" push doesn't repeat it. A
+scheduled window called off as it starts runs no session but still pushes held branches.
 
 ## The heavy lock
 
