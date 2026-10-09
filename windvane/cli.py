@@ -690,6 +690,7 @@ def main(argv=None):
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
     s.add_argument("--wait", type=float, help="minutes to wait for the machine before giving up "
                                               "(default: machine.toml's heavy_wait, 60)")
+    s.add_argument("--status", action="store_true", help="who holds the lock and who waits, without waiting")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("await", help="wait (up to ~9.5 min) for a bg command (this ticket's own)")
     s.add_argument("name")
@@ -736,6 +737,8 @@ def main(argv=None):
     if a.cmd == "request":
         return cmd_request(a)
     if a.cmd == "heavy":
+        if a.status:
+            return print("\n".join(heavy.status()))
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
         sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60) if cmd else "heavy: give a command")
     p = find()

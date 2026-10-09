@@ -699,9 +699,10 @@ class Pilot(Desk, Periodic):
             ok, summary, logf = run()
             if ok is not None:
                 return ok, summary, logf
-            self.log(f"{tid}: {what}: {waited(summary)}; the autopilot runs it again, nothing to do")
             if self.stopping_now() or (self.p.state / "STOP").exists() or now() >= self.end():
+                self.log(f"{tid}: {what}: {waited(summary)}; the next run checks it again, nothing to do")
                 return ok, summary, logf
+            self.log(f"{tid}: {what}: {waited(summary)}; the autopilot runs it again, nothing to do")
             self.nap(now() + timedelta(seconds=STASH_WAIT))  # a short heavy_wait mustn't spin
 
     def check_at(self, rev, ticket=None):
