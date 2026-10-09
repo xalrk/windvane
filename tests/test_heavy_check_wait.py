@@ -143,15 +143,18 @@ class GateRunsItAgain(unittest.TestCase):
 
         def freed_after_one_wait(msg):  # the holder lets go once the gate has waited in vain once
             log(msg)
-            if "CHECK NOT RUN" in msg:
+            if "not run, waited" in msg:
                 (self.d / "release").touch()
         pilot.log = freed_after_one_wait
         pilot.run(now() + timedelta(minutes=10))
         self.assertEqual(pilot.merged, ["T-001"])
         self.assertEqual(pilot.bounces.get("T-001", {}), {})
-        waits = [m for m in self.lines if "CHECK NOT RUN" in m]
+        waits = [m for m in self.lines if "not run" in m]
         self.assertEqual(len(waits), 1, waits)
-        self.assertIn("T-001: check on ", waits[0])
+        self.assertRegex(waits[0], r"^T-001: check on \w+: not run, waited 0 min for the machine lock \(held by pid "
+                                   r"\d+ \(render.sh in game/work, since \d\d:\d\d\)\); the autopilot runs it again, "
+                                   "nothing to do$")
+        self.assertNotIn("run it again;", waits[0])
         workers = [c for c in read_jsonl(self.s.tmp / "calls.jsonl") if "worker" in c.get("system", "")]
         self.assertLessEqual(len(workers), 1)
 
@@ -161,9 +164,11 @@ class GateRunsItAgain(unittest.TestCase):
         (pilot.p.state / "STOP").parent.mkdir(parents=True, exist_ok=True)
         (pilot.p.state / "STOP").write_text("")
         pilot.deadline = now() + timedelta(minutes=10)
-        ok, summary, _ = pilot.ran("T-001", lambda: (runs.append(1), (None, "CHECK NOT RUN: x", None))[1], "check")
+        ok, summary, _ = pilot.ran("T-001", lambda: (runs.append(1), (None, "CHECK NOT RUN: x; run it again", None))[1],
+                                 "check")
         self.assertIsNone(ok)
-        self.assertEqual((len(runs), self.lines), (1, ["T-001: check: CHECK NOT RUN: x"]))
+        self.assertEqual((len(runs), self.lines),
+                         (1, ["T-001: check: not run, x; the autopilot runs it again, nothing to do"]))
 
 
 if __name__ == "__main__":

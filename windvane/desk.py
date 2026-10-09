@@ -13,7 +13,7 @@ import time
 from datetime import timedelta
 
 from . import net
-from .jobs import check, tail
+from .jobs import check, tail, waited
 from .phone import cut
 from .renumber import noted, old_numbers, said
 from .util import git, gout, hhmm, last_match, now, push
@@ -97,7 +97,7 @@ class Desk:
         ok, summary, logf, where = self.desk_check(head)
         if ok is None:  # the machine was busy: nothing the PR did, so no fix session; checked at the next listing
             self.desk_prs, self.desk_looked = [], time.time()
-            return self.log(f"desk PR #{n}: {summary}")
+            return self.log(f"desk PR #{n}: check {waited(summary)}; checked again at the next look, nothing to do")
         if not ok:
             return self.desk_problem(pr, d, head, "check fails", f"The check ran on {where}: {summary}\n```\n"
                                                                  f"{tail(logf, 40)}\n```")

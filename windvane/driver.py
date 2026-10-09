@@ -33,7 +33,7 @@ from .periodic import Periodic
 from .phone import MOST, REASON, cut, whole
 from .planner import plan
 from .config import CHECKOUT, DIR, HOME, exe, slots
-from .jobs import check, tail
+from .jobs import check, tail, waited
 from .questions import (answered, desk_answers, give_answer, keys, mode, note, parts, phone_answer, provisional, qkey,
                         quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on, with_ids)
 from .queue import Queue
@@ -699,7 +699,7 @@ class Pilot(Desk, Periodic):
             ok, summary, logf = run()
             if ok is not None:
                 return ok, summary, logf
-            self.log(f"{tid}: {what}: {summary}")
+            self.log(f"{tid}: {what}: {waited(summary)}; the autopilot runs it again, nothing to do")
             if self.stopping_now() or (self.p.state / "STOP").exists() or now() >= self.end():
                 return ok, summary, logf
             self.nap(now() + timedelta(seconds=STASH_WAIT))  # a short heavy_wait mustn't spin
