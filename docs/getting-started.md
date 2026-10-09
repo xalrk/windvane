@@ -26,6 +26,9 @@ Without either, from a clone:
 git clone https://github.com/xalrk/windvane
 sh windvane/install.sh     # a venv in ~/.local/share/windvane, the command in ~/.local/bin
 ```
+If `~/.local/bin` isn't on your `PATH` yet, install.sh prints the line that puts it there. To try all of this first
+on a machine that has never seen windvane, `tools/clean_machine_check.sh --shell` (podman or docker) opens a
+throwaway container with it installed, and lists the steps to a first run.
 Then:
 ```sh
 windvane doctor     # what this machine lacks, with the command that fixes each

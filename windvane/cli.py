@@ -102,6 +102,8 @@ def need(p):
 
 def cmd_run(a, p):
     need(p)
+    if not shutil.which("claude"):
+        sys.exit("windvane run needs Claude Code (`claude`) on PATH: `windvane doctor` says how to install it")
     try:
         window = schedule.first(a.from_, a.until, a.for_, a.daily)
     except ValueError as e:

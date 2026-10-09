@@ -50,12 +50,13 @@ class CleanMachine(unittest.TestCase):
         self.tmp = tmpdir(self, "windvane-clean-")
         self.home = self.tmp / "home"
         self.home.mkdir()
-        fakes = self.tmp / "fakes"
-        fakes.mkdir()
-        (fakes / "claude").write_text(CLAUDE)
-        (fakes / "claude-session").write_text(FAKE_CLAUDE)
-        (fakes / "claude").chmod(0o755)
-        (fakes / "python3").symlink_to(sys.executable)
+        self.claude_bin, py_bin = self.tmp / "claude-bin", self.tmp / "python-bin"
+        self.claude_bin.mkdir()
+        py_bin.mkdir()
+        (self.claude_bin / "claude").write_text(CLAUDE)
+        (self.claude_bin / "claude-session").write_text(FAKE_CLAUDE)
+        (self.claude_bin / "claude").chmod(0o755)
+        (py_bin / "python3").symlink_to(sys.executable)
         # Nothing but the system's tools and `claude`: no XDG dirs, no git identity, and none of the optional tools
         # this machine may have (gh, tmux, ntfy's), left out of a copy of its bin dirs. The Python running the suite
         # is `python3`, as tools/check_pythons.sh makes it for each version.
@@ -65,7 +66,7 @@ class CleanMachine(unittest.TestCase):
             for exe in Path(d).glob("*") if os.path.isdir(d) else ():
                 if exe.name not in OPTIONAL and not (system / exe.name).exists() and os.access(exe, os.X_OK):
                     (system / exe.name).symlink_to(exe)
-        self.env = {"HOME": str(self.home), "PATH": f"{fakes}:{system}",
+        self.env = {"HOME": str(self.home), "PATH": f"{self.claude_bin}:{py_bin}:{system}",
                     "LANG": "C.UTF-8", "TMPDIR": str(self.tmp), "PIP_NO_INDEX": "1", "WINDVANE_SOURCE": str(REPO),
                     "WINDVANE_SELF_UPDATE": "0", "FAKE_LOG": str(self.tmp / "calls.jsonl"),
                     "FAKE_CRITIC_TEXT": CRITIQUE}
@@ -120,6 +121,10 @@ class CleanMachine(unittest.TestCase):
         self.sh("git add .windvane && git commit -qm 'windvane setup and first ticket' && git push -q", cwd=proj)
         self.assertIn("T-001", self.sh("windvane queue", cwd=proj))
 
+        no_claude = self.env["PATH"].replace(f"{self.claude_bin}:", "")
+        out = self.sh(f"PATH={no_claude} windvane run --for 2h", cwd=proj, ok=False)  # not a traceback
+        self.assertIn("needs Claude Code (`claude`) on PATH: `windvane doctor` says how", out)
+        self.assertIn("MISSING   Claude Code (`claude`)", self.sh(f"PATH={no_claude} windvane doctor", ok=False))
         out = self.sh("windvane run --for 20m", cwd=proj, ok=False)  # too short for a ticket: it says so, not "Why: deadline"
         self.assertIn("would do nothing: give it longer (e.g. --for 2h)", out)
         out = self.sh("windvane run --for 2h", cwd=proj)
