@@ -1470,7 +1470,8 @@ class Pilot(Desk, Periodic):
         except OSError as e:
             self.log(f"phone hooks: not tidied ({e})")
         restarted = os.environ.pop("WINDVANE_RESTARTED", None)
-        if not restarted:  # a stop asked for while the driver restarted still holds
+        from . import schedule  # (it imports this module)
+        if not (restarted or schedule.called_off(p)):  # a stop asked for while it restarted, or started, holds
             (p.state / "STOP").unlink(missing_ok=True)
         (p.state / "DEADLINE").unlink(missing_ok=True)  # an earlier run's
         self.deadline = deadline
@@ -1541,6 +1542,7 @@ class Pilot(Desk, Periodic):
     def summary(self):
         """The run's last push: what merged and what still needs the user (questions, provisional answers, merges
         the critic only let through because its revisions ran out)."""
+        from . import schedule  # (it imports this module)
         p = self.p
         names = lambda ids: "; ".join(map(self.name, ids)) or "none"
         crit = ", ".join(f"{t} {s:g}" for t, s in self.scores.items())
@@ -1562,7 +1564,8 @@ class Pilot(Desk, Periodic):
                 + (f"Stopped at the deadline (resumes next run): {names(self.stopped)}.\n" if self.stopped else "")
                 + "".join(f"Set aside: {self.name(t)} ({why}).\n" for t, why in self.aside.items())
                 + (f"{self.usage.text()}." if self.usage.five is not None else "")
-                + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else ""))
+                + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else "")
+                + schedule.next_line(p))
 
 
 def supervise(p, argv, deadline, start=None, sleep=time.sleep):

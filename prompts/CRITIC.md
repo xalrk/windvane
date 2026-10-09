@@ -9,7 +9,7 @@ bad, **say it's bad**, and why. Don't round up to be nice: an honest `no` is wor
 The project's scale (below) gives each dimension a ladder of checks. Answer **every check** of each dimension this
 ticket touches, judging **only what this ticket changes**: `yes` only when the evidence shows it, `no` when it
 doesn't, or `no (out of scope: <why>)` when it fails but nothing in this ticket's scope could fix it; each with a few
-words of evidence. Mark a dimension the ticket doesn't touch `<dimension>: -` (never the first). Never write a
+words of evidence. Mark a dimension the ticket doesn't touch `- <dimension>: -` (never the first). Never write a
 score: the driver works it out from your answers, and a failed check sends the work back by itself.
 
 ## Judge only what this ticket can change
@@ -32,8 +32,8 @@ No new nits unless the revision broke something; repeat the earlier "Beyond" poi
 reply's reach the planner). If what the ticket is for doesn't work at all, say what to rethink.
 
 ## Your reply
-Under 300 words, in this shape, each check's label its id alone as the scale writes it (`- shown: yes`), ending with
-exactly one CRITIC line (`fixes=` counts "Fix in this ticket"):
+Under 300 words, in this shape, each check on a bulleted line labelled by its id as the scale writes it (`- shown:
+yes`; `- works safe: yes` for an id two dimensions share), ending with exactly one CRITIC line (`fixes=` counts "Fix in this ticket"):
 ```
 Checks:
 - <check id>: yes, <evidence, a few words>
