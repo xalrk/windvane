@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import heavy, scratch
 from .config import exe
-from .runner import NEST, TICKET
+from .runner import NEST, ROLE, TICKET
 from .util import append_jsonl, gout, now, read_jsonl
 
 _LOGS = itertools.count(1)  # a check log's number in this process
@@ -49,10 +49,12 @@ def tree_key(p, cwd):
 
 def ledger(p, ticket, row, event="check"):
     """A check run for a ticket (the driver's, or a session's `windvane check`) as a ledger row, so `stats` can say
-    what checks cost; one at the desk, for no ticket, isn't counted."""
+    what checks cost; one at the desk, for no ticket, isn't counted. The role is the session's that ran it, or the
+    driver's (its gate), so `stats` can say who waited."""
     ticket = ticket or os.environ.get(TICKET)
     if ticket:
-        append_jsonl(p.state / "ledger.jsonl", {"event": event, "ticket": ticket, **row})
+        append_jsonl(p.state / "ledger.jsonl", {"event": event, "ticket": ticket,
+                                                "role": os.environ.get(ROLE) or "driver", **row})
 
 
 def check(p, cwd, quiet=False, ticket=None):
@@ -100,7 +102,8 @@ def run_logged(p, ticket, cmd, cwd, log):
     from one cut off; the start row is written only once it's locked, or `stats` could catch it unlocked and call a
     check that just started cut off. A heartbeat touches the log while the check runs, so a kill is timed within
     `HEARTBEAT` even when the check went quiet. Returns (exit code, minutes, what a heavy check waited for and never
-    got, or None): such a row says `not_run`, and `stats` doesn't count it a failure."""
+    got, or None): such a row says `not_run`, and `stats` doesn't count it a failure. A heavy check's end row also
+    says how many of its seconds went to waiting for the machine (`waited_s`: all of them when it never ran)."""
     start = time.time()
     code = waited = None
     t = ticket or os.environ.get(TICKET)  # a ticket's check gets its scratch dir as TMPDIR, as its sessions do
@@ -126,8 +129,10 @@ def run_logged(p, ticket, cmd, cwd, log):
             waited = heavy.gave_up(log)
     finally:
         mins = (time.time() - start) / 60
+        wait_s = round(mins * 60) if waited else heavy.waited(log) if p.cfg["heavy_check"] else 0
         ledger(p, ticket, {"minutes": round(mins, 2), "passed": code == 0, "reused": False, "start": round(start, 3),
-                           **({} if code is not None else {"finished": False}), **({"not_run": True} if waited else {})})
+                           **({} if code is not None else {"finished": False}), **({"not_run": True} if waited else {}),
+                           **({"waited_s": wait_s} if wait_s else {})})
     return code, mins, waited
 
 
@@ -318,12 +323,14 @@ def bg(p, name, cmd, cwd, heavy=False):
 
 
 def await_(p, name, lines=40, limit=570):
-    """Block until a bg job ends, at most `limit` seconds (under one tool call's 10 minutes)."""
+    """Block until a bg job ends, at most `limit` seconds (under one tool call's 10 minutes). The seconds it blocked
+    go to the ledger as an `await` row (a ticket's only), so `stats` shows the time each role spends waiting."""
     (base, stray), ticket = find_job(p, name), os.environ.get(TICKET)
     if not Path(f"{base}.start").exists():
         sys.exit(f"await: nothing started as '{name}'" + (f" for {ticket}" if ticket else "")
                  + (f"\n{stray_line(name, stray)}" if stray else ""))
-    end = time.time() + limit
+    t0 = time.time()
+    end = t0 + limit
     exit_f = Path(f"{base}.exit")
     while not exit_f.exists() and time.time() < end:
         try:
@@ -334,6 +341,8 @@ def await_(p, name, lines=40, limit=570):
                 exit_f.write_text("1")
             break
         time.sleep(3)
+    if (blocked := round(time.time() - t0)) >= 1:
+        ledger(p, None, {"name": name, "seconds": blocked}, event="await")
     mins = (time.time() - int(Path(f"{base}.start").read_text())) / 60
     if exit_f.exists():
         print(f"DONE {name} exit {exit_f.read_text().strip()} after {mins:.0f} min")
