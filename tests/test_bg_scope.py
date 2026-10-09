@@ -94,6 +94,7 @@ class BgCommand(unittest.TestCase):
     def setUp(self):
         self.s = Sandbox()
         self.addCleanup(self.s.close)
+        self.addCleanup(os.chdir, os.getcwd())  # `-C` moves into the sandbox, which close deletes
         self.state = Project(self.s.root).state
 
     def cli(self, ticket, *argv):
