@@ -162,9 +162,9 @@ def claim(lock, cmd, cwd):
 
 def waiting_line(info, n):
     if info.get("pid"):
-        mins = int((time.time() - info.get("since", time.time())) // 60)
+        # A clock time, not minutes held: the line is printed once and read later, when minutes would be stale.
         since = time.strftime("%H:%M", time.localtime(info.get("since", time.time())))
-        who = f"held by pid {info['pid']} ({info.get('cmd', '?')} in {info.get('cwd', '?')}, since {since}, {mins} min)"
+        who = f"held by pid {info['pid']} ({info.get('cmd', '?')} in {info.get('cwd', '?')}, since {since})"
     else:
         who = "held by another heavy job"
     return f"heavy: waiting for the machine lock: {who}; " + (f"{n} ahead of this job" if n else "next in line")
