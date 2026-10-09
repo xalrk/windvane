@@ -73,6 +73,14 @@ going is neither: `1 still running`. Then `costliest wasted check: T-060, 18 min
 failed or was cut off, the time that bought nothing; no line when every check passed. With `--by ticket`,
 `most check time: T-060, 4 runs, 31 min` comes before it (the ticket whose checks took longest).
 
+`not-run checks: 2 (no bounce)` counts heavy checks whose wait for the machine timed out: each ran again instead of
+bouncing its ticket to a worker. `waits, worker: 12 min in await, 3.0 min for the heavy lock` is the wall time a role
+spent blocked rather than working, one line per role, longest first: in `windvane await` (its `await` rows) and
+waiting for the heavy lock before a check ran (a check row's `waited_s`; the gate's checks are `driver`). These cost
+time, not tokens; no line without any. `stats --critic` ends with `no verdict: 2 critic runs (step: none)` and
+`re-asks: 1 replied, 1 failed, 2 sessions, 14k weighted tokens`: the same-session re-asks that try to save a reply
+the driver couldn't read, and what their sessions (labelled `-critic-reask`) cost.
+
 Check logs (`state/checks/`) are pruned when a check starts: a passed check's log after 3 days, any after 3 weeks,
 but never one still running or one of the 5 newest that failed or were cut off. A killed check's log gets its
 end row (its minutes) in the ledger before it goes, so its time still counts.
