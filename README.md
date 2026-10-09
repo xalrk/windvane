@@ -1,3 +1,14 @@
+<p align="center">
+  <img src="docs/assets/banner.png" alt="windvane: tickets in, merges out. An autopilot for Claude Code." width="100%">
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-f5b942"></a>
+  <img alt="python: 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776ab">
+  <img alt="dependencies: none" src="https://img.shields.io/badge/dependencies-none-2ea44f">
+  <img alt="runs on: Linux, macOS" src="https://img.shields.io/badge/runs%20on-Linux%20%7C%20macOS-5b6b9a">
+</p>
+
 # windvane
 
 **An autopilot for [Claude Code](https://docs.claude.com/en/docs/claude-code).** You write tickets for a git project
