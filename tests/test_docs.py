@@ -2,6 +2,7 @@
 the CI workflow running the same test command windvane runs on itself."""
 import contextlib
 import io
+import os
 import re
 import unittest
 from pathlib import Path
@@ -183,8 +184,13 @@ class Workflow(unittest.TestCase):
         """Hosted minutes are limited: the local check runs every Python, the workflow only on request."""
         job = self.wf["jobs"]["test"]
         self.assertEqual([s["run"] for s in job["steps"] if "run" in s], ["python3 -m unittest discover -s tests -q"])
-        self.assertEqual(job["strategy"]["matrix"]["python"], ["3.11", "3.14"])
         self.assertEqual(self.wf["on"], {"workflow_dispatch": None})
+        script = REPO / "tools/check_pythons.sh"
+        self.assertTrue(os.access(script, os.X_OK), "the local check is an executable script")
+        local = re.search(r'^VERSIONS="([^"]*)"', script.read_text(), re.M).group(1).split()
+        self.assertEqual(job["strategy"]["matrix"]["python"], [local[0], local[-1]], "the oldest and newest")
+        hosted = {*job["strategy"]["matrix"]["python"], *(i["python"] for i in job["strategy"]["matrix"]["include"])}
+        self.assertLessEqual(hosted, set(local), "the local check runs every Python the workflow names")
 
     def test_the_subset_parser_agrees_with_pyyaml(self):
         try:

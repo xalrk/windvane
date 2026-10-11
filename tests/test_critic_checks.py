@@ -309,12 +309,14 @@ class Ladder(unittest.TestCase):
     def test_the_shipped_scale_is_a_short_ladder(self):
         root = Path(__file__).resolve().parents[1]
         lad = critic.ladder((root / "templates/CRITIC.md").read_text())
-        ids = [c for cs in lad.values() for _, c, _ in cs]
+        checks = [c for cs in lad.values() for c in cs]
+        ids = [c for _, c, _ in checks]
         self.assertEqual(list(lad)[0], "works")
         self.assertLessEqual(len(ids), 12)
         self.assertEqual(len(ids), len(set(ids)), "check ids are unique across the scale")
+        for r, c, q in checks:
+            self.assertTrue(0 < r <= 10 and q.endswith("."), f"{c}: a rung with one check to answer yes or no")
         self.assertLessEqual(len((root / "prompts/CRITIC.md").read_text().splitlines()), 54, "the prompt never grows")
-
 
 COURSE = LADDER + """
 ## on the course
