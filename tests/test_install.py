@@ -91,6 +91,8 @@ class Installed(unittest.TestCase):
         r = run("sh", str(REPO / "install.sh"))
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         exe = home / ".local/bin/windvane"
+        self.assertEqual(sorted(p.name for p in exe.parent.iterdir()), ["windvane"])  # one command, no other name
+        self.assertEqual(sorted(p.name for p in (tmp / "data").iterdir()), ["windvane"])
         pkg = Path(run(str(tmp / "data/windvane/venv/bin/python"), "-c",
                        "import windvane, os; print(os.path.dirname(windvane.__file__))").stdout.strip())
         self.assertTrue(str(pkg).startswith(str(tmp / "data")), pkg)
