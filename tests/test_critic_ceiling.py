@@ -11,7 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import cli, critic, driver  # noqa: E402
-from windvane.config import Project  # noqa: E402
+from windvane.config import DEFAULTS, Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import append_jsonl  # noqa: E402
 from windvane.worktree import ensure_worktree  # noqa: E402
@@ -38,6 +38,13 @@ class Ceilings(unittest.TestCase):
                          "Critic scale: clear tops out at 8, so no ticket can score above 8 (the pass mark, so every "
                          "merged ticket scores it): give it a 10 rung in .windvane/CRITIC.md.")
         self.assertEqual(critic.ceiling_line(p, critic.ladder(CAPPED.replace("- 8 awake", "- 10 awake"))), "")
+
+    def test_the_shipped_scale_reaches_10_above_the_pass_mark(self):
+        lad = critic.ladder((REPO / "templates/CRITIC.md").read_text())
+        self.assertTrue(lad)
+        self.assertEqual(critic.ceilings(lad), {})
+        for d, cs in lad.items():
+            self.assertTrue([r for r, _, _ in cs if r > DEFAULTS["critic"]["pass"]], f"{d}: a rung above the bar")
 
     def test_rungs_over_the_bar_are_not_told_to_lower(self):
         self.assertEqual(critic.advice(0, 0, 10, top=True), "")
