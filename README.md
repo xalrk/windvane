@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.png">
-    <img src="docs/assets/banner-light.png" alt="windvane: ideas in, results out. An autopilot for Claude Code." width="100%">
+    <img src="docs/assets/banner-light.png" alt="windvane: self-steering for Claude Code." width="100%">
   </picture>
 </p>
 
@@ -12,13 +12,19 @@
   <img alt="runs on: Linux, macOS" src="https://img.shields.io/badge/runs%20on-Linux%20%7C%20macOS-5b6b9a">
 </p>
 
+<p align="center"><sub>windvane is an independent project, not affiliated with, endorsed by or sponsored by Anthropic.
+Claude and Claude Code are trademarks of Anthropic, PBC, named only to say what windvane works with.</sub></p>
+
 # windvane
 
-**An autopilot for [Claude Code](https://docs.claude.com/en/docs/claude-code).** You write tickets for a git project
-(or have windvane plan them from a goal); it works through them unattended until a deadline. Each ticket gets a fresh
-Claude Code session that builds it with tests, a critic that scores the result, your project's check, a read-only
-code review, and a merge that only happens when all of them pass. Product questions reach your phone; a token ledger
-shows what everything cost.
+**Self-steering for [Claude Code](https://docs.claude.com/en/docs/claude-code).** A wind vane steers a sailboat with
+nobody at the helm: you set the course, it holds it. windvane does the same for your project: you set the course in
+tickets, and it holds it while you're away.
+
+It is an autopilot for Claude Code. You write tickets for a git project (or have windvane plan them from a goal); it
+works through them unattended until a deadline. Each ticket gets a fresh Claude Code session that builds it with
+tests, a critic that scores the result, your project's check, a read-only code review, and a merge that only happens
+when all of them pass. Product questions reach your phone; a token ledger shows what everything cost.
 
 It is for developers who already use Claude Code and want it to keep shipping reviewed, tested work overnight or
 while they are busy elsewhere, without touching their checkout and without merging anything unchecked.

@@ -82,7 +82,7 @@ class CleanMachine(unittest.TestCase):
     def test_install_doctor_init_new_run(self):
         out = self.sh(f"sh {shlex.quote(str(REPO / 'install.sh'))}")
         bin_dir = self.home / ".local/bin"
-        self.assertTrue((bin_dir / "windvane").exists(), out)
+        self.assertEqual(sorted(p.name for p in bin_dir.iterdir()), ["windvane"], out)  # the one command, nothing else
         # ~/.local/bin isn't on a clean PATH: install.sh says how to put it there, and its next steps work before that
         add = re.search(r"^ +(export PATH=.*)$", out, re.M)
         self.assertTrue(add, out)

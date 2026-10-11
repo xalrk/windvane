@@ -32,8 +32,8 @@ def hook(prompt, session=""):
 class KeywordHook(unittest.TestCase):
     def test_fires_on_the_keywords_only(self):
         for p in ("yo dawg heres my idea, lets build it with windvane", "yo claude put windvane on my idea",
-                  "i wanna make a recipe app, use windvane", "autopilot this idea: a budgeting tool", "run autopilot overnight",
-                  "how's the Autopilot doing", "use windvane on this", "auto-pilot status?"):
+                  "i wanna make a recipe app, use wind-vane", "autopilot this idea: a budgeting tool", "run autopilot overnight",
+                  "how's the Autopilot doing", "use Windvane on this", "auto-pilot status?"):
             self.assertIn("windvane", hook(p) or "", p)
         for p in ("fix the pilot light", "autopilots? no: autopiloting is a word", "build it with claude"):
             self.assertIsNone(hook(p), p)
@@ -91,6 +91,8 @@ class Installed(unittest.TestCase):
         r = run("sh", str(REPO / "install.sh"))
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         exe = home / ".local/bin/windvane"
+        self.assertEqual(sorted(p.name for p in exe.parent.iterdir()), ["windvane"])  # one command, no other name
+        self.assertEqual(sorted(p.name for p in (tmp / "data").iterdir()), ["windvane"])
         pkg = Path(run(str(tmp / "data/windvane/venv/bin/python"), "-c",
                        "import windvane, os; print(os.path.dirname(windvane.__file__))").stdout.strip())
         self.assertTrue(str(pkg).startswith(str(tmp / "data")), pkg)
