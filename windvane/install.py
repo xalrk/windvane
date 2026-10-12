@@ -335,12 +335,11 @@ def hook_root_exists(f):
 
 
 def tidy_phone_hooks(p=None):
-    """At a run's start: the shared `status` hook comes back when it's missing or its install is gone, hooks of
-    deleted repos go,
-    and `p`'s own `stop` and `overview` come back when they're missing (tidied while its repo was away), without
-    waiting for an `init`. Raises Unreadable or TimeoutError, changing nothing, as `changing` does."""
+    """At a run's start: an install made before the shared `status` hook gets it now (and a run gets it back when
+    it's missing or its install is gone), hooks of deleted repos go, and `p`'s own `stop` and `overview` come back
+    when they're missing (tidied while its repo was away), without waiting for an `init`. Raises Unreadable or TimeoutError, changing nothing, as `changing` does."""
     with changing() as m:
-        if tidy_hooks(m) or ntfy_dir().exists() and status_hook_gone():
+        if tidy_hooks(m) or p and ntfy_dir().exists() and status_hook_gone():
             write_status_hook(m)
         if p and ntfy_dir().exists():
             write_project_hooks(p, m, missing_only=True)

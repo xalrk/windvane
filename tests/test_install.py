@@ -15,6 +15,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from windvane import cli, install, runner  # noqa: E402
+from windvane.config import Project  # noqa: E402
 from windvane.install import add_keyword_hook  # noqa: E402
 from helpers import Sandbox, tmpdir  # noqa: E402
 
@@ -262,14 +263,15 @@ class TwoInstalls(unittest.TestCase):
 
     def test_a_runs_start_brings_back_a_status_hook_thats_missing_or_whose_install_is_gone(self):
         self.init(self.first)
+        self.p = Project(self.s.root)
         with mock.patch.object(install, "exe", lambda: [self.second]):
-            install.tidy_phone_hooks()  # the first is still there: left alone
+            install.tidy_phone_hooks(self.p)  # the first is still there: left alone
             self.assertEqual(self.runs("status.d/windvane"), self.first)
             os.unlink(self.first)
-            install.tidy_phone_hooks()
+            install.tidy_phone_hooks(self.p)
             self.assertEqual(self.runs("status.d/windvane"), self.second)
             (self.ntfy / "status.d/windvane").unlink()
-            install.tidy_phone_hooks()
+            install.tidy_phone_hooks(self.p)
             self.assertEqual(self.runs("status.d/windvane"), self.second)
 
 
