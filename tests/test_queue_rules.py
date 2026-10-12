@@ -120,6 +120,18 @@ class QueueRules(unittest.TestCase):
         self.assertEqual(q.waits_on("T-001"), ["T-003"])
         self.assertEqual(q.related["T-001"], ["T-004"])
 
+    def test_a_dot_separated_key_quoted_in_prose_is_not_read(self):
+        self.s.write(".windvane/tickets/T-001.md", "# T-001: x\nTouches: a.py.\n\nA header like `Milestone: M9 · "
+                     "Depends on: T-003` or `M9 · Related: T-004` puts keys on one line.\n")
+        self.s.write(".windvane/tickets/T-002.md", "# T-002: y\nTouches: b.py.\n\nWrite `Milestone: M9 · "
+                     "Depends on: the user` to wait.\n")
+        self.s.write(".windvane/tickets/T-003.md", "# T-003: z\nMilestone: `M9` · Depends on: T-004 · Can start later\n"
+                     "Touches: c.py.\n")
+        q = self.queue()
+        self.assertEqual((q.deps["T-001"], q.related["T-001"], q.status("T-001")), ([], [], "todo"))
+        self.assertEqual((q.outside["T-002"], q.status("T-002")), ([], "todo"))
+        self.assertEqual(q.waits_on("T-003"), ["T-004"])
+
     def test_an_open_question_written_by_hand_blocks_its_ticket(self):
         q = self.queue(questions=OPEN_QUESTION)
         self.assertEqual(q.status("T-002"), "blocked")
