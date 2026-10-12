@@ -14,9 +14,10 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from windvane import install, runner  # noqa: E402
+from windvane import cli, install, runner  # noqa: E402
+from windvane.config import Project  # noqa: E402
 from windvane.install import add_keyword_hook  # noqa: E402
-from helpers import tmpdir  # noqa: E402
+from helpers import Sandbox, tmpdir  # noqa: E402
 
 RUNTIME = tempfile.mkdtemp(prefix="windvane-runtime-")
 atexit.register(shutil.rmtree, RUNTIME, True)
@@ -220,6 +221,70 @@ class InstallInProcess(unittest.TestCase):
         self.quiet(install.uninstall, True)
         self.assertFalse(self.claude.exists())
         self.assertIn("nothing to remove", self.quiet(install.uninstall, True))
+
+
+class TwoInstalls(unittest.TestCase):
+    """Two windvane installs on one machine (a checkout and an installed copy): the shared phone `status` hook stays
+    with the install that wrote it while its command is there, and `stop`/`overview` name the one that ran `init`."""
+
+    def setUp(self):
+        self.s = Sandbox()
+        self.addCleanup(self.s.close)
+        self.ntfy = Path.home() / ".config/ntfy"
+        self.ntfy.mkdir(parents=True)
+        self.first, self.second = (self.fake(n) for n in ("first", "second"))
+
+    def fake(self, name):
+        f = self.s.tmp / name / "windvane"
+        f.parent.mkdir()
+        f.write_text("#!/bin/sh\n")
+        f.chmod(0o755)
+        return str(f)
+
+    def init(self, *cmd):
+        with mock.patch.object(install, "exe", lambda: list(cmd)), contextlib.redirect_stdout(io.StringIO()) as out:
+            cli.main(["init", str(self.s.root)])
+        return out.getvalue()
+
+    def runs(self, kind):
+        return (self.ntfy / kind).read_text().splitlines()[-1].split()[1]
+
+    def test_init_from_a_second_install_leaves_the_firsts_status_until_its_command_is_gone(self):
+        self.init(self.first)
+        self.assertEqual(self.runs("status.d/windvane"), self.first)
+        said = self.init(self.second)
+        self.assertEqual(self.runs("status.d/windvane"), self.first)
+        self.assertIn(f"phone status: kept with the windvane that set it up ({self.first})", said)
+        self.assertEqual(self.runs("stop.d/windvane-sandbox"), self.second)
+        self.assertEqual(self.runs("overview.d/windvane-sandbox"), self.second)
+        os.unlink(self.first)
+        self.assertNotIn("kept with", self.init(self.second))
+        self.assertEqual(self.runs("status.d/windvane"), self.second)
+
+    def test_a_python_m_install_counts_as_gone_once_its_interpreter_cant_import_windvane(self):
+        py = Path(self.fake("py") + "3")  # an interpreter with a pip-installed windvane while `installed` says 0
+        py.write_text(f'#!/bin/sh\n[ "$1 $2" = "-I -c" ] && exit "$(cat {self.s.tmp}/installed)"\nexit 2\n')
+        py.chmod(0o755)
+        (self.s.tmp / "installed").write_text("0")
+        self.init(str(py), "-m", "windvane")
+        self.assertIn("kept with", self.init(self.second))
+        self.assertEqual(self.runs("status.d/windvane"), str(py))
+        (self.s.tmp / "installed").write_text("1")  # pip uninstall windvane
+        self.assertNotIn("kept with", self.init(self.second))
+        self.assertEqual(self.runs("status.d/windvane"), self.second)
+
+    def test_a_runs_start_brings_back_a_status_hook_thats_missing_or_whose_install_is_gone(self):
+        self.init(self.first)
+        self.p = Project(self.s.root)
+        with mock.patch.object(install, "exe", lambda: [self.second]):
+            install.tidy_phone_hooks(self.p)  # the first is still there: left alone
+            self.assertEqual(self.runs("status.d/windvane"), self.first)
+            os.unlink(self.first)
+            install.tidy_phone_hooks(self.p)
+            self.assertEqual(self.runs("status.d/windvane"), self.second)
+            (self.ntfy / "status.d/windvane").unlink()
+            install.tidy_phone_hooks(self.p)
+            self.assertEqual(self.runs("status.d/windvane"), self.second)
 
 
 if __name__ == "__main__":

@@ -1675,6 +1675,7 @@ class Pilot(Desk, Periodic):
             if not (crashed and os.environ.get(SUPERVISED)):
                 tear_down(p, tell=True)
                 self.lockfile.truncate(0)  # torn down: the next run has nothing left to tear down
+            fcntl.flock(self.lockfile, fcntl.LOCK_UN)  # now, not at the close: a thread's fork may still have the fd
             self.lockfile.close()
             for sig, h in handlers.items():
                 signal.signal(sig, h)
@@ -1863,8 +1864,4 @@ def locked(p):
     if not f.exists():
         return False
     with open(f) as fh:
-        try:
-            fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except OSError:
-            return not (p.state / statedir.CLEANING).exists()
-    return False
+        return util.held(fh) and not (p.state / statedir.CLEANING).exists()

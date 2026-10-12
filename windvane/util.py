@@ -1,5 +1,6 @@
 """Small shared helpers: git, the log, phone pushes, JSON state files."""
 import calendar
+import fcntl
 import json
 import os
 import signal
@@ -15,6 +16,18 @@ from pathlib import Path
 # group of their own and no terminal input, so a Ctrl-C at the terminal (sent to the whole foreground group) reaches
 # only the driver, which lets the step finish, and never git in the middle of a merge.
 shielded = False
+
+
+def held(fh):
+    """Whether another open file holds a lock on `fh`'s file. The probe's own shared lock is let go at once: a close
+    alone leaves it held while any thread's fork (a git or a session starting) still has the fd, until that child
+    execs, and a run taking the lock then would think another one has it."""
+    try:
+        fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    fcntl.flock(fh, fcntl.LOCK_UN)
+    return False
 
 
 def run(cmd, cwd, timeout=None, env=None):

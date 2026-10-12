@@ -155,11 +155,7 @@ def heartbeat(log):
 def locked(path):
     """Whether a check still holds `path`'s lock; a log that can't be opened isn't (OSError is the caller's)."""
     with path.open("rb") as f:
-        try:
-            fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-    return False
+        return util.held(f)
 
 
 def running(p, start_row):

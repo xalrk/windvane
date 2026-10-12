@@ -13,7 +13,7 @@ import re
 import time
 from datetime import datetime, timedelta
 
-from . import driver, questions, selfupdate
+from . import driver, questions, selfupdate, util
 from .util import hhmm, load_json, log, now, save_json
 
 STATE, LOCK, STOPPED, TURN = "schedule.json", "schedule.lock", "schedule-stop", "schedule.turn"  # in the state dir
@@ -191,11 +191,8 @@ def state(p):
     if not f.exists():
         return None
     with open(f) as fh:
-        try:
-            fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        if not util.held(fh):
             return None
-        except OSError:
-            pass
     st = load_json(p.state / STATE, None)
     if not st:
         return None
