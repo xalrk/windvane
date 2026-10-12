@@ -99,6 +99,27 @@ class QueueRules(unittest.TestCase):
         self.assertEqual(q.status("T-001"), "todo")
         self.assertEqual(q.waits_on("T-002"), ["T-003"])
 
+    def test_a_title_or_prose_quoting_a_key_is_not_its_header_line(self):
+        self.s.write(".windvane/tickets/T-001.md", "# T-001: The `Depends on: T-004` line reads ids\n"
+                     "Depends on: nothing.\nTouches: a.py.\n")
+        self.s.write(".windvane/tickets/T-002.md", "# T-002: Read the `Depends on:` line, never the title\n"
+                     "Touches: b.py.\n\nA ticket's `Depends on:` and `Related: T-005` lines are headers.\n")
+        self.s.write(".windvane/tickets/T-003.md", "# T-003: Quote `Depends on: the user` and `Related: T-005`\n"
+                     "Depends on: T-004.\nRelated: T-001.\nTouches: c.py.\n")
+        q = self.queue()
+        self.assertEqual((q.deps["T-001"], q.outside["T-001"], q.status("T-001")), ([], [], "todo"))
+        self.assertEqual((q.deps["T-002"], q.outside["T-002"], q.status("T-002")), ([], [], "todo"))
+        self.assertEqual(q.related["T-002"], [])
+        self.assertEqual(q.waits_on("T-003"), ["T-004"])
+        self.assertEqual(q.related["T-003"], ["T-001"])
+
+    def test_a_key_after_a_dot_separator_still_counts(self):
+        self.s.write(".windvane/tickets/T-001.md", "# T-001: x · Depends on: T-005\n"
+                     "Milestone: M9 · Related: T-004 · Depends on: T-003 · Can start later\nTouches: a.py.\n")
+        q = self.queue()
+        self.assertEqual(q.waits_on("T-001"), ["T-003"])
+        self.assertEqual(q.related["T-001"], ["T-004"])
+
     def test_an_open_question_written_by_hand_blocks_its_ticket(self):
         q = self.queue(questions=OPEN_QUESTION)
         self.assertEqual(q.status("T-002"), "blocked")

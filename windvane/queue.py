@@ -38,8 +38,11 @@ def bullets(text, files, p):
 
 def header_line(head, key):
     """The text of a header's `<key>:` line, up to its full stop, a blank line, the next `Key:` line or a ` · `
-    (headers that put several keys on one line: `Milestone: M9 · Depends on: nothing · Can start now`)."""
-    m = re.search(rf"{key}:(.*?)(?:\.\s|\n\s*\n|\n(?=[\w ]+:)|\s·\s|\Z)", head, re.S | re.I)
+    (headers that put several keys on one line: `Milestone: M9 · Depends on: nothing · Can start now`). The key counts
+    only where one starts, at a line's start or after a ` · ` outside the `#` title, so a title or prose quoting
+    `Depends on:` isn't read as one."""
+    start = r"(?:^|^(?!#)[^\n]*?[ \t]·[ \t])(?:\*\*)?"
+    m = re.search(rf"{start}{key}:(.*?)(?:\.\s|\n\s*\n|\n(?=[\w ]+:)|\s·\s|\Z)", head, re.S | re.I | re.M)
     return m.group(1) if m else ""
 
 
