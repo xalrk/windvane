@@ -519,7 +519,8 @@ class Pilot(Desk, Periodic):
         if status == "PARTIAL":
             waits = self.waits_on_merge(tid, branch)
             if waits:  # not out of time: the queue holds it until they merge, then resumes it
-                return self.log(f"{tid}: waits for {', '.join(waits)} to merge (its branch says so)")
+                self.log(f"{tid}: waits for {', '.join(waits)} to merge (its branch says so)")
+                return self.held_for_good(tid, branch, waits)
             self.partials[tid] = self.partials.get(tid, 0) + 1
             self.log(f"{tid}: partial ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
@@ -543,7 +544,19 @@ class Pilot(Desk, Periodic):
         if not (q and branch and tid in q.files):
             return []
         return [d for d in branch_depends(self.wd, f"{self.p.remote}/{branch}", q.files[tid], self.p)
-                if d != tid and not q.is_done(d)]
+                if d != tid and q.known(d) and not q.is_done(d)]
+
+    def held_for_good(self, tid, branch, waits):
+        """A ticket its branch makes wait for one that can't merge (parked, set aside, or itself waiting for this
+        one) would wait silently forever: say so once, with how to release it."""
+        q = self.queue
+        why = {d: "parked" if d in q.parked else "set aside" if d in self.skip else
+               f"waits for {tid} too" if q.leads_to(d, tid) else "" for d in waits}
+        stuck = [f"{d} ({w})" for d, w in why.items() if w]
+        if stuck:
+            push(f"Held: {self.name(tid)}", f"Its branch waits for {', '.join(stuck)}, which can't merge first. To "
+                 f"release it, take {'them' if len(stuck) > 1 else 'it'} out of `Depends on:` in {q.files[tid]} on "
+                 f"{branch}.", 3, "hourglass")
 
     def unfinished_run(self, tid, branch):
         """A run that ended normally but without its RESULT line may have done all the work: one more run, told

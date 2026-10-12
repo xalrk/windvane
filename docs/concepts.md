@@ -25,7 +25,8 @@ Retry with exponential backoff, at most 5 tries. Don't change the upload API.
   `windvane queue` shows what each waiting ticket waits on. To release one ticket waiting on `the user`, edit its
   `Depends on:` line; `- done: the user` releases all of them. A worker that finds its ticket can't go on until
   another ticket merges adds that ticket's id here on its own branch: the queue reads the line there too (it can add
-  a ticket, never drop one main has), holds the ticket until that one merges, then resumes it first.
+  a ticket, never drop one main has), holds the ticket until that one merges, then resumes it first. To release it
+  sooner, edit the line on that branch; a push says so when the ticket it waits on can't merge first.
 - **Touches:** the files and directories the ticket changes. It decides what may run in parallel (below). A ticket
   without this line runs alone.
 - **Related:** (optional, written by the planner) open tickets that change the same feature through other files.

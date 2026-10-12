@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver, net, planner, scratch  # noqa: E402
 from windvane import held as held_mod  # noqa: E402
 from windvane.config import Project  # noqa: E402
+from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
 from windvane.worktree import ensure_worktree  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -70,6 +71,20 @@ def partials(p, patch, s):
     pl.partials["T-001"] = p.ap["partials"] - 1
     pl.handle("T-001", f"RESULT: PARTIAL T-001 {LONG}", None)
     return {"Set aside": ("ran out of time", "Split it.", "Branch kept.")}
+
+
+def held_for_good(p, patch, s):
+    s.ticket("T-002")
+    s.write(".windvane/QUEUE.md", "# Queue\n- parked: T-002 (later)\n")
+    s.publish()
+    pl = pilot(p, worktree=True)
+    s.git("switch", "-q", "-c", "t-001-x", cwd=p.work_dir)
+    (p.work_dir / ".windvane/tickets/T-001.md").write_text("# T-001: do T-001\nDepends on: T-002.\n")
+    s.git("commit", "-qam", "waits", cwd=p.work_dir)
+    s.git("push", "-q", "-u", "origin", "t-001-x", cwd=p.work_dir)
+    pl.queue = Queue(p)
+    pl.handle("T-001", f"RESULT: PARTIAL T-001 {LONG}", None)
+    return {"Held": ("waits for T-002 (parked)", "To release it", "on t-001-x.")}
 
 
 def in_checkout(p, patch, s):
@@ -239,7 +254,7 @@ def tmp_full(p, patch, s):
     return {"Temp dir nearly full": ("93% full of inodes", "isn't windvane's")}
 
 
-SITES = [set_aside, own_limit, dollar_budget, partials, stashed, not_stashed, merged, failed, no_answer,
+SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, teardown_failed, restarted, crashed_stopped,
          held, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full]
 

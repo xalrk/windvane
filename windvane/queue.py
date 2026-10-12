@@ -141,9 +141,25 @@ class Queue:
         for tid, branches in self.wip.items():
             if tid in self.files:
                 for b in branches:
-                    for d in branch_depends(cwd, f"{p.remote}/{b}", self.files[tid], p):
-                        if d != tid and d not in self.deps[tid] and d not in self.branch_deps.get(tid, []):
+                    for d in branch_depends(cwd, f"{p.remote}/{b}", self.files[tid], p):  # a typo'd id: no wait
+                        if self.known(d) and d != tid and d not in self.deps[tid] + self.branch_deps.get(tid, []):
                             self.branch_deps.setdefault(tid, []).append(d)
+
+    def known(self, tid):
+        """Whether `tid` is a ticket on the ref, or a split ticket's parent."""
+        return tid in self.files or any(re.fullmatch(rf"{re.escape(tid)}[a-z]", t) for t in self.files)
+
+    def leads_to(self, start, target):
+        """Whether `start` waits, through the tickets it waits on, for `target`: then neither can merge."""
+        seen, todo = set(), [start]
+        while todo:
+            t = todo.pop()
+            if t == target:
+                return True
+            if t not in seen:
+                seen.add(t)
+                todo += [d for d in self.deps.get(t, []) + self.branch_deps.get(t, []) if not self.is_done(d)]
+        return False
 
     def is_done(self, tid):
         if tid in self.done:

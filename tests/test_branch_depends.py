@@ -85,12 +85,13 @@ class BranchDepends(unittest.TestCase):
         self.assertEqual((q.status("T-001"), q.status("T-002")), ("waiting", "waiting"))
         self.assertEqual(q.pick()[:2], ("T-003", "todo"))
 
-    def partial(self, deps):
+    def partial(self, deps, skip=()):
         """A worker run on T-001 that pushes its branch with `deps` and ends PARTIAL, one run short of set aside."""
         ensure_worktree(self.p, self.p.work_dir, setup=False)
         self.branch("t-001-x", "T-001", deps, cwd=self.p.work_dir)
         pl = driver.Pilot(self.p, args())
         pl.queue = Queue(self.p)
+        pl.skip |= set(skip)
         before = self.p.ap["partials"] - 1
         pl.partials["T-001"] = before
         with mock.patch.object(driver, "push") as pushed:
@@ -109,6 +110,46 @@ class BranchDepends(unittest.TestCase):
         self.assertEqual(pl.partials["T-001"], before + 1)
         self.assertIn("T-001", pl.skip)
         self.assertIn("Set aside", pushed.call_args[0][0])
+
+    def test_an_unknown_id_on_a_branch_is_no_wait(self):
+        pl, before, _ = self.partial("T-099")
+        self.assertEqual(pl.queue.status("T-001"), "wip")
+        self.assertEqual(pl.partials["T-001"], before + 1)
+
+    def test_a_line_left_unpushed_is_no_wait(self):
+        ensure_worktree(self.p, self.p.work_dir, setup=False)
+        w = self.p.work_dir
+        self.s.git("switch", "-q", "-c", "t-001-x", "origin/main", cwd=w)
+        (w / ".windvane/tickets/T-001.md").write_text("# T-001: do T-001\nDepends on: T-002.\n")
+        self.s.git("commit", "-qam", "waits", cwd=w)
+        pl = driver.Pilot(self.p, args())
+        pl.queue = Queue(self.p)
+        pl.handle("T-001", "RESULT: PARTIAL T-001 waits for T-002", None)
+        self.assertEqual(pl.partials["T-001"], 1)  # the pushed branch is what the queue reads: it counts
+
+    def held(self, pushed):
+        self.assertEqual(pushed.call_count, 1)
+        title, body = pushed.call_args[0][:2]
+        self.assertEqual(title, "Held: do T-001 (T-001)")
+        self.assertIn("take it out of `Depends on:` in .windvane/tickets/T-001.md on t-001-x", body)
+        return body
+
+    def test_waiting_on_a_parked_ticket_says_so_once(self):
+        self.s.write(".windvane/QUEUE.md", "# Queue\n- parked: T-002 (later)\n")
+        self.s.publish()
+        pl, before, pushed = self.partial("T-002")
+        self.assertIn("Its branch waits for T-002 (parked), which can't merge first", self.held(pushed))
+        self.assertEqual(pl.partials["T-001"], before)
+
+    def test_waiting_on_a_set_aside_ticket_says_so(self):
+        _, _, pushed = self.partial("T-002", skip=["T-002"])
+        self.assertIn("T-002 (set aside)", self.held(pushed))
+
+    def test_waiting_on_a_ticket_that_waits_back_says_so(self):
+        self.branch("t-002-y", "T-002", "T-003")
+        self.branch("t-003-z", "T-003", "T-001")
+        _, _, pushed = self.partial("T-002")
+        self.assertIn("T-002 (waits for T-001 too)", self.held(pushed))
 
 
 if __name__ == "__main__":
