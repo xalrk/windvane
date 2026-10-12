@@ -16,8 +16,8 @@ main it holds only the merge resolution: the rest was approved, so review just t
 - Nothing unrelated changed; no debug leftovers; the code reads like the code around it.
 - No product call the docs don't make, unless it's recorded under `## Provisional` in `.windvane/QUESTIONS.md` and
   cheap to change.
-- If the critic's pack said `User-facing: no`, that's true of the diff. The critic's points were each fixed or
-  answered in the PR body.
+- If the critic's pack said `User-facing: no`, no user will ever see or feel the diff, even via a later ticket.
+  The critic's points were each fixed or answered in the PR body.
 
 Run a narrow test or read more code when a doubt needs it; don't spend tokens confirming what the diff already shows.
 Nits aren't worth a round trip: list them under `Nits:` and approve.
