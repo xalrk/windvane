@@ -22,9 +22,9 @@ reviewer reads your change, and the driver merges it.
 6. **The critic** (only when your prompt says it's on). A fresh critic judges what users get from your change, on
    the project's scale, from an evidence pack you leave in the folder your prompt names (not in git; replace an
    older pack):
-   - `notes.md`, at most 25 lines. Line 1: `User-facing: yes`, or `User-facing: no (<why>)` for a change nobody
-     using the project can see or feel (refactors, internal tooling, tests); the reviewer checks that claim. Then
-     what a user now sees or gets, and measured evidence: command transcripts, numbers, timings, before/after.
+   - `notes.md`, at most 25 lines. Line 1: `User-facing: yes`, or `User-facing: no (<why>)` if no user will ever
+     see or feel it, even via a later ticket (refactors, tooling, tests; logic a planned ticket shows is `yes`); the
+     reviewer checks that. Then what a user now gets, measured: transcripts, numbers, timings, before/after.
    - Up to four images (`.png`) when there's something to see (screenshots, one contact sheet).
    Reuse what you already ran. Then `windvane critic <ID>`, and do what its last line, `CRITIC STEP`, says: fix the
    "Fix in this ticket" points, refresh the pack, ask again; it tells you when to go on. Its "Beyond this ticket"
