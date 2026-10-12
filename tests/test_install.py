@@ -241,8 +241,8 @@ class TwoInstalls(unittest.TestCase):
         f.chmod(0o755)
         return str(f)
 
-    def init(self, cmd):
-        with mock.patch.object(install, "exe", lambda: [cmd]), contextlib.redirect_stdout(io.StringIO()) as out:
+    def init(self, *cmd):
+        with mock.patch.object(install, "exe", lambda: list(cmd)), contextlib.redirect_stdout(io.StringIO()) as out:
             cli.main(["init", str(self.s.root)])
         return out.getvalue()
 
@@ -258,6 +258,18 @@ class TwoInstalls(unittest.TestCase):
         self.assertEqual(self.runs("stop.d/windvane-sandbox"), self.second)
         self.assertEqual(self.runs("overview.d/windvane-sandbox"), self.second)
         os.unlink(self.first)
+        self.assertNotIn("kept with", self.init(self.second))
+        self.assertEqual(self.runs("status.d/windvane"), self.second)
+
+    def test_a_python_m_install_counts_as_gone_once_its_interpreter_cant_import_windvane(self):
+        py = Path(self.fake("py") + "3")  # an interpreter with a pip-installed windvane while `installed` says 0
+        py.write_text(f'#!/bin/sh\n[ "$1 $2" = "-I -c" ] && exit "$(cat {self.s.tmp}/installed)"\nexit 2\n')
+        py.chmod(0o755)
+        (self.s.tmp / "installed").write_text("0")
+        self.init(str(py), "-m", "windvane")
+        self.assertIn("kept with", self.init(self.second))
+        self.assertEqual(self.runs("status.d/windvane"), str(py))
+        (self.s.tmp / "installed").write_text("1")  # pip uninstall windvane
         self.assertNotIn("kept with", self.init(self.second))
         self.assertEqual(self.runs("status.d/windvane"), self.second)
 

@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -282,7 +283,21 @@ def write_status_hook(m):
 def other_install(f):
     """The command of another windvane install that the hook `f` runs, when that command still exists."""
     cmd = status_command(f)
-    return shlex.join(cmd) if cmd and cmd != exe() and shutil.which(cmd[0]) else None
+    return shlex.join(cmd) if cmd and cmd != exe() and command_exists(cmd) else None
+
+
+def command_exists(cmd):
+    """Whether a windvane command still runs: its program is there and, for the `python -m windvane` form (an
+    install without a console script), that interpreter can still import windvane, which a `pip uninstall` ends."""
+    if not shutil.which(cmd[0]):
+        return False
+    if cmd[1:] != ["-m", "windvane"]:
+        return True
+    try:  # -I: the hook's cwd and PYTHONPATH aren't ours to guess, so only an installed windvane counts
+        found = "import importlib.util as u, sys; sys.exit(not u.find_spec('windvane'))"
+        return subprocess.run([cmd[0], "-I", "-c", found], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return True  # can't tell: leave it as it is
 
 
 def status_command(f):
@@ -349,7 +364,7 @@ def status_hook_gone():
     """Whether the shared `status` hook is missing or runs a command that's no longer there (an uninstalled copy)."""
     f = ntfy_dir() / "status.d/windvane"
     cmd = status_command(f)
-    return not (f.exists() or f.is_symlink()) or bool(cmd) and not shutil.which(cmd[0])
+    return not (f.exists() or f.is_symlink()) or bool(cmd) and not command_exists(cmd)
 
 
 def _groups(data):
