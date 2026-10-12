@@ -138,9 +138,9 @@ no 2nd slot: 3 tickets x 9 min fit before 18:45 one at a time
 
 The critic is a fresh, read-only session that judges what a ticket gives the people who use the project, not the
 code (that is the reviewer's job). The worker leaves an **evidence pack** for it outside git: `notes.md` (what a
-user now sees, with measured numbers, transcripts, before and after) and up to four images. A change nobody using
-the project can see (a refactor, test tooling) is declared `User-facing: no` and skips the critique; the reviewer
-checks that claim.
+user now sees, with measured numbers, transcripts, before and after) and up to four images. A change no user will
+ever see, even through a later ticket (a refactor, test tooling), is declared `User-facing: no` and skips the
+critique; the reviewer checks that claim. Logic a planned ticket will show is critiqued now.
 
 **The scale** is `.windvane/CRITIC.md`, written per project: who uses it, what best in class looks like, and two to
 four dimensions, each a ladder of rungs (say 2, 5, 8, 10) with a few yes/no checks on each (`- 5 safe: no known way
