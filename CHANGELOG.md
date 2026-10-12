@@ -21,6 +21,9 @@ release on the same day adds a number (`2026.10.9.1`).
   `stats --critic` warn about a scale whose ladder stops under 10, since that caps every ticket's score.
 
 ### Fixed
+- A run lets go of its lock as it ends, and `status`'s look at a lock lets go at once: a git or session starting in
+  another thread just then could keep the lock held a moment longer, so the run still read as on, or a run starting
+  then said one was already running.
 - A heavy check that waited its whole `heavy_wait` (new in `machine.toml`, default 60 minutes) for the machine lock
   says `CHECK NOT RUN` with who held it, exits 75, and isn't counted as failed; the driver runs it again instead of
   sending the ticket back to its worker.
