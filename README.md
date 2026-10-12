@@ -17,14 +17,13 @@ Claude and Claude Code are trademarks of Anthropic, PBC, named only to say what 
 
 # windvane
 
-**Self-steering for [Claude Code](https://docs.claude.com/en/docs/claude-code).** A wind vane steers a sailboat with
-nobody at the helm: you set the course, it holds it. windvane does the same for your project: you set the course in
-tickets, and it holds it while you're away.
+**Self-steering for [Claude Code](https://docs.claude.com/en/docs/claude-code).** A wind vane keeps a sailboat on
+the course you set while nobody is at the helm. windvane does that for a git project: you set the course as tickets
+(or let it plan them from a goal), and Claude Code works through them unattended until a deadline.
 
-It is an autopilot for Claude Code. You write tickets for a git project (or have windvane plan them from a goal); it
-works through them unattended until a deadline. Each ticket gets a fresh Claude Code session that builds it with
-tests, a critic that scores the result, your project's check, a read-only code review, and a merge that only happens
-when all of them pass. Product questions reach your phone; a token ledger shows what everything cost.
+Each ticket gets a fresh Claude Code session that builds it with tests, a critic that scores the result, your
+project's check, a read-only code review, and a merge that only happens when all of them pass. Product questions
+reach your phone; a token ledger shows what everything cost.
 
 It is for developers who already use Claude Code and want it to keep shipping reviewed, tested work overnight or
 while they are busy elsewhere, without touching their checkout and without merging anything unchecked.
