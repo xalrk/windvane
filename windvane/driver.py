@@ -37,7 +37,7 @@ from .config import CHECKOUT, DIR, HOME, exe, slots
 from .jobs import check, tail, waited
 from .questions import (answered, desk_answers, give_answer, keys, mode, note, parts, phone_answer, provisional, qkey,
                         quiet_note, quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on, with_ids)
-from .queue import Queue
+from .queue import Queue, branch_depends
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
 from .worktree import TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, ensure_worktree, teardown
@@ -517,6 +517,10 @@ class Pilot(Desk, Periodic):
         self.stopped = [t for t in self.stopped if t != tid]  # a deadline moved later let it finish after all
         status, rest = m.group(1), m.group(3).strip()
         if status == "PARTIAL":
+            waits = self.waits_on_merge(tid, branch)
+            if waits:  # not out of time: the queue holds it until they merge, then resumes it
+                self.log(f"{tid}: waits for {', '.join(waits)} to merge (its branch says so)")
+                return self.held_for_good(tid, branch, waits)
             self.partials[tid] = self.partials.get(tid, 0) + 1
             self.log(f"{tid}: partial ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
@@ -532,6 +536,27 @@ class Pilot(Desk, Periodic):
         sha = next(iter(re.findall(r"\b[0-9a-f]{40}\b", rest)), "") or gout(self.wd, "rev-parse", "HEAD")
         self.feedback.pop(tid, None)
         self.after(tid, branch, sha)
+
+    def waits_on_merge(self, tid, branch):
+        """The unmerged tickets the `Depends on:` line on the ticket's pushed branch names: a worker that can't go on
+        until another ticket merges adds it there, and its PARTIAL isn't a run that ran out of time."""
+        q = getattr(self, "queue", None)
+        if not (q and branch and tid in q.files):
+            return []
+        return [d for d in branch_depends(self.wd, f"{self.p.remote}/{branch}", q.files[tid], self.p)
+                if d != tid and q.known(d) and not q.is_done(d)]
+
+    def held_for_good(self, tid, branch, waits):
+        """A ticket its branch makes wait for one that can't merge (parked, set aside, or itself waiting for this
+        one) would wait silently forever: say so once, with how to release it."""
+        q = self.queue
+        why = {d: "parked" if d in q.parked else "set aside" if d in self.skip else
+               f"waits for {tid} too" if q.leads_to(d, tid) else "" for d in waits}
+        stuck = [f"{d} ({w})" for d, w in why.items() if w]
+        if stuck:
+            push(f"Held: {self.name(tid)}", f"Its branch waits for {', '.join(stuck)}, which can't merge first. To "
+                 f"release it, take {'them' if len(stuck) > 1 else 'it'} out of `Depends on:` in {q.files[tid]} on "
+                 f"{branch}.", 3, "hourglass")
 
     def unfinished_run(self, tid, branch):
         """A run that ended normally but without its RESULT line may have done all the work: one more run, told

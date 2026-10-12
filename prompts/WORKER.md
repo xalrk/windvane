@@ -74,8 +74,8 @@ Scratch files go in `$TMPDIR` (this ticket's own, removed when it ends), never s
   question to `## Answered` with the answer (or to `## Provisional` with `Built:` when it timed out).
 - **windvane itself in your way** (a bug or a missing feature of the autopilot, not of the project): work around it,
   then `windvane request "<title>" --body <file>` (what happened, evidence, what you wanted, the workaround), at most 2.
-- A ticket that is already done or folded into another: add `- done: <ID> (why)` to `.windvane/QUEUE.md` on your
-  branch, open the PR, and finish `READY` as usual.
+- A ticket already done or folded into another: `- done: <ID> (why)` in `.windvane/QUEUE.md`, PR, `READY`; one that
+  can't go on until another merges: that id in its `Depends on:` line, pushed, `PARTIAL <ID> waits for <other ID>`.
 
 ## Tokens
 The user's usage limit is shared with their other work, and every turn re-reads all your context so far, so what a

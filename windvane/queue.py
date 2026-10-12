@@ -12,7 +12,7 @@ branches (fetch first).
   wip      an unmerged remote branch `t-003-...`: resumed before new work, unless no commit touched it for
            `stale_days`: then it waits for its turn in the order like new work
   waiting  a dependency isn't done; a `Depends on:` item that isn't a ticket id (`the user`, `M9`) waits until
-           `- done: M9 (why)` in QUEUE.md names it
+           `- done: M9 (why)` in QUEUE.md names it. A wip ticket's own branch may add ticket ids to main's line
   asked    a question for it under `## Open` in QUESTIONS.md, whoever wrote it: blocked until it's answered
   touches  `Touches: windvane/driver.py, prompts/` in the header: tickets whose lists don't overlap may run at once
   related  `Related: T-004.` in the header: the same feature through other files, so never run beside T-004
@@ -54,6 +54,13 @@ def outside(head, p):
     items = re.split(r",|;|\band\b", re.sub(r"\([^)]*\)", "", header_line(head, "Depends on")))
     items = (" ".join(x.split()).strip(" .`*") for x in items)
     return [x for x in items if x and x.lower().split()[0] not in ("nothing", "none") and not re.search(p.id_re, x, re.I)]
+
+
+def branch_depends(cwd, ref, path, p):
+    """The ticket ids in the `Depends on:` line of a ticket's header as `ref` (its pushed branch) has it: a worker that
+    finds its ticket can't go on until another merges says so there. Other words (`the user`) are left out: a
+    question to the user is a BLOCKED run, not a dependency."""
+    return depends_on("\n".join(gout(cwd, "show", f"{ref}:{path}").splitlines()[:8]), p)
 
 
 def touches(head):
@@ -130,6 +137,29 @@ class Queue:
                 if int(when or 0) > old:
                     fresh.add(tid)
         self.stale = set(self.wip) - fresh  # every branch untouched for stale_days: the order decides, not "wip"
+        self.branch_deps = {}  # ids a wip ticket's branch adds to main's `Depends on:` (it can't drop one)
+        for tid, branches in self.wip.items():
+            if tid in self.files:
+                for b in branches:
+                    for d in branch_depends(cwd, f"{p.remote}/{b}", self.files[tid], p):  # a typo'd id: no wait
+                        if self.known(d) and d != tid and d not in self.deps[tid] + self.branch_deps.get(tid, []):
+                            self.branch_deps.setdefault(tid, []).append(d)
+
+    def known(self, tid):
+        """Whether `tid` is a ticket on the ref, or a split ticket's parent."""
+        return tid in self.files or any(re.fullmatch(rf"{re.escape(tid)}[a-z]", t) for t in self.files)
+
+    def leads_to(self, start, target):
+        """Whether `start` waits, through the tickets it waits on, for `target`: then neither can merge."""
+        seen, todo = set(), [start]
+        while todo:
+            t = todo.pop()
+            if t == target:
+                return True
+            if t not in seen:
+                seen.add(t)
+                todo += [d for d in self.deps.get(t, []) + self.branch_deps.get(t, []) if not self.is_done(d)]
+        return False
 
     def is_done(self, tid):
         if tid in self.done:
@@ -149,8 +179,9 @@ class Queue:
         return "wip" if tid in self.wip else "todo"
 
     def waits_on(self, tid):
-        """What `tid` still waits on: its undone dependencies, ticket ids and outside ones alike."""
-        return ([d for d in self.deps.get(tid, []) if not self.is_done(d)]
+        """What `tid` still waits on: its undone dependencies, ticket ids and outside ones alike, main's and its
+        branch's."""
+        return ([d for d in self.deps.get(tid, []) + self.branch_deps.get(tid, []) if not self.is_done(d)]
                 + [x for x in self.outside.get(tid, []) if x.lower() not in self.done_words])
 
     def to_run(self, skip=(), blocked=()):
@@ -175,7 +206,8 @@ class Queue:
         rows = []
         for t in self.order:
             s = self.status(t, blocked)
-            why = {"waiting": f"waiting on: {', '.join(self.waits_on(t))}",
+            on = (f"{x} (from its branch)" if x in self.branch_deps.get(t, []) else x for x in self.waits_on(t))
+            why = {"waiting": f"waiting on: {', '.join(on)}",
                    "blocked": f"question: {self.asked[t][:60]}" if t in self.asked else ""}.get(s, "")
             rows.append(f"{t:8} {s:8} {'(last) ' * (t in self.last)}{self.titles[t][:70]}"
                         + (f"  [{' '.join(self.wip[t])}{', stale' if t in self.stale else ''}]"
