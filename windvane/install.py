@@ -232,7 +232,8 @@ def phone_hooks(p):
     try:
         with changing() as m:
             write_project_hooks(p, m)
-            write_status_hook(m)
+            if other := write_status_hook(m):
+                print(f"  phone status: kept with the windvane that set it up ({other})")
             tidy_hooks(m)
     except (Unreadable, TimeoutError) as e:
         print(f"  phone hooks: not written: {e}")
@@ -268,8 +269,29 @@ def write_hook(f, what, command, m):
 
 
 def write_status_hook(m):
-    write_hook(ntfy_dir() / "status.d/windvane", "every project: `status`, only the autopilots that are on",
+    """The shared `status` hook, unless another windvane install on this machine wrote it and its command is still
+    there: then it stays that install's, so an `init` from a second copy doesn't move every project's `status` to it
+    (that command is returned)."""
+    f = ntfy_dir() / "status.d/windvane"
+    if other := other_install(f):
+        return other
+    write_hook(f, "every project: `status`, only the autopilots that are on",
                f"{shlex.join(exe())} status --line --running", m)
+
+
+def other_install(f):
+    """The command of another windvane install that the hook `f` runs, when that command still exists."""
+    cmd = status_command(f)
+    return shlex.join(cmd) if cmd and cmd != exe() and shutil.which(cmd[0]) else None
+
+
+def status_command(f):
+    """The windvane command a `status` hook runs (the words between `exec` and `status`), or None."""
+    try:
+        words = shlex.split(f.read_text().splitlines()[-1])
+        return words[1:words.index("status")] if words[0] == "exec" else None
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 # A per-project hook as windvane writes it: hooks written before install.json listed them are known by this shape.
@@ -313,14 +335,22 @@ def hook_root_exists(f):
 
 
 def tidy_phone_hooks(p=None):
-    """At a run's start: an install made before the shared `status` hook gets it now, hooks of deleted repos go,
+    """At a run's start: the shared `status` hook comes back when it's missing or its install is gone, hooks of
+    deleted repos go,
     and `p`'s own `stop` and `overview` come back when they're missing (tidied while its repo was away), without
     waiting for an `init`. Raises Unreadable or TimeoutError, changing nothing, as `changing` does."""
     with changing() as m:
-        if tidy_hooks(m):
+        if tidy_hooks(m) or ntfy_dir().exists() and status_hook_gone():
             write_status_hook(m)
         if p and ntfy_dir().exists():
             write_project_hooks(p, m, missing_only=True)
+
+
+def status_hook_gone():
+    """Whether the shared `status` hook is missing or runs a command that's no longer there (an uninstalled copy)."""
+    f = ntfy_dir() / "status.d/windvane"
+    cmd = status_command(f)
+    return not (f.exists() or f.is_symlink()) or bool(cmd) and not shutil.which(cmd[0])
 
 
 def _groups(data):
