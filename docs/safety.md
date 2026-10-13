@@ -109,11 +109,10 @@ arrives just as the lock frees can't overtake one that has waited, and a waiter 
 waiter paused with Ctrl-Z keeps its place but doesn't hold up the jobs behind it; resumed, it waits its turn again.
 While it waits, its log says who holds the lock (pid, command, since when) and how many jobs are ahead of it;
 `windvane heavy --status` shows the same at any time.
-A job a session starts (`windvane heavy`, `bg --heavy`, `windvane check`) waits for the machine until the session's
-own stop, and the driver's heavy check until the run's end: a job that gave up sooner would lose its place in line and
-queue again at the back. A command run by hand waits `machine.toml`'s
-`heavy_wait` minutes (default 60). `--wait` overrides either. Then it gives up without running the command: it says
-what it waited for (the holder, or what keeps the machine busy) and exits 75.
+It waits for the machine until the session's stop for a job a session starts (`windvane heavy`, `bg --heavy`, `windvane
+check`), until the run's end for the driver's heavy check, and `machine.toml`'s `heavy_wait` minutes (default 60) for a
+command run by hand; `--wait` overrides each. A job that gave up sooner would lose its place in line. Then it gives up
+without running the command: it says what it waited for (the holder, or what keeps the machine busy) and exits 75.
 It never takes another tool's lock, so a heavy command that is itself a locking tool can't deadlock waiting on itself.
 Set `heavy_check = true` to run the project's check this way; sessions use `windvane bg --heavy` for long heavy jobs.
 A check that gave up says `CHECK NOT RUN: waited N min for the machine lock (held by ...); run it again`: a busy
