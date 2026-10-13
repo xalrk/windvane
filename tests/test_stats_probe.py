@@ -131,6 +131,7 @@ class StoppedWait(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         os.environ.pop("WINDVANE_HEAVY_HELD", None)
+        os.environ.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
 
     def test_a_check_stopped_while_waiting_counts_its_wait(self):
         state = Project(self.s.root).state

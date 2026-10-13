@@ -27,6 +27,7 @@ class HeavyFifo(unittest.TestCase):
         self.env = {**os.environ, "XDG_RUNTIME_DIR": str(d), "XDG_CONFIG_HOME": str(d / "cfg"),
                     "PYTHONPATH": str(ROOT)}
         self.env.pop("WINDVANE_HEAVY_HELD", None)
+        self.env.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
         self.order = d / "order"
 
     def job(self, cmd, wait_s=30, **kw):

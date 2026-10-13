@@ -57,9 +57,11 @@ def ledger(p, ticket, row, event="check"):
                                                 "role": os.environ.get(ROLE) or "driver", **row})
 
 
-def check(p, cwd, quiet=False, ticket=None):
+def check(p, cwd, quiet=False, ticket=None, stop_at=None):
     """Run the project's check in `cwd`. Returns (passed, summary line, log path); passed is None when a heavy check
-    never ran: its wait for the machine timed out, which says nothing about the tree, so callers try it again."""
+    never ran: its wait for the machine timed out, which says nothing about the tree, so callers try it again.
+    `stop_at` (a datetime): when a heavy check stops waiting for the machine, or earlier if the run's deadline is
+    moved meanwhile (the driver's); a session's check has its own stop in the environment already."""
     cmd = p.cfg["check"]
     if not cmd:
         return True, "CHECK PASSED (no check configured)", None
@@ -72,7 +74,7 @@ def check(p, cwd, quiet=False, ticket=None):
     logs.mkdir(parents=True, exist_ok=True)
     prune(p, logs)
     log = logs / log_name()
-    code, mins, waited = run_logged(p, ticket, cmd, cwd, log)
+    code, mins, waited = run_logged(p, ticket, cmd, cwd, log, stop_at)
     if waited:
         what, stopped = waited
         if stopped:
@@ -93,7 +95,7 @@ def log_name():
     return f"{now():%Y%m%d-%H%M%S}-{os.getpid()}-{next(_LOGS)}.log"
 
 
-def run_logged(p, ticket, cmd, cwd, log):
+def run_logged(p, ticket, cmd, cwd, log, stop_at=None):
     """Run the check into `log`, with a ledger row on each side, so a check that's cut off still counts: a
     `check-start` row first (all a SIGKILL or a killed driver leaves; `stats` calls it cut off), then the end row
     with the same `start`, written on the way out even for an exception or Ctrl-C (`finished: false`, the minutes
@@ -119,7 +121,10 @@ def run_logged(p, ticket, cmd, cwd, log):
                                            "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd,
                                           stdout=f, stderr=subprocess.STDOUT,
                                           env={**env, "PYTHONPATH": str(Path(__file__).parents[1]),
-                                               heavy.STOP_ENV: str(p.state / "STOP")}).returncode  # a stop ends the wait
+                                               heavy.STOP_ENV: str(p.state / "STOP"),  # a stop ends the wait
+                                               **({heavy.STOP_AT: str(stop_at.timestamp()),
+                                                   heavy.DEADLINE_ENV: str(p.state / "DEADLINE")} if stop_at else {})}
+                                          ).returncode
                 else:
                     code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
                                           env=env).returncode

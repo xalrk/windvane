@@ -7,7 +7,7 @@ that tool, waiting on its own lock); instead it waits until no process matching 
 
     busy = ["UnrealEditor", "ShaderCompile", "blender"]   # process-name regexes (pgrep) of heavy work started elsewhere
     min_free_gb = 6                                           # wait for this much MemAvailable before starting
-    heavy_wait = 60                                           # minutes to wait for the machine before giving up
+    heavy_wait = 60                                           # minutes a command run by hand waits before giving up
 
 Free memory comes from Linux's /proc/meminfo; elsewhere (macOS) it isn't known, and only `busy` is waited on.
 """
@@ -20,6 +20,7 @@ import subprocess
 import sys
 import time
 import tomllib
+from datetime import datetime
 from pathlib import Path
 
 from . import util
@@ -36,6 +37,12 @@ STOP_ENV, STOPPED = "WINDVANE_HEAVY_STOP", "heavy: stopped while waiting for the
 # Said once the job got the machine after waiting, before its own output: a check reads it back (`waited`) for its
 # ledger row, so `stats` can tell the minutes a check queued from the minutes it ran.
 WAITED = "heavy: waited {} s for the machine"
+# A session's stop, as a Unix time: the driver sets it for each session (its `bg` jobs and checks inherit it) and for
+# its own checks. A job waits for the machine until then, not `heavy_wait`.
+STOP_AT = "WINDVANE_STOP_AT"
+# The driver's check also follows the run's deadline file (its path in this env var), read as it waits: a deadline the
+# user moved earlier ends the wait then, not at the end it had when the check started.
+DEADLINE_ENV = "WINDVANE_HEAVY_DEADLINE"
 
 
 def machine_file():
@@ -93,7 +100,7 @@ def wait_until_clear(cfg, deadline, say, stopped=lambda: False):
         if stopped():  # only once it has to wait: a clear machine still runs the job
             say(f"{STOPPED}: {why}")
             return False
-        if time.time() >= deadline:
+        if time.time() >= deadline():
             say(f"{GAVE_UP}: {why}")
             return False
         if why != said:
@@ -270,7 +277,7 @@ def waited(log, head=65536):
 def take(lock, entry, deadline, say, stopped=lambda: False):
     """Wait for this job's turn, then take the lock: only the oldest live waiter tries it, so a job that arrives
     just as the lock frees can't overtake one that has been waiting (R-007). True once held, False at the deadline
-    or a stop."""
+    (a function: a moved deadline counts at once) or a stop."""
     said = None
     while True:
         n = ahead(entry)
@@ -288,40 +295,61 @@ def take(lock, entry, deadline, say, stopped=lambda: False):
         if stopped():
             say(f"{STOPPED} lock: {held_by(info)}")
             return False
-        if time.time() >= deadline:
+        if time.time() >= deadline():
             say(f"{GAVE_UP} lock: {held_by(info)}")
             return False
         time.sleep(1)
 
 
+def moved(path):
+    """The time in a deadline file (an ISO time, as `windvane deadline` writes it); never when it can't be read."""
+    try:
+        return datetime.fromisoformat(Path(path).read_text().strip()).timestamp()
+    except (OSError, ValueError):
+        return float("inf")
+
+
+def deadline(cfg, wait_s):
+    """When a wait for the machine gives up: after `wait_s` seconds when given; else at the session's stop
+    (`STOP_AT`), since a job still waiting then is killed with its session anyway, and one that gave up earlier
+    would lose its place in line and requeue at the back; else after machine.toml's `heavy_wait` (a command run by
+    hand)."""
+    if wait_s is not None:
+        return time.time() + wait_s
+    try:
+        return float(os.environ[STOP_AT])
+    except (KeyError, ValueError):
+        return time.time() + cfg["heavy_wait"] * 60
+
+
 def run(cmd, wait_s=None, cwd=None):
-    """Run `cmd` under the machine-wide heavy lock. Returns its exit code (TIMED_OUT if the wait timed out, after
-    `wait_s` seconds, or machine.toml's `heavy_wait` minutes, or as soon as the STOP file named in `STOP_ENV`
-    appears while it waits).
+    """Run `cmd` under the machine-wide heavy lock. Returns its exit code (TIMED_OUT if the wait timed out, at
+    `deadline`, or as soon as the STOP file named in `STOP_ENV` appears while it waits).
 
     Jobs run in arrival order: each joins a queue when it asks and waits there for the lock, then holds the lock
     while it waits for the machine to clear (busy processes, free memory), so it keeps its place throughout."""
     say = lambda m: print(m, file=sys.stderr, flush=True)
     t0 = time.time()
     cfg = machine()
-    deadline = time.time() + (cfg["heavy_wait"] * 60 if wait_s is None else wait_s)
+    end, moves = deadline(cfg, wait_s), os.environ.get(DEADLINE_ENV)
+    until = lambda: min(end, moved(moves)) if moves else end
     path = lock_path()
     stop = os.environ.get(STOP_ENV)
     stopped = lambda: bool(stop) and os.path.exists(stop)
-    env = {k: v for k, v in os.environ.items() if k != STOP_ENV}  # the stop is for this wait, not the command's own
+    env = {k: v for k, v in os.environ.items() if k not in (STOP_ENV, DEADLINE_ENV)}  # for this wait, not the command
     env["WINDVANE_HEAVY_HELD"] = str(path)
     if os.environ.get("WINDVANE_HEAVY_HELD") == str(path):  # nested: the outer one already holds it
         return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
     entry = join_queue()
     lock = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
     try:
-        if not take(lock, entry, deadline, say, stopped):
+        if not take(lock, entry, until, say, stopped):
             return TIMED_OUT
         leave_queue(entry)  # the lock keeps this job's place now; the next waiter becomes the head and waits on it
         entry = None
         try:
             claim(lock, cmd, cwd)
-            if not wait_until_clear(cfg, deadline, say, stopped):
+            if not wait_until_clear(cfg, until, say, stopped):
                 return TIMED_OUT
             if (s := round(time.time() - t0)) >= 1:
                 say(WAITED.format(s))

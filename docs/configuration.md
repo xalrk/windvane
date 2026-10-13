@@ -36,7 +36,7 @@ matching keys for one run.
 | `author` | git's identity | `"Name <email>"` for the driver's own commits (merges, planned tickets). |
 | `overview_extra` | `""` | A shell command, run in the checkout, whose output `windvane overview` (and so the phone's `overview`) adds below its own lines: the project's own milestones. First 15 lines, 30 s at most; a failure shows as one line. |
 | `shared_notes` | `[]` | Notes files every ticket appends its findings to (e.g. `["NOTES.md"]`; paths in the repo, globs like `docs/*.md`, or a directory ending in `/`). They don't count when deciding which tickets may run side by side, whether on a Touches line or among the files a running branch changed. When a merge (a ticket's, or a desk PR's) conflicts only in these and `[[append_only]]` files, and in these files every conflict hunk only adds lines on both sides, the driver resolves it without a session: main's text, then the branch's added sections in order (a section starts at a Markdown heading, or is the added text itself). It's named in the merge commit, the log and the PR (`NOTES.md: kept main's, appended 2 sections`). A hunk that changes or deletes an existing line, on either side, or a conflict in any other file, goes back to the worker as before. Workers are told to add a new section and not rewrite existing text. |
-| `heavy_check` | `false` | The check itself is machine-heavy (a game engine, a render): run it under `windvane heavy`, one at a time on this machine. A check that waited `heavy_wait` in vain is not run, not failed. |
+| `heavy_check` | `false` | The check itself is machine-heavy (a game engine, a render): run it under `windvane heavy`, one at a time on this machine. A check that waited in vain for the machine is not run, not failed. |
 
 ## [models]
 
@@ -171,7 +171,7 @@ Settings for this machine, shared by every project on it.
 | `projects_dir` | none | Where the windvane skill creates new projects when you start one from a Claude Code session. |
 | `busy` | `["UnrealEditor", "ShaderCompile", "blender"]` | Process names (regular expressions, as `pgrep` matches them) of heavy work started outside windvane. `windvane heavy` waits while any of them runs. |
 | `min_free_gb` | `6` | `windvane heavy` waits until at least this much memory is available. Linux only; elsewhere only `busy` is waited on. |
-| `heavy_wait` | `60` | Minutes a heavy job (`heavy_check`, `bg --heavy`, `windvane heavy`) waits for the machine before giving up without running (exit 75); `windvane heavy --wait` overrides it. A check that gave up says `CHECK NOT RUN` and doesn't count as failed; the driver runs it again. |
+| `heavy_wait` | `60` | Minutes a heavy job run by hand (`windvane heavy`, `windvane check` with `heavy_check`) waits for the machine before giving up without running (exit 75); `windvane heavy --wait` overrides it. Sessions' heavy jobs and the driver's heavy check wait until their stop instead (the session's stop, or the run's end), so they keep their place in line. A check that gave up says `CHECK NOT RUN` and doesn't count as failed. |
 
 ## [state]
 

@@ -604,7 +604,7 @@ class Pilot(Desk, Periodic):
             return
         if not self.clean_wait(tid, f"checking {tid}"):
             return
-        ok, summary, logf = self.ran(tid, lambda: self.check_at(sha, tid), f"check on {sha[:7]}")
+        ok, summary, logf = self.ran(tid, lambda: self.check_at(sha, tid, self.end()), f"check on {sha[:7]}")
         if ok is None:  # stopped while the machine was busy: the next run's worker finds the head and is READY again
             return
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
@@ -728,7 +728,9 @@ class Pilot(Desk, Periodic):
     def ran(self, tid, run, what):
         """`run()` (a check) again until it runs: a heavy check whose wait for the machine timed out says nothing
         about the ticket, so it costs no worker run and no bounce, only a line in the log for each wait. (None, ...)
-        when a stop or the deadline comes first."""
+        when a stop or the deadline comes first. A ticket's check waits for the machine until the run's end, keeping
+        its place in line (not its worker's time box: that started with the worker and may be spent), so it runs
+        again only when the deadline moved later while it waited."""
         while True:
             ok, summary, logf = run()
             if ok is not None:
@@ -739,11 +741,11 @@ class Pilot(Desk, Periodic):
             self.log(f"{tid}: {what}: {waited(summary)}; the autopilot runs it again, nothing to do")
             self.nap(now() + timedelta(seconds=STASH_WAIT))  # a short heavy_wait mustn't spin
 
-    def check_at(self, rev, ticket=None):
+    def check_at(self, rev, ticket=None, stop_at=None):
         cd = self.cd
         if not clean_detach(self.p, cd, rev):
             return False, f"couldn't check out {rev[:12]}", None
-        return check(self.p, cd, ticket=ticket)
+        return check(self.p, cd, ticket=ticket, stop_at=stop_at)
 
     def review(self, tid, branch, sha, res=None):
         """`res`: (approved head, diff, paths, tree) when the head only resolves a bounce off main: the reviewer
@@ -843,7 +845,8 @@ class Pilot(Desk, Periodic):
             if renumbered is not None:
                 self.log(f"{tid}: conflicted with {p.main} only in appended entries: {said(renumbered)}; resolved "
                          "without a worker run")
-            ok, summary, logf = self.ran(tid, lambda: check(p, cd, ticket=tid), "check on the merged tree")
+            ok, summary, logf = self.ran(tid, lambda: check(p, cd, ticket=tid, stop_at=self.end()),
+                                         "check on the merged tree")
             if ok is None:
                 return None
             if not ok:

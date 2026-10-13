@@ -29,6 +29,7 @@ class HeavyStatus(unittest.TestCase):
         self.d = Path(tmp.name)
         self.env = {**os.environ, **machine(self.d, 60), "PYTHONPATH": str(ROOT)}
         self.env.pop("WINDVANE_HEAVY_HELD", None)
+        self.env.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
         patch = mock.patch.dict(os.environ, self.env)
         patch.start()
         self.addCleanup(patch.stop)

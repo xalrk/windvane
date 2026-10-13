@@ -103,6 +103,7 @@ class RowsWritten(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         os.environ.pop("WINDVANE_HEAVY_HELD", None)
+        os.environ.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
         (self.d / "work").mkdir()
         self.p = SimpleNamespace(state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True})
 

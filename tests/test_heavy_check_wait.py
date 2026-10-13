@@ -59,6 +59,7 @@ class HeavyCheckWait(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         os.environ.pop("WINDVANE_HEAVY_HELD", None)
+        os.environ.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
         os.environ.pop(TICKET, None)
         (self.d / "work").mkdir()
         self.p = SimpleNamespace(state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True})
@@ -136,27 +137,15 @@ class GateRunsItAgain(unittest.TestCase):
         pilot.log = lambda msg: (self.lines.append(msg), log(msg))
         return pilot
 
-    def test_the_gate_runs_it_again_without_a_bounce(self):
-        hold(self, self.d)
+    def test_a_wait_cut_short_before_the_tickets_stop_runs_again(self):
+        """The deadline moved later while the check waited: it waits again rather than bounce the ticket."""
         pilot = self.pilot()
-        log = pilot.log
-
-        def freed_after_one_wait(msg):  # the holder lets go once the gate has waited in vain once
-            log(msg)
-            if "not run, waited" in msg:
-                (self.d / "release").touch()
-        pilot.log = freed_after_one_wait
-        pilot.run(now() + timedelta(minutes=10))
-        self.assertEqual(pilot.merged, ["T-001"])
-        self.assertEqual(pilot.bounces.get("T-001", {}), {})
-        waits = [m for m in self.lines if "not run" in m]
-        self.assertEqual(len(waits), 1, waits)
-        self.assertRegex(waits[0], r"^T-001: check on \w+: not run, waited 0 min for the machine lock \(held by pid "
-                                   r"\d+ \(render.sh in game/work, since \d\d:\d\d\)\); the autopilot runs it again, "
-                                   "nothing to do$")
-        self.assertNotIn("run it again;", waits[0])
-        workers = [c for c in read_jsonl(self.s.tmp / "calls.jsonl") if "worker" in c.get("system", "")]
-        self.assertLessEqual(len(workers), 1)
+        pilot.deadline = now() + timedelta(minutes=10)
+        runs = iter([(None, "CHECK NOT RUN: waited 1 min for the machine lock (x); run it again", None),
+                     (True, "CHECK PASSED", None)])
+        self.assertEqual(pilot.ran("T-001", lambda: next(runs), "check on abc1234")[:2], (True, "CHECK PASSED"))
+        self.assertEqual(self.lines, ["T-001: check on abc1234: not run, waited 1 min for the machine lock (x); the "
+                                      "autopilot runs it again, nothing to do"])
 
     def test_a_stop_ends_the_retries(self):
         pilot = self.pilot()

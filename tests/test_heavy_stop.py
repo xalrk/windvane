@@ -35,6 +35,7 @@ class HeavyStop(unittest.TestCase):
         self.stop = d / "STOP"
         self.env = {**os.environ, **machine(d, 60), "PYTHONPATH": str(ROOT), heavy.STOP_ENV: str(self.stop)}
         self.env.pop("WINDVANE_HEAVY_HELD", None)
+        self.env.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
         self.order = d / "order"
 
     def job(self, cmd, code=RUN, env=None, **kw):
@@ -104,6 +105,7 @@ class HeavyStop(unittest.TestCase):
     def test_a_check_stopped_while_waiting_is_not_run(self):
         with mock.patch.dict(os.environ, machine(self.d, 1)):
             os.environ.pop("WINDVANE_HEAVY_HELD", None)
+            os.environ.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
             os.environ.pop(TICKET, None)
             holder = hold(self, self.d)
             p = SimpleNamespace(state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True})
