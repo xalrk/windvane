@@ -182,9 +182,10 @@ def teardown_failed(p, patch, s):
 
 
 def leftovers(p, patch, s):
-    patch(driver, "leftover_helpers", lambda p, since: [(4242, f"emulator -avd {LONG}")])
+    patch(driver, "leftover_helpers", lambda p, since: [(4242, LONG)])  # a command line pages long, as a JVM's
     driver.report_leftovers(p, 0)
-    return {"windvane left helpers running": ("Still running in the autopilot's worktrees: emulator -avd API Error",
+    return {"windvane left helpers running": ("Still running in the autopilot's worktrees: API Error",
+                                              "(the rest is in the log) (pid 4242)",
                                               "Set `teardown` in .windvane/config.toml")}
 
 

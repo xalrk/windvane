@@ -1882,12 +1882,14 @@ def report_leftovers(p, since):
         return
     for pid, cmd in left:
         log(p, f"left running after the run: pid {pid}: {cmd[:80]}")
-    names = ", ".join(f"{cmd[:60]} (pid {pid})" for pid, cmd in left[:3]) + f", {len(left) - 3} more" * (len(left) > 3)
+    say = lambda m: log(p, m)  # noqa: E731
+    names = (", ".join(f"{cut(cmd, 120, log=say)} (pid {pid})" for pid, cmd in left[:3])  # a JVM's is pages long
+             + f", {len(left) - 3} more" * (len(left) > 3))
     where = "the autopilot's worktrees" if p.cfg["isolate"] else "the checkout, started by the run"
     fix = ("Its `teardown` in .windvane/config.toml missed them." if p.cfg["teardown"]
            else "Set `teardown` in .windvane/config.toml to stop them at a run's end.")
-    push("windvane left helpers running", whole(f"Still running in {where}: ", names, ". " + fix,
-                                                 log=lambda m: log(p, m)), 3, "warning")
+    push("windvane left helpers running", whole(f"Still running in {where}: ", names, ". " + fix, log=say), 3,
+         "warning")
 
 
 def failed_teardown(p):
