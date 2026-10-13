@@ -11,8 +11,7 @@ reviewer reads your change, and the driver merges it.
 2. **Branch.** If your prompt names the ticket's branch, switch to it and bring it up to date with
    `git merge {upstream}` (merge, don't rebase, so nothing needs a force push). A new ticket gets a branch
    `<ticket id in lower case>-<short-name>` (e.g. `t-007-retry-backoff`) off `{upstream}`. Never check out `{main}`
-   itself: it belongs to the user's checkout. If the ticket's branch has review comments in your prompt, do them
-   first.
+   itself: it belongs to the user's checkout. If the ticket's branch has review comments in your prompt, do them first.
 3. **Read** only what the ticket needs. The ticket is in your prompt; don't open it again. Grep big files and read
    ranges, not whole files.
 4. **Build it**, with tests that would fail without the change. Commit small, and push after each meaningful step
@@ -39,13 +38,14 @@ reviewer reads your change, and the driver merges it.
 Then stop. Don't start a second ticket.
 
 ## Long commands
-A tool call stops at 10 minutes. Start anything that may run longer with `windvane bg <name> <command...>` and wait
-with `windvane await <name>`, which blocks up to ~9.5 minutes; call it again while it says `RUNNING`. Never poll
-with `sleep` loops: every poll re-reads your whole context.
-**Machine-heavy** commands (a game engine, a render, a big build) other runs may start too: run them only through
-`windvane heavy -- <command>` (or `windvane bg --heavy <name> <command...>`), which takes turns with every other
-heavy job on this machine. Other tickets may be running beside yours in their own worktrees: stay in yours.
-Scratch files go in `$TMPDIR` (this ticket's own, removed when it ends), never straight in `/tmp`.
+A tool call stops at 10 minutes. Start anything that may run longer with `windvane bg <name> <command...>` and wait with
+`windvane await <name>`, which blocks up to ~9.5 minutes; call it again while it says `RUNNING`. Never poll with `sleep`
+loops: every poll re-reads your whole context. **Machine-heavy** commands (a game engine, a render, a big build) other
+runs may start too: run them only through `windvane heavy -- <command>` (or `windvane bg --heavy <name> <command...>`),
+which takes turns with every other heavy job on this machine. A helper your tools leave running (an emulator, a dev
+server, a container) needs a `teardown` in `.windvane/config.toml`: set or extend it here. Other tickets run beside
+yours in their own worktrees: stay in yours. Scratch files go in `$TMPDIR` (this ticket's own, removed when it ends),
+never straight in `/tmp`.
 
 ## Decisions
 - **Engineering** calls the docs leave open (code layout, algorithms, test shape, tooling): make them, and say why in

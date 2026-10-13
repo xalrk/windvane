@@ -1585,6 +1585,7 @@ class Pilot(Desk, Periodic):
     def run(self, deadline):
         """Works tickets until a stop; False when it couldn't start (a failed setup)."""
         p = self.p
+        began = util.clock()  # with isolate off, a process in the checkout older than this is the user's
         self.take_lock()
         phone.start_run(p)
         try:  # an older install's per-project `status` hooks, a deleted repo's, and this one's back if they went
@@ -1654,7 +1655,7 @@ class Pilot(Desk, Periodic):
         finally:
             self.ending = True
             for t in self.threads:  # the running tickets finish (their runs stop at the deadline at the latest)
-                t.join()
+                join(t)
             self.clean_state(between=False)  # every slot's thread is done: its trees are idle
             if not quiet_now(p)[0]:
                 self.send_unsent()  # a question from a ticket that finished after the loop's last pass
@@ -1676,6 +1677,7 @@ class Pilot(Desk, Periodic):
             if not (crashed and os.environ.get(SUPERVISED)):
                 tear_down(p, tell=True)
                 self.lockfile.truncate(0)  # torn down: the next run has nothing left to tear down
+                report_leftovers(p, began)
             fcntl.flock(self.lockfile, fcntl.LOCK_UN)  # now, not at the close: a thread's fork may still have the fd
             self.lockfile.close()
             for sig, h in handlers.items():
@@ -1769,6 +1771,15 @@ class Pilot(Desk, Periodic):
                 + schedule.next_line(p))
 
 
+def join(t):
+    """`t.join()`, also after a signal interrupted an earlier join of it (the main loop's): Python 3.11 and 3.12 then
+    mark the thread ended while it still runs, so join returns at once and the teardown would run beside its session.
+    A thread is in `threading.enumerate()` until it really ends."""
+    t.join()
+    while t in threading.enumerate():
+        time.sleep(0.05)
+
+
 def supervise(p, argv, deadline, start=None, sleep=time.sleep):
     """`run --detach`'s loop around the driver (`windvane <argv>`): a driver that dies of an exception is restarted
     with the run's deadline as it now is and what it had done (`carry_over`), up to RESTARTS times an hour; each
@@ -1776,6 +1787,7 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
     as they end the driver. A driver killed by the system (OOM) is only pushed: its sessions, in process groups of
     their own, may still be at work in the worktrees a restart would resume. Returns the driver's last exit code."""
     start = start or (lambda args, env: subprocess.run([*exe(), *args], env=env).returncode)
+    began = util.clock()
     env = {**os.environ, SUPERVISED: "1"}
     env.pop("WINDVANE_RESTARTED", None)
     crashes, args = [], list(argv)
@@ -1815,6 +1827,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
                                           log=lambda m: log(p, m)) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             tear_down(p, lock=True, tell=True)  # after the push, as the driver's own end does
+            if not locked(p):  # its sessions ended with it (a killed one's may not have: not checked there); a run
+                report_leftovers(p, began)  # started since has sessions of its own there
             return rc
         args = selfupdate.restart_args(args, deadline)
         env["WINDVANE_RESTARTED"] = "1"
@@ -1846,6 +1860,48 @@ def tear_down(p, lock=False, tell=False):
         if push("windvane teardown failed", whole(f"Its helpers may still be up ({f['how']}). Run it by hand: ",
                                                   f["cmd"], log=lambda m: log(p, m)), 4, "warning"):
             save_json(p.state / TEARDOWN_FAILED, {**f, "told": True})  # the next "started" push needn't say it again
+
+
+def leftover_helpers(p, since):
+    """[(pid, command)] of the processes still at work in the autopilot's trees once a run is over: the helpers its
+    tools started (an emulator, a dev server, a container) that its `teardown` doesn't stop. With isolate off the tree
+    is the checkout, where the user works too: only what started after `since` with no terminal counts, so their
+    editor and shells never do."""
+    if p.cfg["isolate"]:
+        roots = [os.path.realpath(p.state / d) for d in util._listdir(p.state) if re.fullmatch(r"(work|ci)(-\d+)?", d)]
+    else:
+        roots = [os.path.realpath(p.main_root())]
+    out = []
+    for pid, cwd in sorted(util.cwds().items()):
+        if pid in (os.getpid(), os.getppid()) or not any(cwd == r or cwd.startswith(r + os.sep) for r in roots):
+            continue
+        if not (info := util.command(pid)):
+            continue
+        if not p.cfg["isolate"] and (info[1] or (util.started_at(pid) or 0) < since):
+            continue
+        out.append((pid, info[0]))
+    return out
+
+
+def report_leftovers(p, since):
+    """Names what a run's end left running (`leftover_helpers`) in the log and one push, never kills it: the driver
+    can't tell a helper from something the user started there. The push says how to stop them next time."""
+    try:
+        left = leftover_helpers(p, since)
+    except Exception as e:  # noqa: BLE001 (a report: the run is over either way)
+        return log(p, f"left running: not checked ({e})")
+    if not left:
+        return
+    for pid, cmd in left:
+        log(p, f"left running after the run: pid {pid}: {cmd[:80]}")
+    say = lambda m: log(p, m)  # noqa: E731
+    names = (", ".join(f"{cut(cmd, 120, log=say)} (pid {pid})" for pid, cmd in left[:3])  # a JVM's is pages long
+             + f", {len(left) - 3} more" * (len(left) > 3))
+    where = "the autopilot's worktrees" if p.cfg["isolate"] else "the checkout, started by the run"
+    fix = ("Its `teardown` in .windvane/config.toml missed them." if p.cfg["teardown"]
+           else "Set `teardown` in .windvane/config.toml to stop them at a run's end.")
+    push("windvane left helpers running", whole(f"Still running in {where}: ", names, ". " + fix, log=say), 3,
+         "warning")
 
 
 def failed_teardown(p):

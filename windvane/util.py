@@ -251,3 +251,32 @@ def started_at(pid):
         return boot + ticks / os.sysconf("SC_CLK_TCK")
     except (OSError, ValueError, IndexError, StopIteration):
         return None
+
+
+def clock():
+    """Now, on `started_at`'s clock: on Linux the boot time /proc gives in whole seconds plus the uptime, so a process
+    started a moment after this reads as later, as it is; elsewhere the wall clock."""
+    try:
+        boot = next(int(l.split()[1]) for l in (PROC / "stat").read_text().splitlines() if l.startswith("btime"))
+        return boot + float((PROC / "uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError, StopIteration):
+        return time.time()
+
+
+def command(pid):
+    """(the command line of process `pid`, whether it has a terminal), or None when it's gone or a zombie. /proc on
+    Linux; elsewhere (macOS) `ps`, whose `??` is no terminal."""
+    if not PROC.is_dir():
+        try:
+            out = subprocess.run(["ps", "-o", "tty=,command=", "-p", str(pid)], capture_output=True, text=True,
+                                 timeout=PS_WAIT).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return None
+        tty, _, cmd = out.partition(" ")
+        return (cmd.strip(), tty not in ("??", "?", "-")) if cmd.strip() else None
+    try:
+        cmd = (PROC / str(pid) / "cmdline").read_bytes().rstrip(b"\0").replace(b"\0", b" ")
+        tty = int((PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[4])
+    except (OSError, ValueError, IndexError):
+        return None
+    return (os.fsdecode(cmd), tty != 0) if cmd else None

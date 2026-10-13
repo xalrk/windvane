@@ -181,6 +181,14 @@ def teardown_failed(p, patch, s):
                                          "reset by the peer")}
 
 
+def leftovers(p, patch, s):
+    patch(driver, "leftover_helpers", lambda p, since: [(4242, LONG)])  # a command line pages long, as a JVM's
+    driver.report_leftovers(p, 0)
+    return {"windvane left helpers running": ("Still running in the autopilot's worktrees: API Error",
+                                              "(the rest is in the log) (pid 4242)",
+                                              "Set `teardown` in .windvane/config.toml")}
+
+
 def crashing(p, stop):
     p.state.mkdir(parents=True, exist_ok=True)
     if stop:
@@ -255,7 +263,7 @@ def tmp_full(p, patch, s):
 
 
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
-         quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, teardown_failed, restarted, crashed_stopped,
+         quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, teardown_failed, leftovers, restarted, crashed_stopped,
          held, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full]
 
 
