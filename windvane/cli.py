@@ -613,9 +613,20 @@ def desk_periodic(p, e):
         pilot.lockfile.close()
 
 
+class Version(argparse.Action):
+    """Like argparse's own, but the line is worked out only when asked for: a clone's needs two git calls."""
+    def __init__(self, option_strings, dest, **kw):
+        super().__init__(option_strings, dest, nargs=0, default=argparse.SUPPRESS, help=kw.get("help"))
+
+    def __call__(self, parser, *_):
+        print(doctor.own_version())
+        parser.exit()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="windvane", description=__doc__)
     ap.add_argument("-C", dest="cwd", help="run as if started in this directory")
+    ap.add_argument("--version", action=Version, help="which windvane this is: a release, or a clone's commit")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("init", help="set windvane up in a repository")
     s.add_argument("dir", nargs="?")
@@ -739,7 +750,7 @@ def main(argv=None):
     if a.cmd in ("install", "uninstall"):
         return getattr(install, a.cmd)(a.yes)
     if a.cmd == "doctor":
-        root = toplevel()
+        root = toplevel() if shutil.which("git") else None  # no git is one of the gaps doctor is there to name
         return doctor.main(Project(root) if root else None, a.clean, a.dry_run)
     if a.cmd == "phone":
         root = toplevel()

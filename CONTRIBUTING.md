@@ -7,7 +7,7 @@ problem, running windvane from a clone, how the tests work, and what we look for
 ## Reporting bugs and suggesting features
 Open an issue on GitHub. For a bug, it helps to include:
 - what you ran, what you expected and what happened instead;
-- the output of `windvane doctor`, your OS, and how you installed windvane (a release, or the commit of a clone);
+- the output of `windvane doctor` (its first line is what `windvane --version` prints) and your OS;
 - the lines of `windvane status` or the run's log around the problem.
 
 Logs can hold your paths, branch names and ticket titles, so look them over before you paste them, and leave out any
