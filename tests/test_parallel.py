@@ -94,6 +94,17 @@ class Slots(unittest.TestCase):
         self.assertGreater(at["T-003"] - at["T-001"], 1.4)
         self.assertEqual(self.log().count("no 3rd slot: usage estimate (10% + 3 x 8% > cap 30%)"), 1)
 
+    def test_a_ticket_merged_this_run_is_not_picked_again_from_a_queue_that_lags(self):
+        """A slot can merge and free itself after the pass's fetch: that queue still shows its ticket to do. Picked
+        again, it merged and was picked again for as long as the race kept winning (173 times in one CI run)."""
+        self.tickets(T_001="a.py", T_002="b.py")
+        self.p = Project(self.s.root)
+        pilot = driver.Pilot(self.p, args())
+        pilot.queue = driver.Queue(self.p)  # fetched before T-001's merge landed
+        self.assertEqual(pilot.queue.status("T-001"), "todo")
+        pilot.merged.append("T-001")
+        self.assertEqual(pilot.pick([0])[0], "T-002")
+
     def test_parallel_1_runs_one_at_a_time(self):
         self.tickets(T_001="a.py", T_002="b.py", T_003="c.py")
         pilot = self.run_pilot(parallel=1)

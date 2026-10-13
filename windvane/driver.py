@@ -1290,7 +1290,8 @@ class Pilot(Desk, Periodic):
         marked last could still start, even one held only by a clash: last means once the rest has run out."""
         q = self.queue
         busy = sorted(self.running)
-        avoid = set(self.skip) | set(busy)
+        # merged this run: a slot can merge and free itself after this pass's fetch, so the queue may not show it yet
+        avoid = set(self.skip) | set(busy) | set(self.merged)
         self.waits = []
         extra = self.outside(busy)  # once a pass: two git calls a running ticket
         ahead = q.to_run(avoid, tickets(self.questions))  # those waiting on a clash too: a free slot isn't "run out"
