@@ -279,7 +279,7 @@ def running(pid):
 def tmpdir(test, prefix="windvane-"):
     """A temp dir removed when `test` ends, passed or failed: every check runs the suite on four Pythons, and a dir
     leaked per run once took all of /tmp's inodes."""
-    d = Path(tempfile.mkdtemp(prefix=prefix))
+    d = Path(tempfile.mkdtemp(prefix=prefix)).resolve()  # macOS's /var is /private/var: see Sandbox
     test.addCleanup(shutil.rmtree, d, ignore_errors=True)
     return d
 
@@ -288,7 +288,8 @@ class Sandbox:
     """A project with a bare `origin`, `.windvane/` set up for forge git, and an isolated environment."""
 
     def __init__(self, config_extra=""):
-        self.tmp = Path(tempfile.mkdtemp(prefix="windvane-test-"))
+        # resolved: macOS's temp dir is behind a symlink (/var -> /private/var), and windvane reports real paths
+        self.tmp = Path(tempfile.mkdtemp(prefix="windvane-test-")).resolve()
         # removed by close(), or when it's collected or the run ends: a setUp that fails after this never calls close
         self.rm = weakref.finalize(self, shutil.rmtree, str(self.tmp), True)
         self.old_env = dict(os.environ)

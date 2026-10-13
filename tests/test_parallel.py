@@ -59,11 +59,12 @@ class Slots(unittest.TestCase):
         return (self.p.state / "autopilot.log").read_text()
 
     def test_three_disjoint_tickets_run_at_once(self):
+        os.environ["FAKE_WORK_S"] = "4"  # room for a slow machine's starts, and still under one worker run
         self.tickets(T_001="a.py", T_002="docs/", T_003="tests/test_c.py")
         pilot = self.run_pilot()
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002", "T-003"])
         at = self.starts().values()
-        self.assertLess(max(at) - min(at), 1.0)  # all three started before the first finished
+        self.assertLess(max(at) - min(at), 3.0)  # all three started before the first finished
         self.assertTrue((self.p.state / "work-2").exists())
         self.assertFalse((self.p.state / "work-3").exists())  # worktrees only for the slots used
         self.assertIn("T-003: slot 2, beside T-001, T-002", self.log())
