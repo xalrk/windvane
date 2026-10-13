@@ -1655,7 +1655,7 @@ class Pilot(Desk, Periodic):
         finally:
             self.ending = True
             for t in self.threads:  # the running tickets finish (their runs stop at the deadline at the latest)
-                t.join()
+                join(t)
             self.clean_state(between=False)  # every slot's thread is done: its trees are idle
             if not quiet_now(p)[0]:
                 self.send_unsent()  # a question from a ticket that finished after the loop's last pass
@@ -1769,6 +1769,15 @@ class Pilot(Desk, Periodic):
                 + (f"{self.usage.text()}." if self.usage.five is not None else "")
                 + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else "")
                 + schedule.next_line(p))
+
+
+def join(t):
+    """`t.join()`, also after a signal interrupted an earlier join of it (the main loop's): Python 3.11 and 3.12 then
+    mark the thread ended while it still runs, so join returns at once and the teardown would run beside its session.
+    A thread is in `threading.enumerate()` until it really ends."""
+    t.join()
+    while t in threading.enumerate():
+        time.sleep(0.05)
 
 
 def supervise(p, argv, deadline, start=None, sleep=time.sleep):
