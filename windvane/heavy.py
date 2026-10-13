@@ -7,7 +7,7 @@ that tool, waiting on its own lock); instead it waits until no process matching 
 
     busy = ["UnrealEditor", "ShaderCompile", "blender"]   # process-name regexes (pgrep) of heavy work started elsewhere
     min_free_gb = 6                                           # wait for this much MemAvailable before starting
-    heavy_wait = 60                                           # minutes to wait for the machine before giving up
+    heavy_wait = 60                                           # minutes a command run by hand waits before giving up
 
 Free memory comes from Linux's /proc/meminfo; elsewhere (macOS) it isn't known, and only `busy` is waited on.
 """
@@ -36,6 +36,9 @@ STOP_ENV, STOPPED = "WINDVANE_HEAVY_STOP", "heavy: stopped while waiting for the
 # Said once the job got the machine after waiting, before its own output: a check reads it back (`waited`) for its
 # ledger row, so `stats` can tell the minutes a check queued from the minutes it ran.
 WAITED = "heavy: waited {} s for the machine"
+# A session's stop, as a Unix time: the driver sets it for each session (its `bg` jobs and checks inherit it) and for
+# its own checks. A job waits for the machine until then, not `heavy_wait`.
+STOP_AT = "WINDVANE_STOP_AT"
 
 
 def machine_file():
@@ -294,17 +297,29 @@ def take(lock, entry, deadline, say, stopped=lambda: False):
         time.sleep(1)
 
 
+def deadline(cfg, wait_s):
+    """When a wait for the machine gives up: after `wait_s` seconds when given; else at the session's stop
+    (`STOP_AT`), since a job still waiting then is killed with its session anyway, and one that gave up earlier
+    would lose its place in line and requeue at the back; else after machine.toml's `heavy_wait` (a command run by
+    hand)."""
+    if wait_s is not None:
+        return time.time() + wait_s
+    try:
+        return float(os.environ[STOP_AT])
+    except (KeyError, ValueError):
+        return time.time() + cfg["heavy_wait"] * 60
+
+
 def run(cmd, wait_s=None, cwd=None):
-    """Run `cmd` under the machine-wide heavy lock. Returns its exit code (TIMED_OUT if the wait timed out, after
-    `wait_s` seconds, or machine.toml's `heavy_wait` minutes, or as soon as the STOP file named in `STOP_ENV`
-    appears while it waits).
+    """Run `cmd` under the machine-wide heavy lock. Returns its exit code (TIMED_OUT if the wait timed out, at
+    `deadline`, or as soon as the STOP file named in `STOP_ENV` appears while it waits).
 
     Jobs run in arrival order: each joins a queue when it asks and waits there for the lock, then holds the lock
     while it waits for the machine to clear (busy processes, free memory), so it keeps its place throughout."""
     say = lambda m: print(m, file=sys.stderr, flush=True)
     t0 = time.time()
     cfg = machine()
-    deadline = time.time() + (cfg["heavy_wait"] * 60 if wait_s is None else wait_s)
+    until = deadline(cfg, wait_s)
     path = lock_path()
     stop = os.environ.get(STOP_ENV)
     stopped = lambda: bool(stop) and os.path.exists(stop)
@@ -315,13 +330,13 @@ def run(cmd, wait_s=None, cwd=None):
     entry = join_queue()
     lock = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
     try:
-        if not take(lock, entry, deadline, say, stopped):
+        if not take(lock, entry, until, say, stopped):
             return TIMED_OUT
         leave_queue(entry)  # the lock keeps this job's place now; the next waiter becomes the head and waits on it
         entry = None
         try:
             claim(lock, cmd, cwd)
-            if not wait_until_clear(cfg, deadline, say, stopped):
+            if not wait_until_clear(cfg, until, say, stopped):
                 return TIMED_OUT
             if (s := round(time.time() - t0)) >= 1:
                 say(WAITED.format(s))
