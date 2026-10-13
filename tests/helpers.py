@@ -1,5 +1,6 @@
 """Test helpers: a throwaway project repo with a bare remote, and an environment that can't reach the real phone
 or the real Claude (PATH holds only a fake `claude` and the system's bin dirs)."""
+import faulthandler
 import os
 import shutil
 import subprocess
@@ -9,6 +10,9 @@ import weakref
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+# A test still in its sandbox after this long is stuck (the slowest takes seconds): it prints every thread's stack and
+# ends the run, which names the hang instead of letting it use up a CI job's time limit in silence.
+HANG_S = 300
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
 # A stand-in for `claude -p ... --output-format stream-json`: plays the role its system prompt names.
@@ -272,6 +276,7 @@ class Sandbox:
         # removed by close(), or when it's collected or the run ends: a setUp that fails after this never calls close
         self.rm = weakref.finalize(self, shutil.rmtree, str(self.tmp), True)
         self.old_env = dict(os.environ)
+        faulthandler.dump_traceback_later(HANG_S, exit=True)
         try:
             self.setup(config_extra)
         except BaseException:  # undone, or the next test runs in a half-made sandbox's environment
@@ -341,6 +346,7 @@ class Sandbox:
         self.git("push", "-q", "origin", "main")
 
     def close(self):
+        faulthandler.cancel_dump_traceback_later()
         os.environ.clear()
         os.environ.update(self.old_env)
         self.rm()
