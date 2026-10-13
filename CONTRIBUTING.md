@@ -1,7 +1,23 @@
 # Contributing to windvane
 
-Thanks for helping! windvane is small on purpose: a Python driver (`windvane/`) and the rules its Claude sessions
-follow (`prompts/`). This page covers running it from a clone, how the tests work, and what we look for in a change.
+Thanks for helping! Bug reports, ideas, fixes to the docs and code are all welcome. windvane is small on purpose: a
+Python driver (`windvane/`) and the rules its Claude sessions follow (`prompts/`). This page covers reporting a
+problem, running windvane from a clone, how the tests work, and what we look for in a change.
+
+## Reporting bugs and suggesting features
+Open an issue on GitHub. For a bug, it helps to include:
+- what you ran, what you expected and what happened instead;
+- the output of `windvane doctor`, your OS, and how you installed windvane (a release, or the commit of a clone);
+- the lines of `windvane status` or the run's log around the problem.
+
+Logs can hold your paths, branch names and ticket titles, so look them over before you paste them, and leave out any
+token, email address or ntfy topic.
+
+If you'd like to make a larger change (a new command, a config key, a change to how sessions work), please open an
+issue first so we can talk it through before you spend time on it. Small fixes can go straight to a pull request.
+
+**Security problems:** please don't open a public issue. Report them privately through the repository's Security tab
+("Report a vulnerability").
 
 ## Setup
 ```sh
@@ -17,7 +33,8 @@ bin/windvane --help
 python3 -m unittest discover -s tests -q
 ```
 It runs the whole driver end to end, so give it a few minutes. `tools/check_pythons.sh` runs it on every Python
-from 3.11 up that you have installed, and the CI workflow (`.github/workflows/test.yml`) runs it on Linux and macOS.
+from 3.11 up that you have installed. The CI workflow (`.github/workflows/test.yml`) runs it on Linux and macOS; it
+is started by hand, so a maintainer runs it on your pull request before merging.
 
 The tests never run the real tools. Anything that would call `claude`, `gh` or `notify`, or reach your phone, goes
 through `tests/helpers.py`'s `Sandbox`:
@@ -69,3 +86,7 @@ pushes) is short and concrete.
 ## Changes
 Open a pull request against `main` with what changed and why, and add a line to `CHANGELOG.md` under
 "Unreleased". Small, focused pull requests are easiest to review.
+
+## License
+windvane is released under the [MIT License](LICENSE). By contributing, you agree that your contributions are
+licensed under the same terms.
