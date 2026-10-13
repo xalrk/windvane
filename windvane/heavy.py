@@ -76,9 +76,15 @@ def in_dirs(path, dirs):
 
 def in_checkout(path):
     """Whether `path` is inside some git checkout (a `.git` in it or above): a process working there works for that
-    project, whichever it is."""
+    project, whichever it is. A dir it can't enter (a container's /root) isn't one it can tell, so isn't one."""
     p = Path(path)
-    return any((d / ".git").exists() for d in (p, *p.parents) if d != Path(d.anchor))
+    for d in (p, *p.parents):
+        try:
+            if d != Path(d.anchor) and (d / ".git").exists():
+                return True
+        except OSError:
+            pass
+    return False
 
 
 def owned(pid, dirs, cwds):

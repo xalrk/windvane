@@ -94,6 +94,18 @@ class HeavyReuse(unittest.TestCase):
         self.ps(72, "qemu-system-x86", "state/slot-2", 3.4, ppid=1)
         self.assertEqual(self.helpers(), 3.4)
 
+    def test_a_cwd_it_cant_enter_doesnt_crash_the_wait(self):
+        self.ps(80, "bash", "state/slot-1", 0.01)
+        self.ps(81, "qemu-system-x86", "sdk", 3.4, ppid=80)
+        real = Path.exists
+        def exists(p, *a, **kw):
+            if "sdk" in str(p):
+                raise PermissionError(13, "Permission denied", str(p))
+            return real(p, *a, **kw)
+        with mock.patch.object(Path, "exists", exists):
+            self.assertEqual(self.helpers(), 3.4)
+            self.assertTrue(self.take(self.reuse))
+
     def test_the_waiting_line_says_what_it_counted(self):
         self.assertEqual(heavy.short(6, 1.0, 3.4), "1.0 GB free + 3.4 GB in this project's helpers (want 6)")
         self.assertEqual(heavy.short(6, 1.0), "only 1.0 GB free (want 6)")
