@@ -4,12 +4,14 @@ import faulthandler
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import weakref
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+PROC = Path("/proc")  # running() reads it; a test points it at an empty dir to take the macOS branch
 # A test still in its sandbox after this long is stuck (the slowest takes seconds): it prints every thread's stack and
 # ends the run, which names the hang instead of letting it use up a CI job's time limit in silence.
 HANG_S = 300
@@ -85,6 +87,8 @@ if system.startswith("# windvane worker run"):
         c = subprocess.Popen(["windvane", "critic", tid], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while not os.path.exists(pid_file):
+            if c.poll() is not None:  # `windvane critic` failed: no critic to wait for, so fail fast, never hang
+                sys.exit(f"windvane critic exited {c.returncode} before its critic started")
             time.sleep(0.05)
         emit({"type": "system", "subtype": "critic started"})
         c.wait()
@@ -260,6 +264,18 @@ emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01, 
 '''
 
 
+def running(pid):
+    """Whether process `pid` still runs: gone or ended (a zombie waiting to be reaped) is not running. /proc where
+    there is one, else `ps` (macOS)."""
+    if (PROC / "self/stat").exists():
+        try:
+            return not (PROC / str(pid) / "stat").read_text().split(") ")[-1].startswith("Z")
+        except OSError:
+            return False
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
 def tmpdir(test, prefix="windvane-"):
     """A temp dir removed when `test` ends, passed or failed: every check runs the suite on four Pythons, and a dir
     leaked per run once took all of /tmp's inodes."""
@@ -292,6 +308,9 @@ class Sandbox:
         fake = self.bin / "claude"
         fake.write_text(FAKE_CLAUDE)
         fake.chmod(0o755)
+        # `python3` is the Python running the tests: bin/windvane and the fake run it from PATH, and /usr/bin's can be
+        # too old for windvane (macOS ships 3.9)
+        (self.bin / "python3").symlink_to(sys.executable)
         (self.bin / "windvane").symlink_to(REPO / "bin/windvane")
         self.env = {"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.tmp / "home"),
                     "XDG_STATE_HOME": str(self.tmp / "state"), "XDG_CONFIG_HOME": str(self.tmp / "config"),
