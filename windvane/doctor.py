@@ -27,13 +27,14 @@ def run_quiet(cmd, timeout=20):
 
 def own_version():
     """`windvane --version`'s line. A clone has no package metadata (or a stale one, for an editable install), so
-    its commit says which code runs; the toplevel must be the checkout itself, not a repo it happens to sit in."""
-    top = gout(HOME, "rev-parse", "--show-toplevel") if CHECKOUT else ""
+    its commit says which code runs; the toplevel must be the checkout itself, not a repo it happens to sit in. No git
+    (a downloaded zip) reads as no checkout: doctor must get on to saying git is missing."""
+    top = gout(HOME, "rev-parse", "--show-toplevel") if CHECKOUT and shutil.which("git") else ""
     if top and Path(top).resolve() == HOME:
         dirty = gout(HOME, "status", "--porcelain", "--untracked-files=no")
         return f"windvane {gout(HOME, 'rev-parse', '--short', 'HEAD')} (clone{', modified' if dirty else ''})"
     v = selfupdate.version()
-    return f"windvane {v}" if v != "0" else "windvane (unknown version: no package and no git checkout)"
+    return f"windvane {v}" if v != "0" else "windvane (unknown version: not installed, and no git commit to read)"
 
 
 def version(tool):

@@ -1,6 +1,7 @@
 """`windvane --version` and doctor's first line: a release's version for an install, a clone's commit for a checkout."""
 import contextlib
 import io
+import os
 import subprocess
 import sys
 import unittest
@@ -56,6 +57,12 @@ class Version(unittest.TestCase):
         self.assertEqual(self.line(self.tmp / "outer/vendor/wv", installed="2026.10.12"), "windvane 2026.10.12")
         self.assertIn("unknown version", self.line(self.tmp / "outer/vendor/wv"))
 
+    def test_a_checkout_on_a_machine_without_git_falls_back(self):
+        self.clone(self.tmp / "wv")
+        with mock.patch.dict(os.environ, {"PATH": str(self.tmp / "empty")}):
+            self.assertIn("unknown version", self.line(self.tmp / "wv"))
+            self.assertEqual(self.line(self.tmp / "wv", installed="2026.10.12"), "windvane 2026.10.12")
+
     def test_the_flag_prints_one_line_without_a_command(self):
         with contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit) as e:
             cli.main(["--version"])
@@ -75,6 +82,13 @@ class DoctorLine(unittest.TestCase):
         with mock.patch.object(doctor, "own_version", return_value="windvane 2026.10.12"):
             out, _ = self.run_doctor(test_doctor.GITHUB)
         self.assertEqual(out.splitlines()[0], "windvane 2026.10.12")
+
+    def test_doctor_without_git_names_the_gap_instead_of_crashing(self):
+        with mock.patch.dict(os.environ, {"PATH": str(self.tmp / "empty")}), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            code = cli.main(["doctor"])
+        self.assertEqual(code, 1)
+        self.assertRegex(out.getvalue(), r"^windvane .*\n(.*\n)*MISSING +git ")
 
 
 if __name__ == "__main__":

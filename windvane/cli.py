@@ -750,7 +750,7 @@ def main(argv=None):
     if a.cmd in ("install", "uninstall"):
         return getattr(install, a.cmd)(a.yes)
     if a.cmd == "doctor":
-        root = toplevel()
+        root = toplevel() if shutil.which("git") else None  # no git is one of the gaps doctor is there to name
         return doctor.main(Project(root) if root else None, a.clean, a.dry_run)
     if a.cmd == "phone":
         root = toplevel()
