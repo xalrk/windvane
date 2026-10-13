@@ -1,0 +1,49 @@
+name: Bug report
+description: windvane did something wrong, crashed, or stopped where it shouldn't have.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Logs can hold your paths, branch names and ticket titles: look them over before you
+        paste, and leave out any token, email address or ntfy topic. For a security problem, please don't open an
+        issue; see [SECURITY.md](https://github.com/xalrk/windvane/blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen again
+      description: The steps, if you know them, starting from a fresh `windvane init` or an existing project.
+  - type: input
+    id: version
+    attributes:
+      label: windvane version
+      description: The release you installed, or the commit of your clone.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `windvane doctor`
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: The Linux distribution and its version, or the macOS version.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines
+      description: The lines of `windvane status` or the run's log around the problem.
+      render: text

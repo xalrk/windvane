@@ -1,0 +1,26 @@
+name: Feature request
+description: An idea for windvane, or a change to how it works.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a larger change (a new command, a config key, how sessions work), an issue to talk it through before
+        anyone writes code saves everyone time.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The problem or the situation, not only the fix. What happens today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like windvane to do
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything you've tried or considered instead
