@@ -6,85 +6,60 @@ release on the same day adds a number (`2026.10.9.1`).
 
 ## Unreleased
 
-### Added
-- `windvane run --from 12:00 --until 20:00 --detach` waits in tmux for its start; `run --daily 12:00-20:00 --detach`
-  runs in that window every day until `windvane stop`, and `status` says when it next starts.
-- `[[periodic]]` `after_group`: run the session when a group of tickets (a milestone) is finished, its prompt
-  naming the group and its tickets; `windvane queue` shows the groups closest to finishing.
-- `[[append_only]]`: a conflict only in entries appended to a numbered log (decisions, ADRs, migrations) is resolved
-  by the driver, renumbering the branch's colliding entries and its references to them, without another worker run.
+The first public release of windvane, an autopilot for Claude Code. It works through a git project's tickets
+unattended until a deadline: each change is built by a fresh Claude Code session, then scored by a critic, tested
+with the project's own check and read by a code reviewer before the driver merges it. Your checkout is never touched.
 
-- Quiet times of your own for every project: `~/.config/windvane/quiet.txt`, beside each project's. In a quiet time a
-  question already waiting for you gets its recommendation built at once (a push says which), not held all night,
-  and a worker's system prompt says when the quiet time ends, or when one starts before its session can end.
-- Pushes and the run's summary show a ticket's first critic score beside its final one (`2→8`); `overview` and
-  `stats --critic` warn about a scale whose ladder stops under 10, since that caps every ticket's score.
-
-### Fixed
-- With tickets running side by side, a ticket that merged just as another slot was being filled could be picked
-  again from a queue fetched a moment before, and run and merged over and over until the run ended. A ticket merged
-  in a run is never picked again in that run.
-- A run lets go of its lock as it ends, and `status`'s look at a lock lets go at once: a git or session starting in
-  another thread just then could keep the lock held a moment longer, so the run still read as on, or a run starting
-  then said one was already running.
-- A heavy check that waited its whole `heavy_wait` (new in `machine.toml`, default 60 minutes) for the machine lock
-  says `CHECK NOT RUN` with who held it, exits 75, and isn't counted as failed; the driver runs it again instead of
-  sending the ticket back to its worker.
-- A `windvane bg` job a session started before windvane updated itself is still found by `await` (and not started
-  twice) when it runs in the session's worktree; one that can't be tied to it is named in one line.
-- A ticket that asks several questions at once gets each to you as `T-007.q1`, `T-007.q2`: pushed, listed in
-  `status` and preflight, answered (`windvane answer T-007.q2 B`) and timed out one by one; before, only the first
-  reached you. `status` names a ticket's several provisional answers as `T-007.p1`, `T-007.p2`.
-- `windvane init` picks `forge = "git"` for a remote that isn't on GitHub (or without `gh`), and says which it chose.
-- `windvane queue` names tickets that aren't pushed yet, instead of "no tickets yet".
-- `windvane install` without a terminal names `--yes`; getting started explains letting Claude set windvane up.
-- The phone's `stop` and `overview` hooks aren't lost: `install`, `init` and a run's start change install.json one
-  at a time, never save over one they can't read (they say so instead), and a run puts back its project's own hooks
-  when they went while its repo was away.
-
-## 0.1.0 - 2026-10-02
-
-The first release.
+Requires Linux, Python 3.11 or newer, git and Claude Code. macOS mostly works. Optional: `gh` for GitHub projects,
+tmux for detached runs and the ntfy app for your phone. windvane uses the Python standard library only. See the
+[README](https://github.com/xalrk/windvane#install) to install it and
+[Getting started](https://github.com/xalrk/windvane/blob/main/docs/getting-started.md) for a first run.
 
 ### The pipeline
-- Works a git project's tickets unattended until a deadline: a fresh headless Claude Code worker per ticket, a
-  critic that scores the outcome on the project's own scale, the project's check on the exact pushed head, a fresh
-  read-only reviewer, and a merge done by the driver itself.
-- Forge `github` (pull requests through `gh`) or plain `git` (the driver merges and pushes).
-- Sessions work in the autopilot's own git worktrees, so the user's checkout is never touched.
-- Parallel tickets: another ticket starts when its `Touches:` line doesn't overlap the running ones, the usage window
-  has room, and a second slot would finish the queue sooner. Merges stay one at a time, each checked on the tree
-  main will have.
-- Crashed sessions (API errors, network drops) are retried after a growing pause instead of failing their ticket.
-- A merge-conflict bounce re-checks only the resolution.
-- `windvane plan` turns a goal and the critic's follow-up notes into tickets, safely at any time; `run --replan`
-  plans more when the queue runs dry.
-- `windvane heavy`: machine-heavy commands (engines, renders, big builds) run one at a time across every project.
+- A fresh headless Claude Code worker per ticket, working in the autopilot's own git worktrees.
+- A critic scores what users get from the change on the project's own scale and sends fixes back; the project's
+  check runs on the exact pushed head; a read-only reviewer approves the diff; the driver itself merges, after
+  running the check on the merged tree.
+- `forge = "github"` merges through pull requests with `gh`; `forge = "git"` merges and pushes directly.
+- Independent tickets, whose `Touches:` lines don't overlap, run side by side while the usage window has room.
+- `windvane plan` turns a goal, and the critic's notes beyond each ticket, into new tickets; `run --replan` plans
+  more when the queue runs dry.
+- Merge conflicts only in entries appended to numbered logs (decisions, ADRs, migrations; `[[append_only]]`) are
+  resolved by the driver without another worker run.
+
+### Running unattended
+- Deadlines (`--until`, `--for`), a later start (`--from`) and daily windows (`--daily 12:00-20:00`); `windvane
+  deadline` moves a running deadline and `windvane stop` ends a run, at once with `--now`.
+- Pauses near the usage limits and stops at the deadline.
+- Crashed sessions are retried after a growing pause, a ticket whose sessions keep dying is set aside, network
+  outages are waited out, and a detached driver that crashes is restarted.
+- Periodic sessions (`[[periodic]]`), such as a playtest or an audit, run every few tickets or when a group of
+  tickets is finished, and their findings become tickets.
+- Pull requests of your own labelled `windvane merge` are tested and merged between tickets, so they don't race
+  the autopilot's.
 
 ### The critic
-- Scores 0 to 10 per dimension on `.windvane/CRITIC.md`, blind to the pass mark; the ticket's score is its lowest.
-- Splits its points into "Fix in this ticket" (up to 3 revisions) and "Beyond this ticket" (they feed `plan`).
-- `windvane stats --critic` shows whether the scale spreads its scores; a collapsed scale is detected and reported.
-- `windvane init` and the setup skill help write a good scale for a new project.
+- Each project describes what its best looks like in `.windvane/CRITIC.md`: a few dimensions, each a ladder of
+  yes/no checks. The critic answers the checks and the driver works out the score; the critic never sees the pass
+  mark.
+- Its points split into fixes for this ticket and follow-ups for the planner.
+- `windvane stats --critic` and `windvane overview` show whether the scale spreads its scores; pushes show a
+  ticket's first and final score (`2→8`).
 
-### Questions and the phone
-- Product questions go into `.windvane/QUESTIONS.md` with lettered options and a recommendation, answered with
-  `windvane answer` or from the phone.
-- Preflight asks the questions the next tickets will predictably need when the run starts.
-- Quiet times: no questions, the recommendation is built and marked provisional.
-- A built-in ntfy phone (`windvane phone setup`): pushes for merges, failures, pauses and questions, censored first;
-  answer buttons; `status`, `overview`, `usage` and `stop` from the phone.
+### Questions and your phone
+- Product calls become lettered questions with a recommendation in `.windvane/QUESTIONS.md`, answered with
+  `windvane answer` or from your phone.
+- Preflight asks the questions the next tickets will predictably need when a run starts.
+- In quiet times, per project or your own, the recommended option is built and marked provisional, to change later.
+- Phone notifications through ntfy (`windvane phone setup`): merges, failures, pauses and questions, with answer
+  buttons, and `status`, `overview`, `usage` and `stop` from the phone.
 
 ### Watching and measuring
-- `windvane watch`: a live view of every session (what it says, the commands it runs and their output), costing no
-  tokens.
-- A token ledger per run, role and ticket, shown by `windvane stats`, including killed runs.
-- `windvane status`, `overview`, `queue`, and `deadline` / `stop --now` to steer a running autopilot.
+- `windvane watch`: a live view of every session, at no token cost.
+- A token ledger per run, role and ticket, shown by `windvane stats`; `windvane status`, `overview` and `queue` show
+  where a run and the project stand.
 
 ### Install
-- `pipx install` or `uv tool install` straight from git, or `sh install.sh` without either; standard library only,
-  including the build backend.
-- `windvane doctor` lists what the machine lacks and the command that fixes each.
-- `windvane install` adds the windvane skill and a mention hook to Claude Code, asking before each change;
-  `windvane uninstall` removes exactly that.
-- A windvane checkout keeps itself current between tickets when it works on itself.
+- `pipx install` or `uv tool install` from GitHub, or `sh install.sh` from a clone.
+- `windvane doctor` lists what the machine lacks and how to fix each; `windvane install` adds the windvane skill and
+  a mention hook to Claude Code, asking first, and `windvane uninstall` removes them.
