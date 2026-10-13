@@ -93,6 +93,10 @@ if system.startswith("# windvane worker run"):
         emit({"type": "system", "subtype": "critic started"})
         c.wait()
     time.sleep(float(os.environ.get("FAKE_WORK_S", "0")))
+    if os.environ.get("FAKE_HELPER"):  # a helper its tools start to outlive them (an emulator): its pid goes there
+        h = subprocess.Popen(["sleep", "120"], start_new_session=True, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        open(os.environ["FAKE_HELPER"], "w").write(str(h.pid))
     branch = tid.lower() + "-work"
     if "In progress on branch" in prompt:
         sh("git", "switch", branch)

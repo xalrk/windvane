@@ -1585,6 +1585,7 @@ class Pilot(Desk, Periodic):
     def run(self, deadline):
         """Works tickets until a stop; False when it couldn't start (a failed setup)."""
         p = self.p
+        began = util.clock()  # with isolate off, a process in the checkout older than this is the user's
         self.take_lock()
         phone.start_run(p)
         try:  # an older install's per-project `status` hooks, a deleted repo's, and this one's back if they went
@@ -1676,6 +1677,7 @@ class Pilot(Desk, Periodic):
             if not (crashed and os.environ.get(SUPERVISED)):
                 tear_down(p, tell=True)
                 self.lockfile.truncate(0)  # torn down: the next run has nothing left to tear down
+                report_leftovers(p, began)
             fcntl.flock(self.lockfile, fcntl.LOCK_UN)  # now, not at the close: a thread's fork may still have the fd
             self.lockfile.close()
             for sig, h in handlers.items():
@@ -1846,6 +1848,46 @@ def tear_down(p, lock=False, tell=False):
         if push("windvane teardown failed", whole(f"Its helpers may still be up ({f['how']}). Run it by hand: ",
                                                   f["cmd"], log=lambda m: log(p, m)), 4, "warning"):
             save_json(p.state / TEARDOWN_FAILED, {**f, "told": True})  # the next "started" push needn't say it again
+
+
+def leftover_helpers(p, since):
+    """[(pid, command)] of the processes still at work in the autopilot's trees once a run is over: the helpers its
+    tools started (an emulator, a dev server, a container) that its `teardown` doesn't stop. With isolate off the tree
+    is the checkout, where the user works too: only what started after `since` with no terminal counts, so their
+    editor and shells never do."""
+    if p.cfg["isolate"]:
+        roots = [os.path.realpath(p.state / d) for d in util._listdir(p.state) if re.fullmatch(r"(work|ci)(-\d+)?", d)]
+    else:
+        roots = [os.path.realpath(p.main_root())]
+    out = []
+    for pid, cwd in sorted(util.cwds().items()):
+        if pid in (os.getpid(), os.getppid()) or not any(cwd == r or cwd.startswith(r + os.sep) for r in roots):
+            continue
+        if not (info := util.command(pid)):
+            continue
+        if not p.cfg["isolate"] and (info[1] or (util.started_at(pid) or 0) < since):
+            continue
+        out.append((pid, info[0]))
+    return out
+
+
+def report_leftovers(p, since):
+    """Names what a run's end left running (`leftover_helpers`) in the log and one push, never kills it: the driver
+    can't tell a helper from something the user started there. The push says how to stop them next time."""
+    try:
+        left = leftover_helpers(p, since)
+    except Exception as e:  # noqa: BLE001 (a report: the run is over either way)
+        return log(p, f"left running: not checked ({e})")
+    if not left:
+        return
+    for pid, cmd in left:
+        log(p, f"left running after the run: pid {pid}: {cmd[:80]}")
+    names = ", ".join(f"{cmd[:60]} (pid {pid})" for pid, cmd in left[:3]) + f", {len(left) - 3} more" * (len(left) > 3)
+    where = "the autopilot's worktrees" if p.cfg["isolate"] else "the checkout, started by the run"
+    fix = ("Its `teardown` in .windvane/config.toml missed them." if p.cfg["teardown"]
+           else "Set `teardown` in .windvane/config.toml to stop them at a run's end.")
+    push("windvane left helpers running", whole(f"Still running in {where}: ", names, ". " + fix,
+                                                 log=lambda m: log(p, m)), 3, "warning")
 
 
 def failed_teardown(p):
