@@ -21,6 +21,9 @@ release on the same day adds a number (`2026.10.9.1`).
   `stats --critic` warn about a scale whose ladder stops under 10, since that caps every ticket's score.
 
 ### Fixed
+- With tickets running side by side, a ticket that merged just as another slot was being filled could be picked
+  again from a queue fetched a moment before, and run and merged over and over until the run ended. A ticket merged
+  in a run is never picked again in that run.
 - A run lets go of its lock as it ends, and `status`'s look at a lock lets go at once: a git or session starting in
   another thread just then could keep the lock held a moment longer, so the run still read as on, or a run starting
   then said one was already running.
