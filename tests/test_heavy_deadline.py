@@ -117,6 +117,31 @@ class DriverCheckKeepsItsPlace(unittest.TestCase):
         """The worker's box (6 s here) started with the worker: the check still waits on until the run's end."""
         self.waits_in_place(args(parallel=1, ticket_hours=6 / 3600), 8)
 
+    def test_a_deadline_moved_earlier_ends_the_wait_then(self):
+        hold(self, self.d)  # for good
+        pilot = driver.Pilot(Project(self.s.root), args(parallel=1))
+        lines, log = [], pilot.log
+        pilot.log = lambda msg: (lines.append(msg), log(msg))
+        done = threading.Event()
+
+        def move():  # `windvane deadline` 2 s out, once the check is in line
+            q = heavy.queue_dir()
+            while not done.is_set() and not (q.exists() and [n for n in os.listdir(q) if not n.startswith(".")]):
+                time.sleep(0.05)
+            (pilot.p.state / "DEADLINE").write_text((now() + timedelta(seconds=2)).isoformat(timespec="seconds"))
+        mover = threading.Thread(target=move, daemon=True)
+        mover.start()
+        t = time.time()
+        try:
+            pilot.run(now() + timedelta(minutes=10))
+        finally:
+            done.set()
+            mover.join()
+        self.assertLess(time.time() - t, 60)
+        self.assertEqual(pilot.merged, [])
+        self.assertRegex("\n".join(lines), r"T-001: check on \w+: not run, waited 0 min for the machine lock .*; the "
+                                            "next run checks it again, nothing to do")
+
     def waits_in_place(self, a, held_s):
         """A full run whose check queues behind a holder that lets go `held_s` after the check got in line."""
         hold(self, self.d)

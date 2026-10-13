@@ -20,6 +20,7 @@ import subprocess
 import sys
 import time
 import tomllib
+from datetime import datetime
 from pathlib import Path
 
 from . import util
@@ -39,6 +40,9 @@ WAITED = "heavy: waited {} s for the machine"
 # A session's stop, as a Unix time: the driver sets it for each session (its `bg` jobs and checks inherit it) and for
 # its own checks. A job waits for the machine until then, not `heavy_wait`.
 STOP_AT = "WINDVANE_STOP_AT"
+# The driver's check also follows the run's deadline file (its path in this env var), read as it waits: a deadline the
+# user moved earlier ends the wait then, not at the end it had when the check started.
+DEADLINE_ENV = "WINDVANE_HEAVY_DEADLINE"
 
 
 def machine_file():
@@ -96,7 +100,7 @@ def wait_until_clear(cfg, deadline, say, stopped=lambda: False):
         if stopped():  # only once it has to wait: a clear machine still runs the job
             say(f"{STOPPED}: {why}")
             return False
-        if time.time() >= deadline:
+        if time.time() >= deadline():
             say(f"{GAVE_UP}: {why}")
             return False
         if why != said:
@@ -273,7 +277,7 @@ def waited(log, head=65536):
 def take(lock, entry, deadline, say, stopped=lambda: False):
     """Wait for this job's turn, then take the lock: only the oldest live waiter tries it, so a job that arrives
     just as the lock frees can't overtake one that has been waiting (R-007). True once held, False at the deadline
-    or a stop."""
+    (a function: a moved deadline counts at once) or a stop."""
     said = None
     while True:
         n = ahead(entry)
@@ -291,10 +295,18 @@ def take(lock, entry, deadline, say, stopped=lambda: False):
         if stopped():
             say(f"{STOPPED} lock: {held_by(info)}")
             return False
-        if time.time() >= deadline:
+        if time.time() >= deadline():
             say(f"{GAVE_UP} lock: {held_by(info)}")
             return False
         time.sleep(1)
+
+
+def moved(path):
+    """The time in a deadline file (an ISO time, as `windvane deadline` writes it); never when it can't be read."""
+    try:
+        return datetime.fromisoformat(Path(path).read_text().strip()).timestamp()
+    except (OSError, ValueError):
+        return float("inf")
 
 
 def deadline(cfg, wait_s):
@@ -319,11 +331,12 @@ def run(cmd, wait_s=None, cwd=None):
     say = lambda m: print(m, file=sys.stderr, flush=True)
     t0 = time.time()
     cfg = machine()
-    until = deadline(cfg, wait_s)
+    end, moves = deadline(cfg, wait_s), os.environ.get(DEADLINE_ENV)
+    until = lambda: min(end, moved(moves)) if moves else end
     path = lock_path()
     stop = os.environ.get(STOP_ENV)
     stopped = lambda: bool(stop) and os.path.exists(stop)
-    env = {k: v for k, v in os.environ.items() if k != STOP_ENV}  # the stop is for this wait, not the command's own
+    env = {k: v for k, v in os.environ.items() if k not in (STOP_ENV, DEADLINE_ENV)}  # for this wait, not the command
     env["WINDVANE_HEAVY_HELD"] = str(path)
     if os.environ.get("WINDVANE_HEAVY_HELD") == str(path):  # nested: the outer one already holds it
         return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode

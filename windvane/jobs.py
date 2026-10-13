@@ -60,8 +60,8 @@ def ledger(p, ticket, row, event="check"):
 def check(p, cwd, quiet=False, ticket=None, stop_at=None):
     """Run the project's check in `cwd`. Returns (passed, summary line, log path); passed is None when a heavy check
     never ran: its wait for the machine timed out, which says nothing about the tree, so callers try it again.
-    `stop_at` (a datetime): when a heavy check stops waiting for the machine; a session's check has its own stop in
-    the environment already."""
+    `stop_at` (a datetime): when a heavy check stops waiting for the machine, or earlier if the run's deadline is
+    moved meanwhile (the driver's); a session's check has its own stop in the environment already."""
     cmd = p.cfg["check"]
     if not cmd:
         return True, "CHECK PASSED (no check configured)", None
@@ -122,7 +122,8 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None):
                                           stdout=f, stderr=subprocess.STDOUT,
                                           env={**env, "PYTHONPATH": str(Path(__file__).parents[1]),
                                                heavy.STOP_ENV: str(p.state / "STOP"),  # a stop ends the wait
-                                               **({heavy.STOP_AT: str(stop_at.timestamp())} if stop_at else {})}
+                                               **({heavy.STOP_AT: str(stop_at.timestamp()),
+                                                   heavy.DEADLINE_ENV: str(p.state / "DEADLINE")} if stop_at else {})}
                                           ).returncode
                 else:
                     code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,

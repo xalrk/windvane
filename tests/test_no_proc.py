@@ -144,7 +144,7 @@ class NoPsNeeded(NoProc):
         self.assertIsNone(heavy.free_gb())
         said = []
         cfg = {"busy": [], "min_free_gb": 10 ** 6}
-        self.assertTrue(heavy.wait_until_clear(cfg, time.time() + 1, said.append))
+        self.assertTrue(heavy.wait_until_clear(cfg, lambda: time.time() + 1, said.append))
         self.assertEqual(said, [])
         if self.real["free"] is None:
             self.skipTest("no /proc to compare with")
