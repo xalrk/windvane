@@ -102,16 +102,17 @@ class HeavyFifo(unittest.TestCase):
         finally:
             holder.kill(), holder.wait()
 
-    def test_a_holder_waiting_on_memory_keeps_its_place(self):
+    def test_a_head_waiting_on_memory_keeps_its_place_without_the_lock(self):
         (self.d / "cfg/windvane/machine.toml").write_text("busy = []\nmin_free_gb = 1\n")
         mem = lambda tag: subprocess.Popen([sys.executable, "-c", MEMWAIT, f"echo {tag} >> {self.order}", "30",
                                             str(self.d / "free")], env=self.env, stderr=subprocess.DEVNULL)
         first = mem("first")
-        lock = self.d / "windvane-heavy.lock"
-        self.until(lambda: lock.exists() and b'"pid"' in lock.read_bytes())  # holds it, waiting on memory
-        later = mem("later")
         self.until(lambda: len(self.queue()) == 1)
+        later = mem("later")  # needs as much: it can't go by
+        self.until(lambda: len(self.queue()) == 2)
         time.sleep(0.5)
+        lock = self.d / "windvane-heavy.lock"
+        self.assertFalse(lock.exists() and lock.read_bytes())  # nobody took the lock to wait on memory in it
         (self.d / "free").touch()
         first.wait(30), later.wait(30)
         self.assertEqual(self.order.read_text().split(), ["first", "later"])

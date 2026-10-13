@@ -41,6 +41,7 @@ DEFAULTS = {
     "goal": "",  # what `windvane plan` aims at when given no goal
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
     "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
+    "heavy_mem": None,  # GB free this project's heavy jobs and heavy check wait for (unset: machine.toml's min_free_gb)
     "overview_extra": "",  # a command whose output `windvane overview` adds (the project's own milestones)
     "shared_notes": [],  # notes files every ticket appends to: no Touches overlap, appended sections merge on their own
     "models": {"worker": "opus", "worker_effort": "high", "reviewer": "opus", "reviewer_effort": "high",
@@ -198,6 +199,13 @@ def setup_minutes(v, where="", key="setup_minutes"):
     return v
 
 
+def heavy_mem(v):
+    """A `heavy_mem`: unset, or a number of GB, 0 or more."""
+    if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0):
+        raise SystemExit(f"windvane: heavy_mem = {v!r} in config.toml: use a number of GB (0 or more)")
+    return v
+
+
 def actions_budget(c):
     """`actions_minutes` and `actions_cap`, checked at once: a typo here would let `windvane ci` spend unchecked."""
     m, cap = c["actions_minutes"], c["actions_cap"]
@@ -256,6 +264,7 @@ class Project:
         self.ap = c["autopilot"]
         setup_minutes(c["setup_minutes"])
         setup_minutes(c["teardown_minutes"], key="teardown_minutes")
+        heavy_mem(c["heavy_mem"])
         actions_budget(c)
         self.periodic = periodic(c.get("periodic", []))
         self.perms, self.perm_problems = permissions(c["permissions"], self.periodic)

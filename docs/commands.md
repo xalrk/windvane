@@ -67,8 +67,8 @@ Options of `windvane run`:
 
 | Command | What it does |
 |---|---|
-| `windvane heavy [--wait <min>] -- <command>` | Run a machine-heavy command (engine, render, big build) one at a time on this machine, waiting up to `--wait` minutes (default: a session's stop, else `machine.toml`'s `heavy_wait`, 60), then exiting 75 without running it. See [the heavy lock](safety.md#the-heavy-lock). |
-| `windvane heavy --status` | Who holds the heavy lock (pid, command, folder, since when) and each live waiter in line (pid, waiting since, `paused` for one stopped with Ctrl-Z), or `free`. Never waits, takes no lock and no place in line. |
+| `windvane heavy [--wait <min>] [--mem <GB>] -- <command>` | Run a machine-heavy command (engine, render, big build) one at a time on this machine, once `--mem` GB of memory are free (default: the project's `heavy_mem`, else `machine.toml`'s `min_free_gb`), waiting up to `--wait` minutes (default: a session's stop, else `machine.toml`'s `heavy_wait`, 60), then exiting 75 without running it. See [the heavy lock](safety.md#the-heavy-lock). |
+| `windvane heavy --status` | Who holds the heavy lock (pid, command, folder, since when) and each live waiter in line (pid, waiting since, `paused` for one stopped with Ctrl-Z, and for a head short of memory `waiting for 6 GB, 4.1 free; letting smaller jobs by`), or `free`. Never waits, takes no lock and no place in line. |
 
 ## Used by the sessions
 
@@ -79,5 +79,5 @@ These are what the autopilot's sessions call; you rarely need them yourself.
 | `windvane ci [workflow] [--ref <branch>] [--dry-run]` | Start a GitHub Actions workflow (default: the repo's only one) on the current branch, only if this month's minutes plus its last run's stay within `actions_cap`; prints what's used and what's left. `--dry-run` counts and says, but starts nothing. |
 | `windvane check [--lines 60]` | Run the project's check, reusing a pass recorded for the same git tree. Exits 0 on a pass, 1 on a failure, 75 (`CHECK NOT RUN`) when a `heavy_check` never got the machine. |
 | `windvane critic <ticket>` | Have the critic judge a ticket's evidence pack, and print the worker's next step. |
-| `windvane bg [--heavy] <name> <command...>` | Start a long command in the background (under the heavy lock with `--heavy`). |
+| `windvane bg [--heavy [--mem <GB>]] <name> <command...>` | Start a long command in the background (under the heavy lock with `--heavy`, needing `--mem` GB free). |
 | `windvane await <name> [lines]` | Wait up to about 9.5 minutes for a `bg` command; prints `RUNNING` while it still runs. A job an older windvane started before an update is still found when it runs in the caller's worktree; one that can't be tied to it is named in one line, not awaited. |

@@ -142,10 +142,7 @@ class NoPsNeeded(NoProc):
 
     def test_free_memory_is_unknown_and_never_waited_on(self):
         self.assertIsNone(heavy.free_gb())
-        said = []
-        cfg = {"busy": [], "min_free_gb": 10 ** 6}
-        self.assertTrue(heavy.wait_until_clear(cfg, lambda: time.time() + 1, said.append))
-        self.assertEqual(said, [])
+        self.assertIsNone(heavy.short(10 ** 6, heavy.free_gb()))
         if self.real["free"] is None:
             self.skipTest("no /proc to compare with")
         self.assertGreater(self.real["free"], 0)

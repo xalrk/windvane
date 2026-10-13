@@ -9,7 +9,8 @@ that tool, waiting on its own lock); instead it waits until no process matching 
     min_free_gb = 6                                           # wait for this much MemAvailable before starting
     heavy_wait = 60                                           # minutes a command run by hand waits before giving up
 
-Free memory comes from Linux's /proc/meminfo; elsewhere (macOS) it isn't known, and only `busy` is waited on.
+A job's own `--mem`, or its project's `heavy_mem`, replaces `min_free_gb` for it. Free memory comes from Linux's
+/proc/meminfo; elsewhere (macOS) it isn't known, and only `busy` is waited on.
 """
 import fcntl
 import json
@@ -87,42 +88,30 @@ def nap(seconds, stopped):
         time.sleep(min(1, end - time.time()))
 
 
-def wait_until_clear(cfg, deadline, say, stopped=lambda: False):
-    said = None
-    while True:
-        b = busy(cfg["busy"])
-        mem = free_gb()
-        why = (f"'{b}' is running" if b else
-               f"only {mem:.1f} GB free (want {cfg['min_free_gb']})" if mem is not None and mem < cfg["min_free_gb"]
-               else None)
-        if not why:
-            return True
-        if stopped():  # only once it has to wait: a clear machine still runs the job
-            say(f"{STOPPED}: {why}")
-            return False
-        if time.time() >= deadline():
-            say(f"{GAVE_UP}: {why}")
-            return False
-        if why != said:
-            say(f"heavy: waiting: {why}")
-            said = why
-        nap(10, stopped)
+def short(need, mem):
+    """Why a job needing `need` GB can't start with `mem` GB free, or None: also when either is unknown (no /proc,
+    or a waiter from an older windvane that didn't say)."""
+    if mem is not None and need is not None and mem < need:
+        return f"only {mem:.1f} GB free (want {need:.10g})"
+    return None
 
 
 def queue_dir():
     return lock_path().with_name("windvane-heavy.queue")
 
 
-def join_queue():
-    """An entry in the queue, named by arrival time so they sort in order, and flocked while this job lives.
+def join_queue(need):
+    """An entry in the queue, named by arrival time so they sort in order, and flocked while this job lives. It holds
+    the job's memory need, for the waiters behind it to see whether it lets them by.
 
-    It's flocked under a hidden name first and only then renamed into place, so a scan never sees a live entry
-    unlocked. The open file keeps the entry; closing it (or dying) frees it."""
+    It's flocked and written under a hidden name first and only then renamed into place, so a scan never sees a live
+    entry unlocked or empty. The open file keeps the entry; closing it (or dying) frees it."""
     q = queue_dir()
     q.mkdir(parents=True, exist_ok=True)
     name = f"{time.time_ns():020d}-{os.getpid()}"
     fd = os.open(q / f".{name}", os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
+    os.write(fd, json.dumps({"mem": need}).encode())
     os.rename(q / f".{name}", q / name)
     return fd, q / name
 
@@ -186,11 +175,21 @@ def entry_pid(name):
         return None
 
 
+def need_of(path):
+    """A waiter's memory need in GB, from its queue entry; None when it can't be read (an older windvane's entry)."""
+    try:
+        need = json.loads(Path(path).read_text() or "{}").get("mem")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return need if isinstance(need, (int, float)) and not isinstance(need, bool) else None
+
+
 def ahead(entry):
-    """How many live waiters arrived before this one. Clears dead entries on the way (and a waiter's hidden one
-    left by a kill between creating and renaming it). A paused waiter (Ctrl-Z) doesn't count: it keeps its entry,
-    but would hold up the whole line until its wait times out; resumed, it gets in line again."""
-    q, mine, n = entry[1].parent, entry[1].name, 0
+    """The memory needs of the live waiters that arrived before this one, oldest first. Clears dead entries on the
+    way (and a waiter's hidden one left by a kill between creating and renaming it). A paused waiter (Ctrl-Z) isn't
+    in it: it keeps its entry, but would hold up the whole line until its wait times out; resumed, it gets in line
+    again."""
+    q, mine, needs = entry[1].parent, entry[1].name, []
     for name in sorted(os.listdir(q)):
         path = q / name
         if name.startswith("."):
@@ -200,8 +199,8 @@ def ahead(entry):
             except OSError:
                 pass
         elif name < mine and alive(path) and not paused(entry_pid(name)):
-            n += 1
-    return n
+            needs.append(need_of(path))
+    return needs
 
 
 def holder(lock):
@@ -274,29 +273,44 @@ def waited(log, head=65536):
     return int(m.group(1)) if m else 0
 
 
-def take(lock, entry, deadline, say, stopped=lambda: False):
-    """Wait for this job's turn, then take the lock: only the oldest live waiter tries it, so a job that arrives
-    just as the lock frees can't overtake one that has been waiting (R-007). True once held, False at the deadline
-    (a function: a moved deadline counts at once) or a stop."""
-    said = None
+def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False):
+    """Wait for this job's turn, its memory and a machine clear of `busy` work, then take the lock. True once held,
+    False at the deadline (a function: a moved deadline counts at once) or a stop.
+
+    Only the head of the line (the oldest live waiter) tries the lock, so a job that arrives just as it frees can't
+    overtake one that has been waiting (R-007). A head short of memory doesn't take it, and every job behind it would
+    wait on that memory too: so the first waiter behind it whose own need is met may go first, while the head stays
+    the head and gets the first try once its memory is free. Only memory lets a job by: a waiter ahead whose need is
+    met, or unknown, keeps its turn."""
+    said, busy_why, retry = None, None, 0
     while True:
-        n = ahead(entry)
-        if not n:
+        line, mem = ahead(entry), free_gb()
+        turn = all(short(w, mem) for w in line)  # the head, or every waiter ahead waits on memory it doesn't have
+        mine = short(need, mem) if turn else None
+        if turn and not mine and time.time() >= retry:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return True
             except OSError:
-                pass
+                busy_why = None
+            else:
+                b = busy(cfg["busy"])
+                if not b:
+                    return True
+                fcntl.flock(lock, fcntl.LOCK_UN)  # no one runs beside it anyway; it looks again in 10 s
+                busy_why, retry = f"'{b}' is running", time.time() + 10
+        why = mine or (busy_why if turn else None)
         info = holder(lock)
-        key = (info.get("pid"), info.get("since"), n)
-        if key != said:  # reprinted only when the holder or the line ahead changes, not every minute
-            say(waiting_line(info, n))
+        n = 0 if turn else len(line)
+        key = "memory" if mine else why or (info.get("pid"), info.get("since"), n)
+        if key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
+            say(f"heavy: waiting: {why}" if why else waiting_line(info, n))
             said = key
+        gone = f": {why}" if why else f" lock: {held_by(info)}"
         if stopped():
-            say(f"{STOPPED} lock: {held_by(info)}")
+            say(STOPPED + gone)
             return False
         if time.time() >= deadline():
-            say(f"{GAVE_UP} lock: {held_by(info)}")
+            say(GAVE_UP + gone)
             return False
         time.sleep(1)
 
@@ -322,12 +336,13 @@ def deadline(cfg, wait_s):
         return time.time() + cfg["heavy_wait"] * 60
 
 
-def run(cmd, wait_s=None, cwd=None):
-    """Run `cmd` under the machine-wide heavy lock. Returns its exit code (TIMED_OUT if the wait timed out, at
-    `deadline`, or as soon as the STOP file named in `STOP_ENV` appears while it waits).
+def run(cmd, wait_s=None, cwd=None, mem=None):
+    """Run `cmd` under the machine-wide heavy lock, once `mem` GB (default: machine.toml's `min_free_gb`) are free.
+    Returns its exit code (TIMED_OUT if the wait timed out, at `deadline`, or as soon as the STOP file named in
+    `STOP_ENV` appears while it waits).
 
-    Jobs run in arrival order: each joins a queue when it asks and waits there for the lock, then holds the lock
-    while it waits for the machine to clear (busy processes, free memory), so it keeps its place throughout."""
+    Jobs run in arrival order: each joins a queue when it asks and waits there, keeping its place, until the lock
+    is free and the machine is clear for it (`take`)."""
     say = lambda m: print(m, file=sys.stderr, flush=True)
     t0 = time.time()
     cfg = machine()
@@ -340,17 +355,16 @@ def run(cmd, wait_s=None, cwd=None):
     env["WINDVANE_HEAVY_HELD"] = str(path)
     if os.environ.get("WINDVANE_HEAVY_HELD") == str(path):  # nested: the outer one already holds it
         return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
-    entry = join_queue()
+    need = cfg["min_free_gb"] if mem is None else mem
+    entry = join_queue(need)
     lock = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
     try:
-        if not take(lock, entry, until, say, stopped):
+        if not take(lock, entry, need, cfg, until, say, stopped):
             return TIMED_OUT
-        leave_queue(entry)  # the lock keeps this job's place now; the next waiter becomes the head and waits on it
+        leave_queue(entry)  # the next waiter becomes the head and waits on the lock
         entry = None
         try:
             claim(lock, cmd, cwd)
-            if not wait_until_clear(cfg, until, say, stopped):
-                return TIMED_OUT
             if (s := round(time.time() - t0)) >= 1:
                 say(WAITED.format(s))
             return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
@@ -372,14 +386,21 @@ def status():
     line = held_by(info) if info.get("pid") else "free"
     if line != "free" and paused(info["pid"]):
         line += " (paused: everyone waits on it)"
-    lines = [line]
+    lines, head = [line], True
     q = queue_dir()
     for name in sorted(os.listdir(q)) if q.is_dir() else []:
         pid = entry_pid(name)
         if name.startswith(".") or not pid or not alive(q / name):
             continue
         since = time.strftime("%H:%M", time.localtime(int(name.split("-")[0]) / 1e9))
-        lines.append(f"waiting: pid {pid}, since {since}" + (" (paused: skipped)" if paused(pid) else ""))
+        line = f"waiting: pid {pid}, since {since}"
+        if paused(pid):
+            line += " (paused: skipped)"
+        elif head:
+            head, need, mem = False, need_of(q / name), free_gb()
+            if short(need, mem):
+                line += f" (waiting for {need:.10g} GB, {mem:.1f} free; letting smaller jobs by)"
+        lines.append(line)
     return lines
 
 
