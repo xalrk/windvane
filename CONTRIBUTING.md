@@ -16,8 +16,8 @@ token, email address or ntfy topic.
 If you'd like to make a larger change (a new command, a config key, a change to how sessions work), please open an
 issue first so we can talk it through before you spend time on it. Small fixes can go straight to a pull request.
 
-**Security problems:** please don't open a public issue. Report them privately through the repository's Security tab
-("Report a vulnerability").
+**Security problems:** please don't open a public issue. Report them privately as [SECURITY.md](SECURITY.md)
+describes.
 
 ## Setup
 ```sh
