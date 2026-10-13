@@ -7,6 +7,7 @@ never recorded.
 import fcntl
 import hashlib
 import itertools
+import json
 import os
 import subprocess
 import sys
@@ -118,10 +119,12 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None):
             try:
                 if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
                     mem = p.cfg.get("heavy_mem")  # unset: machine.toml's min_free_gb
-                    code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
+                    code = subprocess.run([sys.executable, "-c", "import json, sys; from windvane.heavy import run; "
                                            "sys.exit(run(sys.argv[1], cwd=sys.argv[2], "
-                                           "mem=float(sys.argv[3]) if sys.argv[3] else None))",
-                                           cmd, str(cwd), "" if mem is None else str(mem)], cwd=cwd,
+                                           "mem=float(sys.argv[3]) if sys.argv[3] else None, "
+                                           "reuse=json.loads(sys.argv[4])))",
+                                           cmd, str(cwd), "" if mem is None else str(mem),
+                                           json.dumps(heavy.reuse_of(p))], cwd=cwd,
                                           stdout=f, stderr=subprocess.STDOUT,
                                           env={**env, "PYTHONPATH": str(Path(__file__).parents[1]),
                                                heavy.STOP_ENV: str(p.state / "STOP"),  # a stop ends the wait

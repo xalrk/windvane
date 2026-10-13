@@ -777,9 +777,12 @@ def main(argv=None):
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
         if not cmd:
             sys.exit("heavy: give a command")
-        if a.mem is None and (root := toplevel()):
-            a.mem = Project(root).cfg["heavy_mem"]
-        sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60, mem=a.mem))
+        reuse = None
+        if root := toplevel():
+            p = Project(root)
+            a.mem = p.cfg["heavy_mem"] if a.mem is None else a.mem
+            reuse = heavy.reuse_of(p)
+        sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60, mem=a.mem, reuse=reuse))
     p = find()
     phone.use(p)
     if a.cmd == "run":

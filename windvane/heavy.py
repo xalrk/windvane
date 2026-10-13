@@ -9,8 +9,9 @@ that tool, waiting on its own lock); instead it waits until no process matching 
     min_free_gb = 6                                           # wait for this much MemAvailable before starting
     heavy_wait = 60                                           # minutes a command run by hand waits before giving up
 
-A job's own `--mem`, or its project's `heavy_mem`, replaces `min_free_gb` for it. Free memory comes from Linux's
-/proc/meminfo; elsewhere (macOS) it isn't known, and only `busy` is waited on.
+A job's own `--mem`, or its project's `heavy_mem`, replaces `min_free_gb` for it. Its project's `heavy_reuses` names
+helpers its heavy jobs reuse (an emulator, a build daemon): the memory theirs hold counts as free for it. Free memory
+comes from Linux's /proc; elsewhere (macOS) it isn't known, and only `busy` is waited on.
 """
 import fcntl
 import json
@@ -69,6 +70,81 @@ def free_gb():
         return None
 
 
+def in_dirs(path, dirs):
+    return any(path == d or path.startswith(d.rstrip("/") + "/") for d in dirs)
+
+
+def in_checkout(path):
+    """Whether `path` is inside some git checkout (a `.git` in it or above): a process working there works for that
+    project, whichever it is."""
+    p = Path(path)
+    return any((d / ".git").exists() for d in (p, *p.parents) if d != Path(d.anchor))
+
+
+def owned(pid, dirs, cwds):
+    """Whether process `pid` works for the project in `dirs`: the nearest process up its tree (itself, its parent,
+    ...) whose working directory is in the project or in any git checkout decides. A launcher that `cd`s to an SDK
+    dir leaves its emulator's cwd outside the project, but the shell that started it is inside; the walk stops at a
+    checkout so a shared ancestor (one tmux server for every project) can't claim another project's helper. A helper
+    reparented to init when its launcher left is decided by its own cwd alone."""
+    seen = set()
+    while pid > 1 and pid not in seen:
+        seen.add(pid)
+        cwd = cwds.get(pid)
+        if cwd is not None:
+            if in_dirs(cwd, dirs):
+                return True
+            if in_checkout(cwd):
+                return False
+        pid = status_field(pid, "PPid") or 0
+    return False
+
+
+def status_field(pid, key):
+    """A number from /proc/<pid>/status (`VmRSS` in kB, `PPid`), or None."""
+    try:
+        m = re.search(rf"^{key}:\s+(\d+)", (util.PROC / str(pid) / "status").read_text(), re.M)
+    except OSError:
+        return None
+    return int(m.group(1)) if m else None
+
+
+def matches(pid, patterns):
+    """Whether process `pid`'s name (as pgrep sees it) or one of its command-line words matches a pattern. A word, not
+    the whole line: a JVM's name is `java`, its main class a word of its line; a prompt with spaces in it isn't."""
+    try:
+        name = (util.PROC / str(pid) / "comm").read_text().strip()
+        words = [w for w in os.fsdecode((util.PROC / str(pid) / "cmdline").read_bytes()).split("\0")
+                 if w and not any(c.isspace() for c in w)]
+    except OSError:
+        return False
+    return any(re.search(p, w) for p in patterns for w in (name, *words))
+
+
+def helpers_gb(reuse):
+    """GB resident in the long-lived helpers a project's heavy jobs reuse: processes matching its `heavy_reuses`
+    patterns that work for it (`owned`). Its heavy jobs count it as free, since they use those very processes
+    rather than start their own. 0 when it has none, or without /proc."""
+    if not reuse or not reuse[0] or not util.PROC.is_dir():
+        return 0
+    patterns, dirs = reuse
+    mine = {os.getpid(), os.getppid()}
+    cwds = util.cwds()
+    kb = sum(status_field(pid, "VmRSS") or 0 for pid in cwds
+             if pid not in mine and matches(pid, patterns) and owned(pid, dirs, cwds))
+    return kb / 1048576
+
+
+def reuse_of(p):
+    """A project's (`heavy_reuses` patterns, the dirs whose processes are its own: every checkout git knows of it, its
+    main one and the slots, and its state dir), or None when it names none."""
+    if not p.cfg.get("heavy_reuses"):
+        return None
+    out = util.gout(p.root, "worktree", "list", "--porcelain")
+    dirs = {line[9:] for line in out.splitlines() if line.startswith("worktree ")} | {str(p.root), str(p.state)}
+    return list(p.cfg["heavy_reuses"]), sorted({os.path.realpath(d) for d in dirs})
+
+
 def busy(patterns):
     """The first busy pattern with a running process (other than this one's own tree), or None."""
     for pat in patterns:
@@ -88,10 +164,12 @@ def nap(seconds, stopped):
         time.sleep(min(1, end - time.time()))
 
 
-def short(need, mem):
-    """Why a job needing `need` GB can't start with `mem` GB free, or None: also when either is unknown (no /proc,
-    or a waiter from an older windvane that didn't say)."""
-    if mem is not None and need is not None and mem < need:
+def short(need, mem, helpers=0):
+    """Why a job needing `need` GB can't start with `mem` GB free (and `helpers` GB more in its project's own
+    helpers), or None: also when either is unknown (no /proc, or a waiter from an older windvane that didn't say)."""
+    if mem is not None and need is not None and mem + helpers < need:
+        if helpers:
+            return f"{mem:.1f} GB free + {helpers:.1f} GB in this project's helpers (want {need:.10g})"
         return f"only {mem:.1f} GB free (want {need:.10g})"
     return None
 
@@ -273,7 +351,7 @@ def waited(log, head=65536):
     return int(m.group(1)) if m else 0
 
 
-def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False):
+def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=None):
     """Wait for this job's turn, its memory and a machine clear of `busy` work, then take the lock. True once held,
     False at the deadline (a function: a moved deadline counts at once) or a stop.
 
@@ -281,12 +359,13 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False):
     overtake one that has been waiting (R-007). A head short of memory doesn't take it, and every job behind it would
     wait on that memory too: so the first waiter behind it whose own need is met may go first, while the head stays
     the head and gets the first try once its memory is free. Only memory lets a job by: a waiter ahead whose need is
-    met, or unknown, keeps its turn."""
+    met, or unknown, keeps its turn. This job's own project's helpers (`reuse`) count as free for it alone: a waiter
+    ahead is judged on what's free for anyone."""
     said, busy_why, retry = None, None, 0
     while True:
         line, mem = ahead(entry), free_gb()
         turn = all(short(w, mem) for w in line)  # the head, or every waiter ahead waits on memory it doesn't have
-        mine = short(need, mem) if turn else None
+        mine = short(need, mem, helpers_gb(reuse) if mem is not None else 0) if turn else None
         if turn and not mine and time.time() >= retry:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -336,8 +415,9 @@ def deadline(cfg, wait_s):
         return time.time() + cfg["heavy_wait"] * 60
 
 
-def run(cmd, wait_s=None, cwd=None, mem=None):
-    """Run `cmd` under the machine-wide heavy lock, once `mem` GB (default: machine.toml's `min_free_gb`) are free.
+def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None):
+    """Run `cmd` under the machine-wide heavy lock, once `mem` GB (default: machine.toml's `min_free_gb`) are free,
+    counting the memory of its project's own reused helpers (`reuse_of`) as free.
     Returns its exit code (TIMED_OUT if the wait timed out, at `deadline`, or as soon as the STOP file named in
     `STOP_ENV` appears while it waits).
 
@@ -359,7 +439,7 @@ def run(cmd, wait_s=None, cwd=None, mem=None):
     entry = join_queue(need)
     lock = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
     try:
-        if not take(lock, entry, need, cfg, until, say, stopped):
+        if not take(lock, entry, need, cfg, until, say, stopped, reuse):
             return TIMED_OUT
         leave_queue(entry)  # the next waiter becomes the head and waits on the lock
         entry = None

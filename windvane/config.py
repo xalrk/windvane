@@ -42,6 +42,7 @@ DEFAULTS = {
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
     "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
     "heavy_mem": None,  # GB free this project's heavy jobs and heavy check wait for (unset: machine.toml's min_free_gb)
+    "heavy_reuses": [],  # process-name regexes of helpers its heavy jobs reuse (an emulator): their memory counts free
     "overview_extra": "",  # a command whose output `windvane overview` adds (the project's own milestones)
     "shared_notes": [],  # notes files every ticket appends to: no Touches overlap, appended sections merge on their own
     "models": {"worker": "opus", "worker_effort": "high", "reviewer": "opus", "reviewer_effort": "high",
@@ -206,6 +207,18 @@ def heavy_mem(v):
     return v
 
 
+def heavy_reuses(v):
+    """A `heavy_reuses`: a list of process-name regexes."""
+    try:
+        ok = isinstance(v, list) and all(isinstance(p, str) and p and re.compile(p) for p in v)
+    except re.error:
+        ok = False
+    if not ok:
+        raise SystemExit(f"windvane: heavy_reuses = {v!r} in config.toml: use a list of process-name patterns "
+                         "(\"qemu-system\")")
+    return v
+
+
 def actions_budget(c):
     """`actions_minutes` and `actions_cap`, checked at once: a typo here would let `windvane ci` spend unchecked."""
     m, cap = c["actions_minutes"], c["actions_cap"]
@@ -265,6 +278,7 @@ class Project:
         setup_minutes(c["setup_minutes"])
         setup_minutes(c["teardown_minutes"], key="teardown_minutes")
         heavy_mem(c["heavy_mem"])
+        heavy_reuses(c["heavy_reuses"])
         actions_budget(c)
         self.periodic = periodic(c.get("periodic", []))
         self.perms, self.perm_problems = permissions(c["permissions"], self.periodic)
