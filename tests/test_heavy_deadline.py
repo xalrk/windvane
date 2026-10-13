@@ -1,7 +1,7 @@
 """R-010, R-011, R-013: a heavy job waits for the machine until its session's stop (`WINDVANE_STOP_AT`), not
 machine.toml's `heavy_wait`, so it never gives up its place in line and requeues at the back; `--wait` still wins,
 and a command run by hand (no stop in its environment) waits `heavy_wait` as before. The driver's heavy check waits
-once, in place, until the ticket's stop."""
+once, in place, until the run's end, even past its worker's time box."""
 import os
 import subprocess
 import sys
@@ -111,20 +111,28 @@ class DriverCheckKeepsItsPlace(unittest.TestCase):
             self.addCleanup(patch.stop)
 
     def test_the_check_waits_once_in_place_behind_a_long_holder(self):
+        self.waits_in_place(args(parallel=1), 4)
+
+    def test_it_waits_past_its_workers_time_box(self):
+        """The worker's box (6 s here) started with the worker: the check still waits on until the run's end."""
+        self.waits_in_place(args(parallel=1, ticket_hours=6 / 3600), 8)
+
+    def waits_in_place(self, a, held_s):
+        """A full run whose check queues behind a holder that lets go `held_s` after the check got in line."""
         hold(self, self.d)
-        pilot = driver.Pilot(Project(self.s.root), args(parallel=1))
+        pilot = driver.Pilot(Project(self.s.root), a)
         lines, log = [], pilot.log
         pilot.log = lambda msg: (lines.append(msg), log(msg))
         entries, done = set(), threading.Event()
 
-        def watch():  # every queue entry the waiting check ever has; the holder lets go after 4 s of it
+        def watch():  # every queue entry the waiting check ever has, until the holder lets go
             q, first = heavy.queue_dir(), None
             while not done.is_set():
                 names = {n for n in (os.listdir(q) if q.exists() else []) if not n.startswith(".")}
                 if not (self.d / "release").exists():  # the merged tree's check after it queues too
                     entries.update(names)
                 first = first or (names and time.time())
-                if first and time.time() - first > 4:
+                if first and time.time() - first > held_s:
                     (self.d / "release").touch()
                 time.sleep(0.05)
         watcher = threading.Thread(target=watch, daemon=True)
@@ -139,7 +147,7 @@ class DriverCheckKeepsItsPlace(unittest.TestCase):
         self.assertEqual(len(entries), 1, entries)  # one place in line for the whole wait, kept past heavy_wait
         checks = [r for r in read_jsonl(pilot.p.state / "ledger.jsonl") if r.get("event") == "check"]
         self.assertEqual([r.get("not_run") for r in checks], [None, None])  # the head, then the merged tree
-        self.assertGreater(checks[0].get("waited_s", 0), HEAVY_WAIT * 60)
+        self.assertGreater(checks[0].get("waited_s", 0), held_s - 1)
 
 
 if __name__ == "__main__":

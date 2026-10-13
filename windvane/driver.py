@@ -199,7 +199,6 @@ class Pilot(Desk, Periodic):
         self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
         self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
-        self.kill_at = {}  # ticket -> its run's time box: its checks wait for the machine until then at most
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
         self.digest_tried = 0.0  # when a push last tried the phone's missed provisional answers (see quiet_check)
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
@@ -442,7 +441,7 @@ class Pilot(Desk, Periodic):
     def work(self, tid, kind, branches):
         p, wd = self.p, self.wd
         start_five = self.usage.five
-        limit = self.kill_at[tid] = now() + timedelta(hours=self.a.ticket_hours)
+        limit = now() + timedelta(hours=self.a.ticket_hours)
         kill_at = min(self.end(), limit)
         wrap = kill_at - timedelta(minutes=20)
         ref = f"{p.remote}/{branches[0]}" if branches else p.upstream
@@ -605,7 +604,7 @@ class Pilot(Desk, Periodic):
             return
         if not self.clean_wait(tid, f"checking {tid}"):
             return
-        ok, summary, logf = self.ran(tid, lambda: self.check_at(sha, tid, self.check_stop(tid)), f"check on {sha[:7]}")
+        ok, summary, logf = self.ran(tid, lambda: self.check_at(sha, tid, self.end()), f"check on {sha[:7]}")
         if ok is None:  # stopped while the machine was busy: the next run's worker finds the head and is READY again
             return
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
@@ -726,22 +725,17 @@ class Pilot(Desk, Periodic):
                  4, "warning")
         return False
 
-    def check_stop(self, tid):
-        """When a ticket's heavy check stops waiting for the machine: its run's time box or the run's end, whichever
-        comes first. It waits once, keeping its place in line, rather than timing out and queueing again at the
-        back."""
-        return min(self.kill_at.get(tid, self.end()), self.end())
-
     def ran(self, tid, run, what):
         """`run()` (a check) again until it runs: a heavy check whose wait for the machine timed out says nothing
         about the ticket, so it costs no worker run and no bounce, only a line in the log for each wait. (None, ...)
-        when a stop or the ticket's stop (`check_stop`) comes first; so a wait runs again only when the deadline
-        moved later while it waited."""
+        when a stop or the deadline comes first. A ticket's check waits for the machine until the run's end, keeping
+        its place in line (not its worker's time box: that started with the worker and may be spent), so it runs
+        again only when the deadline moved later while it waited."""
         while True:
             ok, summary, logf = run()
             if ok is not None:
                 return ok, summary, logf
-            if self.stopping_now() or (self.p.state / "STOP").exists() or now() >= self.check_stop(tid):
+            if self.stopping_now() or (self.p.state / "STOP").exists() or now() >= self.end():
                 self.log(f"{tid}: {what}: {waited(summary)}; the next run checks it again, nothing to do")
                 return ok, summary, logf
             self.log(f"{tid}: {what}: {waited(summary)}; the autopilot runs it again, nothing to do")
@@ -851,7 +845,7 @@ class Pilot(Desk, Periodic):
             if renumbered is not None:
                 self.log(f"{tid}: conflicted with {p.main} only in appended entries: {said(renumbered)}; resolved "
                          "without a worker run")
-            ok, summary, logf = self.ran(tid, lambda: check(p, cd, ticket=tid, stop_at=self.check_stop(tid)),
+            ok, summary, logf = self.ran(tid, lambda: check(p, cd, ticket=tid, stop_at=self.end()),
                                          "check on the merged tree")
             if ok is None:
                 return None

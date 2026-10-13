@@ -147,16 +147,6 @@ class GateRunsItAgain(unittest.TestCase):
         self.assertEqual(self.lines, ["T-001: check on abc1234: not run, waited 1 min for the machine lock (x); the "
                                       "autopilot runs it again, nothing to do"])
 
-    def test_the_tickets_stop_ends_the_retries(self):
-        pilot = self.pilot()
-        pilot.deadline = now() + timedelta(minutes=10)
-        pilot.kill_at["T-001"] = now() - timedelta(seconds=1)
-        runs = []
-        ok, _, _ = pilot.ran("T-001", lambda: (runs.append(1), (None, "CHECK NOT RUN: x; run it again", None))[1],
-                             "check")
-        self.assertIsNone(ok)
-        self.assertEqual(len(runs), 1)
-
     def test_a_stop_ends_the_retries(self):
         pilot = self.pilot()
         runs = []

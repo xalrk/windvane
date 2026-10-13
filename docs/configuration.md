@@ -171,7 +171,7 @@ Settings for this machine, shared by every project on it.
 | `projects_dir` | none | Where the windvane skill creates new projects when you start one from a Claude Code session. |
 | `busy` | `["UnrealEditor", "ShaderCompile", "blender"]` | Process names (regular expressions, as `pgrep` matches them) of heavy work started outside windvane. `windvane heavy` waits while any of them runs. |
 | `min_free_gb` | `6` | `windvane heavy` waits until at least this much memory is available. Linux only; elsewhere only `busy` is waited on. |
-| `heavy_wait` | `60` | Minutes a heavy job run by hand (`windvane heavy`, `windvane check` with `heavy_check`) waits for the machine before giving up without running (exit 75); `windvane heavy --wait` overrides it. Sessions' heavy jobs and the driver's heavy check wait until their stop instead (the session's, or the ticket's or run's end), so they keep their place in line. A check that gave up says `CHECK NOT RUN` and doesn't count as failed. |
+| `heavy_wait` | `60` | Minutes a heavy job run by hand (`windvane heavy`, `windvane check` with `heavy_check`) waits for the machine before giving up without running (exit 75); `windvane heavy --wait` overrides it. Sessions' heavy jobs and the driver's heavy check wait until their stop instead (the session's stop, or the run's end), so they keep their place in line. A check that gave up says `CHECK NOT RUN` and doesn't count as failed. |
 
 ## [state]
 
