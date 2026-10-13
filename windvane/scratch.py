@@ -42,25 +42,8 @@ def drop(p, key):
 
 
 def busy():
-    """The cwd and TMPDIR of every process we can see (Linux /proc; elsewhere only the age rule protects a dir)."""
-    out = set()
-    try:
-        pids = [d for d in os.listdir(util.PROC) if d.isdigit()]
-    except OSError:
-        return out
-    for pid in pids:
-        try:
-            out.add(os.readlink(util.PROC / pid / "cwd"))
-        except OSError:
-            pass
-        try:
-            env = (util.PROC / pid / "environ").read_bytes()
-        except OSError:
-            continue
-        for var in env.split(b"\0"):
-            if var.startswith(b"TMPDIR="):
-                out.add(os.fsdecode(var[7:]).rstrip("/"))
-    return out
+    """The cwd and TMPDIR of every process we can see (/proc on Linux; `lsof` and `ps` on macOS)."""
+    return set(util.cwds().values()) | {d.rstrip("/") for d in util.tmpdirs().values()}
 
 
 def _recent(path, since):
@@ -105,8 +88,8 @@ def stale(dirs, age=AGE, procs=None):
                 continue
         except OSError:
             continue
-        inside = str(d) + os.sep
-        if any(b == str(d) or b.startswith(inside) for b in procs) or _recent(d, since):
+        names = {str(d), os.path.realpath(d)}  # lsof gives macOS's /var as /private/var; a TMPDIR is as it was set
+        if any(b == n or b.startswith(n + os.sep) for b in procs for n in names) or _recent(d, since):
             continue
         out.append(d)
     return out

@@ -141,8 +141,9 @@ class Teardown(unittest.TestCase):
 
     def helper_after_run(self, teardown):
         """The pid of a helper the setup starts outside every process group (as a shared emulator is), after a run."""
-        pids = self.s.tmp / "helper.pids"
-        self.config(f'setup = "setsid sleep 600 >/dev/null 2>&1 & echo $! >> {pids}"\n' + teardown)
+        pids, helper = self.s.tmp / "helper.pids", self.s.tmp / "helper.py"
+        helper.write_text("import os, time\nos.setsid()\ntime.sleep(600)\n")  # setsid(1) is Linux's, not macOS's
+        self.config(f'setup = "python3 {helper} >/dev/null 2>&1 & echo $! >> {pids}"\n' + teardown)
         self.run_until()
         pid = int(pids.read_text().split()[0])
         self.addCleanup(lambda: [os.kill(int(q), 9) for q in pids.read_text().split() if alive_pid(int(q))])

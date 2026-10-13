@@ -150,30 +150,48 @@ class NoPsNeeded(NoProc):
             self.skipTest("no /proc to compare with")
         self.assertGreater(self.real["free"], 0)
 
-    def test_an_older_jobs_cwd_is_unknown_unless_recorded(self):
-        c = self.child()
-        base = self.d / "bg" / "check"
-        base.parent.mkdir()
-        Path(f"{base}.pid").write_text(str(c.pid))
-        self.assertIsNone(jobs.job_cwd(base))
-        if HAS_PROC:
-            with mock.patch.object(util, "PROC", Path("/proc")):
-                self.assertEqual(jobs.job_cwd(base), os.getcwd())
-        Path(f"{base}.cwd").write_text("/somewhere\n")
-        self.assertEqual(jobs.job_cwd(base), "/somewhere")
-
-    def test_scratch_sees_no_process_so_only_age_protects(self):
-        self.assertEqual(scratch.busy(), set())
-        if HAS_PROC:
-            with mock.patch.object(util, "PROC", Path("/proc")):
-                self.assertIn(os.getcwd(), scratch.busy())
-        old = self.d / "windvane-old"
-        old.mkdir()
-        os.utime(old, (time.time() - 2 * scratch.AGE,) * 2)
-        self.assertEqual(scratch.stale([old]), [old])
-        os.utime(old)
-        self.assertEqual(scratch.stale([old]), [])
-
 
 if __name__ == "__main__":
     unittest.main()
+
+
+LSOF = shutil.which("lsof") or next((x for x in ("/usr/sbin/lsof",) if os.access(x, os.X_OK)), None)
+
+
+@unittest.skipUnless(LSOF and shutil.which("ps"), "no lsof or ps on this system")
+class LsofAndPs(NoProc):
+    """Which dirs processes work in, as macOS tells it: `lsof` for each one's cwd, `ps` for its TMPDIR."""
+
+    def test_an_older_jobs_cwd_comes_from_its_live_pid(self):
+        here = self.d / "worktree"
+        here.mkdir()
+        c = self.child("sh", "-c", f"cd {here} && exec sleep 30")
+        base = self.d / "bg" / "check"
+        base.parent.mkdir()
+        Path(f"{base}.pid").write_text(str(c.pid))
+        for _ in range(50):  # until the shell has changed dir
+            if jobs.job_cwd(base) == os.path.realpath(here):
+                break
+            time.sleep(0.05)
+        self.assertEqual(jobs.job_cwd(base), os.path.realpath(here))
+        c.kill()
+        c.wait()
+        self.assertIsNone(jobs.job_cwd(base))  # dead: nothing ties it to anyone
+        Path(f"{base}.cwd").write_text("/somewhere\n")
+        self.assertEqual(jobs.job_cwd(base), "/somewhere")
+
+    def test_scratch_keeps_an_old_dir_a_process_works_in_or_has_as_its_tmpdir(self):
+        cwd, env, idle = (self.d / f"windvane-{n}" for n in ("cwd", "env", "idle"))
+        for d in (cwd, env, idle):
+            d.mkdir()
+            os.utime(d, (time.time() - 2 * scratch.AGE,) * 2)
+        self.child("sh", "-c", f"cd {cwd} && exec sleep 30")
+        b = subprocess.Popen(["sleep", "30"], env={**os.environ, "TMPDIR": str(env)})
+        self.addCleanup(lambda: (b.kill(), b.wait()))
+        for _ in range(50):
+            if scratch.stale([cwd, env, idle]) == [idle]:
+                break
+            time.sleep(0.05)
+        self.assertEqual(scratch.stale([cwd, env, idle]), [idle])
+        os.utime(idle)
+        self.assertEqual(scratch.stale([idle]), [])  # the age rule still holds

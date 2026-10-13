@@ -98,7 +98,7 @@ class CleanMachine(unittest.TestCase):
         for line in out.splitlines():  # each fix is a command the user can run, or something to install
             if "->" in line:
                 fix = line.split("-> ")[1]
-                self.assertRegex(fix, r"^(windvane \w+|install \S+)", line)
+                self.assertRegex(fix, r"^(windvane \w+|install \S+|nothing to run)", line)  # the last: macOS's note
         self.assertNotIn("pipx", out)
         self.sh("windvane install --yes")
         self.assertIn("ok        the mention hook", self.sh("windvane doctor"))

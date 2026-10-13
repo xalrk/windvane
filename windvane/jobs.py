@@ -261,9 +261,10 @@ def job_cwd(base):
     except OSError:
         pass
     try:
-        return os.readlink(util.PROC / str(int(Path(f"{base}.pid").read_text())) / "cwd")
-    except (OSError, ValueError):  # dead, or no /proc (macOS): nothing ties it to anyone
+        pid = int(Path(f"{base}.pid").read_text())
+    except (OSError, ValueError):
         return None
+    return util.cwds(pid).get(pid)  # None when it's dead: nothing ties it to anyone
 
 
 def worktree(path):

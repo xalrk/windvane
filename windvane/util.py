@@ -3,8 +3,11 @@ import calendar
 import fcntl
 import json
 import os
+import re
+import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -167,6 +170,69 @@ def last_match(regex, text):
 # dir, so the tests point it at a path that isn't there to run that branch on Linux (test_no_proc).
 PROC = Path("/proc")
 PS_WAIT = 10  # seconds a `ps` may take: a hung one counts as no answer
+
+
+def cwds(pid=None):
+    """{pid: working directory} of every process we can see, or of `pid` alone. /proc on Linux; elsewhere (macOS)
+    `lsof`, which macOS keeps in /usr/sbin, often off PATH. Empty when neither answers."""
+    if PROC.is_dir():
+        out = {}
+        for d in [str(pid)] if pid else [d for d in _listdir(PROC) if d.isdigit()]:
+            try:
+                out[int(d)] = os.readlink(PROC / d / "cwd")
+            except OSError:
+                pass
+        return out
+    exe = shutil.which("lsof") or next((x for x in ("/usr/sbin/lsof", "/usr/bin/lsof") if os.access(x, os.X_OK)), None)
+    if not exe:
+        return {}
+    try:
+        text = subprocess.run([exe, "-a", "-d", "cwd", "-w", "-Fn", *(["-p", str(pid)] if pid else [])],
+                              capture_output=True, text=True, timeout=PS_WAIT).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    out, at = {}, None
+    for line in text.splitlines():  # -F: a `p<pid>` line, then its `n<path>`
+        if line.startswith("p"):
+            at = int(line[1:])
+        elif line.startswith("n") and at is not None:
+            out[at] = line[1:]
+    return out
+
+
+def tmpdirs():
+    """{pid: its TMPDIR} for every process we can see that sets one. /proc on Linux; elsewhere `ps` with the
+    environment, which shows only our own processes' (paths with spaces in them are cut at the space)."""
+    out = {}
+    if PROC.is_dir():
+        for d in [d for d in _listdir(PROC) if d.isdigit()]:
+            try:
+                env = (PROC / d / "environ").read_bytes()
+            except OSError:
+                continue
+            for var in env.split(b"\0"):
+                if var.startswith(b"TMPDIR="):
+                    out[int(d)] = os.fsdecode(var[7:])
+        return out
+    flags = "-axwwE" if sys.platform == "darwin" else "axeww"  # macOS's ps, or procps (a test without /proc)
+    try:
+        text = subprocess.run(["ps", flags, "-o", "pid=,command="], capture_output=True, text=True,
+                              timeout=PS_WAIT).stdout
+    except (OSError, subprocess.SubprocessError):
+        return out
+    for line in text.splitlines():
+        pid, _, rest = line.strip().partition(" ")
+        m = re.search(r"(?:^|\s)TMPDIR=(\S+)", rest)
+        if m and pid.isdigit():
+            out[int(pid)] = m.group(1)
+    return out
+
+
+def _listdir(d):
+    try:
+        return os.listdir(d)
+    except OSError:
+        return []
 
 
 def started_at(pid):
