@@ -117,8 +117,11 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None):
             beat = heartbeat(log)
             try:
                 if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
+                    mem = p.cfg.get("heavy_mem")  # unset: machine.toml's min_free_gb
                     code = subprocess.run([sys.executable, "-c", "import sys; from windvane.heavy import run; "
-                                           "sys.exit(run(sys.argv[1], cwd=sys.argv[2]))", cmd, str(cwd)], cwd=cwd,
+                                           "sys.exit(run(sys.argv[1], cwd=sys.argv[2], "
+                                           "mem=float(sys.argv[3]) if sys.argv[3] else None))",
+                                           cmd, str(cwd), "" if mem is None else str(mem)], cwd=cwd,
                                           stdout=f, stderr=subprocess.STDOUT,
                                           env={**env, "PYTHONPATH": str(Path(__file__).parents[1]),
                                                heavy.STOP_ENV: str(p.state / "STOP"),  # a stop ends the wait
@@ -301,7 +304,7 @@ def stray_line(name, base):
             f"tied to it): {how}; log {base}.log")
 
 
-def bg(p, name, cmd, cwd, heavy=False):
+def bg(p, name, cmd, cwd, heavy=False, mem=None):
     if alive(find_job(p, name)[0]):
         sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
     base = job_base(p, name)
@@ -311,7 +314,7 @@ def bg(p, name, cmd, cwd, heavy=False):
     Path(f"{base}.start").write_text(str(int(time.time())))
     Path(f"{base}.cwd").write_text(str(Path(cwd).resolve()))  # ties it to its worktree, should job_base move again
     if heavy:
-        cmd = [*exe(), "heavy", "--", *cmd]
+        cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []), "--", *cmd]
     proc = subprocess.Popen(["bash", "-c", '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"', str(base), *cmd],
                             cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True)

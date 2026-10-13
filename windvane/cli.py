@@ -706,11 +706,14 @@ def main(argv=None):
     s.add_argument("--last", action="store_true", help="with --project: the latest verdicts' scores per dimension")
     s = sub.add_parser("bg", help="start a long command in the background")
     s.add_argument("--heavy", action="store_true", help="run it under the machine-wide heavy lock")
+    s.add_argument("--mem", type=float, help="with --heavy: GB of free memory it needs (default: as `heavy`)")
     s.add_argument("name")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
     s.add_argument("--wait", type=float, help="minutes to wait for the machine before giving up "
                                               "(default: the session's stop, else machine.toml's heavy_wait, 60)")
+    s.add_argument("--mem", type=float, help="GB of free memory it needs before starting "
+                                             "(default: the project's heavy_mem, else machine.toml's min_free_gb)")
     s.add_argument("--status", action="store_true", help="who holds the lock and who waits, without waiting")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("await", help="wait (up to ~9.5 min) for a bg command (this ticket's own)")
@@ -761,7 +764,11 @@ def main(argv=None):
         if a.status:
             return print("\n".join(heavy.status()))
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
-        sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60) if cmd else "heavy: give a command")
+        if not cmd:
+            sys.exit("heavy: give a command")
+        if a.mem is None and (root := toplevel()):
+            a.mem = Project(root).cfg["heavy_mem"]
+        sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60, mem=a.mem))
     p = find()
     phone.use(p)
     if a.cmd == "run":
@@ -770,7 +777,9 @@ def main(argv=None):
                 setattr(a, k, p.ap[k])
     if a.cmd == "bg":
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
-        return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy) if cmd else sys.exit("bg: give a command")
+        if a.mem is not None and not a.heavy:
+            sys.exit("bg: --mem goes with --heavy")
+        return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy, a.mem) if cmd else sys.exit("bg: give a command")
     if a.cmd == "await":
         return jobs.await_(p, a.name, a.lines)
     if a.cmd == "watch":
