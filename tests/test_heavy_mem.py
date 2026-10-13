@@ -103,6 +103,23 @@ class HeavyMem(unittest.TestCase):
         self.assertEqual([head.wait(30), small.wait(30)], [0, 0])
         self.assertEqual(self.ran(), ["head", "small"])
 
+    def test_two_small_jobs_go_by_one_at_a_time_in_their_order(self):
+        head = self.job("head")
+        self.until(lambda: len(self.waiters()) == 1)
+        hold = self.d / "go"
+        first = self.job(f"first >> {self.order}; while [ ! -e {hold} ]; do sleep 0.05; done; echo first-done", 2)
+        self.until(lambda: self.ran() == ["first"])
+        second = self.job("second", 2)
+        self.until(lambda: len(self.waiters()) == 2)
+        time.sleep(0.5)
+        self.assertEqual(self.ran(), ["first"])  # the lock is first's: second waits for it, not beside it
+        hold.touch()
+        self.assertEqual([first.wait(30), second.wait(30)], [0, 0])
+        self.assertIsNone(head.poll())
+        self.free(8)
+        self.assertEqual(head.wait(30), 0)
+        self.assertEqual(self.ran(), ["first", "first-done", "second", "head"])
+
     def test_a_job_that_does_not_fit_either_does_not_go_by(self):
         head = self.job("head")
         self.until(lambda: len(self.waiters()) == 1)
@@ -154,6 +171,12 @@ class MemSetting(unittest.TestCase):
         self.assertEqual(argv[argv.index("heavy"):], ["heavy", "--mem", "2", "--", "make", "shots"])
         with self.assertRaisesRegex(SystemExit, "--mem goes with --heavy"):
             cli.main(["bg", "--mem", "2", "shots", "make"])
+
+    def test_a_bad_mem_is_refused_as_heavy_mem_is(self):
+        for bad in ("-1", "nan", "inf", "lots"):
+            with self.subTest(bad), mock.patch("sys.stderr", io.StringIO()) as err, self.assertRaises(SystemExit):
+                cli.main(["heavy", "--mem", bad, "--", "true"])
+            self.assertIn("use a number of GB (0 or more)", err.getvalue())
 
     @unittest.skipUnless(heavy.free_gb(), "free memory is only known on Linux")
     def test_a_heavy_check_waits_for_the_projects_heavy_mem(self):

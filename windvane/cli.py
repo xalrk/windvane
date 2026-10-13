@@ -623,6 +623,17 @@ class Version(argparse.Action):
         parser.exit()
 
 
+def gb(text):
+    """A `--mem` value: GB, 0 or more, as `heavy_mem` takes them."""
+    try:
+        v = float(text)
+    except ValueError:
+        v = -1
+    if not 0 <= v < float("inf"):
+        raise argparse.ArgumentTypeError(f"{text!r}: use a number of GB (0 or more)")
+    return v
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="windvane", description=__doc__)
     ap.add_argument("-C", dest="cwd", help="run as if started in this directory")
@@ -706,13 +717,13 @@ def main(argv=None):
     s.add_argument("--last", action="store_true", help="with --project: the latest verdicts' scores per dimension")
     s = sub.add_parser("bg", help="start a long command in the background")
     s.add_argument("--heavy", action="store_true", help="run it under the machine-wide heavy lock")
-    s.add_argument("--mem", type=float, help="with --heavy: GB of free memory it needs (default: as `heavy`)")
+    s.add_argument("--mem", type=gb, help="with --heavy: GB of free memory it needs (default: as `heavy`)")
     s.add_argument("name")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
     s.add_argument("--wait", type=float, help="minutes to wait for the machine before giving up "
                                               "(default: the session's stop, else machine.toml's heavy_wait, 60)")
-    s.add_argument("--mem", type=float, help="GB of free memory it needs before starting "
+    s.add_argument("--mem", type=gb, help="GB of free memory it needs before starting "
                                              "(default: the project's heavy_mem, else machine.toml's min_free_gb)")
     s.add_argument("--status", action="store_true", help="who holds the lock and who waits, without waiting")
     s.add_argument("command", nargs=argparse.REMAINDER)
