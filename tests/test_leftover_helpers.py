@@ -2,6 +2,7 @@
 run's end, in the log and one push, and left running: the driver can't tell it from something the user started."""
 import contextlib
 import io
+import json
 import os
 import signal
 import subprocess
@@ -92,6 +93,25 @@ class LeftoverHelpers(unittest.TestCase):
         self.assertNotIn("sleep 121", msg)
         self.assertNotIn("sleep 121", self.log())
         self.assertIsNone(older.poll())
+
+    def test_a_crash_supervise_gives_up_on_is_checked_too(self):
+        """The crashed driver leaves teardown to `supervise`, which reports after it, as a run's own end does."""
+        self.config()
+        work = self.p.state / "work"
+        work.mkdir(parents=True)
+
+        def start(a, env):  # the driver: its tools start a helper, then it crashes and isn't restarted
+            h = subprocess.Popen(["sleep", "122"], cwd=work, start_new_session=True)
+            self.pidfile.write_text(str(h.pid))
+            (self.p.state / "STOP").write_text("")
+            (self.p.state / "crash.json").write_text(json.dumps({"error": "boom", "summary": "Merged: none."}))
+            return 1
+        with contextlib.redirect_stdout(io.StringIO()):
+            driver.supervise(self.p, ["run"], now() + timedelta(hours=1), start=start, sleep=lambda s: None)
+        self.addCleanup(kill, self.helper())
+        [msg] = [m for t, m in self.pushes if t == TITLE]
+        self.assertIn(f"sleep 122 (pid {self.helper()})", msg)
+        self.assertTrue(alive(self.helper()))
 
 
 class Command(unittest.TestCase):
