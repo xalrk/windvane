@@ -710,7 +710,7 @@ def main(argv=None):
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
     s.add_argument("--wait", type=float, help="minutes to wait for the machine before giving up "
-                                              "(default: machine.toml's heavy_wait, 60)")
+                                              "(default: the session's stop, else machine.toml's heavy_wait, 60)")
     s.add_argument("--status", action="store_true", help="who holds the lock and who waits, without waiting")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("await", help="wait (up to ~9.5 min) for a bg command (this ticket's own)")
