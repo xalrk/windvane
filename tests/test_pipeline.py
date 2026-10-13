@@ -15,7 +15,7 @@ from windvane import critic, driver, jobs, planner, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now, read_jsonl  # noqa: E402
-from helpers import Sandbox  # noqa: E402
+from helpers import Sandbox, running  # noqa: E402
 
 
 def args(**kw):
@@ -513,8 +513,7 @@ class Sessions(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             runner.run_claude(self.p, "worker", "T-001", "hi", "", self.s.root, ticket="T-001", stop_if=broken)
         pid = int(Path(str(marker) + ".pid").read_text())
-        self.assertFalse(Path(f"/proc/{pid}").exists() and
-                         not Path(f"/proc/{pid}/stat").read_text().split(") ")[-1].startswith("Z"))
+        self.assertFalse(running(pid))
         self.assertLess(time.time() - started, 30)
 
     def test_killing_a_worker_kills_the_critic_it_started(self):
@@ -530,8 +529,7 @@ class Sessions(unittest.TestCase):
         self.assertEqual(killed, "time")
         pid = int(pid_file.read_text())
         for _ in range(100):
-            stat = Path(f"/proc/{pid}/stat")
-            if not stat.exists() or stat.read_text().split(") ")[-1].startswith("Z"):
+            if not running(pid):
                 break
             time.sleep(0.05)
         else:
