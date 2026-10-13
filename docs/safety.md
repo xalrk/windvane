@@ -103,7 +103,10 @@ beside the user's own engine session, can exhaust memory. `windvane heavy -- <co
 - while no process from `machine.toml`'s `busy` list is running (by default Unreal Editor, shader compilers and
   Blender);
 - once the memory it needs is available (Linux): `--mem <GB>` (`bg --heavy --mem`), else its project's `heavy_mem`,
-  else `machine.toml`'s `min_free_gb`.
+  else `machine.toml`'s `min_free_gb`. The memory held by its project's own reused helpers (`heavy_reuses`: an
+  emulator, a build daemon left up between jobs) counts as available to it, since it uses those very processes: a
+  matching process counts when the nearest process up its tree that works in a checkout works in this project's (its
+  main checkout, a slot, its state dir), so another project's emulator never does.
 
 Jobs waiting for the lock run in arrival order: each joins a queue beside the lock when it asks, so a job that
 arrives just as the lock frees can't overtake one that has waited, and a waiter that dies drops out of the line. A

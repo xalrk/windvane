@@ -26,7 +26,9 @@ Do everything yourself. The user should only have to answer real product questio
 3. **Set up windvane.** Run `windvane init --check "<test command>"`. Put the idea in `goal` in
    `.windvane/config.toml`. Set `heavy_check = true` if the check runs an engine, a render or a big build, and
    `teardown` to a command that stops the helpers the stack starts and leaves running (an Android emulator and its adb
-   server, `docker compose up`, a dev server the tests use), e.g. `teardown = "docker compose down"`.
+   server, `docker compose up`, a dev server the tests use), e.g. `teardown = "docker compose down"`. Heavy jobs that
+   reuse such a helper between runs (an emulator, a Gradle daemon) need `heavy_reuses` too (`["qemu-system",
+   "GradleDaemon"]`), or the memory it holds keeps them waiting for memory they'd never need.
 4. **Write the first tickets yourself.** You already hold the context, so this is cheaper than a planner run. Write
    4 to 8 tickets in `.windvane/tickets/T-001.md` and onward, each sized for one session of at most a few hours:
    ```
