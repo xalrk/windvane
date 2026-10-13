@@ -17,13 +17,13 @@ windvane itself needs nothing beyond the Python standard library.
 
 With [pipx](https://pipx.pypa.io) or [uv](https://docs.astral.sh/uv/):
 ```sh
-pipx install git+https://github.com/xalrk/windvane
+pipx install git+https://github.com/xalrk/windvane@v2026.10.13
 # or
-uv tool install git+https://github.com/xalrk/windvane
+uv tool install git+https://github.com/xalrk/windvane@v2026.10.13
 ```
 Without either, from a clone:
 ```sh
-git clone https://github.com/xalrk/windvane
+git clone --branch v2026.10.13 https://github.com/xalrk/windvane
 sh windvane/install.sh     # a venv in ~/.local/share/windvane, the command in ~/.local/bin
 ```
 If `~/.local/bin` isn't on your `PATH` yet, install.sh prints the line that puts it there. To try all of this first

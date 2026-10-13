@@ -6,6 +6,8 @@ release on the same day adds a number (`2026.10.9.1`).
 
 ## Unreleased
 
+## 2026.10.13 - 2026-10-13
+
 The first public release of windvane, an autopilot for Claude Code. It works through a git project's tickets
 unattended until a deadline: each change is built by a fresh Claude Code session, then scored by a critic, tested
 with the project's own check and read by a code reviewer before the driver merges it. Your checkout is never touched.
