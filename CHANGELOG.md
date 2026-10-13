@@ -6,6 +6,10 @@ release on the same day adds a number (`2026.10.9.1`).
 
 ## Unreleased
 
+### Added
+- `windvane --version`: the release, or for a clone its commit (and whether it has changes). `windvane doctor`
+  prints it as its first line.
+
 ## 2026.10.13 - 2026-10-13
 
 The first public release of windvane, an autopilot for Claude Code. It works through a git project's tickets

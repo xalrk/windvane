@@ -8,10 +8,11 @@ import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
-from . import actions, heavy, install, phone, runner, scratch, statedir
-from .config import CHECKOUT, Project
-from .util import load_json
+from . import actions, heavy, install, phone, runner, scratch, selfupdate, statedir
+from .config import CHECKOUT, HOME, Project
+from .util import gout, load_json
 
 # The triggers that run a workflow on its own for every autopilot ticket: its PR and the merge push to main.
 AUTO_TRIGGERS = ("push", "pull_request", "pull_request_target")
@@ -22,6 +23,17 @@ def run_quiet(cmd, timeout=20):
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+def own_version():
+    """`windvane --version`'s line. A clone has no package metadata (or a stale one, for an editable install), so
+    its commit says which code runs; the toplevel must be the checkout itself, not a repo it happens to sit in."""
+    top = gout(HOME, "rev-parse", "--show-toplevel") if CHECKOUT else ""
+    if top and Path(top).resolve() == HOME:
+        dirty = gout(HOME, "status", "--porcelain", "--untracked-files=no")
+        return f"windvane {gout(HOME, 'rev-parse', '--short', 'HEAD')} (clone{', modified' if dirty else ''})"
+    v = selfupdate.version()
+    return f"windvane {v}" if v != "0" else "windvane (unknown version: no package and no git checkout)"
 
 
 def version(tool):
@@ -318,6 +330,7 @@ def clean_states(p=None, dry_run=False):
 
 
 def main(p=None, clean=False, dry_run=False):
+    print(own_version())  # a bug report pastes this output: it names the windvane it describes
     if clean or dry_run:
         clean_tmp(p, dry_run)
         clean_states(p, dry_run)

@@ -24,7 +24,7 @@ body:
     id: version
     attributes:
       label: windvane version
-      description: The release you installed, or the commit of your clone.
+      description: What `windvane --version` prints.
     validations:
       required: true
   - type: textarea
