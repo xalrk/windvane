@@ -102,13 +102,18 @@ beside the user's own engine session, can exhaust memory. `windvane heavy -- <co
   lock);
 - while no process from `machine.toml`'s `busy` list is running (by default Unreal Editor, shader compilers and
   Blender);
-- once at least `min_free_gb` of memory is available (Linux).
+- once the memory it needs is available (Linux): `--mem <GB>` (`bg --heavy --mem`), else its project's `heavy_mem`,
+  else `machine.toml`'s `min_free_gb`.
 
 Jobs waiting for the lock run in arrival order: each joins a queue beside the lock when it asks, so a job that
 arrives just as the lock frees can't overtake one that has waited, and a waiter that dies drops out of the line. A
 waiter paused with Ctrl-Z keeps its place but doesn't hold up the jobs behind it; resumed, it waits its turn again.
-While it waits, its log says who holds the lock (pid, command, since when) and how many jobs are ahead of it;
-`windvane heavy --status` shows the same at any time.
+The job at the head of the line takes the lock only once its memory is free too. While it waits for memory, the first
+job behind it whose own need is met (a 2 GB test run behind a 6 GB engine) may take the free lock and run; the head
+stays the head and gets the lock first once its memory frees. Only memory lets a job by: one that a `busy` process
+holds up keeps everyone behind it waiting.
+While it waits, its log says who holds the lock (pid, command, since when) and how many jobs are ahead of it, or the
+memory it waits for; `windvane heavy --status` shows the same at any time.
 It waits for the machine until the session's stop for a job a session starts (`windvane heavy`, `bg --heavy`, `windvane
 check`), until the run's end (even one `windvane deadline` moves) for the driver's heavy check, and `machine.toml`'s
 `heavy_wait` minutes (default 60) for a command run by hand; `--wait` overrides each. A job that gave up sooner would

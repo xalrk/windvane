@@ -7,10 +7,10 @@ that tool, waiting on its own lock); instead it waits until no process matching 
 
     busy = ["UnrealEditor", "ShaderCompile", "blender"]   # process-name regexes (pgrep) of heavy work started elsewhere
     min_free_gb = 6                                           # wait for this much MemAvailable before starting
-                                                              # (a job's own `--mem`, or its project's `heavy_mem`, wins)
     heavy_wait = 60                                           # minutes a command run by hand waits before giving up
 
-Free memory comes from Linux's /proc/meminfo; elsewhere (macOS) it isn't known, and only `busy` is waited on.
+A job's own `--mem`, or its project's `heavy_mem`, replaces `min_free_gb` for it. Free memory comes from Linux's
+/proc/meminfo; elsewhere (macOS) it isn't known, and only `busy` is waited on.
 """
 import fcntl
 import json

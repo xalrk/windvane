@@ -9,6 +9,12 @@ release on the same day adds a number (`2026.10.9.1`).
 ### Added
 - `windvane --version`: the release, or for a clone its commit (and whether it has changes). `windvane doctor`
   prints it as its first line.
+- `windvane heavy --mem <GB>` (and `bg --heavy --mem`), and a project's `heavy_mem`: the free memory a heavy job
+  waits for, instead of `machine.toml`'s one `min_free_gb` for every job.
+
+### Changed
+- The head of the heavy line takes the lock only once its memory is free, and while it waits for memory a job behind
+  it that fits runs first, instead of every job waiting behind it.
 
 ## 2026.10.13 - 2026-10-13
 
