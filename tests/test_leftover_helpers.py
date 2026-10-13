@@ -96,6 +96,18 @@ class LeftoverHelpers(unittest.TestCase):
 
     def test_a_crash_supervise_gives_up_on_is_checked_too(self):
         """The crashed driver leaves teardown to `supervise`, which reports after it, as a run's own end does."""
+        self.crash_under_supervise()
+        [msg] = [m for t, m in self.pushes if t == TITLE]
+        self.assertIn(f"sleep 122 (pid {self.helper()})", msg)
+        self.assertTrue(alive(self.helper()))
+
+    def test_not_while_a_new_run_holds_the_lock(self):
+        """What runs in the trees then is the new run's own work."""
+        with mock.patch.object(driver, "locked", lambda p: True):
+            self.crash_under_supervise()
+        self.assertEqual([m for t, m in self.pushes if t == TITLE], [])
+
+    def crash_under_supervise(self):
         self.config()
         work = self.p.state / "work"
         work.mkdir(parents=True)
@@ -109,9 +121,6 @@ class LeftoverHelpers(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             driver.supervise(self.p, ["run"], now() + timedelta(hours=1), start=start, sleep=lambda s: None)
         self.addCleanup(kill, self.helper())
-        [msg] = [m for t, m in self.pushes if t == TITLE]
-        self.assertIn(f"sleep 122 (pid {self.helper()})", msg)
-        self.assertTrue(alive(self.helper()))
 
 
 class Command(unittest.TestCase):

@@ -1818,7 +1818,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
                                           log=lambda m: log(p, m)) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             tear_down(p, lock=True, tell=True)  # after the push, as the driver's own end does
-            report_leftovers(p, began)  # its sessions ended with it (a killed one's may not have: not checked there)
+            if not locked(p):  # its sessions ended with it (a killed one's may not have: not checked there); a run
+                report_leftovers(p, began)  # started since has sessions of its own there
             return rc
         args = selfupdate.restart_args(args, deadline)
         env["WINDVANE_RESTARTED"] = "1"
