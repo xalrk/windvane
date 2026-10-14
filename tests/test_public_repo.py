@@ -31,6 +31,8 @@ if a[:2] == ["pr", "list"]:
                       if head in (None, x["headRefName"]) and state in ("ALL", x["state"])]))
 elif a[:2] == ["pr", "view"]:
     print(next(x for x in st["prs"] if str(x["number"]) == a[2])["body"])
+elif a[:2] == ["repo", "view"] and st.get("fail"):
+    sys.exit(st["fail"])  # gh's error on stderr, exit 1
 elif a[:2] == ["repo", "view"]:
     print(st.get("repo", "me/proj"))
 elif a[:1] == ["api"]:
@@ -196,6 +198,16 @@ class TokenFile(Base):
         st["private"] = ["me/proj"]
         self.gh.write_text(json.dumps(st))
         self.assertEqual(doctor.token_warnings(self.p), [])
+
+    def test_doctor_tells_a_refused_token_from_being_offline(self):
+        st = json.loads(self.gh.read_text())
+        st["fail"] = "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"
+        self.gh.write_text(json.dumps(st))
+        self.assertEqual(doctor.token_warnings(self.p), [])  # nothing known yet: no advice to remake the token
+        st["fail"] = "HTTP 401: Bad credentials (https://api.github.com/graphql)"
+        self.gh.write_text(json.dumps(st))
+        self.assertEqual([what for _, what, _ in doctor.token_warnings(self.p)],
+                         ["[github] token_file: GitHub refused its token for this repo"])
 
 
 class Identity(Base):

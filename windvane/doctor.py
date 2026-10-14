@@ -14,6 +14,8 @@ from . import actions, heavy, install, phone, privacy, runner, scratch, selfupda
 from .config import CHECKOUT, DIR, HOME, Project, author, github_token
 from .util import gout, load_json
 
+# How gh says GitHub turned a token down (expired, revoked, or not given this repo), as opposed to not reaching it.
+REFUSED = re.compile(r"HTTP 40[134]|Bad credentials|Could not resolve to a Repository")
 # The triggers that run a workflow on its own for every autopilot ticket: its PR and the merge push to main.
 AUTO_TRIGGERS = ("push", "pull_request", "pull_request_target")
 
@@ -277,9 +279,11 @@ def token_warnings(p):
         return []
     env = {**os.environ, "GH_TOKEN": token}
     r = run_quiet(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], 15, p.root, env)
-    repo = r.stdout.strip() if r and r.returncode == 0 else ""
+    if not r or r.returncode and not REFUSED.search(r.stderr):
+        return []  # offline, or no gh: nothing to tell yet
+    repo = r.stdout.strip() if r.returncode == 0 else ""
     if not repo:
-        return [("warn", "[github] token_file: its token can't read this repo",
+        return [("warn", "[github] token_file: GitHub refused its token for this repo",
                  "make a fine-grained token for it with Contents, Pull requests and Metadata (docs/configuration.md)")]
     r = run_quiet(["gh", "api", "user/repos?visibility=private&per_page=100", "-q", ".[].full_name"], 15, p.root, env)
     others = sorted(set(r.stdout.split()) - {repo}) if r and r.returncode == 0 else []
