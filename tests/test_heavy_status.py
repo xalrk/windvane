@@ -27,7 +27,7 @@ class HeavyStatus(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(prefix="windvane-")
         self.addCleanup(tmp.cleanup)
         self.d = Path(tmp.name)
-        self.env = {**os.environ, **machine(self.d, 60), "PYTHONPATH": str(ROOT)}
+        self.env = {**os.environ, **machine(self.d, 60), "PYTHONPATH": str(ROOT), "XDG_STATE_HOME": str(self.d / "st")}
         self.env.pop("WINDVANE_HEAVY_HELD", None)
         self.env.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
         patch = mock.patch.dict(os.environ, self.env)

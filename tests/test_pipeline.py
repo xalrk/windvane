@@ -559,7 +559,7 @@ class Heavy(unittest.TestCase):
         env_tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, env_tmp, True)
         old = dict(os.environ)
-        os.environ.update({"XDG_RUNTIME_DIR": env_tmp, "XDG_CONFIG_HOME": env_tmp})
+        os.environ.update({"XDG_RUNTIME_DIR": env_tmp, "XDG_CONFIG_HOME": env_tmp, "XDG_STATE_HOME": env_tmp})
         try:
             (Path(env_tmp) / "windvane").mkdir()
             (Path(env_tmp) / "windvane/machine.toml").write_text('busy = []\nmin_free_gb = 0\n')

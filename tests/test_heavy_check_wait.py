@@ -55,7 +55,7 @@ class HeavyCheckWait(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(prefix="windvane-")
         self.addCleanup(tmp.cleanup)
         self.d = Path(tmp.name)
-        patch = mock.patch.dict(os.environ, machine(self.d, 0.02))  # 1.2 s
+        patch = mock.patch.dict(os.environ, {**machine(self.d, 0.02), "XDG_STATE_HOME": str(self.d / "st")})  # 1.2 s
         patch.start()
         self.addCleanup(patch.stop)
         os.environ.pop("WINDVANE_HEAVY_HELD", None)

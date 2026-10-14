@@ -25,6 +25,7 @@ class HeavyFifo(unittest.TestCase):
         (d / "cfg/windvane").mkdir(parents=True)
         (d / "cfg/windvane/machine.toml").write_text("busy = []\nmin_free_gb = 0\n")
         self.env = {**os.environ, "XDG_RUNTIME_DIR": str(d), "XDG_CONFIG_HOME": str(d / "cfg"),
+                    "XDG_STATE_HOME": str(d / "st"),
                     "PYTHONPATH": str(ROOT)}
         self.env.pop("WINDVANE_HEAVY_HELD", None)
         self.env.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
@@ -86,7 +87,7 @@ class HeavyFifo(unittest.TestCase):
         where = "/".join(self.d.resolve().parts[-2:])
         self.assertRegex(err.splitlines()[0], re.escape(f"heavy: waiting for the machine lock: held by pid {held.pid} "
                          f"(touch running; sleep 3; echo held >> order in {where}, since ") + r"\d\d:\d\d\); "
-                         "1 ahead of this job$")
+                         "1 ahead of this job; work ahead unknown \\(never timed\\)$")
         self.assertEqual(err.count("1 ahead of this job"), 1)  # reprinted only when it changes
         self.assertEqual(self.order.read_text().split(), ["held", "ahead", "waiter"])
         self.assertEqual((self.d / "windvane-heavy.lock").read_text(), "")  # the holder's line goes with it
