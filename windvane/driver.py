@@ -1350,8 +1350,8 @@ class Pilot(Desk, Periodic):
             jobs.follow(self.p, until)
             on = [f"{b.parent.name}'s '{b.name}'" for b in jobs.running_kept(self.p)]
             if on:
-                self.kept_note = (f"Kept jobs run on until {hhmm(until)}; the next run resumes their "
-                                  f"tickets when they end: {', '.join(on)}.\n")
+                self.kept_note = (f"Kept jobs run on until {hhmm(until)} (`windvane stop` ends them sooner); "
+                                  f"the next run resumes their tickets when they end: {', '.join(on)}.\n")
         else:
             killed = jobs.end_kept(self.p)
             if killed:

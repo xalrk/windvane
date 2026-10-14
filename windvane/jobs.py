@@ -297,12 +297,16 @@ def worktree(path):
 
 
 def alive(base):
-    """Whether a job runs: no exit written, and its pid is alive."""
+    """Whether a job runs: no exit written, and its pid is alive and started by the time `bg` wrote it. A number
+    reused after a reboot is a stranger's, which mustn't hold a kept job's ticket and slot (or block the name)."""
     if Path(f"{base}.exit").exists():
         return False
+    pid_f = Path(f"{base}.pid")
     try:
-        os.kill(int(Path(f"{base}.pid").read_text()), 0)
-        return True
+        pid = int(pid_f.read_text())
+        os.kill(pid, 0)
+        t = util.started_at(pid)
+        return t is None or t <= pid_f.stat().st_mtime + 2  # /proc's boot time and ps's are in whole seconds
     except (OSError, ValueError):
         return False
 

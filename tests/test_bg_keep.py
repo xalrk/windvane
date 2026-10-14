@@ -4,6 +4,7 @@ and its slot, until it ends, then resumes the ticket with the job's exit code. T
 import io
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -261,6 +262,21 @@ class StopsAndSessions(Base):
         if child:
             self.until(lambda: not os.path.exists(f"/proc/{child}") or "Z" in Path(f"/proc/{child}/stat").read_text()
                        .split(") ")[-1][:1], 10, "the command's own group")
+
+    def test_a_pid_reused_after_a_reboot_holds_nothing(self):
+        """A kept job's leader gone with a reboot, its number now a stranger's: no hold, and the stranger lives."""
+        stranger = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: (stranger.kill(), stranger.wait()))
+        self.job.parent.mkdir(parents=True)
+        for end, text in (("start", "1"), ("cwd", str(self.s.root)), ("keep", ""), ("pid", str(stranger.pid))):
+            self.job.with_suffix(f".{end}").write_text(text)
+        before = time.time() - 3600  # bg wrote it an hour before the stranger started
+        os.utime(self.job.with_suffix(".pid"), (before, before))
+        self.assertEqual(jobs.running_kept(self.p), [])
+        self.assertEqual(jobs.end_kept(self.p), [])
+        self.assertIsNone(stranger.poll())
+        os.utime(self.job.with_suffix(".pid"))  # written as it started: its own job, running
+        self.assertEqual(jobs.running_kept(self.p), [self.job])
 
     def test_keep_goes_with_heavy(self):
         self.addCleanup(os.chdir, os.getcwd())  # -C moves into the sandbox, which goes at the test's end
