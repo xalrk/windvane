@@ -9,6 +9,7 @@ import hashlib
 import itertools
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -17,7 +18,8 @@ from pathlib import Path
 
 from . import heavy, scratch, util
 from .config import exe
-from .runner import NEST, ROLE, TICKET
+from .heavy import STOP_AT
+from .runner import GRACE, NEST, ROLE, TICKET, signal_group
 from .util import append_jsonl, gout, now, read_jsonl
 
 _LOGS = itertools.count(1)  # a check log's number in this process
@@ -33,6 +35,14 @@ KEEP_ANY = 21 * 86400
 KEEP_FAILED = 5
 NOT_RUN, AGAIN = "CHECK NOT RUN: ", "; run it again"  # a heavy check that never got the machine
 STOPPING = "; the run is stopping, so don't run it again now"  # ...because a stop ended its wait: a retry would too
+# A kept job (`bg --heavy --keep`) outlives its session: the run's stop (a Unix time), which the driver gives its
+# workers, is when it ends unless the driver moves it (`<job>.keep` holds the time it ends, empty for never).
+RUN_STOP = "WINDVANE_RUN_STOP"
+KILLED = 143  # a kept job's exit when the run's stop or a kill ended it (as SIGTERM's)
+WATCH_S = 2  # seconds between a kept job's looks at its end time
+# A kept job's group leader: `watch` from this same windvane (its package dir is the first argument), outside PATH.
+WATCH = ("import sys; sys.path.insert(0, sys.argv[1]); from windvane.jobs import watch; "
+         "sys.exit(watch(sys.argv[2], sys.argv[3:]))")
 
 
 def waited(summary):
@@ -288,12 +298,16 @@ def worktree(path):
 
 
 def alive(base):
-    """Whether a job runs: no exit written, and its pid is alive."""
+    """Whether a job runs: no exit written, and its pid is alive and started by the time `bg` wrote it. A number
+    reused after a reboot is a stranger's, which mustn't hold a kept job's ticket and slot (or block the name)."""
     if Path(f"{base}.exit").exists():
         return False
+    pid_f = Path(f"{base}.pid")
     try:
-        os.kill(int(Path(f"{base}.pid").read_text()), 0)
-        return True
+        pid = int(pid_f.read_text())
+        os.kill(pid, 0)
+        t = util.started_at(pid)
+        return t is None or t <= pid_f.stat().st_mtime + 2  # /proc's boot time and ps's are in whole seconds
     except (OSError, ValueError):
         return False
 
@@ -307,27 +321,135 @@ def stray_line(name, base):
             f"tied to it): {how}; log {base}.log")
 
 
-def bg(p, name, cmd, cwd, heavy=False, mem=None):
+def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False):
+    """Start `cmd` in the background. A session's job dies with it; a kept one (`keep`) goes on past it, until the
+    run's stop, so a heavy job that can't both queue and run in one session still runs: the driver holds its ticket
+    until it ends."""
     if alive(find_job(p, name)[0]):
         sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
     base = job_base(p, name)
     base.parent.mkdir(parents=True, exist_ok=True)
     pid = Path(f"{base}.pid")
-    Path(f"{base}.exit").unlink(missing_ok=True)
+    for end in ("exit", "keep", "child"):
+        Path(f"{base}.{end}").unlink(missing_ok=True)
     Path(f"{base}.start").write_text(str(int(time.time())))
     Path(f"{base}.cwd").write_text(str(Path(cwd).resolve()))  # ties it to its worktree, should job_base move again
     if heavy:
         cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []), "--", *cmd]
+    env = None
+    if keep:  # it waits for the machine as long as it's kept (`watch` ends it), and belongs to no session
+        Path(f"{base}.keep").write_text(os.environ.get(RUN_STOP, ""))
+        cmd = [sys.executable, "-c", WATCH, str(Path(__file__).parents[1]), str(base), *cmd]
+        env = {**{k: v for k, v in os.environ.items() if k != NEST}, STOP_AT: "inf"}
     proc = subprocess.Popen(["bash", "-c", '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"', str(base), *cmd],
                             cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, start_new_session=True)
+                            stderr=subprocess.DEVNULL, start_new_session=True, env=env)
     pid.write_text(str(proc.pid))
     session = os.environ.get(NEST)
-    if session:  # killed with the session that started it (runner.kill_nested), not left behind by a stop
+    if session and not keep:  # killed with the session that started it (runner.kill_nested), not left by a stop
         mark = p.state / "nested" / session / str(proc.pid)
         mark.parent.mkdir(parents=True, exist_ok=True)
         mark.touch()
-    print(f"started '{name}' (log {base}.log); wait with: windvane await {name}")
+    if keep:
+        print(f"started '{name}', kept past this session (log {base}.log): commit, push and end your run "
+              f"PARTIAL naming it; the ticket resumes when it ends")
+    else:
+        print(f"started '{name}' (log {base}.log); wait with: windvane await {name}")
+
+
+def watch(base, cmd):
+    """A kept job's group leader: runs `cmd` in a group of its own (its pid in `<job>.child`, for `end_kept`) and
+    ends it at the time in `<job>.keep`, read afresh each look, since no session's end does. Its exit code."""
+    child = subprocess.Popen(cmd, start_new_session=True)
+    Path(f"{base}.child").write_text(str(child.pid))
+    while True:
+        try:
+            return child.wait(WATCH_S)
+        except subprocess.TimeoutExpired:
+            pass
+        until = kept_until(base)
+        if until is not None and time.time() >= until:
+            print("windvane: kept job stopped at the run's stop", file=sys.stderr, flush=True)
+            stop_groups([(child.pid, Path(f"{base}.child"))])
+            child.wait()
+            return KILLED
+
+
+def kept_until(base):
+    """When a kept job ends (a Unix time), or None for never: a desk job, or one whose ticket's run gave no stop."""
+    try:
+        return float(Path(f"{base}.keep").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def kept_jobs(p, ticket=None):
+    """The kept jobs (`bg --keep`) of one ticket, or of every ticket, that its next session hasn't been told of yet:
+    running, or ended since. Their bases, as job_base gives them."""
+    return [f.with_suffix("") for f in sorted((p.state / "bg").glob(f"{ticket or '*'}/*.keep"))]
+
+
+def running_kept(p, ticket=None):
+    """The kept jobs still waiting or running."""
+    return [b for b in kept_jobs(p, ticket) if alive(b)]
+
+
+def follow(p, until):
+    """Let every running kept job go on until at least `until` (a datetime): the run's deadline as it now is, or past
+    the run's stop by `heavy_keep_hours`."""
+    for b in running_kept(p):
+        t = kept_until(b)
+        if t is not None and t < until.timestamp():
+            Path(f"{b}.keep").write_text(str(until.timestamp()))
+
+
+def stop_groups(groups):
+    """SIGTERM each (process group, the file written as it started), then SIGKILL those alive after GRACE."""
+    alive_ = [g for g, mark in groups if signal_group(g, signal.SIGTERM, mark)]
+    end = time.time() + GRACE
+    while alive_ and time.time() < end:
+        time.sleep(0.1)
+        alive_ = [g for g in alive_ if signal_group(g, 0)]
+    for g in alive_:
+        signal_group(g, signal.SIGKILL)
+
+
+def end_kept(p, ticket=None, why="the run's stop"):
+    """Kill the kept jobs still waiting or running (a ticket's, or every one): each gets exit `KILLED` and a last log
+    line saying why, so the session that resumes its ticket is told. Their names."""
+    out = []
+    for b in running_kept(p, ticket):
+        with open(f"{b}.log", "a") as f:
+            f.write(f"windvane: kept job killed: {why}\n")
+        groups = []
+        for end in ("pid", "child"):  # the leader's group, and the command's own (see `watch`)
+            try:
+                groups.append((int(Path(f"{b}.{end}").read_text()), Path(f"{b}.{end}")))
+            except (OSError, ValueError):
+                pass
+        stop_groups(groups)
+        if not Path(f"{b}.exit").exists():
+            Path(f"{b}.exit").write_text(str(KILLED))
+        out.append(f"{b.parent.name}'s '{b.name}'")
+    return out
+
+
+def ended_kept(p, ticket):
+    """Lines on the ticket's kept jobs that have ended, for its next session's prompt; it's told of each once."""
+    lines = []
+    for b in kept_jobs(p, ticket):
+        if alive(b):
+            continue
+        exit_f = Path(f"{b}.exit")
+        code = exit_code(exit_f, 0) if exit_f.exists() else "? (it died without one)"
+        try:
+            mins = f" after {(exit_f.stat().st_mtime - int(Path(f'{b}.start').read_text())) / 60:.0f} min"
+        except (OSError, ValueError):
+            mins = ""
+        lines.append(f"- '{b.name}' exit {code}{mins}; log {b}.log (`windvane await {b.name}` shows it)")
+        for end in ("keep", "child"):
+            Path(f"{b}.{end}").unlink(missing_ok=True)
+    return lines
 
 
 def exit_code(exit_f, patience=2.0):

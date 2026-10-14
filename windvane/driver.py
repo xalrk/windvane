@@ -25,8 +25,8 @@ import traceback
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 
-from . import (actions, critic, install, net, phone, renumber, requests, scratch, selfupdate, statedir, util,
-               worktree)
+from . import (actions, critic, install, jobs, net, phone, renumber, requests, scratch, selfupdate, statedir,
+               util, worktree)
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .held import author_ident, push_held
@@ -212,6 +212,7 @@ class Pilot(Desk, Periodic):
         self.signalled, self.ending = None, False  # the SIGTERM or SIGHUP that ended the run; past its `finally`
         self.guarded = 0  # how deep the main thread is in `critical` steps: a signal waits for them to end
         self.left = ""  # the pid in the lock file a run that ended without its teardown left (`take_lock`)
+        self.kept_note = ""  # the summary's line on kept jobs (`bg --keep`) the run's end killed or let go on
         self.worker_rules, self.review_rules = rules(p, "WORKER.md"), rules(p, "REVIEW.md")
         # Parallel slots: each has its own work and ci worktrees, made when first used. Merges and fetches are
         # serialized. `n` is the most at once; the queue's Touches and the usage window decide how many really run.
@@ -452,11 +453,13 @@ class Pilot(Desk, Periodic):
         pr = pr_for(p, branches[0]) if branches else ""
         known = self.answered(tid, ref)
         git_env, skip_line = actions.worker_git(p, wd)
-        session_env = {**git_env, **actions.gh_guard(p, wd)}
+        session_env = {**git_env, **actions.gh_guard(p, wd), jobs.RUN_STOP: str(self.end().timestamp())}
+        kept = jobs.ended_kept(p, tid)
         prompt = "\n\n".join(filter(None, [
             f"Ticket {tid}. Follow the worker rules in your system prompt and end with the RESULT line.",
             f"## The ticket\n{ticket[:8000]}",
             f"## Act on this first\n{fb}" if fb else "",
+            "## Your kept jobs (`bg --keep`) ended\n" + "\n".join(kept) if kept else "",
             "## The user already answered these (under ## Answered in QUESTIONS.md): build them, don't ask again\n"
             + "\n\n".join(known) if known else "",
             (f"In progress on branch(es) {', '.join(branches)}" + (f", PR #{pr}" if pr else "") + ". Resume it.")
@@ -521,6 +524,9 @@ class Pilot(Desk, Periodic):
             if waits:  # not out of time: the queue holds it until they merge, then resumes it
                 self.log(f"{tid}: waits for {', '.join(waits)} to merge (its branch says so)")
                 return self.held_for_good(tid, branch, waits)
+            kept = jobs.kept_jobs(self.p, tid)
+            if kept:  # not out of time either: the queue holds it until its job ends, then resumes it
+                return self.log(f"{tid}: held until its kept job {', '.join(repr(b.name) for b in kept)} ends: {rest}")
             self.partials[tid] = self.partials.get(tid, 0) + 1
             self.log(f"{tid}: partial ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
@@ -943,6 +949,7 @@ class Pilot(Desk, Periodic):
             if branch and git(wd, "merge-base", "--is-ancestor", branch, p.upstream).returncode == 0:
                 git(wd, "branch", "-q", "-D", branch)  # -d's own test would use the deleted remote branch
         self.merged.append(tid)
+        jobs.end_kept(p, tid, "its ticket merged")
         scratch.drop(p, tid)
         with self.lock:  # this attempt is still running: its time so far counts too
             ran = self.spent.pop(tid, 0) + time.time() - self.began.get(tid, time.time())
@@ -987,6 +994,7 @@ class Pilot(Desk, Periodic):
 
     def fail(self, tid, why):
         self.skip.add(tid)
+        jobs.end_kept(self.p, tid, "its ticket failed")
         scratch.drop(self.p, tid)
         self.failed.append(tid)
         self.approved.pop(tid, None)
@@ -1297,9 +1305,13 @@ class Pilot(Desk, Periodic):
         avoid = set(self.skip) | set(busy) | set(self.merged)
         self.waits = []
         extra = self.outside(busy)  # once a pass: two git calls a running ticket
+        kept, held = {}, self.kept_slots()
+        for b in jobs.running_kept(self.p):
+            kept.setdefault(b.parent.name, []).append(b.name)
         ahead = q.to_run(avoid, tickets(self.questions))  # those waiting on a clash too: a free slot isn't "run out"
         for t in q.order:
             why = ("" if t in avoid or q.status(t, tickets(self.questions)) not in ("wip", "todo")
+                   else f"its kept job {', '.join(map(repr, kept[t]))} runs" if t in kept
                    else f"last, {ahead[0]} still to run" if ahead and t in q.last else self.clash(t, busy, extra))
             if why:
                 avoid.add(t)
@@ -1308,11 +1320,44 @@ class Pilot(Desk, Periodic):
             tid, *rest = q.pick(avoid, tickets(self.questions))
             if tid is None:
                 return None, rest[0], None, None
-            own = next((i for i, o in self.owner.items() if o == tid), None)
-            slot = own if own is not None else next((i for i in free if self.owner[i] is None), None)
+            own = next((i for i, o in [*self.owner.items(), *held.items()] if o == tid), None)
+            slot = own if own is not None else next((i for i in free if self.owner[i] is None and i not in held), None)
             if slot is not None and slot in free:
                 return tid, rest[0], rest[1], slot
             avoid.add(tid)
+
+    def kept_slots(self):
+        """slot -> the ticket a kept job runs for (or ended for, its session not yet told) in that slot's work tree: no
+        other ticket may take the tree it writes into, in this run or the next."""
+        kept = jobs.kept_jobs(self.p)
+        trees = {t: i for i in range(self.n) if (t := jobs.worktree(self.slot_dirs(i)[0]))} if kept else {}
+        out = {}
+        for b in kept:
+            where = jobs.job_cwd(b)
+            i = trees.get(jobs.worktree(where)) if where else None
+            if i is not None:
+                out[i] = b.parent.name
+        return out
+
+    def kept_at_end(self):
+        """A kept job still waiting or running at the run's end is killed, as a session's job is, unless
+        `heavy_keep_hours` lets it go on that long past the stop (not past a stop the user asked for): the next run
+        keeps its slot and resumes its ticket when it ends."""
+        hours = self.p.cfg["heavy_keep_hours"]
+        asked = self.signalled or self.stop_reason.startswith(("asked to stop", "stopped now"))
+        if hours and not asked:
+            until = now() + timedelta(hours=hours)
+            jobs.follow(self.p, until)
+            on = [f"{b.parent.name}'s '{b.name}'" for b in jobs.running_kept(self.p)]
+            if on:
+                self.kept_note = (f"Kept jobs run on until {hhmm(until)} (`windvane stop` ends them sooner); "
+                                  f"the next run resumes their tickets when they end: {', '.join(on)}.\n")
+        else:
+            killed = jobs.end_kept(self.p)
+            if killed:
+                self.kept_note = f"Kept jobs killed at the stop (their tickets resume next run): {', '.join(killed)}.\n"
+        if self.kept_note:
+            self.log(self.kept_note.strip())
 
     def prepare(self, slot):
         """Both of a slot's worktrees. A failed setup halts the run: every check in that tree would fail, and each
@@ -1377,8 +1422,8 @@ class Pilot(Desk, Periodic):
             self.fail(tid, f"driver error: {e}")
         finally:
             wd = self.wd
-            if gout(wd, "status", "--porcelain"):
-                self.owner[slot] = tid  # its leftovers stay here: only this ticket resumes in this slot
+            if gout(wd, "status", "--porcelain") or jobs.kept_jobs(self.p, tid):
+                self.owner[slot] = tid  # its leftovers stay here, or its kept job writes here: only it resumes here
             else:
                 self.owner[slot] = None
                 if gout(wd, "rev-parse", "--abbrev-ref", "HEAD") not in ("HEAD", ""):
@@ -1441,6 +1486,7 @@ class Pilot(Desk, Periodic):
         while True:
             self.quiet_check()
             self.poll_questions()  # every pass, busy slots or not: a question's wait runs out on time
+            jobs.follow(p, self.end())  # a deadline moved later keeps the kept jobs going as long
             why = self.stop_check()
             if why:
                 self.stop_reason = why
@@ -1489,7 +1535,7 @@ class Pilot(Desk, Periodic):
                 self.pause()
                 continue
             if tid is None:
-                if busy or self.running:
+                if busy or self.running or jobs.running_kept(p):  # a kept job's ticket resumes when it ends
                     self.idle_note(self.waits)
                     self.pause()
                     continue
@@ -1660,6 +1706,8 @@ class Pilot(Desk, Periodic):
             for t in self.threads:  # the running tickets finish (their runs stop at the deadline at the latest)
                 join(t)
             self.clean_state(between=False)  # every slot's thread is done: its trees are idle
+            if not (crashed and os.environ.get(SUPERVISED)):  # a restart goes on with them
+                self.kept_at_end()
             if not quiet_now(p)[0]:
                 self.send_unsent()  # a question from a ticket that finished after the loop's last pass
             summary = self.summary()
@@ -1768,6 +1816,7 @@ class Pilot(Desk, Periodic):
                    "To change one: windvane answer <ID> <letter>.\n" if picks else "")
                 + f"Failed: {names(self.failed)}.\n"
                 + (f"Stopped at the deadline (resumes next run): {names(self.stopped)}.\n" if self.stopped else "")
+                + self.kept_note
                 + "".join(f"Set aside: {self.name(t)} ({why}).\n" for t, why in self.aside.items())
                 + (f"{self.usage.text()}." if self.usage.five is not None else "")
                 + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else "")

@@ -42,6 +42,7 @@ DEFAULTS = {
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
     "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
     "heavy_mem": None,  # GB free this project's heavy jobs and heavy check wait for (unset: machine.toml's min_free_gb)
+    "heavy_keep_hours": 0,  # how long a kept job (`bg --heavy --keep`) may run on past the run's stop (0: killed then)
     "heavy_reuses": [],  # process-name regexes of helpers its heavy jobs reuse (an emulator): their memory counts free
     "overview_extra": "",  # a command whose output `windvane overview` adds (the project's own milestones)
     "shared_notes": [],  # notes files every ticket appends to: no Touches overlap, appended sections merge on their own
@@ -207,6 +208,13 @@ def heavy_mem(v):
     return v
 
 
+def heavy_keep_hours(v):
+    """A `heavy_keep_hours`: a number of hours, 0 or more."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+        raise SystemExit(f"windvane: heavy_keep_hours = {v!r} in config.toml: use a number of hours (0 or more)")
+    return v
+
+
 def heavy_reuses(v):
     """A `heavy_reuses`: a list of process-name regexes."""
     try:
@@ -278,6 +286,7 @@ class Project:
         setup_minutes(c["setup_minutes"])
         setup_minutes(c["teardown_minutes"], key="teardown_minutes")
         heavy_mem(c["heavy_mem"])
+        heavy_keep_hours(c["heavy_keep_hours"])
         heavy_reuses(c["heavy_reuses"])
         actions_budget(c)
         self.periodic = periodic(c.get("periodic", []))
