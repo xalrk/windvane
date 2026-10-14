@@ -188,6 +188,9 @@ def cmd_stop(a, p):
         print(f"{p.display}: autopilot isn't running")
         return
     p.state.mkdir(parents=True, exist_ok=True)
+    killed = jobs.end_kept(p, why="windvane stop")  # a run's own end would too, but one past its stop has no run
+    if killed:
+        print(f"{p.display}: killed kept jobs: {', '.join(killed)}")
     stop_now = getattr(a, "now", False)  # callers that predate --now pass a Namespace without it
     if stop_now and not running(p):
         return print(f"{p.display}: autopilot isn't running")
@@ -718,6 +721,8 @@ def main(argv=None):
     s = sub.add_parser("bg", help="start a long command in the background")
     s.add_argument("--heavy", action="store_true", help="run it under the machine-wide heavy lock")
     s.add_argument("--mem", type=gb, help="with --heavy: GB of free memory it needs (default: as `heavy`)")
+    s.add_argument("--keep", action="store_true", help="with --heavy: it outlives the session (until the run's "
+                                                       "stop); the ticket resumes when it ends")
     s.add_argument("name")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
@@ -791,9 +796,10 @@ def main(argv=None):
                 setattr(a, k, p.ap[k])
     if a.cmd == "bg":
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
-        if a.mem is not None and not a.heavy:
-            sys.exit("bg: --mem goes with --heavy")
-        return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy, a.mem) if cmd else sys.exit("bg: give a command")
+        for flag, given in (("--mem", a.mem is not None), ("--keep", a.keep)):
+            if given and not a.heavy:
+                sys.exit(f"bg: {flag} goes with --heavy")
+        return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy, a.mem, a.keep) if cmd else sys.exit("bg: give a command")
     if a.cmd == "await":
         return jobs.await_(p, a.name, a.lines)
     if a.cmd == "watch":
