@@ -119,10 +119,11 @@ While it waits, its log says who holds the lock (pid, command, since when), how 
 how long their work takes, or the memory it waits for and the three processes holding the most (pid, name, GB and the
 last two parts of their folder, so another project's idle emulator shows at once); `windvane heavy --status` shows the
 same at any time. The estimate comes from each job's last few run times, kept per project and command in
-`~/.local/state/windvane/heavy-times.json`: the holder's usual time less what it ran so far, plus each waiter's (a
-command never seen makes it `unknown`, or `at least`). In a session, a job whose estimate puts its start after the
-wrap-up (20 minutes before the session's stop) says so once, `heavy: likely to start after your wrap-up (03:22)`,
-and keeps waiting: the session decides whether to plan around it.
+`~/.local/state/windvane/heavy-times.json`: the holder's usual time less what it ran so far, plus each waiter's. A
+command never seen, or a holder past its usual time, makes it `at least N min`, or `unknown` when nothing is known.
+In a session, a job says once when it likely starts after the wrap-up (20 minutes before the session's stop): when the
+known work ahead runs past it, or when the wrap-up comes and the job still waits. It keeps waiting; the session decides
+whether to plan without it.
 It waits for the machine until the session's stop for a job a session starts (`windvane heavy`, `bg --heavy`, `windvane
 check`), until the run's end (even one `windvane deadline` moves) for the driver's heavy check, and `machine.toml`'s
 `heavy_wait` minutes (default 60) for a command run by hand; `--wait` overrides each. A job that gave up sooner would

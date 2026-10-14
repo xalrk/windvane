@@ -51,7 +51,7 @@ DEADLINE_ENV = "WINDVANE_HEAVY_DEADLINE"
 # A session's wrap-up is this long before its stop (as the worker prompt tells it): a job likely to start after it is
 # one the session should plan around.
 WRAP_UP_S = 20 * 60
-WRAP_UP = "heavy: likely to start after your wrap-up ({})"
+WRAP_UP = "heavy: likely to start after your wrap-up ({}); still waiting: plan the ticket without it"
 # Run times kept: the last few runs of each command, of the commands run most recently.
 KEEP_RUNS, KEEP_CMDS = 5, 100
 
@@ -95,9 +95,9 @@ def largest(n=3):
         try:
             where = "/".join(Path(os.readlink(util.PROC / str(pid) / "cwd")).parts[-2:])
         except OSError:  # someone else's: its folder can't be read
-            where = "?"
+            where = None
         if kb:
-            out.append(f"pid {pid} {name} {kb / 1048576:.1f} GB in {where}")
+            out.append(f"pid {pid} {name} {kb / 1048576:.1f} GB " + (f"in {where}" if where else "(folder unreadable)"))
     return out
 
 
@@ -355,39 +355,49 @@ def record(key, minutes):
 
 def usual(key, times):
     """A job's usual run time in minutes (the median of its last runs), or None for a command never seen."""
-    runs = sorted(times.get(key) or []) if key else []
+    runs = times.get(key) if key else None
+    runs = sorted(r for r in runs if isinstance(r, (int, float)) and not isinstance(r, bool)) \
+        if isinstance(runs, list) else []  # a hand-edited file isn't a reason to stop waiting
     return runs[len(runs) // 2] if runs else None
 
 
 def work_ahead(info, keys, times, now=None):
     """The heavy work before a job can start, behind the holder `info` and the waiters with `keys` ahead of it:
-    (minutes known, how many jobs have no known time, how many jobs). The holder counts its usual time less what it
-    ran so far."""
+    (minutes known, how many jobs have no known time, how many jobs, the holder's usual minutes when it ran past
+    them). The holder counts its usual time less what it ran so far; one past its usual time has no known end."""
     now = time.time() if now is None else now
     jobs = [(info.get("key"), now - info.get("since", now))] if info.get("pid") and still_held(info) else []
-    mins = unknown = 0
+    mins, unknown, over = 0, 0, None
     for key, ran in jobs + [(k, 0) for k in keys]:
         u = usual(key, times)
-        if u is None:
+        if u is None or u < ran / 60:
             unknown += 1
+            over = over if u is None else u
         else:
-            mins += max(u - ran / 60, 0)
-    return mins, unknown, len(jobs) + len(keys)
+            mins += u - ran / 60
+    return mins, unknown, len(jobs) + len(keys), over
+
+
+def minutes(m):
+    return f"{m:.0f} min" if m >= 1 else "under 1 min"
 
 
 def estimate(work, now=None):
-    """`work_ahead` as words, "about 25 min of work ahead (until about 01:30)", a lower bound when some job was
-    never timed, "work ahead unknown" when none was; None with nothing ahead. A clock time too, since the line is
-    read later."""
-    mins, unknown, jobs = work
+    """`work_ahead` as words, "about 25 min of work ahead (until about 01:30)", a lower bound when some job's end
+    isn't known (never timed, or a holder past its usual time), "work ahead unknown" when none is; None with nothing
+    ahead. A clock time too, since the line is read later."""
+    mins, unknown, jobs, over = work
     if not jobs:
         return None
-    if unknown == jobs:
-        return "work ahead unknown (never timed)"
+    never = unknown - (over is not None)
+    why = "; ".join(([f"the holder is past its usual {minutes(over)}"] if over is not None else [])
+                    + (["never timed" if never == jobs else f"{never} never timed"] if never else []))
+    if unknown == jobs or (unknown and mins < 1):
+        return f"work ahead unknown ({why})"
     until = time.strftime("%H:%M", time.localtime((time.time() if now is None else now) + mins * 60))
     if unknown:
-        return f"at least {mins:.0f} min of work ahead (until {until} or later; {unknown} never timed)"
-    return (f"about {mins:.0f} min" if mins >= 1 else "under 1 min") + f" of work ahead (until about {until})"
+        return f"at least {minutes(mins)} of work ahead (until {until} or later; {why})"
+    return ("under 1 min" if mins < 1 else f"about {minutes(mins)}") + f" of work ahead (until about {until})"
 
 
 def ahead(entry):
@@ -491,9 +501,10 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
     met, or unknown, keeps its turn. This job's own project's helpers (`reuse`) count as free for it alone: a waiter
     ahead is judged on what's free for anyone.
 
-    Each time what it waits on changes, the line says so: the work ahead (`estimate`), and once, with a session's
-    stop known, that the job likely starts after its wrap-up; a wait on memory names the processes holding most."""
-    said, busy_why, retry, warned = None, None, 0, False
+    Each time what it waits on changes, the line says so: the work ahead (`estimate`), or for a wait on memory the
+    processes holding most. With a session's stop known it says once that the job likely starts after the wrap-up:
+    when the known work ahead runs past it, or the wrap-up came with the job still waiting."""
+    said, busy_why, retry, warned, looked = None, None, 0, False, 0
     while True:
         line, mem = ahead(entry), free_gb()
         turn = all(short(need_of(w), mem) for w in line)  # the head, or all ahead wait on memory
@@ -513,13 +524,15 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
         info = holder(lock)
         n = 0 if turn else len(line)
         key = "memory" if mine else why or (info.get("pid"), info.get("since"), n)
-        if key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
-            work = work_ahead(info, [key_of(w) for w in line[:n]], load_times())
-            if mine:
+        if key != said or time.time() >= looked + 60:  # the wrap-up is looked at again each minute as time passes
+            work, looked = work_ahead(info, [key_of(w) for w in line[:n]], load_times()), time.time()
+            if key != said and mine:
                 say(f"heavy: waiting: {why}" + (f"; largest: {', '.join(big)}" if (big := largest()) else ""))
-            else:
+            elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
                 say(f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work)))
-            if not warned and (wrap := wrap_up()) and work[1] < work[2] and time.time() + work[0] * 60 > wrap:
+            wrap, now = wrap_up(), time.time()
+            late = wrap and (now >= wrap or work[1] < work[2] and now + work[0] * 60 > wrap)
+            if late and not warned:
                 say(WRAP_UP.format(time.strftime("%H:%M", time.localtime(wrap))))
                 warned = True
             said = key
