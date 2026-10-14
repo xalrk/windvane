@@ -38,7 +38,7 @@ class Scanner(unittest.TestCase):
         self.assertNotIn(TOKEN, privacy.said([("token", "x:1 in abc")]))
 
     def test_version_ranges_and_lan_logins_arent_emails_and_only_a_bots_noreply_is(self):
-        self.assertEqual(privacy.scan_text("react@18.x, ssh pi@" + "pihole.local, bot@" + "nas.lan"), [])
+        self.assertEqual(privacy.scan_text("react@" + "18.x, ssh pi@" + "pihole.local, bot@" + "nas.lan"), [])
         self.assertEqual(privacy.scan_text("ask someone@" + "anthropic.com"), ["email"])
 
     def test_the_guard_needs_no_login_name(self):
