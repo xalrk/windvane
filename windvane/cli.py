@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import doctor, driver, heavy, install, jobs, net, phone, planner, preflight, questions, requests, schedule, watch
+from . import doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, questions, requests, schedule, watch
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, exe, find, slots, toplevel
@@ -86,6 +86,9 @@ def cmd_init(a):
           f"  then commit {DIR}/ and push it to {p.upstream}: the autopilot reads tickets from there")
     if hooks:
         print(f"  phone: status/stop/overview hooks in {', '.join(hooks)}")
+    if p.cfg["forge"] == "github":
+        for _, what, fix in doctor.public_warnings(p):
+            print(f"  WARNING: {what}: {fix}")
 
 
 def guess_forge(root):
@@ -451,6 +454,9 @@ def waits_for(p, given):
 
 def cmd_answer(a, p):
     letter = a.answer.upper() if re.fullmatch(r"[A-Ea-e]", a.answer) else None
+    why = "" if letter else privacy.refusal(a.answer)
+    if why:  # before anything is written: the state's answers become a commit too
+        sys.exit(f"{a.ticket}: not recorded: {why}. Answer again without it.")
     keys = waits_for(p, a.ticket)
     if len(keys) > 1:  # which one the letter is for can't be told
         sys.exit(f"{p.norm(a.ticket)} has {len(keys)} open questions: answer each by its id ({', '.join(keys)}), "
@@ -656,6 +662,8 @@ def main(argv=None):
                    help="first remove windvane's leftover temp dirs, and what every project's state dir no longer "
                    "needs (idle merged worktrees, old transcripts, merged tickets' critic packs)")
     s.add_argument("--dry-run", action="store_true", help="with --clean: list what would go, with sizes")
+    s.add_argument("--leaks", action="store_true", help="instead: scan this repo's whole history for tokens, ntfy "
+                   "topics, personal emails, private words and this machine's names (before making it public)")
     s = sub.add_parser("phone", help="pushes and questions on your phone (ntfy); off until `phone setup`")
     s.add_argument("action", choices=("setup", "off", "rotate", "listen"),
                    help="setup: turn it on and subscribe; off; rotate: new topics; listen: act on the phone's replies")
@@ -770,6 +778,8 @@ def main(argv=None):
         return getattr(install, a.cmd)(a.yes)
     if a.cmd == "doctor":
         root = toplevel() if shutil.which("git") else None  # no git is one of the gaps doctor is there to name
+        if a.leaks:
+            return doctor.leaks(Project(root)) if root else sys.exit("windvane doctor --leaks: run it in a git repo")
         return doctor.main(Project(root) if root else None, a.clean, a.dry_run)
     if a.cmd == "phone":
         root = toplevel()

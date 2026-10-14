@@ -10,17 +10,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import actions, heavy, install, phone, runner, scratch, selfupdate, statedir
-from .config import CHECKOUT, HOME, Project
+from . import actions, heavy, install, phone, privacy, runner, scratch, selfupdate, statedir
+from .config import CHECKOUT, DIR, HOME, Project
 from .util import gout, load_json
 
 # The triggers that run a workflow on its own for every autopilot ticket: its PR and the merge push to main.
 AUTO_TRIGGERS = ("push", "pull_request", "pull_request_target")
 
 
-def run_quiet(cmd, timeout=20):
+def run_quiet(cmd, timeout=20, cwd=None):
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -223,6 +223,8 @@ def checks(p=None):
     if has_gh:
         r = run_quiet(["gh", "auth", "status"])
         add(r and r.returncode == 0, github, "gh logged in", "gh auth login")
+        if github:
+            out += public_warnings(p)
     add(shutil.which("tmux"), False, "tmux (for `windvane run --detach`)", "install tmux (e.g. sudo apt install tmux)")
     add(shutil.which("notify") and shutil.which("notify-ask") or phone.on(phone.conf()), False,
         "phone pushes and questions (ntfy)", "windvane phone setup; without it, questions wait for `windvane answer`")
@@ -238,6 +240,31 @@ def checks(p=None):
     add(install.has_keyword_hook(settings, any_copy=True), False, f"the mention hook in {settings}",
         "windvane install")
     return out + tmp_warnings(p) + state_warnings(p)
+
+
+def public_warnings(p):
+    """A warning when the project's GitHub repo is public: `.windvane/` is pushed with it, answers and all. Quiet when
+    `gh` can't tell (offline, logged out): this is a reminder, never a failure."""
+    r = run_quiet(["gh", "repo", "view", "--json", "visibility", "-q", ".visibility"], timeout=10, cwd=p.root)
+    if not r or r.returncode or r.stdout.strip().upper() != "PUBLIC":
+        return []
+    return [("warn", f"this repo is public on GitHub, and so is {DIR}/ (tickets, your answers, the critic's notes)",
+             f"keep secrets and personal details out of them; `windvane doctor --leaks` checks its history "
+             f"(docs/safety.md, \"What {DIR}/ holds\")")]
+
+
+def leaks(p):
+    """`doctor --leaks`: every leak kind in the lines any commit adds, by kind with its places, never the text.
+    Exit status 1 when there are any, for a check before a repo goes public."""
+    found = {}
+    for kind, where in privacy.history(p.root):
+        found.setdefault(kind, []).append(where)
+    for kind, places in sorted(found.items()):
+        more = f" (+{len(places) - 20} more)" if len(places) > 20 else ""
+        print(f"{privacy.NAMES[kind]}: {len(places)} place(s): {', '.join(places[:20])}{more}")
+    print(f"{sum(map(len, found.values()))} place(s) to check in {p.root}'s history; a deleted file's lines stay in it"
+          if found else f"nothing found in {p.root}'s history")
+    return 1 if found else 0
 
 
 def tmp_scope(p):

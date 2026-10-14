@@ -25,7 +25,7 @@ import traceback
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 
-from . import (actions, critic, install, jobs, net, phone, renumber, requests, scratch, selfupdate, statedir,
+from . import (actions, critic, install, jobs, net, phone, privacy, renumber, requests, scratch, selfupdate, statedir,
                util, worktree)
 from .renumber import noted, old_numbers, said
 from .desk import Desk
@@ -848,6 +848,11 @@ class Pilot(Desk, Periodic):
                 self.conflicted(tid)
                 return self.bounce(tid, "conflict")
             merge = gout(cd, "rev-parse", "HEAD")
+            found = privacy.outgoing(cd, p.upstream, merge, DIR)
+            if found:  # before the check: no paid-for check on a merge that can't go out
+                return self.fail(tid, f"not merged: the lines its commits add under {DIR}/ hold {privacy.said(found)}; "
+                                      f"take it out of {branch}'s history, and change the secret if it's real (that "
+                                      "branch is pushed)")
             if renumbered is not None:
                 self.log(f"{tid}: conflicted with {p.main} only in appended entries: {said(renumbered)}; resolved "
                          "without a worker run")

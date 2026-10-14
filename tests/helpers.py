@@ -122,6 +122,8 @@ if system.startswith("# windvane worker run"):
         if "conflicts with" in prompt:
             sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
         open("shared.txt", "w").write(tid + "\n")
+    if os.environ.get("FAKE_IDEA") and not resolve_only:  # a line for .windvane/IDEAS.md, as a session may write
+        open(".windvane/IDEAS.md", "a").write(os.environ["FAKE_IDEA"] + "\n")
     notes = os.environ.get("FAKE_NOTES")  # append: a section of its own in NOTES.md; edit: also rewrites its line 1
     if notes and "conflicts with" not in prompt:
         nt = open("NOTES.md").read()
