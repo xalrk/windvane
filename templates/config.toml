@@ -85,7 +85,7 @@ desk_fixes = 2            # fix sessions per red or conflicting desk PR before i
 # critic_deny = ["Edit", "Write"]
 
 # Sessions get your environment without variables named like credentials (*TOKEN*, *SECRET*, *PASSWORD*, *_KEY,
-# AWS_*), but for Claude Code's and gh's own. Name any your project's tools need:
+# AWS_*), but for Claude Code's and gh's own. Name any that your project's tools need:
 # [env]
 # keep = ["NPM_TOKEN"]
 

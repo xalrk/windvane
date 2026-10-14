@@ -282,6 +282,11 @@ def token_path(p):
     return Path(f).expanduser() if f else None
 
 
+class TokenError(SystemExit):
+    """`[github] token_file` can't be used. A SystemExit, so a command stops with its message; the driver catches it
+    by name, as a thread drops a SystemExit without a word."""
+
+
 def github_token(p):
     """The token in `[github] token_file`, or "" when none is set. A set file that can't be read stops the command:
     falling back to the user's own gh login would quietly give every session all their repos."""
@@ -291,9 +296,9 @@ def github_token(p):
     try:
         token = f.read_text().strip()
     except OSError as e:
-        raise SystemExit(f"windvane: [github] token_file: can't read {f} ({e.strerror})")
+        raise TokenError(f"windvane: [github] token_file: can't read {f} ({e.strerror})")
     if not token or len(token.split()) != 1:
-        raise SystemExit(f"windvane: [github] token_file: {f} should hold just the token")
+        raise TokenError(f"windvane: [github] token_file: {f} should hold just the token")
     return token
 
 

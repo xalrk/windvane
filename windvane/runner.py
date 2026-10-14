@@ -85,7 +85,8 @@ def identity(p):
 
 def git_config(environ):
     """The (key, value) settings git reads from `environ`'s GIT_CONFIG_COUNT and GIT_CONFIG_KEY_n/VALUE_n."""
-    n = int(environ.get("GIT_CONFIG_COUNT") or 0)
+    n = environ.get("GIT_CONFIG_COUNT", "")
+    n = int(n) if n.isdigit() else 0  # git itself refuses a bad count; a session's own commands will say so
     return [(environ[f"GIT_CONFIG_KEY_{i}"], environ.get(f"GIT_CONFIG_VALUE_{i}", ""))
             for i in range(n) if f"GIT_CONFIG_KEY_{i}" in environ]
 

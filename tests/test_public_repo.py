@@ -1,6 +1,8 @@
 """On a public repo: an outsider's fork PR named like a ticket's branch is never taken for it, sessions get no
 credentials from the driver's environment but what Claude Code and gh need, an optional token reaches this repo alone,
 and workers commit as the configured author. All through the Sandbox's fake `claude` and a fake `gh`."""
+import contextlib
+import io
 import json
 import os
 import sys
@@ -11,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import doctor, driver, net, runner, worktree  # noqa: E402
+from windvane import cli, doctor, driver, net, runner, worktree  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from helpers import REPO, Sandbox  # noqa: E402
@@ -145,6 +147,9 @@ class SessionEnv(Base):
         self.assertEqual(env["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"], "1")
         self.assertIn(("core.hooksPath", str(worktree.hooks_folder(self.p, self.p.work_dir))), runner.git_config(env))
 
+    def test_a_bad_git_config_count_in_the_users_environment_is_no_crash(self):
+        self.assertEqual(runner.git_config({"GIT_CONFIG_COUNT": "x", "GIT_CONFIG_KEY_0": "a.b"}), [])
+
     def test_claude_on_bedrock_keeps_its_aws_login(self):
         os.environ.update(AWS_ACCESS_KEY_ID="a", CLAUDE_CODE_USE_BEDROCK="1")
         self.assertEqual(runner.env(p=self.p)["AWS_ACCESS_KEY_ID"], "a")
@@ -184,6 +189,32 @@ class TokenFile(Base):
         self.token.unlink()
         with self.assertRaises(SystemExit) as e:
             runner.env(p=self.p)
+        self.assertIn("can't read", str(e.exception))
+
+    def test_a_token_file_gone_mid_run_stops_the_run_with_its_reason(self):
+        """A slot thread drops a SystemExit without a word: the run would go quiet, the ticket queued and retried."""
+        pushes, push = [], driver.push
+        driver.push = lambda title, msg, *a, **kw: pushes.append((title, msg))
+        self.addCleanup(setattr, driver, "push", push)
+        pilot = driver.Pilot(self.p, Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0, answer_wait=10,
+                                               replan=0, goal="", parallel=1))
+        prepare = pilot.prepare
+        pilot.prepare = lambda slot: (prepare(slot), self.token.unlink(missing_ok=True))[0]
+        pilot.run(datetime.now() + timedelta(minutes=15))
+        why = f"[github] token_file: can't read {self.token}"
+        log = (self.p.state / "autopilot.log").read_text()
+        self.assertIn(f"T-001: {why} (No such file or directory); the run stops", log)
+        self.assertEqual(log.count("; the run stops"), 1)  # not picked up again
+        self.assertEqual((pilot.failed, self.envs("# windvane worker run")), ([], []))
+        self.assertIn(why, dict(pushes)["windvane stopped"])
+
+    def test_desk_commands_that_only_look_or_stop_still_work_without_the_token(self):
+        self.token.unlink()
+        self.addCleanup(os.chdir, os.getcwd())
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.main(["-C", str(self.s.root), "status"])
+        with self.assertRaises(SystemExit) as e:
+            cli.main(["-C", str(self.s.root), "queue"])
         self.assertIn("can't read", str(e.exception))
 
     def test_doctor_checks_the_token_reaches_this_repo_alone_and_never_prints_it(self):
