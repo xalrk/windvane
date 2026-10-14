@@ -145,6 +145,12 @@ class HeavyEstimate(unittest.TestCase):
         self.assertEqual(heavy.usual("bake", heavy.load_times()), 7)  # 5 and 7: the bad entries skipped
         heavy.record("render", 3)
         self.assertEqual(heavy.load_times()["render"], [3])
+        key = heavy.job_key(["sh", "-c", "exit 5"], str(self.d))
+        for bad in (True, None, 5, "ten", {"a": 1}, [True, "x", 2]):  # the job's own entry, hand-edited
+            f.write_text(json.dumps({key: bad, "render": [3]}))
+            self.assertEqual(heavy.run(["sh", "-c", "exit 5"], wait_s=5, cwd=str(self.d)), 5)
+            self.assertEqual(heavy.load_times()[key][-1], 0, bad)
+        self.assertEqual(heavy.load_times()[key], [2, 0])
         holder = self.held("render", ran_min=1)  # a waiter reading it says what it can
         self.assertIn("about 2 min of work ahead", self.take()[0][0])
         os.chmod(f.parent, 0o500)  # unwritable: the job runs, its time just isn't kept

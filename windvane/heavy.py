@@ -340,8 +340,9 @@ def record(key, minutes):
     """Keep a job's run time: the last KEEP_RUNS of each command, for the KEEP_CMDS commands run most recently. Its
     writer holds the heavy lock, so no two write at once; written whole and renamed, so a reader never sees half."""
     times = load_times()
-    runs = times.pop(key, [])
-    times[key] = ([r for r in runs if isinstance(r, (int, float))] + [round(minutes, 2)])[-KEEP_RUNS:]
+    runs = runs_of(times, key)
+    times.pop(key, None)
+    times[key] = (runs + [round(minutes, 2)])[-KEEP_RUNS:]
     times = dict(list(times.items())[-KEEP_CMDS:])
     f = times_file()
     try:
@@ -353,11 +354,17 @@ def record(key, minutes):
         pass  # an estimate the next waiter can't make, not a reason to fail the job
 
 
+def runs_of(times, key):
+    """A job's kept run times, skipping anything that isn't one: a hand-edited file isn't a reason to fail a job."""
+    runs = times.get(key) if key else None
+    if not isinstance(runs, list):
+        return []
+    return [r for r in runs if isinstance(r, (int, float)) and not isinstance(r, bool)]
+
+
 def usual(key, times):
     """A job's usual run time in minutes (the median of its last runs), or None for a command never seen."""
-    runs = times.get(key) if key else None
-    runs = sorted(r for r in runs if isinstance(r, (int, float)) and not isinstance(r, bool)) \
-        if isinstance(runs, list) else []  # a hand-edited file isn't a reason to stop waiting
+    runs = sorted(runs_of(times, key))
     return runs[len(runs) // 2] if runs else None
 
 
@@ -390,8 +397,12 @@ def estimate(work, now=None):
     if not jobs:
         return None
     never = unknown - (over is not None)
-    why = "; ".join((["the holder is past its usual " + (f"{over:.0f} min" if over >= 1 else "time")] if over is not None else [])
-                    + (["never timed" if never == jobs else f"{never} never timed"] if never else []))
+    why = []
+    if over is not None:
+        why.append("the holder is past its usual " + (f"{over:.0f} min" if over >= 1 else "time"))
+    if never:
+        why.append("never timed" if never == jobs else f"{never} never timed")
+    why = "; ".join(why)
     if unknown == jobs or (unknown and mins < 1):
         return f"work ahead unknown ({why})"
     until = time.strftime("%H:%M", time.localtime((time.time() if now is None else now) + mins * 60))
