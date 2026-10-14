@@ -12,6 +12,12 @@ release on the same day adds a number (`2026.10.9.1`).
   windvane would push to main, or a ticket it would merge, whose new `.windvane/` lines hold one stays local, and the
   phone hears the kind and place, never the text. `windvane doctor --leaks` checks a repository's whole history
   before it goes public, and `init` and `doctor` warn when a GitHub repository already is.
+- Every push a session makes is scanned by a `pre-push` hook (your own still runs after it), and every branch again
+  before it merges: a token, a private key, an ntfy topic, a personal email, a private word or a file named like a
+  secret (`.env`, `*.pem`, `id_rsa`) is refused by kind and place. A ticket's branch that holds one goes back to its
+  worker and merges as one commit once it's taken out. Reviews, critiques, check logs, session replies and workers'
+  PR text are censored before they reach GitHub (home path, username and hostname too), and `windvane init` adds the
+  secret-file patterns to `.gitignore`.
 - `windvane --version`: the release, or for a clone its commit (and whether it has changes). `windvane doctor`
   prints it as its first line.
 - `windvane heavy --mem <GB>` (and `bg --heavy --mem`), and a project's `heavy_mem`: the free memory a heavy job

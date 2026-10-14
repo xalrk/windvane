@@ -196,6 +196,32 @@ merged; either way your phone hears the kind and the file and line, never the te
 they can't catch everything you'd rather keep to yourself. A repository that stays private can let a kind through
 with [`scan_allow`](configuration.md) (e.g. your private words, when its tickets name your other projects).
 
+### Pushes, merges and what windvane posts
+
+On a public repository a branch is public the moment it's pushed, before anyone reviews it. So windvane checks what
+leaves the machine at three points:
+
+- **Every push a session makes.** Sessions run with a `pre-push` hook of windvane's own, given in their git
+  environment (your repository's config and hooks stay as they are, and your own `pre-push` still runs after it). It
+  refuses a push whose new lines hold a token or a private key, an ntfy URL or this machine's topic, a personal email
+  or a word from `private-terms.txt`, or that adds a file named like a secret: `.env` and `.env.*` (not
+  `.env.example`), `*.pem`, `*.key`, `id_rsa*`, `credentials*.json`, `*.p12`. The refusal names the kind and the file
+  and line, never the text. Lines already on main don't count, and `scan_allow` lets a kind through here too.
+- **Every merge.** Before it merges a ticket or a desk PR, the driver scans the branch's commits again, for a push that
+  got past the hook (`--no-verify`, or one made elsewhere). A ticket goes back to its worker, who takes it out with a
+  commit on top; windvane then merges the branch as one commit, so the commit that added it stays out of main's
+  history. It stays in the branch's history on the remote, so change a real secret anyway. A desk PR is left for you.
+- **Text windvane posts** to GitHub or writes into a commit message: review and critic comments, the check log's tail
+  on a desk PR, the planner's and periodic sessions' replies, and the titles and bodies workers give `gh pr` and
+  `gh issue`. The same kinds are masked, and so are this machine's home path, username and hostname.
+
+`windvane init` adds those secret-file patterns to `.gitignore`, keeping what's already there.
+
+None of this is a guarantee. It misses a secret with no recognisable shape (most passwords), one that's encoded,
+split or inside a binary file, commit messages, and pushes made outside windvane's sessions until their branch comes
+up for a merge. GitHub's push protection, on by default for public repositories, is a second check for known token
+formats.
+
 Before you make a repository public, check its history, not only its files:
 ```sh
 windvane doctor --leaks
