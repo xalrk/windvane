@@ -52,7 +52,7 @@ To https://github.com/octo-org/octo-repo
 """
 GH = """#!/bin/sh
 case "$*" in
-  *"--head {head} "*) echo {state};;
+  *"--head {head} "*) echo '[{{"number": 4, "state": "{state}"}}]';;
 esac
 exit 0
 """
