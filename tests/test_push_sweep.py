@@ -21,7 +21,8 @@ TITLE = ("Retry overloaded sessions with a longer backoff and say on the phone w
 FIX = ("Split the ticket into one ticket for the driver and one for its prompts, then run each alone, then merge "
        "them in series.")
 # Sites whose push says none of the free text, by design: what they push is fixed words, times, counts and paths
-NO_TEXT = {"dollar_budget", "paused", "started_and_stopped:windvane started", "killed", "tmp_full", "held_for_good"}
+NO_TEXT = {"dollar_budget", "paused", "started_and_stopped:windvane started", "killed", "tmp_full", "held_for_good",
+           "secret_aside", "kept_secret"}  # a secret's push: a kind and a place, never text
 
 
 def limit_fix(p, patch, s):
