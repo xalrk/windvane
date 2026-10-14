@@ -17,6 +17,8 @@ author = ""               # "Name <email>" for the driver's own commits (merges,
 heavy_check = false       # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
 overview_extra = ""       # a command whose output (15 lines, 30 s) `windvane overview` and the phone's add
 shared_notes = []         # notes files every ticket appends to (["NOTES.md"]): no Touches overlap, sections merge
+scan_allow = []           # leak kinds answers and pushed .windvane/ lines may hold (["private-term"]: a repo that
+                          # stays private); see docs/safety.md, "What .windvane/ holds"
 
 [models]                  # model and effort per role
 worker = "opus"

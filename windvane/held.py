@@ -130,7 +130,7 @@ def land(p, cd, branch, title, body, commit=True, tries=2):
     title = actions.tag(p, title, cd)
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
-    found = privacy.outgoing(cd, p.upstream, "HEAD", DIR)
+    found = privacy.outgoing(cd, p.upstream, "HEAD", DIR, privacy.guarded(p))
     ok, where = (False, kept_secret(p, cd, branch, title, found)) if found else _land(p, cd, branch, title, body, tries)
     if is_local(where):
         hold(p, branch, "land")

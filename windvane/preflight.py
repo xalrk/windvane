@@ -311,7 +311,7 @@ def ask(p, qs, inp=input, say=print):
         if reply.strip().lower() == "q":
             break
         got = parse(reply, x)
-        why = got and got[1] and privacy.refusal(got[1])
+        why = got and got[1] and privacy.refusal(p, got[1])
         if why:
             say(f"  not taken: {why}; answer it again with `windvane answer {x['id']}`")
         elif got:

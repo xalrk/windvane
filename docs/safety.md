@@ -193,7 +193,8 @@ Never type a password, a token or a personal detail into an answer or a ticket. 
 in `~/.config/windvane/private-terms.txt` (one per line: a name, a client, an address). A change windvane is about to
 push to main whose new `.windvane/` lines hold one stays on its local branch instead, and a ticket holding one isn't
 merged; either way your phone hears the kind and the file and line, never the text. These checks match patterns, so
-they can't catch everything you'd rather keep to yourself.
+they can't catch everything you'd rather keep to yourself. A repository that stays private can let a kind through
+with [`scan_allow`](configuration.md) (e.g. your private words, when its tickets name your other projects).
 
 Before you make a repository public, check its history, not only its files:
 ```sh

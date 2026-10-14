@@ -848,7 +848,7 @@ class Pilot(Desk, Periodic):
                 self.conflicted(tid)
                 return self.bounce(tid, "conflict")
             merge = gout(cd, "rev-parse", "HEAD")
-            found = privacy.outgoing(cd, p.upstream, merge, DIR)
+            found = privacy.outgoing(cd, p.upstream, merge, DIR, privacy.guarded(p))
             if found:  # before the check: no paid-for check on a merge that can't go out
                 return self.fail(tid, f"not merged: the lines its commits add under {DIR}/ hold {privacy.said(found)}; "
                                       f"take it out of {branch}'s history, and change the secret if it's real (that "

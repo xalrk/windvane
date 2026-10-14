@@ -454,7 +454,7 @@ def waits_for(p, given):
 
 def cmd_answer(a, p):
     letter = a.answer.upper() if re.fullmatch(r"[A-Ea-e]", a.answer) else None
-    why = "" if letter else privacy.refusal(a.answer)
+    why = "" if letter else privacy.refusal(p, a.answer)
     if why:  # before anything is written: the state's answers become a commit too
         sys.exit(f"{a.ticket}: not recorded: {why}. Answer again without it.")
     keys = waits_for(p, a.ticket)

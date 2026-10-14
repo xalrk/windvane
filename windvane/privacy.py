@@ -110,6 +110,11 @@ def kinds_in(text, rules):
     return found
 
 
+def guarded(p):
+    """The kinds the guards on `p`'s answers and pushes refuse: SURE, less the project's `scan_allow`."""
+    return tuple(k for k in SURE if k not in p.cfg["scan_allow"])
+
+
 def scan_text(text, kinds=SURE):
     """The kinds of leak in `text`, sorted."""
     r = rules(kinds)
@@ -168,8 +173,8 @@ def said(found, most=3):
     return ", ".join(parts) + (f" and {len(found) - most} more" if len(found) > most else "")
 
 
-def refusal(text):
+def refusal(p, text):
     """Why free text the user typed can't be committed, or "" when it can: the kinds it holds, never the text."""
-    kinds = scan_text(text)
+    kinds = scan_text(text, guarded(p))
     return (f"it holds {' and '.join(NAMES[k] for k in kinds)}, and answers are committed and pushed with {DIR}/"
             if kinds else "")

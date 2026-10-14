@@ -122,6 +122,19 @@ class Land(Base):
         why, msg = self.assert_held(ok, "this machine's ntfy topic")
         self.assertNotIn(TOPIC, why + msg + self.log())
 
+    def test_a_private_word_is_held_unless_the_project_allows_it(self):
+        terms = Path(os.environ["XDG_CONFIG_HOME"]) / "windvane/private-terms.txt"
+        terms.parent.mkdir(parents=True, exist_ok=True)
+        terms.write_text("# mine\n" + "Bram" + "blewood\n")
+        ok, _ = self.land("ask " + "bram" + "blewood about it")
+        self.assert_held(ok, "a word from private-terms.txt")
+        cfg = self.s.root / ".windvane/config.toml"
+        cfg.write_text('scan_allow = ["private-term"]\n' + cfg.read_text())
+        self.s.publish("allow")
+        self.p = Project(self.s.root)
+        self.assertEqual(privacy.guarded(self.p), ("token", "ntfy-url", "ntfy-topic", "email"))
+        self.assertEqual(held.land(self.p, self.p.plan_dir, "ideas-x", "Ideas", "body", commit=False)[0], True)
+
     def test_a_home_path_is_pushed(self):
         ok, where = self.land(f"the build writes to {Path.home()}/out")
         self.assertEqual((ok, where), (True, "main"))
