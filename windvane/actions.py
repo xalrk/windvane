@@ -423,7 +423,7 @@ def worker_git(p, wd):
     if not budget(p):
         return {}, ""
     say_stale(p)
-    if run(["git", "config", "core.hooksPath"], wd).stdout.strip() and not own_hooks(p, wd):
+    if run(["git", "config", "core.hooksPath"], wd).stdout.strip():
         if not cached_over_cap(p):
             return {}, ""
         if p.name not in asked:
@@ -446,10 +446,11 @@ UNDER = ("import json, sys, time\n"
 
 
 def own_hooks(p, wd):
-    """The hooks folder windvane set for its worktree `wd` (worktree.guard_pushes, its push scan), or None: it holds
-    the repo's own hooks, so the hooks here link from it."""
-    d = run(["git", "config", "--worktree", "core.hooksPath"], wd).stdout.strip()
-    return Path(d) if d and Path(d).parent == p.state / "hooks" else None
+    """The push-scanning hooks folder windvane made for `wd`'s session (worktree.guard_pushes), or None: it holds the
+    repo's own hooks, so the hooks here link from it, its pre-push too."""
+    from .worktree import hooks_folder
+    d = hooks_folder(p, wd)
+    return d if (d / "pre-push").exists() else None
 
 
 def skip_hooks(p, wd):
@@ -647,6 +648,46 @@ def count(a, kind):
         pass
 
 
+TEXT, FILES = {"-t", "--title", "-b", "--body"}, {"-F", "--body-file"}  # the text gh pr/issue send to GitHub
+
+
+def censored(a):
+    # gh pr/issue's titles, bodies and body files with privacy.censor applied: what a worker writes there is public
+    # at once. A body file that changes goes as a censored copy in TMPDIR (the ticket's own). Unchanged if it can't.
+    if a[:1] not in (["pr"], ["issue"]) or a[1:2] not in (["create"], ["edit"], ["comment"], ["review"]):
+        return a
+    try:
+        sys.path.insert(0, WINDVANE)
+        from windvane.privacy import censor
+    except Exception:
+        return a
+
+    def body_file(path):
+        try:
+            text = sys.stdin.read() if path == "-" else open(path).read()
+        except OSError:
+            return path
+        if path != "-" and censor(text) == text:
+            return path
+        import tempfile
+        fd, copy = tempfile.mkstemp(prefix="gh-body-", suffix=".md")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(censor(text))
+        return copy
+    out, i = [], 0
+    while i < len(a):
+        x, i = a[i], i + 1
+        name, eq, v = x.partition("=")
+        if eq and name.startswith("--") and name in TEXT | FILES:
+            out.append(f"{name}={censor(v) if name in TEXT else body_file(v)}")
+            continue
+        out.append(x)
+        if x in TEXT | FILES and i < len(a):
+            out.append(censor(a[i]) if x in TEXT else body_file(a[i]))
+            i += 1
+    return out
+
+
 a = sys.argv[1:]
 kind, alias = refused(a), None
 if not kind:
@@ -665,7 +706,7 @@ if kind:
 if not REAL:
     print("gh: not found (windvane's guard found no gh on PATH when the session started)", file=sys.stderr)
     sys.exit(127)
-os.execv(REAL, [REAL, *a])
+os.execv(REAL, [REAL, *censored(a)])
 """
 
 
@@ -692,10 +733,10 @@ def real_gh():
 
 def gh_guard(p, wd):
     """Environment for a worker session: on forge github, PATH led by a `gh` that refuses to start, re-run or enable
-    a workflow and passes everything else to the real gh, unchanged. On with or without a budget: workflows run only
-    by hand (`windvane ci`) is a rule of windvane, not of the budget. The Bash tool runs the user's shell setup, which
-    may put another dir first; Claude Code sources CLAUDE_ENV_FILE after it, before each command, so the guard goes
-    first there too (after the user's own env file, if they set one)."""
+    a workflow and passes everything else to the real gh, the text of a PR or an issue censored. On with or without a
+    budget: workflows run only by hand (`windvane ci`) is a rule of windvane, not of the budget. The Bash tool runs the
+    user's shell setup, which may put another dir first; Claude Code sources CLAUDE_ENV_FILE after it, before each
+    command, so the guard goes first there too (after the user's own env file, if they set one)."""
     if p.cfg["forge"] != "github":
         return {}
     folder = p.state / "gh-guard"
@@ -705,6 +746,7 @@ def gh_guard(p, wd):
     tmp.write_text(f"#!/bin/sh\n''''exec {shlex.quote(sys.executable)} \"$0\" \"$@\" # '''\n"
                    f"# {GUARD}: workers never start, re-run or enable a GitHub workflow.\n"
                    f"REAL = {real_gh()!r}\nLEDGER = {str(p.state / 'ledger.jsonl')!r}\n"
+                   f"WINDVANE = {str(Path(__file__).resolve().parent.parent)!r}\n"
                    f"LOG = {str(p.state / 'autopilot.log')!r}\nSAID = {str(folder / f'unread-said.{RUN}')!r}\n"
                    f"{GUARD_SCRIPT}")
     for old in folder.glob("unread-said.*"):  # an earlier run's: this run says it again

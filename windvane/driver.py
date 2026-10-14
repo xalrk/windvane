@@ -40,7 +40,7 @@ from .questions import (answered, desk_answers, give_answer, keys, mode, note, p
 from .queue import Queue, branch_depends
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
-from .worktree import TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, ensure_worktree, teardown
+from .worktree import TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, ensure_worktree, guard_pushes, teardown
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
@@ -498,8 +498,9 @@ class Pilot(Desk, Periodic):
         fb = self.feedback.get(tid)
         pr = pr_for(p, branches[0]) if branches else ""
         known = self.answered(tid, ref)
+        push_env = guard_pushes(p, wd)  # first: worker_git's hooks, when it sets any, link from its folder
         git_env, skip_line = actions.worker_git(p, wd)
-        session_env = {**git_env, **actions.gh_guard(p, wd), jobs.RUN_STOP: str(self.end().timestamp())}
+        session_env = {**push_env, **git_env, **actions.gh_guard(p, wd), jobs.RUN_STOP: str(self.end().timestamp())}
         kept = jobs.ended_kept(p, tid)
         prompt = "\n\n".join(filter(None, [
             f"Ticket {tid}. Follow the worker rules in your system prompt and end with the RESULT line.",

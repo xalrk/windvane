@@ -13,17 +13,14 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
     """The autopilot's own worktree at `path`, created detached at upstream (and set up) when missing. With
     isolate off, work_dir and ci_dir are the checkout itself, which is left alone. `stop()` gives a reason to end
     the setup early (the run's stop or deadline), raised as SetupFailed's `killed`."""
-    if path == p.main_root():
+    if path == p.main_root() or (path / ".git").exists():
         return
-    if (path / ".git").exists():
-        return guard_pushes(p, path)
     root = p.main_root()
     net.git(root, "fetch", "-q", p.remote)
     git(root, "worktree", "prune")
     r = git(root, "worktree", "add", "--detach", str(path), p.upstream)
     if r.returncode:
         raise SystemExit(f"windvane: can't create the worktree {path}: {r.stderr.strip()}")
-    guard_pushes(p, path)
     if setup and p.cfg["setup"]:
         log(p, f"setting up {path}: {p.cfg['setup']}…")
         limit = p.cfg["setup_minutes"]
@@ -39,17 +36,17 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
             raise SetupFailed(f"setup {cmd} {how} in {where}", lines, why, how, f"{cmd} in {where}")
 
 
-HOOKS = "hooks"  # under the state dir: one hooks folder per worktree of windvane's own
+HOOKS = "hooks"  # under the state dir: one hooks folder per worktree a session pushes from
 
 
 def guard_pushes(p, path):
-    """Point the worktree `path` (never the user's checkout) at a hooks folder of windvane's own, through its
-    worktree-only config: a pre-push that scans what each push makes public (`privacy.pre_push`), then runs the repo's
-    own pre-push, and the repo's other hooks linked in, so they run as before. Rebuilt at every start: the repo's
-    hooks may have changed. Its sessions push their own branches, so a scan in the
-    driver would come too late: on a public repository a branch is public the moment it's pushed."""
-    folder = p.state / HOOKS / Path(path).resolve().name
-    theirs = their_hooks(path, folder)
+    """Environment for a session that pushes from `path`: git's core.hooksPath, given in its environment config (never
+    the repo's: the user's checkout shares it), on a hooks folder of windvane's own. Its pre-push scans what each push
+    makes public (`privacy.pre_push`), then runs the repo's own pre-push; the repo's other hooks are linked in, so they
+    run as before. Rebuilt for every session: the repo's hooks may have changed. Sessions push their own branches, so
+    a scan in the driver would come too late: on a public repository a branch is public the moment it's pushed."""
+    folder = hooks_folder(p, path)
+    theirs = their_hooks(path)
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
     for hook in theirs.iterdir() if theirs.is_dir() else ():
@@ -59,18 +56,20 @@ def guard_pushes(p, path):
     own = theirs / "pre-push"
     script.write_text(privacy.hook_script(p.root, p.upstream, str(own) if os.access(own, os.X_OK) else ""))
     script.chmod(0o755)
-    if git(path, "config", "--bool", "extensions.worktreeConfig").stdout.strip() != "true":
-        git(path, "config", "extensions.worktreeConfig", "true")  # read by git only: the checkout's own config is unset
-    git(path, "config", "--worktree", "core.hooksPath", str(folder))
+    n = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
+    return {"GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": "core.hooksPath",
+            f"GIT_CONFIG_VALUE_{n}": str(folder)}
 
 
-def their_hooks(path, ours):
-    """The repo's own hooks folder, as git would find it without windvane's: the last core.hooksPath set outside
-    this worktree's config and git's command line (relative to the worktree, as git reads it), else the common
-    `.git/hooks`. A value that is windvane's own folder (`ours`) doesn't count."""
+def hooks_folder(p, path):
+    return p.state / HOOKS / Path(path).resolve().name
+
+
+def their_hooks(path):
+    """The repo's own hooks folder, as git finds it: the last core.hooksPath in its config files (relative to the
+    worktree, as git reads it; not git's command line, where a session's own may be), else the common `.git/hooks`."""
     out = git(path, "config", "--show-scope", "--get-all", "core.hooksPath").stdout.splitlines()
-    vals = [v for scope, _, v in (line.partition("\t") for line in out)
-            if scope not in ("worktree", "command") and v and Path(v).expanduser() != ours]
+    vals = [v for scope, _, v in (line.partition("\t") for line in out) if scope != "command" and v]
     if vals:
         return Path(path, Path(vals[-1]).expanduser())
     common = git(path, "rev-parse", "--git-common-dir").stdout.strip()

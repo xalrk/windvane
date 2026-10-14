@@ -212,7 +212,7 @@ class Desk:
     def desk_fix(self, pr, d, head, problem, details):
         from .driver import worker_perms
         from .runner import rules
-        from .worktree import clean_detach
+        from .worktree import clean_detach, guard_pushes
         p, cd = self.p, self.cd
         n, branch = str(pr["number"]), pr["headRefName"]
         clean_detach(p, cd, head)
@@ -231,7 +231,7 @@ class Desk:
         deny = [*deny, "Bash(gh pr edit *)", "Bash(gh pr close *)"]  # the PR is the user's
         while True:
             text, killed, error = self.claude("fix", f"desk-{n}", prompt, rules(p, "FIX.md"), cd, limit, allow,
-                                              deny)
+                                              deny, env=guard_pushes(p, cd))
             if not error or not self.crashed(f"desk-{n}", error):
                 break
         if killed or error:  # cut off by a stop, the deadline or the caps: the try doesn't count; next run again
