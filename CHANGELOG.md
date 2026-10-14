@@ -7,6 +7,11 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- Secrets kept out of `.windvane/`, which is pushed with your code: `windvane answer` refuses an answer holding a
+  token, an ntfy URL or topic, a personal email or a word from `~/.config/windvane/private-terms.txt`; a change
+  windvane would push to main, or a ticket it would merge, whose new `.windvane/` lines hold one stays local, and the
+  phone hears the kind and place, never the text. `windvane doctor --leaks` checks a repository's whole history
+  before it goes public, and `init` and `doctor` warn when a GitHub repository already is.
 - `windvane --version`: the release, or for a clone its commit (and whether it has changes). `windvane doctor`
   prints it as its first line.
 - `windvane heavy --mem <GB>` (and `bg --heavy --mem`), and a project's `heavy_mem`: the free memory a heavy job

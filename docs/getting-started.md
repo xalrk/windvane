@@ -79,6 +79,8 @@ The autopilot reads tickets from the remote, so commit and push:
 ```sh
 git add .windvane && git commit -m "windvane setup and first tickets" && git push
 ```
+Everything in `.windvane/` is pushed with your code, your answers included, and must stay that way: see
+[what it holds](safety.md#what-windvane-holds) before you write anything private there.
 
 ## Run it
 
