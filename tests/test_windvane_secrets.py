@@ -181,7 +181,7 @@ class Merge(unittest.TestCase):
         [msg] = [m for t, m in pushes if t.startswith("Set aside:") and "T-001" in t]
         self.assertTrue(msg.startswith("Not merged: its commits add a token at .windvane/IDEAS.md:1 in "), msg)
         self.assertIn("which would stay in main's history.\nRewrite t-001-work without it (`git rebase -i origin/main`, "
-                      "then `git push --force-with-lease`)", msg)
+                      "then `git push --force-with-lease origin t-001-work`)", msg)
         self.assertIn("scan_allow", msg)
         self.assertNotIn(TOKEN, msg + (Project(s.root).state / "autopilot.log").read_text())
 

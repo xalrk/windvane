@@ -430,8 +430,9 @@ class Pilot(Desk, Periodic):
         push(f"Set aside: {self.name(tid)}",
              whole("Not merged: its commits add ", privacy.said(found), f", which would stay in {p.main}'s history.",
                    log=self.log)
-             + f"\nRewrite {branch} without it (`git rebase -i {p.upstream}`, then `git push --force-with-lease`) and "
-             "change the secret if it's real: the branch is pushed already. The next run takes it up again.\n"
+             + f"\nRewrite {branch} without it (`git rebase -i {p.upstream}`, then `git push --force-with-lease "
+             f"{p.remote} {branch}`) and change the secret if it's real: the branch is pushed already. The next run "
+             "takes it up again.\n"
              f"Not a secret? Let its kind through with `scan_allow` in {DIR}/config.toml.", 4, "warning")
 
     def critic_retry(self, tid):
