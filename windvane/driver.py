@@ -903,8 +903,8 @@ class Pilot(Desk, Periodic):
             found = privacy.outgoing(cd, p.upstream, merge, DIR, privacy.guarded(p))
             if found:  # before the check: no paid-for check on a merge that can't go out
                 return self.secret_aside(tid, branch, sha, found)
-            found = privacy.branch_found(p, cd, merge)
-            if found and privacy.pushed(cd, p.upstream, ["-1", merge], privacy.guarded(p)):
+            found = privacy.branch_found(p, cd, sha)  # the branch's own commits: places the worker can find
+            if found and privacy.pushed(cd, p.upstream, ["-1", merge], privacy.guarded(p)):  # still in what it adds
                 return self.secret_bounce(tid, sha, found)
             if found:  # a later commit took it out: the branch as one commit keeps the one that added it off main
                 squashed = self.squash(tid, branch, sha, merge, found)

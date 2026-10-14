@@ -5,6 +5,7 @@ writes into a commit message is censored first; `windvane init` adds the secret-
 The leaks are built from pieces at run time, so this file itself stays clean for the working-tree scan."""
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -200,7 +201,9 @@ class Merge(unittest.TestCase):
         pilot = self.pilot()
         pilot.run(now() + timedelta(hours=1))
         log = self.log()
-        self.assertIn("T-001: not merged: its commits add a token at settings.py:1 in ", log)
+        sha = re.search(r"T-001: not merged: its commits add a token at settings.py:1 in (\w+); back to the worker",
+                        log).group(1)
+        self.assertEqual(self.s.git("log", "-1", "--format=%s", sha), "T-001: build")  # the worker's, not a merge
         self.assertIn("; back to the worker", log)
         self.assertIn("pushed as one commit", log)  # its second run took it out with a commit on top
         self.assertEqual(pilot.merged, ["T-001"])
