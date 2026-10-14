@@ -217,6 +217,20 @@ class Merge(unittest.TestCase):
         self.assertIn("read the key from the vault", self.main_log("-p"))
 
 
+    def test_a_set_aside_ticket_whose_kind_is_then_allowed_merges_unchanged(self):
+        os.environ["FAKE_IDEA"] = "idea: write to someone@" + "fastmail.com"
+        self.assertEqual(list(self.run_pilot().aside), ["T-001"])
+        self.s.git("fetch", "-q", "origin")
+        sha = self.s.git("rev-parse", "origin/t-001-work")
+        cfg = self.s.root / ".windvane/config.toml"  # the push's "Not a secret?" fix
+        cfg.write_text('scan_allow = ["email"]\n' + cfg.read_text())
+        self.s.publish("allow")
+        pilot = self.run_pilot()
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.assertIn("t-001-work holds nothing the guard refuses now; back in the queue",
+                      (Project(self.s.root).state / "autopilot.log").read_text())
+        self.assertIn(sha, self.main_log("--format=%H"))  # the very branch that was set aside
+
 class Public(unittest.TestCase):
     def setUp(self):
         self.s = Sandbox()

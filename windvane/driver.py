@@ -442,20 +442,27 @@ class Pilot(Desk, Periodic):
              f"Not a secret? Let its kind through with `scan_allow` in {DIR}/config.toml.", 4, "warning")
 
     def secrets_unchanged(self):
-        """Set aside, without a session, each ticket `secret_aside` stopped whose branch still has that head; one the
-        user rewrote (or deleted) goes back to the queue as usual."""
-        root = self.p.main_root()
+        """Set aside, without a session, each ticket `secret_aside` stopped whose branch still has that head and whose
+        commits still add something the guard refuses: one the user rewrote (or deleted), or whose finding they let
+        through (`scan_allow`, a word taken out of private-terms.txt), goes back to the queue as usual. The scan is a
+        `git log` of the branch's own commits, once a run."""
+        root, remote = self.p.main_root(), self.p.remote
         for tid, s in list(self.secrets.items()):
             if tid in self.skip:
                 continue
-            if gout(root, "rev-parse", "-q", "--verify", f"{self.p.remote}/{s['branch']}") == s["sha"]:
+            ref = f"{remote}/{s['branch']}"
+            if gout(root, "rev-parse", "-q", "--verify", ref) != s["sha"]:
+                why = "changed since it was set aside for a secret"
+            elif not privacy.outgoing(root, self.p.upstream, ref, DIR, privacy.guarded(self.p)):
+                why = "holds nothing the guard refuses now"
+            else:
                 self.skip.add(tid)
                 self.aside[tid] = f"its {DIR}/ lines still hold a secret: {s['branch']} unchanged since it was set aside"
                 self.log(f"{tid}: {self.aside[tid]}; left be")
-            else:
-                with self.lock:
-                    self.secrets.pop(tid, None)
-                self.log(f"{tid}: {s['branch']} changed since it was set aside for a secret; back in the queue")
+                continue
+            with self.lock:
+                self.secrets.pop(tid, None)
+            self.log(f"{tid}: {s['branch']} {why}; back in the queue")
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
