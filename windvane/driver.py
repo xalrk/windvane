@@ -195,6 +195,7 @@ class Pilot(Desk, Periodic):
         self.questions = s.get("questions", {})  # question id (questions.keys) -> a question for the user
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
+        self.secrets = s.get("secrets", {})  # ticket -> {"branch", "sha"}: a head set aside for a secret (secret_aside)
         self.skip, self.merged, self.failed = set(), [], []
         self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
@@ -262,6 +263,7 @@ class Pilot(Desk, Periodic):
         with self.lock:
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
+                                        "secrets": dict(self.secrets),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
                                         "running": dict(self.running)})
 
@@ -419,21 +421,41 @@ class Pilot(Desk, Periodic):
         push(f"Set aside: {self.name(tid)}", whole("Hit ", limit, f". {fix} Branch kept.", log=self.log), 3,
              "hourglass")
 
-    def secret_aside(self, tid, branch, found):
+    def secret_aside(self, tid, branch, sha, found):
         """A ticket whose commits add a secret under `.windvane/` isn't merged: main would keep it in its history for
-        good. Only the user can rewrite the branch (sessions never force-push), so the run goes on without it, its
-        verdicts kept for when it's clean; the phone hears kind and place, never the text."""
+        good. Only the user can rewrite the branch (sessions never force-push), so the run goes on without it, and
+        later runs too while its head stays `sha` (`secrets_unchanged`): no session is paid to find it again. The
+        phone hears kind and place once, never the text."""
         p = self.p
         self.skip.add(tid)
         self.aside[tid] = f"its {DIR}/ lines hold {privacy.said(found, 1)}"
+        with self.lock:
+            self.secrets[tid] = {"branch": branch, "sha": sha}
+        self.save()
         self.log(f"{tid}: not merged: the lines its commits add under {DIR}/ hold {privacy.said(found)}; set aside")
         push(f"Set aside: {self.name(tid)}",
              whole("Not merged: its commits add ", privacy.said(found), f", which would stay in {p.main}'s history.",
                    log=self.log)
-             + f"\nRewrite {branch} without it (`git rebase -i {p.upstream}`, then `git push --force-with-lease "
-             f"{p.remote} {branch}`) and change the secret if it's real: the branch is pushed already. The next run "
-             "takes it up again.\n"
+             + f"\nRewrite the branch without it: `git fetch {p.remote} && git switch {branch} && git rebase -i "
+             f"{p.upstream}`, then `git push --force-with-lease {p.remote} {branch}`. Change the secret if it's real: "
+             "the branch is pushed already. Until it changes, runs leave it be; then the next one takes it up again.\n"
              f"Not a secret? Let its kind through with `scan_allow` in {DIR}/config.toml.", 4, "warning")
+
+    def secrets_unchanged(self):
+        """Set aside, without a session, each ticket `secret_aside` stopped whose branch still has that head; one the
+        user rewrote (or deleted) goes back to the queue as usual."""
+        root = self.p.main_root()
+        for tid, s in list(self.secrets.items()):
+            if tid in self.skip:
+                continue
+            if gout(root, "rev-parse", "-q", "--verify", f"{self.p.remote}/{s['branch']}") == s["sha"]:
+                self.skip.add(tid)
+                self.aside[tid] = f"its {DIR}/ lines still hold a secret: {s['branch']} unchanged since it was set aside"
+                self.log(f"{tid}: {self.aside[tid]}; left be")
+            else:
+                with self.lock:
+                    self.secrets.pop(tid, None)
+                self.log(f"{tid}: {s['branch']} changed since it was set aside for a secret; back in the queue")
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
@@ -866,7 +888,7 @@ class Pilot(Desk, Periodic):
             merge = gout(cd, "rev-parse", "HEAD")
             found = privacy.outgoing(cd, p.upstream, merge, DIR, privacy.guarded(p))
             if found:  # before the check: no paid-for check on a merge that can't go out
-                return self.secret_aside(tid, branch, found)
+                return self.secret_aside(tid, branch, sha, found)
             if renumbered is not None:
                 self.log(f"{tid}: conflicted with {p.main} only in appended entries: {said(renumbered)}; resolved "
                          "without a worker run")
@@ -1321,6 +1343,7 @@ class Pilot(Desk, Periodic):
         q = self.queue
         busy = sorted(self.running)
         # merged this run: a slot can merge and free itself after this pass's fetch, so the queue may not show it yet
+        self.secrets_unchanged()
         avoid = set(self.skip) | set(busy) | set(self.merged)
         self.waits = []
         extra = self.outside(busy)  # once a pass: two git calls a running ticket

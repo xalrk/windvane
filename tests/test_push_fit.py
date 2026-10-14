@@ -257,7 +257,7 @@ def planned(p, patch, s):
 
 
 def secret_aside(p, patch, s):
-    pilot(p).secret_aside("T-001", "t-001-x", [("token", f".windvane/{'x' * 250}.md:1 in 1a2b3c4")])
+    pilot(p).secret_aside("T-001", "t-001-x", "0" * 40, [("token", f".windvane/{'x' * 250}.md:1 in 1a2b3c4")])
     return {"Set aside": ("Not merged: its commits add a token at .windvane/", "which would stay in main's history.")}
 
 

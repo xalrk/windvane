@@ -161,29 +161,60 @@ class Land(Base):
 
 
 class Merge(unittest.TestCase):
-    def test_a_ticket_whose_commits_add_a_token_under_windvane_isnt_merged(self):
-        s = Sandbox()
-        self.addCleanup(s.close)
-        s.ticket("T-001")
-        s.publish()
-        os.environ["FAKE_IDEA"] = f"idea: {TOKEN}"
-        pushes = []
+    def setUp(self):
+        self.s = Sandbox()
+        self.addCleanup(self.s.close)
+        self.s.ticket("T-001")
+        self.s.publish()
+        self.pushes = []
         self.addCleanup(setattr, driver, "push", driver.push)
-        driver.push = lambda title, msg="", *a, **k: pushes.append((title, msg))
-        pilot = driver.Pilot(Project(s.root), Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0,
-                                                        answer_wait=10, replan=0, goal="", parallel=1))
+        driver.push = lambda title, msg="", *a, **k: self.pushes.append((title, msg))
+
+    def run_pilot(self):
+        pilot = driver.Pilot(Project(self.s.root), Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0,
+                                                             answer_wait=10, replan=0, goal="", parallel=1))
         pilot.run(now() + timedelta(hours=1))
+        return pilot
+
+    def sessions(self):
+        f = self.s.tmp / "calls.jsonl"
+        return sum(json.loads(l)["system"].startswith("# windvane") for l in f.read_text().splitlines())
+
+    def main_log(self, *args):
+        self.s.git("fetch", "-q", "origin")
+        return self.s.git("log", *args, "origin/main")
+
+    def test_a_ticket_whose_commits_add_a_token_under_windvane_is_set_aside_until_rewritten(self):
+        os.environ["FAKE_IDEA"] = f"idea: {TOKEN}"
+        pilot = self.run_pilot()
         self.assertEqual((pilot.merged, pilot.failed, list(pilot.aside)), ([], [], ["T-001"]))
         self.assertEqual(pilot.fail_streak, 0)  # not a failure: two of those in a row would stop the run
-        s.git("fetch", "-q", "origin")
-        self.assertNotIn("Merge T-001", s.git("log", "origin/main", "--format=%s"))
-        self.assertIn("refs/heads/t-001-work", s.git("ls-remote", "--heads", "origin"))  # the branch is kept
-        [msg] = [m for t, m in pushes if t.startswith("Set aside:") and "T-001" in t]
+        self.assertNotIn("Merge T-001", self.main_log("--format=%s"))
+        self.assertIn("refs/heads/t-001-work", self.s.git("ls-remote", "--heads", "origin"))  # the branch is kept
+        [msg] = [m for t, m in self.pushes if t.startswith("Set aside:") and "T-001" in t]
         self.assertTrue(msg.startswith("Not merged: its commits add a token at .windvane/IDEAS.md:1 in "), msg)
-        self.assertIn("which would stay in main's history.\nRewrite t-001-work without it (`git rebase -i origin/main`, "
-                      "then `git push --force-with-lease origin t-001-work`)", msg)
+        self.assertIn("which would stay in main's history.\nRewrite the branch without it: `git fetch origin && git "
+                      "switch t-001-work && git rebase -i origin/main`, then `git push --force-with-lease origin "
+                      "t-001-work`.", msg)
         self.assertIn("scan_allow", msg)
-        self.assertNotIn(TOKEN, msg + (Project(s.root).state / "autopilot.log").read_text())
+        self.assertNotIn(TOKEN, msg + (Project(self.s.root).state / "autopilot.log").read_text())
+
+        paid = self.sessions()  # the branch unchanged: the next run pays nothing and says nothing to find it again
+        pilot = self.run_pilot()
+        self.assertEqual((self.sessions(), pilot.merged, list(pilot.aside)), (paid, [], ["T-001"]))
+        self.assertEqual(sum(t.startswith("Set aside:") for t, _ in self.pushes), 1)
+
+        del os.environ["FAKE_IDEA"]  # the push's fix, as the user would do it (one commit: an amend is the rebase)
+        self.s.git("fetch", "-q", "origin")
+        self.s.git("switch", "-q", "t-001-work")
+        (self.s.root / ".windvane/IDEAS.md").write_text("idea: read the key from the vault\n")
+        self.s.git("commit", "-qa", "--amend", "--no-edit")
+        self.s.git("push", "-q", "--force-with-lease", "origin", "t-001-work")
+        self.s.git("switch", "-q", "main")
+        pilot = self.run_pilot()
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.assertNotIn(TOKEN, self.main_log("-p"))
+        self.assertIn("read the key from the vault", self.main_log("-p"))
 
 
 class Public(unittest.TestCase):
