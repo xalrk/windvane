@@ -79,6 +79,9 @@ def cmd_init(a):
     for name in ("QUEUE.md", "QUESTIONS.md", "CRITIC.md"):
         if not (d / name).exists():
             (d / name).write_text((HOME / "templates" / name).read_text())
+    ignored = gitignore(root)
+    if ignored:
+        print(f".gitignore: added {' '.join(ignored)}")
     p = Project(root)
     hooks = install.phone_hooks(p)
     print(f"windvane set up in {d}\n  project name: {p.name}; state on this machine: {p.state}\n"
@@ -89,6 +92,19 @@ def cmd_init(a):
     if p.cfg["forge"] == "github":
         for _, what, fix in doctor.public_warnings(p):
             print(f"  WARNING: {what}: {fix}")
+
+
+def gitignore(root):
+    """Add the patterns of files named like secrets (privacy.GITIGNORE) that the project's .gitignore lacks, at its
+    end, never rewriting what's there; make the file when there's none. Returns the patterns added."""
+    f = root / ".gitignore"
+    text = f.read_text() if f.exists() else ""
+    have = {line.strip() for line in text.splitlines()}
+    missing = [g for g in privacy.GITIGNORE if g not in have]
+    if missing:
+        sep = "\n" if text and not text.endswith("\n") else ""
+        f.write_text(text + sep + ("\n" if text else "") + "# files named like secrets\n" + "\n".join(missing) + "\n")
+    return missing
 
 
 def guess_forge(root):

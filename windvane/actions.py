@@ -423,7 +423,7 @@ def worker_git(p, wd):
     if not budget(p):
         return {}, ""
     say_stale(p)
-    if run(["git", "config", "core.hooksPath"], wd).stdout.strip():
+    if run(["git", "config", "core.hooksPath"], wd).stdout.strip() and not own_hooks(p, wd):
         if not cached_over_cap(p):
             return {}, ""
         if p.name not in asked:
@@ -445,11 +445,19 @@ UNDER = ("import json, sys, time\n"
          "sys.exit(0 if ok else 1)\n")
 
 
+def own_hooks(p, wd):
+    """The hooks folder windvane set for its worktree `wd` (worktree.guard_pushes, its push scan), or None: it holds
+    the repo's own hooks, so the hooks here link from it."""
+    d = run(["git", "config", "--worktree", "core.hooksPath"], wd).stdout.strip()
+    return Path(d) if d and Path(d).parent == p.state / "hooks" else None
+
+
 def skip_hooks(p, wd):
     """A hooks folder in the state dir: the repo's own hooks linked in, and a prepare-commit-msg that runs the repo's
     own (if any) and then, unless the cached total is under the cap (written into it), adds `[skip ci]` to the first
     line. It reads only the cache: no network in a git hook."""
-    own = Path(wd, run(["git", "rev-parse", "--git-common-dir"], wd).stdout.strip(), "hooks").resolve()
+    own = own_hooks(p, wd) or Path(wd, run(["git", "rev-parse", "--git-common-dir"], wd).stdout.strip(),
+                                       "hooks").resolve()
     folder = p.state / "skip-ci-hooks" / Path(wd).resolve().name  # one per worktree: parallel slots rebuild their own
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)

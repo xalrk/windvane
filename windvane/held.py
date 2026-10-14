@@ -127,7 +127,7 @@ def land(p, cd, branch, title, body, commit=True, tries=2):
     """Put the driver's own change in `cd` (staged, or committed when `commit` is off) on main: through a merged PR on
     github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is). One kept on a local
     branch is noted as one to land when pushed again."""
-    title = actions.tag(p, title, cd)
+    title, body = actions.tag(p, privacy.censor(title), cd), privacy.censor(body)  # a periodic or plan session's reply
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
     found = privacy.outgoing(cd, p.upstream, "HEAD", DIR, privacy.guarded(p))

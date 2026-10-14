@@ -176,7 +176,8 @@ class Land(Base):
         cfg.write_text('scan_allow = ["private-term"]\n' + cfg.read_text())
         self.s.publish("allow")
         self.p = Project(self.s.root)
-        self.assertEqual(privacy.guarded(self.p), ("token", "ntfy-url", "ntfy-topic", "email"))
+        self.assertEqual(privacy.guarded(self.p), ("token", "private-key", "ntfy-url", "ntfy-topic", "email",
+                                                   "secret-file"))
         self.assertEqual(held.land(self.p, self.p.plan_dir, "ideas-x", "Ideas", "body", commit=False)[0], True)
 
     def test_a_home_path_is_pushed(self):
@@ -200,6 +201,7 @@ class Merge(unittest.TestCase):
         self.addCleanup(self.s.close)
         self.s.ticket("T-001")
         self.s.publish()
+        os.environ["FAKE_NO_VERIFY"] = "1"  # its pushes get past the pre-push hook: the driver's scan is the one left
         self.pushes = []
         self.addCleanup(setattr, driver, "push", driver.push)
         driver.push = lambda title, msg="", *a, **k: self.pushes.append((title, msg))

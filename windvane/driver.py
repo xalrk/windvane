@@ -51,7 +51,8 @@ CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "stopped", "me
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
            "critic": ("the critic", "critic", "revisions", 1, "one more for a READY without the evidence pack"),
            "check": ("the check", "autopilot", "check_retries", 0, ""),
-           "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0, "")}
+           "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0, ""),
+           "secret": ("the scan for secrets", "autopilot", "check_retries", 0, "")}
 DIGEST_RETRY = 600  # seconds between tries to push provisional answers the phone missed, outside a quiet time
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
@@ -866,7 +867,7 @@ class Pilot(Desk, Periodic):
         self.log(f"{tid}: review {m.group(1).lower()}: {m.group(3)}")
         if pr:
             net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
-                   f"**windvane review: {m.group(1)}** at {sha[:7]}\n\n{text.strip()[-6000:]}")
+                   privacy.censor(f"**windvane review: {m.group(1)}** at {sha[:7]}\n\n{text.strip()[-6000:]}"))
         return m.group(1), text
 
     def integrate(self, tid, branch, sha):
@@ -882,7 +883,7 @@ class Pilot(Desk, Periodic):
                 return None
             self.fetch()
             clean_detach(p, cd, p.upstream)
-            msg = actions.tag(p, f"Merge {tid}: {title} (branch {branch})", cd)
+            msg = actions.tag(p, privacy.censor(f"Merge {tid}: {title} (branch {branch})"), cd)
             ok, renumbered = self.merge_main(sha, msg)
             if not ok:
                 self.feedback[tid] = (f"Your approved head {sha[:12]} conflicts with {p.upstream}: `git merge "
@@ -896,6 +897,18 @@ class Pilot(Desk, Periodic):
             found = privacy.outgoing(cd, p.upstream, merge, DIR, privacy.guarded(p))
             if found:  # before the check: no paid-for check on a merge that can't go out
                 return self.secret_aside(tid, branch, sha, found)
+            found = privacy.branch_found(p, cd, merge)
+            if found and privacy.pushed(cd, p.upstream, ["-1", merge], privacy.guarded(p)):
+                return self.secret_bounce(tid, sha, found)
+            if found:  # a later commit took it out: the branch as one commit keeps the one that added it off main
+                squashed = self.squash(tid, branch, sha, merge, found)
+                if not squashed:
+                    continue
+                sha = squashed
+                clean_detach(p, cd, p.upstream)
+                if not self.merge_main(sha, msg)[0]:
+                    continue
+                merge, renumbered = gout(cd, "rev-parse", "HEAD"), None  # the branch holds any resolution now
             if renumbered is not None:
                 self.log(f"{tid}: conflicted with {p.main} only in appended entries: {said(renumbered)}; resolved "
                          "without a worker run")
@@ -938,6 +951,37 @@ class Pilot(Desk, Periodic):
             self.log(f"{tid}: merge refused ({cut(' '.join((res.stderr or res.stdout).split()))}); trying again")
         self.fail(tid, "the merge was refused three times")
 
+    def secret_bounce(self, tid, sha, found):
+        """A branch whose commits add a secret outside `.windvane/` (pushed past the pre-push hook, or from outside
+        windvane's worktrees) isn't merged: it goes back to its worker, told kinds and places, never the text. A commit
+        on top that takes it out is enough (workers don't force-push): `squash` keeps the one that added it off main."""
+        p = self.p
+        self.feedback[tid] = (f"Not merged: your branch's commits add {privacy.said(found, 10)}, which would stay in "
+                              f"{p.main}'s history. Take it out with a new commit and push (keep such files out with "
+                              f".gitignore); windvane then merges your branch as one commit, without the commit that "
+                              "added it. If it's a real credential it is public on the branch already: say so at the "
+                              "top of your PR body, so the user replaces it.")
+        self.log(f"{tid}: not merged: its commits add {privacy.said(found)}; back to the worker")
+        return self.bounce(tid, "secret")
+
+    def squash(self, tid, branch, sha, merge, found):
+        """The branch replaced by one commit on main with the tree its merge has, when one of its commits added a
+        secret a later one took out: merged as it is, main's history would keep that commit. Pushed to the branch
+        with a lease on `sha` (the PR follows); the new head, or "" when the push failed."""
+        p, cd = self.p, self.cd
+        title = self.queue.titles.get(tid, tid)
+        body = (f"Its commits as one: one of them added {', '.join(sorted({privacy.NAMES[k] for k, _ in found}))}, "
+                "which a later one took out.")
+        new = gout(cd, *author_ident(p), "commit-tree", f"{merge}^{{tree}}", "-p", p.upstream,
+                   "-m", privacy.censor(f"{tid}: {title}"), "-m", body)
+        if not new or net.git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{sha}", p.remote,
+                              f"{new}:refs/heads/{branch}").returncode:
+            self.log(f"{tid}: couldn't push its branch as one commit to {branch}; trying again")
+            return ""
+        self.log(f"{tid}: {branch} pushed as one commit {new[:7]}: an earlier commit added {privacy.said(found)}, "
+                 "a later one took it out")
+        return new
+
     def merge_main(self, rev, msg):
         """Merge `rev` into main in the ci worktree (left on the merge). A conflict only in appended entries of
         `[[append_only]]` files and sections of `shared_notes` files is resolved and committed with what it did in its
@@ -947,7 +991,7 @@ class Pilot(Desk, Periodic):
             return True, None
         p = self.p
         done = renumber.resolve(cd, p.append_only, p.shared_notes) if p.append_only or p.shared_notes else None
-        if done is not None and git(cd, *ident, "commit", "-q", "--no-verify", "-m", msg, "-m",
+        if done is not None and git(cd, *ident, "commit", "-q", "-m", msg, "-m",
                                     "Appended entries kept from both sides: " + said(done)).returncode == 0:
             return True, done
         git(cd, "merge", "--abort")

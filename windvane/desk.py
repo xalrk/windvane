@@ -12,7 +12,7 @@ import re
 import time
 from datetime import timedelta
 
-from . import net
+from . import net, privacy
 from .jobs import check, tail, waited
 from .phone import cut
 from .renumber import noted, old_numbers, said
@@ -95,6 +95,13 @@ class Desk:
         if files is not None:
             return self.desk_problem(pr, d, head, f"conflicts with {p.main}",
                                      f"`git merge-tree` finds conflicts in: {', '.join(files) or '(unnamed)'}")
+        found = privacy.branch_found(p, cd, head)
+        if found:  # before the check: no paid-for check on a branch that can't merge; no fix run can rewrite it
+            kinds = ", ".join(sorted({privacy.NAMES[k] for k, _ in found}))
+            self.desk_comment(n, f"**windvane: not merged** at {head[:7]}: its commits add {kinds}, which would stay "
+                                 f"in {p.main}'s history. Rewrite the branch without it and push it again.")
+            self.desk_done(d, head)
+            return self.desk_leave(n, d, "holds a secret", f"Its commits add {privacy.said(found)}.")
         ok, summary, logf, where = self.desk_check(head)
         if ok is None:  # the machine was busy: nothing the PR did, so no fix session; checked at the next listing
             self.desk_prs, self.desk_looked = [], time.time()
@@ -181,7 +188,8 @@ class Desk:
             return ""
 
     def desk_comment(self, n, body):
-        net.sh(self.p.main_root(), "gh", "pr", "comment", n, "--body", body)
+        """A comment on desk PR `n`, censored: a check log's tail holds this machine's paths and names."""
+        net.sh(self.p.main_root(), "gh", "pr", "comment", n, "--body", privacy.censor(body))
 
     def desk_problem(self, pr, d, head, problem, details):
         """Comment the problem, then a fix session while the PR has tries left; else leave it for the desk."""

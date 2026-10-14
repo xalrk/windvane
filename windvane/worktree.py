@@ -1,10 +1,11 @@
 """The autopilot's own worktrees: made (and set up) when missing, reset to a commit between uses. Shared by the
 driver, the plan run and held-back pushes, so neither of those imports the driver."""
+import os
 import shutil
 from datetime import timedelta
 from pathlib import Path
 
-from . import net
+from . import net, privacy
 from .util import git, log, now, run_limited, save_json
 
 
@@ -12,14 +13,17 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
     """The autopilot's own worktree at `path`, created detached at upstream (and set up) when missing. With
     isolate off, work_dir and ci_dir are the checkout itself, which is left alone. `stop()` gives a reason to end
     the setup early (the run's stop or deadline), raised as SetupFailed's `killed`."""
-    if path == p.main_root() or (path / ".git").exists():
+    if path == p.main_root():
         return
+    if (path / ".git").exists():
+        return guard_pushes(p, path)
     root = p.main_root()
     net.git(root, "fetch", "-q", p.remote)
     git(root, "worktree", "prune")
     r = git(root, "worktree", "add", "--detach", str(path), p.upstream)
     if r.returncode:
         raise SystemExit(f"windvane: can't create the worktree {path}: {r.stderr.strip()}")
+    guard_pushes(p, path)
     if setup and p.cfg["setup"]:
         log(p, f"setting up {path}: {p.cfg['setup']}…")
         limit = p.cfg["setup_minutes"]
@@ -33,6 +37,44 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
                    else f"failed (exit {code})")
             cmd, where = f"`{p.cfg['setup']}`", short_path(p, path)
             raise SetupFailed(f"setup {cmd} {how} in {where}", lines, why, how, f"{cmd} in {where}")
+
+
+HOOKS = "hooks"  # under the state dir: one hooks folder per worktree of windvane's own
+
+
+def guard_pushes(p, path):
+    """Point the worktree `path` (never the user's checkout) at a hooks folder of windvane's own, through its
+    worktree-only config: a pre-push that scans what each push makes public (`privacy.pre_push`), then runs the repo's
+    own pre-push, and the repo's other hooks linked in, so they run as before. Rebuilt at every start: the repo's
+    hooks may have changed. Its sessions push their own branches, so a scan in the
+    driver would come too late: on a public repository a branch is public the moment it's pushed."""
+    folder = p.state / HOOKS / Path(path).resolve().name
+    theirs = their_hooks(path, folder)
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    for hook in theirs.iterdir() if theirs.is_dir() else ():
+        if hook.suffix != ".sample" and hook.name != "pre-push" and os.access(hook, os.X_OK):
+            (folder / hook.name).symlink_to(hook)
+    script = folder / "pre-push"
+    own = theirs / "pre-push"
+    script.write_text(privacy.hook_script(p.root, p.upstream, str(own) if os.access(own, os.X_OK) else ""))
+    script.chmod(0o755)
+    if git(path, "config", "--bool", "extensions.worktreeConfig").stdout.strip() != "true":
+        git(path, "config", "extensions.worktreeConfig", "true")  # read by git only: the checkout's own config is unset
+    git(path, "config", "--worktree", "core.hooksPath", str(folder))
+
+
+def their_hooks(path, ours):
+    """The repo's own hooks folder, as git would find it without windvane's: the last core.hooksPath set outside
+    this worktree's config and git's command line (relative to the worktree, as git reads it), else the common
+    `.git/hooks`. A value that is windvane's own folder (`ours`) doesn't count."""
+    out = git(path, "config", "--show-scope", "--get-all", "core.hooksPath").stdout.splitlines()
+    vals = [v for scope, _, v in (line.partition("\t") for line in out)
+            if scope not in ("worktree", "command") and v and Path(v).expanduser() != ours]
+    if vals:
+        return Path(path, Path(vals[-1]).expanduser())
+    common = git(path, "rev-parse", "--git-common-dir").stdout.strip()
+    return Path(path, common, "hooks").resolve()
 
 
 TIMED_OUT = "out of time"  # run_limited's reason when `until` passes

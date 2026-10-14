@@ -122,6 +122,12 @@ if system.startswith("# windvane worker run"):
         if "conflicts with" in prompt:
             sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
         open("shared.txt", "w").write(tid + "\n")
+    if os.environ.get("FAKE_LEAK"):  # "file=text": writes it, and takes it out again when told its commits add it
+        leak, said = os.environ["FAKE_LEAK"].split("=", 1)
+        if "Not merged: your branch's commits add" in prompt:
+            os.path.exists(leak) and os.remove(leak)
+        else:
+            open(leak, "w").write(said + "\n")
     if os.environ.get("FAKE_IDEA") and not resolve_only:  # a line for .windvane/IDEAS.md, as a session may write
         open(".windvane/IDEAS.md", "a").write(os.environ["FAKE_IDEA"] + "\n")
     notes = os.environ.get("FAKE_NOTES")  # append: a section of its own in NOTES.md; edit: also rewrites its line 1
@@ -149,7 +155,7 @@ if system.startswith("# windvane worker run"):
                 open(".windvane/QUESTIONS.md", "w").write(q)
         if not resolve_only:
             sh("git", "add", "-A"); sh("git", "commit", "-qm", f"{tid}: build")
-        sh("git", "push", "-q", "-u", "origin", "HEAD")
+        sh("git", "push", "-q", *["--no-verify"] * bool(os.environ.get("FAKE_NO_VERIFY")), "-u", "origin", "HEAD")
         text = f"done\nRESULT: READY {tid} {sh('git', 'rev-parse', 'HEAD')}"
         if step == "quiet":
             text = "done, all pushed"
@@ -268,6 +274,8 @@ elif system.startswith("# windvane fix run"):  # FAKE_FIX: push (fixes it), red 
 elif system.startswith("# windvane preflight"):  # FAKE_PREFLIGHT: the questions it finds
     found = os.environ.get("FAKE_PREFLIGHT", "")
     text = found + "\nPREFLIGHT: " + ("1 questions" if found else "NONE")
+if os.environ.get("FAKE_SAY") and system.startswith(("# windvane review", "# windvane planner", "# windvane periodic")):
+    text = os.environ["FAKE_SAY"] + "\n" + text  # a line of its own in its final reply
 emit({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", "text": text}], "usage": {
     "input_tokens": 3, "cache_creation_input_tokens": 4000, "cache_read_input_tokens": 6000}}})  # the first turn
 emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01, "session_id": "fake-session",

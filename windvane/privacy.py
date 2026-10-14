@@ -1,16 +1,20 @@
-"""Secrets and personal data in what windvane commits: tokens, ntfy URLs and this machine's topics, the user's own
-private words, personal emails.
+"""Secrets and personal data in what windvane commits, pushes and posts: tokens and private keys, ntfy URLs and this
+machine's topics, the user's own private words, personal emails, files named like secrets.
 
 `.windvane/` is committed and pushed (the autopilot reads it from the remote), so an answer typed at the desk or a
 ticket line a session wrote stays in git history for good. This finds such lines before they leave the machine. It
 reports only a kind and a place (`file:line`), never the matched text, so its findings can go in a log line or a
 phone push; the secrets it looks for (the topics, the private words) are read from this machine's config at run time
-and kept only in memory."""
+and kept only in memory. On a public repository a branch is public once pushed, so windvane's own worktrees get a
+pre-push hook that scans every push (`pre_push`), the driver scans a branch again before it merges it
+(`branch_found`), and the text it relays to GitHub goes through `censor`."""
 import getpass
 import os
 import re
+import shlex
 import socket
 import subprocess
+import sys
 from pathlib import Path
 
 from .config import DIR
@@ -24,13 +28,24 @@ SAFE_ADDRESS = re.compile(r"no-?reply|^git@", re.I)  # git@host: an SSH remote
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})(?![A-Za-z0-9-])")
 NTFY_URL = re.compile(r"ntfy\.[A-Za-z0-9.-]+/[A-Za-z0-9_-]{3,}")
 MNT_PATH = re.compile(r"/mnt/[A-Za-z0-9_.-]+")
+# GitHub, Anthropic (its admin keys, sk-ant-admin01-, too), AWS, Slack, Google and Stripe live keys
 TOKEN = re.compile(r"\b(ghp_[A-Za-z0-9]{30,}|gh[ousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}"
-                   r"|sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})")
+                   r"|sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}"
+                   r"|[sr]k_live_[0-9A-Za-z]{20,})")
+PRIVATE_KEY = re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----")
+KEY_BLOCK = re.compile(PRIVATE_KEY.pattern + r".*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|\Z)", re.S)
+# Files named like secrets (matched against the base name, lower-cased); an example or template of one isn't one.
+SECRET_FILES = re.compile(r"\.env(\..+)?|.+\.(pem|key|p12|pfx)|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|credentials.*\.json")
+NOT_SECRET_FILES = re.compile(r".*\.(example|sample|template|dist)")
+# What `windvane init` adds to a project's .gitignore: files like these are one `git add -A` from public.
+GITIGNORE = (".env", ".env.*", "!.env.example", "*.pem", "*.key", "id_rsa*", "credentials*.json", "*.p12")
 COMMON_HOSTS = {"localhost", "fedora", "ubuntu", "debian", "linux", "archlinux", "raspberrypi"}
 # The kinds that are a leak wherever they show up. A home path, the username or the hostname are often named honestly
 # (a ticket about a path), so the guards on answers and pushes leave them to a full scan.
-SURE = ("token", "ntfy-url", "ntfy-topic", "private-term", "email")
-NAMES = {"token": "a token", "ntfy-url": "an ntfy URL", "ntfy-topic": "this machine's ntfy topic",
+SURE = ("token", "private-key", "ntfy-url", "ntfy-topic", "private-term", "email")
+PUSHED = (*SURE, "secret-file")  # what the scans of pushes refuse: SURE, and files named like secrets
+NAMES = {"token": "a token", "private-key": "a private key", "secret-file": "a file named like a secret",
+         "ntfy-url": "an ntfy URL", "ntfy-topic": "this machine's ntfy topic",
          "private-term": "a word from private-terms.txt", "email": "a personal email address",
          "home-path": "this machine's home path", "username": "this machine's username",
          "hostname": "this machine's hostname", "mnt-path": "a /mnt path"}
@@ -96,7 +111,8 @@ def rules(kinds=SURE):
             "hostname": lambda: literal({h} if len(h := socket.gethostname().split(".")[0]) >= 4
                                         and h.lower() not in COMMON_HOSTS and not ci else set()),
             "mnt-path": lambda: MNT_PATH, "ntfy-url": lambda: NTFY_URL, "ntfy-topic": lambda: literal(topics()),
-            "private-term": lambda: literal(private_terms()), "token": lambda: TOKEN, "email": lambda: None}
+            "private-term": lambda: literal(private_terms()), "token": lambda: TOKEN,
+            "private-key": lambda: PRIVATE_KEY, "email": lambda: None, "secret-file": lambda: None}
     built = {k: make[k]() for k in kinds}
     return {k: v for k, v in built.items() if v or k == "email"}
 
@@ -119,8 +135,8 @@ def kinds_in(text, rules):
 
 
 def guarded(p):
-    """The kinds the guards on `p`'s answers and pushes refuse: SURE, less the project's `scan_allow`."""
-    return tuple(k for k in SURE if k not in p.cfg["scan_allow"])
+    """The kinds the guards on `p`'s answers and pushes refuse: PUSHED, less the project's `scan_allow`."""
+    return tuple(k for k in PUSHED if k not in p.cfg["scan_allow"])
 
 
 def scan_text(text, kinds=SURE):
@@ -167,11 +183,50 @@ def outgoing(repo, base, head="HEAD", path=".windvane", kinds=SURE):
     """[(kind, "file:line in commit")] for leaks in the lines head's new commits add under `path`. A line already on
     `base` (an old leak a commit only moves, as answering a question moves it in QUESTIONS.md) doesn't count: one
     old leak mustn't stop every later push. Reading `base`'s files only happens when something was found."""
+    return lines_found(repo, base, [f"{base}..{head}"], path, kinds)
+
+
+def lines_found(repo, base, revs, path, kinds):
     r = rules(kinds)
-    found = [(k, sha, name, n, text) for sha, name, n, text in added(repo, [f"{base}..{head}"], path)
+    found = [(k, sha, name, n, text) for sha, name, n, text in added(repo, revs, path)
              for k in sorted(kinds_in(text, r))]
-    old = on(repo, base, path) if found else set()
+    old = on(repo, base, path or ".") if found and base else set()
     return [(k, f"{name}:{n} in {sha}") for k, sha, name, n, text in found if text not in old]
+
+
+def secret_file(name):
+    """A file named like a secret (`.env.local`, `id_rsa`, `deploy.pem`), not an example of one (`.env.example`)."""
+    base = name.rsplit("/", 1)[-1].lower()
+    return bool(SECRET_FILES.fullmatch(base)) and not NOT_SECRET_FILES.fullmatch(base)
+
+
+def new_files(repo, revs):
+    """(commit, file) for each file the commits `revs` name add."""
+    out = subprocess.run(["git", "-c", "core.quotepath=off", "log", "--diff-filter=A", "--name-only", "--no-renames",
+                          "--diff-merges=first-parent", "--format=%x01%h", *revs, "--"],
+                         cwd=repo, capture_output=True).stdout.decode("utf-8", "replace")
+    sha, files = "", []
+    for line in out.splitlines():
+        if line.startswith("\x01"):
+            sha = line[1:]
+        elif line:
+            files.append((sha, line))
+    return files
+
+
+def pushed(repo, base, revs, kinds=PUSHED):
+    """[(kind, place)] for what pushing the commits `revs` name (`[head, "^origin/main"]`) makes public: leaks in the
+    lines they add anywhere (a line already on `base` doesn't count), and files named like secrets."""
+    found = lines_found(repo, base, revs, None, kinds)
+    if "secret-file" in kinds:
+        found += [("secret-file", f"{name} in {sha}") for sha, name in new_files(repo, revs) if secret_file(name)]
+    return found
+
+
+def branch_found(p, repo, head):
+    """`pushed` for a branch's commits beyond upstream, with the kinds the project's guards refuse: the scan before
+    windvane merges anything, for a branch whose push got past the pre-push hook (or was made without one)."""
+    return pushed(repo, p.upstream, [head, f"^{p.upstream}"], guarded(p))
 
 
 def history(repo):
@@ -193,3 +248,71 @@ def refusal(p, text):
     kinds = scan_text(text, guarded(p))
     return (f"it holds {' and '.join(NAMES[k] for k in kinds)}, and answers are committed and pushed with {DIR}/"
             if kinds else "")
+
+
+# What `censor` puts in place of each kind, in this order: the home path before the username it holds.
+MASKS = {"token": "[token]", "ntfy-url": "[ntfy URL]", "ntfy-topic": "[ntfy topic]", "private-term": "[private]",
+         "home-path": "~", "mnt-path": "/mnt/<dir>", "username": "<user>", "hostname": "<host>"}
+
+
+def censor(text):
+    """`text` with every kind of leak masked, for what windvane posts to GitHub or writes into a commit message (a
+    review, a critique, a log's tail, a session's reply). Unlike the scans of pushes it masks this machine's home path,
+    username and hostname too: a log tail is full of them, and nobody needs them in a comment. Commit hashes, IPs and
+    words like "password:" stay as they are: the phone's own censor is the stricter one."""
+    text = KEY_BLOCK.sub("[private key]", text)
+    text = EMAIL.sub(lambda m: m.group(0) if not personal_email(m.group(0)) else "[email]", text)
+    r = rules(tuple(MASKS))
+    for kind, mask in MASKS.items():
+        if r.get(kind):
+            text = r[kind].sub(mask, text)
+    return text
+
+
+def hook_script(root, upstream, theirs):
+    """The pre-push hook windvane puts in its own worktrees: `pre_push` for the project at `root`, then the repo's own
+    pre-push (`theirs`), if it has one. sh starts it with this python, as a shebang can't hold every path; it imports
+    this package from where it is now."""
+    return (f"#!/bin/sh\n''''exec {shlex.quote(sys.executable)} \"$0\" \"$@\" # '''\n"
+            "# windvane: refuses a push that would make a secret public (windvane/privacy.py)\n"
+            f"import sys\nsys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})\n"
+            "from windvane import privacy\n"
+            f"sys.exit(privacy.pre_push(sys.argv[1:], {str(root)!r}, {upstream!r}, {theirs!r}))\n")
+
+
+def pre_push(args, root, upstream, theirs=""):
+    """git's pre-push hook: scan what each pushed ref adds beyond upstream and what the remote already has, with the
+    kinds the project's config refuses now (`scan_allow` may change while a session runs), and refuse with kinds and
+    places only (the refusal reaches a session's transcript and a log). Then the repo's own pre-push, given the same
+    arguments and refs. A config that can't be read refuses every kind: a push is no time to guess."""
+    from .config import Project
+    try:
+        p = Project(root)
+        upstream, kinds = p.upstream, guarded(p)
+    except (Exception, SystemExit):
+        kinds = PUSHED
+    refs = sys.stdin.read()
+    have = lambda rev: subprocess.run(["git", "rev-parse", "-q", "--verify", f"{rev}^{{commit}}"],
+                                      capture_output=True).returncode == 0
+    base = upstream if have(upstream) else ""
+    found, fix = [], ""
+    for line in refs.splitlines():
+        parts = line.split()
+        if len(parts) != 4 or not parts[1].strip("0"):  # a deletion pushes nothing
+            continue
+        head, there = parts[1], parts[3] if parts[3].strip("0") and have(parts[3]) else ""
+        new = pushed(".", base, [head, *[f"^{r}" for r in (base, there) if r]], kinds)
+        if new:
+            found += new
+            fix = fix or there or (base and subprocess.run(["git", "merge-base", head, base], capture_output=True,
+                                                           text=True).stdout.strip())
+    if found:
+        print(f"windvane: push refused: it would make public {said(found, 10)}.\n"
+              "Take it out of the commits that add it, not with a commit on top: `git commit --amend` for the last "
+              f"one, or `git reset --soft {fix[:12] or '<the pushed base>'}` and commit again. Keep such files out "
+              "with .gitignore. Then push again. Not a secret? `scan_allow` in .windvane/config.toml lets its kind "
+              "through.", file=sys.stderr)
+        return 1
+    if theirs and os.access(theirs, os.X_OK):
+        return subprocess.run([theirs, *args], input=refs.encode()).returncode
+    return 0

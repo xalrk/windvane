@@ -25,7 +25,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import net
+from . import net, privacy
 from .config import HOME
 from .phone import cut
 from .runner import plain_error, run_claude
@@ -649,8 +649,9 @@ def comment(p, entry, pr):
         s = entry.get("score")
         dims = " ".join(f"{k}={v:g}" for k, v in entry.get("dims", {}).items() if k != "score")
         score = f"{'-' if s is None else f'{s:g}'}/10{f' ({dims})' if dims else ''}"
-        r = net.call(["gh", "pr", "comment", pr, "--body", f"**windvane critic: {score}, {entry['step']}** "
-                      f"at {entry['sha']}\n\n{entry.get('critique', '').strip()[-6000:]}"], p.main_root())
+        r = net.call(["gh", "pr", "comment", pr, "--body", privacy.censor(
+            f"**windvane critic: {score}, {entry['step']}** at {entry['sha']}\n\n"
+            f"{entry.get('critique', '').strip()[-6000:]}")], p.main_root())
         return r.returncode == 0
     return True
 
