@@ -287,6 +287,9 @@ class TokenError(SystemExit):
     by name, as a thread drops a SystemExit without a word."""
 
 
+TOKEN_FIX = "; put the token back in it, or take token_file out of config.toml"
+
+
 def github_token(p):
     """The token in `[github] token_file`, or "" when none is set. A set file that can't be read stops the command:
     falling back to the user's own gh login would quietly give every session all their repos."""
@@ -296,9 +299,9 @@ def github_token(p):
     try:
         token = f.read_text().strip()
     except OSError as e:
-        raise TokenError(f"windvane: [github] token_file: can't read {f} ({e.strerror})")
+        raise TokenError(f"windvane: [github] token_file: can't read {f} ({e.strerror}){TOKEN_FIX}")
     if not token or len(token.split()) != 1:
-        raise TokenError(f"windvane: [github] token_file: {f} should hold just the token")
+        raise TokenError(f"windvane: [github] token_file: {f} should hold just the token{TOKEN_FIX}")
     return token
 
 

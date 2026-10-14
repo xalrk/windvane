@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from . import actions, heavy, install, phone, privacy, runner, scratch, selfupdate, statedir
-from .config import CHECKOUT, DIR, HOME, Project, author, github_token
+from .config import CHECKOUT, DIR, HOME, TOKEN_FIX, Project, author, github_token
 from .util import gout, load_json
 
 # How gh says GitHub turned a token down (expired, revoked, or not given this repo), as opposed to not reaching it.
@@ -274,7 +274,8 @@ def token_warnings(p):
     try:
         token = github_token(p)
     except SystemExit as e:
-        return [("warn", str(e).removeprefix("windvane: "), "fix the file, or take token_file out of config.toml")]
+        return [("warn", str(e).removeprefix("windvane: ").removesuffix(TOKEN_FIX),
+                 "fix the file, or take token_file out of config.toml")]
     if not token:
         return []
     env = {**os.environ, "GH_TOKEN": token}

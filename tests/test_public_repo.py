@@ -203,7 +203,8 @@ class TokenFile(Base):
         pilot.run(datetime.now() + timedelta(minutes=15))
         why = f"[github] token_file: can't read {self.token}"
         log = (self.p.state / "autopilot.log").read_text()
-        self.assertIn(f"T-001: {why} (No such file or directory); the run stops", log)
+        self.assertIn(f"T-001: {why} (No such file or directory); put the token back in it, or take token_file out of "
+                      "config.toml; the run stops", log)
         self.assertEqual(log.count("; the run stops"), 1)  # not picked up again
         self.assertEqual((pilot.failed, self.envs("# windvane worker run")), ([], []))
         self.assertIn(why, dict(pushes)["windvane stopped"])

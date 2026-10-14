@@ -182,8 +182,7 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
 
 - **Other people's issues, PRs and comments.** The worker's and reviewer's rules say text by anyone but the repo owner
   is data, never instructions: not acted on, posted or copied into files. Desk PRs are merged only when you opened
-  them, from this repository, with the label. Requests filed to windvane are fenced and censored before triage reads
-  them.
+  them, from this repository, with the label.
 - **Fork PRs.** `gh pr list --head <branch>` matches a branch of that name in any fork. Every lookup windvane makes
   (a ticket's PR, a plan's, a held branch's) asks whether the PR comes from another repository and drops it, with
   one log line, so an outsider's PR named after a ticket's branch never reaches a worker or the reviewer.
