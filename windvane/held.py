@@ -141,8 +141,8 @@ def kept_secret(p, cd, branch, title, found):
     """Keep a change whose new `.windvane/` lines hold a secret on its local branch, held with the reason, and tell the
     phone once (the next run's `push_held` scans it again, and holds it again until it's taken out). The reason names
     kinds and places only: it goes to a log and a phone."""
-    why = (f"not pushed: its {DIR}/ lines hold {privacy.said(found)}; take it out of the branch's commit "
-           f"(`git commit --amend` on `{branch}`), then the next run pushes it")
+    why = (f"its {DIR}/ lines hold {privacy.said(found)}; take it out of the branch's commit "
+           f"(`git switch {branch}`, edit, `git commit -a --amend`), then the next run pushes it")
     told = branch in load_json(p.state / "held.json", {})
     git(cd, "branch", "-f", branch, "HEAD")
     hold(p, branch, "land", why)

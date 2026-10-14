@@ -100,19 +100,29 @@ class Land(Base):
         self.assertEqual(self.git_pushes, 0)
         self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {"ideas-x": "land"})
         why = json.loads((self.p.state / "held_why.json").read_text())["ideas-x"]["why"]
-        self.assertIn(f"not pushed: its .windvane/ lines hold {kind} at .windvane/IDEAS.md:1 in ", why)
+        self.assertTrue(why.startswith(f"its .windvane/ lines hold {kind} at .windvane/IDEAS.md:1 in "), why)
         [(title, msg)] = self.pushes
         self.assertEqual(title, "Not pushed: Ideas")
-        self.assertIn(kind, msg)
+        self.assertTrue(msg.startswith(f"Its .windvane/ lines hold {kind} at .windvane/IDEAS.md:1 in "), msg)
         return why, msg
 
     def test_a_token_is_held_with_its_reason_and_the_alert_hides_it(self):
         ok, where = self.land(f"try {TOKEN}")
         why, msg = self.assert_held(ok, "a token")
         self.assertNotIn(TOKEN, why + msg + where + self.log())
-        self.assertIn("git commit --amend", msg)
+        self.assertIn("(`git switch ideas-x`, edit, `git commit -a --amend`), then the next run pushes it.", msg)
         self.assertEqual(held.push_held(self.p), 0)  # the next run scans it again: still held, no second alert
         self.assertEqual((self.git_pushes, len(self.pushes)), (0, 1))
+        self.assertIn("held back for under an hour, not pushed: ideas-x (Ideas): its .windvane/ lines hold a token",
+                      held.held_lines(self.p)[0])
+        self.s.git("switch", "-q", "ideas-x")  # the fix the push gives, as the user would do it
+        (self.s.root / ".windvane/IDEAS.md").write_text("try the key from the vault\n")
+        self.s.git("commit", "-qa", "--amend", "--no-edit")
+        self.s.git("switch", "-q", "main")
+        self.assertEqual(held.push_held(self.p), 1)  # the next run's start: clean now, so it lands
+        self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {})
+        self.assertEqual(self.on_main(), "try the key from the vault")
+        self.assertNotIn(TOKEN, self.s.git("log", "-p", "origin/main"))
 
     def test_an_ntfy_topic_is_held(self):
         conf = Path(os.environ["XDG_CONFIG_HOME"]) / "ntfy/config"
@@ -163,13 +173,17 @@ class Merge(unittest.TestCase):
         pilot = driver.Pilot(Project(s.root), Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0,
                                                         answer_wait=10, replan=0, goal="", parallel=1))
         pilot.run(now() + timedelta(hours=1))
-        self.assertEqual((pilot.merged, pilot.failed), ([], ["T-001"]))
+        self.assertEqual((pilot.merged, pilot.failed, list(pilot.aside)), ([], [], ["T-001"]))
+        self.assertEqual(pilot.fail_streak, 0)  # not a failure: two of those in a row would stop the run
         s.git("fetch", "-q", "origin")
         self.assertNotIn("Merge T-001", s.git("log", "origin/main", "--format=%s"))
-        [msg] = [m for t, m in pushes if t.startswith("Failed:") and "T-001" in t]
-        self.assertIn("not merged: the lines its commits add under .windvane/ hold a token at .windvane/IDEAS.md:1 in ",
-                      msg)
-        self.assertNotIn(TOKEN, msg)
+        self.assertIn("refs/heads/t-001-work", s.git("ls-remote", "--heads", "origin"))  # the branch is kept
+        [msg] = [m for t, m in pushes if t.startswith("Set aside:") and "T-001" in t]
+        self.assertTrue(msg.startswith("Not merged: its commits add a token at .windvane/IDEAS.md:1 in "), msg)
+        self.assertIn("which would stay in main's history.\nRewrite t-001-work without it (`git rebase -i origin/main`, "
+                      "then `git push --force-with-lease`)", msg)
+        self.assertIn("scan_allow", msg)
+        self.assertNotIn(TOKEN, msg + (Project(s.root).state / "autopilot.log").read_text())
 
 
 class Public(unittest.TestCase):
