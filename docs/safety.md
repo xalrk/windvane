@@ -144,11 +144,11 @@ A session's jobs die with it, so a heavy job that can't both wait its turn and r
 however often its ticket is resumed. `windvane bg --heavy --keep <name> <command...>` starts one that outlives its
 session: it belongs to no session, waits its turn, and runs until the run's stop (the run's deadline, followed when
 `windvane deadline` moves it), not the ticket's. Its worker commits what it has and ends `PARTIAL`. The driver then
-holds the ticket, as one that waits for another to merge: no session starts for it, and the run doesn't count it
-toward `partials`. It keeps the ticket's worktree (its slot) for it, since the job writes into it, in this run and the
-next: other tickets run in other slots (a one-slot run waits for the job). When the job ends, the ticket resumes; its prompt names the job, its exit code and log,
-and `windvane await <name>` shows them. Its files stay under the ticket's own `bg/` folder until the ticket merges or
-fails, which kills a job still running.
+holds the ticket, as one that waits for another to merge: no session starts for it, and the run doesn't count it toward
+`partials`. It keeps the ticket's worktree (its slot) for it, since the job writes into it, in this run and the next:
+other tickets run in other slots (a one-slot run waits for the job). When the job ends, the ticket resumes; its prompt
+names the job, its exit code and log, and `windvane await <name>` shows them. Its files stay under the ticket's own
+`bg/` folder until the ticket merges or fails, which kills a job still running.
 
 A kept job still waiting or running at the run's stop is killed (exit 143, its log says why) and the next run resumes
 its ticket; `windvane stop` kills every kept job at once. `heavy_keep_hours` in `.windvane/config.toml` lets one go on
