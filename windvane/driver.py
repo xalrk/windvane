@@ -526,7 +526,7 @@ class Pilot(Desk, Periodic):
                 return self.held_for_good(tid, branch, waits)
             kept = jobs.kept_jobs(self.p, tid)
             if kept:  # not out of time either: the queue holds it until its job ends, then resumes it
-                return self.log(f"{tid}: waits for its kept job {', '.join(b.name for b in kept)}: {rest}")
+                return self.log(f"{tid}: held until its kept job {', '.join(repr(b.name) for b in kept)} ends: {rest}")
             self.partials[tid] = self.partials.get(tid, 0) + 1
             self.log(f"{tid}: partial ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
@@ -1311,7 +1311,7 @@ class Pilot(Desk, Periodic):
         ahead = q.to_run(avoid, tickets(self.questions))  # those waiting on a clash too: a free slot isn't "run out"
         for t in q.order:
             why = ("" if t in avoid or q.status(t, tickets(self.questions)) not in ("wip", "todo")
-                   else f"its kept job {', '.join(kept[t])} runs" if t in kept
+                   else f"its kept job {', '.join(map(repr, kept[t]))} runs" if t in kept
                    else f"last, {ahead[0]} still to run" if ahead and t in q.last else self.clash(t, busy, extra))
             if why:
                 avoid.add(t)

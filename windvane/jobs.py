@@ -39,7 +39,7 @@ STOPPING = "; the run is stopping, so don't run it again now"  # ...because a st
 # workers, is when it ends unless the driver moves it (`<job>.keep` holds the time it ends, empty for never).
 RUN_STOP = "WINDVANE_RUN_STOP"
 KILLED = 143  # a kept job's exit when the run's stop or a kill ended it (as SIGTERM's)
-WATCH_S = 5  # seconds between a kept job's looks at its end time
+WATCH_S = 2  # seconds between a kept job's looks at its end time
 # A kept job's group leader: `watch` from this same windvane (its package dir is the first argument), outside PATH.
 WATCH = "import sys; sys.path.insert(0, sys.argv[1]); from windvane.jobs import watch; sys.exit(watch(sys.argv[2], sys.argv[3:]))"
 
