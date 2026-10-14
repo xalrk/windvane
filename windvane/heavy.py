@@ -376,7 +376,7 @@ def work_ahead(info, keys, times, now=None):
 
 
 def estimate(work, now=None):
-    """`work_ahead` as words: "about 25 min of work ahead (until about 01:30)", a lower bound when some job was
+    """`work_ahead` as words, "about 25 min of work ahead (until about 01:30)", a lower bound when some job was
     never timed, "work ahead unknown" when none was; None with nothing ahead. A clock time too, since the line is
     read later."""
     mins, unknown, jobs = work
@@ -385,10 +385,9 @@ def estimate(work, now=None):
     if unknown == jobs:
         return "work ahead unknown (never timed)"
     until = time.strftime("%H:%M", time.localtime((time.time() if now is None else now) + mins * 60))
-    m = f"{mins:.0f}" if mins >= 1 else "under 1"
     if unknown:
-        return f"at least {m} min of work ahead (until {until} or later; {unknown} never timed)"
-    return f"about {m} min of work ahead (until about {until})"
+        return f"at least {mins:.0f} min of work ahead (until {until} or later; {unknown} never timed)"
+    return (f"about {mins:.0f} min" if mins >= 1 else "under 1 min") + f" of work ahead (until about {until})"
 
 
 def ahead(entry):

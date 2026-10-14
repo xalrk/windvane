@@ -115,8 +115,14 @@ The job at the head of the line takes the lock only once its memory is free too.
 job behind it whose own need is met (a 2 GB test run behind a 6 GB engine) may take the free lock and run; the head
 stays the head and gets the lock first once its memory frees. Only memory lets a job by: one that a `busy` process
 holds up keeps everyone behind it waiting.
-While it waits, its log says who holds the lock (pid, command, since when) and how many jobs are ahead of it, or the
-memory it waits for; `windvane heavy --status` shows the same at any time.
+While it waits, its log says who holds the lock (pid, command, since when), how many jobs are ahead of it and about
+how long their work takes, or the memory it waits for and the three processes holding the most (pid, name, GB and the
+last two parts of their folder, so another project's idle emulator shows at once); `windvane heavy --status` shows the
+same at any time. The estimate comes from each job's last few run times, kept per project and command in
+`~/.local/state/windvane/heavy-times.json`: the holder's usual time less what it ran so far, plus each waiter's (a
+command never seen makes it `unknown`, or `at least`). In a session, a job whose estimate puts its start after the
+wrap-up (20 minutes before the session's stop) says so once, `heavy: likely to start after your wrap-up (03:22)`,
+and keeps waiting: the session decides whether to plan around it.
 It waits for the machine until the session's stop for a job a session starts (`windvane heavy`, `bg --heavy`, `windvane
 check`), until the run's end (even one `windvane deadline` moves) for the driver's heavy check, and `machine.toml`'s
 `heavy_wait` minutes (default 60) for a command run by hand; `--wait` overrides each. A job that gave up sooner would

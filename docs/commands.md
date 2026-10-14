@@ -68,7 +68,7 @@ Options of `windvane run`:
 | Command | What it does |
 |---|---|
 | `windvane heavy [--wait <min>] [--mem <GB>] -- <command>` | Run a machine-heavy command (engine, render, big build) one at a time on this machine, once `--mem` GB of memory are free (default: the project's `heavy_mem`, else `machine.toml`'s `min_free_gb`), waiting up to `--wait` minutes (default: a session's stop, else `machine.toml`'s `heavy_wait`, 60), then exiting 75 without running it. See [the heavy lock](safety.md#the-heavy-lock). |
-| `windvane heavy --status` | Who holds the heavy lock (pid, command, folder, since when) and each live waiter in line (pid, waiting since, `paused` for one stopped with Ctrl-Z, and for a head short of memory `waiting for 6 GB, 4.1 free; letting smaller jobs by`), or `free`. Never waits, takes no lock and no place in line. |
+| `windvane heavy --status` | Who holds the heavy lock (pid, command, folder, since when) and each live waiter in line (pid, waiting since, `paused` for one stopped with Ctrl-Z, the work ahead of it, `about 20 min of work ahead (until about 01:30)`, and for a head short of memory `waiting for 6 GB, 4.1 free; letting smaller jobs by` with the three processes holding the most memory), or `free`. Never waits, takes no lock and no place in line. |
 
 ## Used by the sessions
 

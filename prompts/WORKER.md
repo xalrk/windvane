@@ -42,10 +42,10 @@ A tool call stops at 10 minutes. Start anything that may run longer with `windva
 `windvane await <name>`, which blocks up to ~9.5 minutes; call it again while it says `RUNNING`. Never poll with `sleep`
 loops: every poll re-reads your whole context. **Machine-heavy** commands (a game engine, a render, a big build) other
 runs may start too: run them only through `windvane heavy -- <command>` (or `windvane bg --heavy <name> <command...>`),
-which waits its turn behind every other heavy job on this machine for as long as your run lasts: start it early, never
-requeue it. A helper your tools leave running (an emulator, a dev server, a container) needs a `teardown` in
-`.windvane/config.toml`: set or extend it here. Other tickets run beside yours in their own worktrees: stay in yours.
-Scratch files go in `$TMPDIR` (this ticket's own, removed when it ends), never straight in `/tmp`.
+which waits its turn behind every heavy job on this machine while your run lasts: start it early, never requeue it, and
+if `await` says it likely starts after your wrap-up, plan without it. A helper your tools leave up (an emulator, a dev
+server) needs a `teardown` in `.windvane/config.toml`: set or extend it here. Other tickets run beside yours in their
+own worktrees: stay in yours. Scratch files go in `$TMPDIR` (this ticket's own, removed when it ends), never in `/tmp`.
 
 ## Decisions
 - **Engineering** calls the docs leave open (code layout, algorithms, test shape, tooling): make them, and say why in
