@@ -24,6 +24,7 @@ import time
 import traceback
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from . import (actions, critic, install, jobs, net, phone, privacy, renumber, requests, scratch, selfupdate, statedir,
                util, worktree)
@@ -189,6 +190,7 @@ class Pilot(Desk, Periodic):
     def __init__(self, p, a):
         self.p, self.a = p, a
         phone.use(p)
+        self.hook_refused = ""  # why a commit hook refused merge_main's resolution of appended entries, if it did
         self.usage = Usage(p)
         self.state_file = p.state / "state.json"
         s = load_json(self.state_file, {})
@@ -885,12 +887,15 @@ class Pilot(Desk, Periodic):
             self.fetch()
             clean_detach(p, cd, p.upstream)
             msg = actions.tag(p, privacy.censor(f"Merge {tid}: {title} (branch {branch})"), cd)
+            self.hook_refused = ""
             ok, renumbered = self.merge_main(sha, msg)
             if not ok:
                 self.feedback[tid] = (f"Your approved head {sha[:12]} conflicts with {p.upstream}: `git merge "
                                       f"{p.upstream}` into your branch, resolve the conflicts keeping both sides' "
                                       "intent, rerun the check, push, and finish READY.")
-                self.log(f"{tid}: conflicts with {p.main}; back to the worker")
+                self.log(f"{tid}: conflicts with {p.main}"
+                         + (f" only in appended entries, but a commit hook refused the resolution "
+                            f"({self.hook_refused})" if self.hook_refused else "") + "; back to the worker")
                 self.approve_bounce(tid, sha, "conflict")
                 self.conflicted(tid)
                 return self.bounce(tid, "conflict")
@@ -981,7 +986,24 @@ class Pilot(Desk, Periodic):
             return ""
         self.log(f"{tid}: {branch} pushed as one commit {new[:7]}: an earlier commit added {privacy.said(found)}, "
                  "a later one took it out")
+        self.follow(tid, branch, new)
         return new
+
+    def follow(self, tid, branch, new):
+        """Move the local `branch` to `new` too, so a worker sent back after a squash (a red merged check) resumes from
+        it: its old commits would make its next push a non-fast-forward, or one the hook refuses. A worktree of
+        windvane's own that has it checked out, with nothing uncommitted, is detached first; the user's checkout,
+        or a tree with changes, is left as it is."""
+        root = self.p.main_root()
+        for block in gout(root, "worktree", "list", "--porcelain").split("\n\n"):
+            fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+            if fields.get("branch") != f"refs/heads/{branch}":
+                continue
+            path = Path(fields["worktree"])
+            if path.resolve() == root.resolve() or gout(path, "status", "--porcelain"):
+                return self.log(f"{tid}: {branch} is checked out with changes in {path}: left at its old head")
+            git(path, "switch", "-q", "--detach")
+        git(root, "branch", "-f", branch, new)
 
     def merge_main(self, rev, msg):
         """Merge `rev` into main in the ci worktree (left on the merge). A conflict only in appended entries of
@@ -992,9 +1014,11 @@ class Pilot(Desk, Periodic):
             return True, None
         p = self.p
         done = renumber.resolve(cd, p.append_only, p.shared_notes) if p.append_only or p.shared_notes else None
-        if done is not None and git(cd, *ident, "commit", "-q", "-m", msg, "-m",
-                                    "Appended entries kept from both sides: " + said(done)).returncode == 0:
-            return True, done
+        if done is not None:
+            r = git(cd, *ident, "commit", "-q", "-m", msg, "-m", "Appended entries kept from both sides: " + said(done))
+            if r.returncode == 0:
+                return True, done
+            self.hook_refused = cut(" ".join((r.stderr or r.stdout).split())) or f"exit {r.returncode}"
         git(cd, "merge", "--abort")
         return False, None
 

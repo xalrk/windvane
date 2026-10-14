@@ -310,8 +310,8 @@ def pre_push(args, root, upstream, theirs=""):
         print(f"windvane: push refused: it would make public {said(found, 10)}.\n"
               "Take it out of the commits that add it, not with a commit on top: `git commit --amend` for the last "
               f"one, or `git reset --soft {fix[:12] or '<the pushed base>'}` and commit again. Keep such files out "
-              "with .gitignore. Then push again. Not a secret? `scan_allow` in .windvane/config.toml lets its kind "
-              "through.", file=sys.stderr)
+              "with .gitignore. Then push again. If it's no secret, ask the user (a question) rather than get around "
+              "this check.", file=sys.stderr)
         return 1
     if theirs and os.access(theirs, os.X_OK):
         return subprocess.run([theirs, *args], input=refs.encode()).returncode

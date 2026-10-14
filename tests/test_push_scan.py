@@ -23,6 +23,7 @@ from windvane.worktree import clean_detach, ensure_worktree, guard_pushes  # noq
 from helpers import Sandbox  # noqa: E402
 import test_desk  # noqa: E402
 import test_gh_guard  # noqa: E402
+import test_renumber  # noqa: E402
 from test_plan_retry import Base  # noqa: E402
 
 TOKEN = "ghp_" + "Wq4" * 12
@@ -140,17 +141,65 @@ class Merge(unittest.TestCase):
         return driver.Pilot(Project(self.s.root), Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0,
                                                       answer_wait=10, replan=0, goal="", parallel=1))
 
+    def log(self):
+        return (Project(self.s.root).state / "autopilot.log").read_text()
+
+    def on_remote(self):
+        return subprocess.run(["git", "--git-dir", str(self.s.remote), "log", "-p", "--all"], capture_output=True,
+                              text=True).stdout
+
     def test_a_workers_own_push_of_a_token_is_refused(self):
         del os.environ["FAKE_NO_VERIFY"]
         self.pilot().run(now() + timedelta(hours=1))
-        on_remote = subprocess.run(["git", "--git-dir", str(self.s.remote), "log", "-p", "--all"], capture_output=True,
-                                   text=True).stdout
-        self.assertNotIn(TOKEN, on_remote)
+        self.assertNotIn(TOKEN, self.on_remote())
+        refused = Path(os.environ["FAKE_LOG"] + ".refused").read_text()  # what the session saw
+        self.assertIn("windvane: push refused: it would make public a token at settings.py:1 in ", refused)
+        self.assertNotIn(TOKEN, refused)
+
+    def test_a_squashed_branch_sent_back_red_is_resumed_from_its_squash_and_pushes(self):
+        os.environ["FAKE_NO_VERIFY"] = "first"  # only the first push gets past the hook
+        orig, red = driver.check, self.s.tmp / "red.log"
+
+        def check(p, cd, **k):  # red once, on the squash's merge (as when main moved meanwhile)
+            if "Its commits as one" in driver.gout(cd, "log", "-1", "--format=%B", "HEAD^2") and not red.exists():
+                red.write_text("FAILED test_x\n")
+                return False, "1 failed", red
+            return orig(p, cd, **k)
+        driver.check = check
+        self.addCleanup(setattr, driver, "check", orig)
+        pilot = self.pilot()
+        pilot.run(now() + timedelta(hours=1))
+        log = self.log()
+        self.assertTrue(red.exists())
+        self.assertIn("pushed as one commit", log)
+        self.assertIn("T-001: the merged tree fails the check; back to the worker", log)
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.assertFalse(Path(os.environ["FAKE_LOG"] + ".refused").exists())  # its third run's push went through
+        self.assertNotIn(TOKEN, self.on_remote())
+        self.assertEqual(self.s.git("show", "origin/main:T-001.txt"), "built\nbuilt\nbuilt")
+
+    def test_a_squash_push_that_loses_its_lease_is_tried_again(self):
+        orig, lost = driver.net.git, []
+
+        def git(cwd, *args):
+            if args[0] == "push" and args[2].startswith("--force-with-lease=refs/heads/t-001-work") and not lost:
+                lost.append(args)
+                return subprocess.CompletedProcess(["git", *args], 1, "", "! [rejected] (stale info)")
+            return orig(cwd, *args)
+        driver.net.git = git
+        self.addCleanup(setattr, driver.net, "git", orig)
+        pilot = self.pilot()
+        pilot.run(now() + timedelta(hours=1))
+        self.assertEqual(len(lost), 1)
+        self.assertIn("T-001: couldn't push its branch as one commit to t-001-work; trying again", self.log())
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.s.git("fetch", "-q", "origin")
+        self.assertNotIn(TOKEN, self.s.git("log", "-p", "origin/main"))
 
     def test_a_token_goes_back_to_the_worker_and_its_commit_stays_off_main(self):
         pilot = self.pilot()
         pilot.run(now() + timedelta(hours=1))
-        log = (Project(self.s.root).state / "autopilot.log").read_text()
+        log = self.log()
         self.assertIn("T-001: not merged: its commits add a token at settings.py:1 in ", log)
         self.assertIn("; back to the worker", log)
         self.assertIn("pushed as one commit", log)  # its second run took it out with a commit on top
@@ -160,6 +209,24 @@ class Merge(unittest.TestCase):
         self.assertNotIn(TOKEN, main + log)
         self.assertIn("Its commits as one: one of them added a token, which a later one took out.", main)
         self.assertIn("built", self.s.git("show", "origin/main:T-001.txt"))
+
+
+class ResolutionHook(unittest.TestCase):
+    """The driver's commit of a resolved conflict runs the repo's commit hooks now (no --no-verify)."""
+    setUp, tearDown = test_renumber.TwoTickets.setUp, test_renumber.TwoTickets.tearDown
+
+    def test_a_commit_hook_refusing_the_resolution_is_named_as_such(self):
+        hook = self.s.root / ".git/hooks/pre-commit"  # refuses merge commits only: the workers' own commits pass
+        hook.write_text("#!/bin/sh\ngit rev-parse -q --verify MERGE_HEAD >/dev/null && "
+                        "{ echo 'lint: merge commits need a ticket id' >&2; exit 1; }\nexit 0\n")
+        hook.chmod(0o755)
+        os.environ["FAKE_WORKER"] = "ready"
+        p = Project(self.s.root)
+        pilot = driver.Pilot(p, test_renumber.args())
+        pilot.run(now() + timedelta(minutes=15))
+        self.assertRegex((p.state / "autopilot.log").read_text(),
+                         r"T-00\d: conflicts with main only in appended entries, but a commit hook refused the "
+                         r"resolution \(lint: merge commits need a ticket id\); back to the worker")
 
 
 class Desk(unittest.TestCase):

@@ -122,11 +122,11 @@ if system.startswith("# windvane worker run"):
         if "conflicts with" in prompt:
             sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
         open("shared.txt", "w").write(tid + "\n")
-    if os.environ.get("FAKE_LEAK"):  # "file=text": writes it, and takes it out again when told its commits add it
+    if os.environ.get("FAKE_LEAK"):  # "file=text": its first run writes it, a run told its commits add it removes it
         leak, said = os.environ["FAKE_LEAK"].split("=", 1)
         if "Not merged: your branch's commits add" in prompt:
             os.path.exists(leak) and os.remove(leak)
-        else:
+        elif "## Act on this first" not in prompt:
             open(leak, "w").write(said + "\n")
     if os.environ.get("FAKE_IDEA") and not resolve_only:  # a line for .windvane/IDEAS.md, as a session may write
         open(".windvane/IDEAS.md", "a").write(os.environ["FAKE_IDEA"] + "\n")
@@ -155,7 +155,12 @@ if system.startswith("# windvane worker run"):
                 open(".windvane/QUESTIONS.md", "w").write(q)
         if not resolve_only:
             sh("git", "add", "-A"); sh("git", "commit", "-qm", f"{tid}: build")
-        sh("git", "push", "-q", *["--no-verify"] * bool(os.environ.get("FAKE_NO_VERIFY")), "-u", "origin", "HEAD")
+        past = os.environ.get("FAKE_NO_VERIFY")  # "first": only its first run's push gets past the pre-push hook
+        past = past and (past != "first" or "## Act on this first" not in prompt)
+        r = subprocess.run(["git", "push", "-q", *["--no-verify"] * bool(past), "-u", "origin", "HEAD"],
+                           capture_output=True, text=True)
+        if r.returncode and log:
+            open(log + ".refused", "a").write(r.stderr)
         text = f"done\nRESULT: READY {tid} {sh('git', 'rev-parse', 'HEAD')}"
         if step == "quiet":
             text = "done, all pushed"
