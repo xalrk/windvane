@@ -6,7 +6,7 @@ import subprocess
 import time
 
 from . import actions, net, privacy
-from .config import DIR
+from .config import DIR, author
 from .phone import cut, whole
 from .util import git, gout, load_json, log, push, save_json
 from .worktree import clean_detach, ensure_worktree
@@ -14,9 +14,8 @@ from .worktree import clean_detach, ensure_worktree
 
 def author_ident(p):
     """`-c user.name/email` for the driver's own commits when the config names an author."""
-    a = p.cfg["author"]
-    return (["-c", f"user.name={a.split('<')[0].strip()}", "-c", f"user.email={a.split('<')[1].rstrip('>').strip()}"]
-            if "<" in a else [])
+    name, email = author(p)
+    return ["-c", f"user.name={name}", "-c", f"user.email={email}"] if email else []
 
 
 def push_branch(p, cd, branch, tries=2):
@@ -183,13 +182,12 @@ def held_branches(p):
     under another name counts as pushed), with no PR on github (one pushed by hand, its PR closed and branch deleted,
     stays closed). A change to land pushed by hand stays noted, not pushed again, until main has it or its PR is
     closed. Notes and reasons for any other branch are dropped."""
-    held, root = load_json(p.state / "held.json", {}), p.main_root()
+    held = load_json(p.state / "held.json", {})
     here, tracked = held_here(p, held), {}
     for b, (how, on) in here.items():
-        states = p.cfg["forge"] == "github" and net.sh(
-            root, "gh", "pr", "list", "--head", on.removeprefix(f"{p.remote}/") if on else b, "--state", "all",
-            "--json", "state", "-q", ".[].state")
-        if not states or (on and "OPEN" in states.split()):
+        states = p.cfg["forge"] == "github" and {pr["state"] for pr in net.own_prs(
+            p, "--head", on.removeprefix(f"{p.remote}/") if on else b, "--state", "all") or []}
+        if not states or (on and "OPEN" in states):
             tracked[b] = how
     if tracked != held or set(load_json(p.state / "held_why.json", {})) - set(tracked):
         save_held(p, tracked)

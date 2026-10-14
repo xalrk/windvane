@@ -18,14 +18,16 @@ from . import critic as critic_mod
 from . import doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, questions, requests, schedule, watch
 from . import held as held_mod
 from . import periodic as periodic_mod
-from .config import DIR, HOME, Project, exe, find, slots, toplevel
+from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
 from .config import periodic as periodic_entries
 from .queue import Queue
-from .runner import Usage, inherited_stop, plain_error
+from .runner import Usage, inherited_stop, plain_error, scope_github
 from .stats import cmd_stats, shared_line  # cmd_stats: main runs `stats` by its name
 from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 
 
+# commands the phone and the desk use to look and stop: a token file that can't be read mustn't block them
+LOCAL = {"stop", "status", "overview", "stats", "watch", "deadline", "quiet", "mode", "await"}
 STOP_WAIT = 90  # seconds `stop --now` waits for the run to end: a 5 s poll, then up to 60 s for SIGTERM to work
 
 
@@ -816,6 +818,11 @@ def main(argv=None):
         sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60, mem=a.mem, reuse=reuse))
     p = find()
     phone.use(p)
+    try:
+        scope_github(p)
+    except TokenError:
+        if a.cmd not in LOCAL:
+            raise
     if a.cmd == "run":
         for k in ("cap", "week_cap", "ticket_hours", "min_slot", "answer_wait"):
             if getattr(a, k) is None:

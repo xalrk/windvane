@@ -40,6 +40,9 @@ if log:
                             "gh": os.environ.get("CLAUDE_ENV_FILE") and sh(  # a bash only when there's a file
                                 "bash", "-c", '. "$CLAUDE_ENV_FILE"; command -v gh')})
                 + "\n")
+if os.environ.get("FAKE_ENV"):  # FAKE_ENV: a file each session adds its environment to, as a JSON line
+    with open(os.environ["FAKE_ENV"], "a") as f:
+        f.write(json.dumps({"role": system[:40], "env": dict(os.environ)}) + "\n")
 # FAKE_FAIL: what each session does in turn (ok, error, crash, quiet = no RESULT line); a trailing * repeats the last
 steps, step = os.environ.get("FAKE_FAIL", "").split(","), ""
 if steps[0] and system:

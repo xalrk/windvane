@@ -18,7 +18,7 @@ OLD = "plan-20250101-000000"
 REOPENED = """#!/bin/sh
 echo "$*" >> "{log}"
 case "$*" in
-  "pr list --state open"*) echo {old};;
+  "pr list --state open"*) echo '[{{"number": 3, "state": "OPEN", "headRefName": "{old}"}}]';;
   "pr create"*) echo https://github.com/o/r/pull/7;;
 esac
 exit 0

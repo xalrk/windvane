@@ -34,7 +34,7 @@ from .held import author_ident, push_held
 from .periodic import Periodic
 from .phone import NTFY, REASON, cut, whole
 from .planner import plan
-from .config import CHECKOUT, DIR, HOME, exe, slots
+from .config import CHECKOUT, DIR, HOME, TokenError, exe, slots
 from .jobs import check, tail, waited
 from .questions import (answered, desk_answers, give_answer, keys, mode, note, parts, phone_answer, provisional, qkey,
                         quiet_note, quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on, with_ids)
@@ -166,10 +166,11 @@ def nth(n):
 
 
 def pr_for(p, branch):
+    """The open PR of `branch` in this repo, never a fork's of the same name (net.own_prs), or ""."""
     if p.cfg["forge"] != "github" or not branch:
         return ""
-    return net.sh(p.main_root(), "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number",
-                  "-q", ".[0].number")
+    prs = net.own_prs(p, "--head", branch, "--state", "open")
+    return str(prs[0]["number"]) if prs else ""
 
 
 def also(tickets, most=NTFY):
@@ -1535,6 +1536,9 @@ class Pilot(Desk, Periodic):
         self.tl.wd, self.tl.cd = self.slot_dirs(slot)
         try:
             self.work(tid, kind, branches)
+        except TokenError as e:  # every later session would fail the same way: the run stops, with the reason
+            self.halt = str(e).removeprefix("windvane: ")
+            self.log(f"{tid}: {self.halt}; the run stops")
         except Exception as e:  # one ticket's driver error must not take the other slots down
             self.log(f"{tid}: driver error: {e!r}")
             self.fail(tid, f"driver error: {e}")
@@ -1815,6 +1819,9 @@ class Pilot(Desk, Periodic):
                 self.loop()
         except Signalled:
             pass  # on_signal set the stop reason
+        except TokenError as e:  # a step outside the slots (a plan, a merge) found the token gone
+            self.halt = self.stop_reason = str(e).removeprefix("windvane: ")
+            self.log(self.stop_reason)
         except Exception as e:
             self.stop_reason = f"driver error: {e}"
             crashed = traceback.format_exception_only(e)[-1].strip()

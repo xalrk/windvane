@@ -16,7 +16,8 @@ from test_requests import TRIAGE  # noqa: E402
 CLOSED = "plan-20261008-120000"
 GH = f"""#!/bin/sh
 echo "$*" >> "$(dirname "$0")/gh.log"
-case "$*" in *"--head {CLOSED} "*) echo CLOSED;; *"--head "*) echo OPEN;; esac
+case "$*" in *"--head {CLOSED} "*) echo '[{{"number": 1, "state": "CLOSED"}}]';;
+  *"--head "*) echo '[{{"number": 2, "state": "OPEN"}}]';; esac
 exit 0
 """
 

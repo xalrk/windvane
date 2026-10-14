@@ -114,8 +114,9 @@ class PlanSafety(unittest.TestCase):
     def test_closed_pr_plan_branch_no_longer_reserves_ids(self):
         self.open_plan_branch("plan-20260101-000000", "T-003")
         self.open_plan_branch("plan-20260102-000000", "T-004")
-        self.forge("github", "#!/bin/sh\ncase \"$*\" in *'--head plan-20260101-000000 '*) echo CLOSED;; "
-                             "*'--head plan-20260102-000000 '*) printf 'OPEN\\nCLOSED\\n';; esac\nexit 0\n")
+        self.forge("github", "#!/bin/sh\ncase \"$*\" in *'--head plan-20260101-000000 '*) echo '[{\"number\": 1, \"state\": \"CLOSED\"}]';; "
+                             "*'--head plan-20260102-000000 '*) echo '[{\"number\": 2, \"state\": \"OPEN\"}, "
+                             "{\"number\": 3, \"state\": \"CLOSED\"}]';; esac\nexit 0\n")
         self.s.git("fetch", "-q", "origin")
         self.assertEqual(planner.pending_ids(self.p) - {"T-001", "T-002"}, {"T-004"})  # the open one holds its id
         self.assertEqual(self.s.git("ls-remote", "--heads", "origin", "plan-20260101-000000").count("plan-"), 1)

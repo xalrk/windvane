@@ -86,15 +86,13 @@ def closed_prs(p, branches):
     known = set(load_json(f, []))
     reopened = set()
     if known & set(branches):
-        r = net.call(["gh", "pr", "list", "--state", "open", "--limit", "1000", "--json", "headRefName", "-q",
-                      ".[].headRefName"], p.main_root())
-        if r.returncode:  # can't tell which reopened: all keep their ids this time (a skipped id costs nothing)
+        prs = net.own_prs(p, "--state", "open", "--limit", "1000")
+        if prs is None:  # can't tell which reopened: all keep their ids this time (a skipped id costs nothing)
             return set()
-        reopened = set(r.stdout.split())
+        reopened = {pr["headRefName"] for pr in prs}
     closed = (known - reopened) & set(branches)
     for b in sorted(set(branches) - known - reopened):
-        states = set(net.sh(p.main_root(), "gh", "pr", "list", "--head", b, "--state", "all", "--json", "state",
-                            "-q", ".[].state").split())
+        states = {pr["state"] for pr in net.own_prs(p, "--head", b, "--state", "all") or []}
         if states == {"CLOSED"}:
             closed.add(b)
     keep = closed

@@ -22,7 +22,7 @@ OTHER = "To /tmp/r.git\nerror: src refspec x does not match any\n"
 GH = """#!/bin/sh
 echo "$*" >> "{log}"
 case "$*" in
-  *"--head plan-20250101-000000 "*) echo CLOSED;;
+  *"--head plan-20250101-000000 "*) echo '[{{"number": 5, "state": "CLOSED"}}]';;
   "pr create"*) echo https://github.com/o/r/pull/7;;
 esac
 exit 0
@@ -159,7 +159,7 @@ class HeldPlans(Base):
 
     def test_one_pushed_by_hand_whose_pr_was_closed_stays_closed(self):
         self.github()
-        (self.s.bin / "gh").write_text("#!/bin/sh\ncase \"$*\" in *\"pr list --head plan-\"*) echo 12;; esac\n")
+        (self.s.bin / "gh").write_text("#!/bin/sh\ncase \"$*\" in *\"pr list --head plan-\"*) echo '[{\"number\": 12, \"state\": \"CLOSED\"}]';; esac\n")
         self.refusal = NETWORK
         planner.plan(self.p, "make it great")
         self.refusal = None  # the user pushed it, closed its PR #12 and deleted the branch

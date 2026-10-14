@@ -33,7 +33,7 @@ matching keys for one run.
 | `teardown_minutes` | `5` | The longest `teardown` may run, in minutes (any number above 0). One still running then is killed, its child processes too, and logged as timed out. |
 | `isolate` | `true` | Work in the autopilot's own worktrees. `false` runs sessions in your checkout instead, for projects whose builds can't be duplicated; it also limits the run to one ticket at a time. |
 | `goal` | `""` | What `windvane plan` and `windvane run --replan` aim at when no goal is given. |
-| `author` | git's identity | `"Name <email>"` for the driver's own commits (merges, planned tickets). |
+| `author` | git's identity | `"Name <email>"` for every commit windvane makes: the driver's (merges, planned tickets) and its workers'. With `forge = "github"`, `windvane doctor` warns unless the email is a `users.noreply.github.com` one, since every pushed commit shows it. |
 | `overview_extra` | `""` | A shell command, run in the checkout, whose output `windvane overview` (and so the phone's `overview`) adds below its own lines: the project's own milestones. First 15 lines, 30 s at most; a failure shows as one line. |
 | `shared_notes` | `[]` | Notes files every ticket appends its findings to (e.g. `["NOTES.md"]`; paths in the repo, globs like `docs/*.md`, or a directory ending in `/`). They don't count when deciding which tickets may run side by side, whether on a Touches line or among the files a running branch changed. When a merge (a ticket's, or a desk PR's) conflicts only in these and `[[append_only]]` files, and in these files every conflict hunk only adds lines on both sides, the driver resolves it without a session: main's text, then the branch's added sections in order (a section starts at a Markdown heading, or is the added text itself). It's named in the merge commit, the log and the PR (`NOTES.md: kept main's, appended 2 sections`). A hunk that changes or deletes an existing line, on either side, or a conflict in any other file, goes back to the worker as before. Workers are told to add a new section and not rewrite existing text. |
 | `scan_allow` | `[]` | Leak kinds that `windvane answer`, the sessions' pre-push hook and the checks before windvane pushes or merges let through: `"token"`, `"private-key"`, `"ntfy-url"`, `"ntfy-topic"`, `"private-term"`, `"email"`, `"secret-file"`. Only for a repository that stays private, e.g. `["private-term"]` when its tickets name your own projects ([what `.windvane/` holds](safety.md#what-windvane-holds)). |
@@ -149,6 +149,45 @@ Claude Code silently drops a rule it can't parse. windvane checks every rule and
 (`bash(x)`, `Bash()`, a misspelt key) stops `windvane run` at its start, with a line in the log and the phone push.
 `windvane periodic` stops before its setup, and a desk `plan` or `critic` before its session. `windvane doctor`
 lists them all.
+
+## [env]
+
+Sessions read text anyone can write on a public repo (issues, PR comments), so they get your environment without
+the variables whose names look like credentials: any name holding `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD` or
+`API_KEY`, ending in `_KEY`, or starting with `AWS_`. What Claude Code logs in with stays (`ANTHROPIC_*`,
+`CLAUDE_*`, and `AWS_*` when `CLAUDE_CODE_USE_BEDROCK` is set), and so do gh's tokens (`GH_TOKEN`, `GITHUB_TOKEN`
+and their enterprise forms). Sessions also run with Claude Code's `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, which keeps
+its own login out of the commands they run.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `keep` | `[]` | Names of variables sessions still get, e.g. `["NPM_TOKEN"]` for a check that installs private packages. |
+
+## [github]
+
+By default sessions use your own `gh` login, which reaches every repository you can. A token for this repository
+alone limits what a session (or a prompt injected into one) can read or push to.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `token_file` | `""` | A file holding a GitHub token. When set, sessions and the driver use it as `GH_TOKEN`, and git reaches github.com over HTTPS through `gh auth git-credential`, so pushes use it too (an SSH remote is rewritten to HTTPS for them). A set file that can't be read stops the command rather than fall back to your login. |
+
+To make one, open GitHub's Settings, Developer settings, Fine-grained tokens, Generate new token. Under Repository
+access choose Only select repositories and pick this one. Under Permissions give it Contents (read and write), Pull
+requests (read and write) and Metadata (read-only); add Issues (read and write) only if your workers file issues.
+Save it with no other text in the file and make it private to you:
+
+```sh
+umask 077; printf '%s\n' 'github_pat_...' > ~/.config/windvane/myproject.token
+```
+
+```toml
+[github]
+token_file = "~/.config/windvane/myproject.token"
+```
+
+`windvane doctor` checks that the token can read this repository and can't list any of your other private ones,
+without printing it. Recommended for every public repository; `windvane ci` needs Actions (read and write) on it too.
 
 ## [[append_only]]
 

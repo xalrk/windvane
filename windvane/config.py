@@ -64,6 +64,8 @@ DEFAULTS = {
                   # off); a red or conflicting one gets up to desk_fixes fix sessions
                   "desk_label": "windvane merge", "desk_fixes": 2},
     "permissions": {},  # <role>_allow / <role>_deny: rules added to that role's sessions (none by default)
+    "env": {"keep": []},  # names of credential-like variables sessions still get (runner.scrub drops the rest)
+    "github": {"token_file": ""},  # a token for this repo alone: sessions and the driver use it as GH_TOKEN
 }
 
 
@@ -259,6 +261,50 @@ def state_settings(machine, project):
     return s
 
 
+def author(p):
+    """`author` as (name, email), or ("", "") when it isn't set as "Name <email>"."""
+    a = p.cfg["author"]
+    return (a.split("<")[0].strip(), a.split("<")[1].rstrip(">").strip()) if "<" in a else ("", "")
+
+
+def env_keep(v):
+    """`[env] keep`: a list of variable names."""
+    if not (isinstance(v, list) and all(isinstance(k, str) and re.fullmatch(r"\w+", k) for k in v)):
+        raise SystemExit(f"windvane: [env] keep = {v!r} in config.toml: use a list of variable names ([\"NPM_TOKEN\"])")
+    return v
+
+
+def token_path(p):
+    """`[github] token_file` as a path, or None when it's not set."""
+    f = p.cfg["github"]["token_file"]
+    if not isinstance(f, str):
+        raise SystemExit(f"windvane: [github] token_file = {f!r} in config.toml: use a path (\"~/.config/...\")")
+    return Path(f).expanduser() if f else None
+
+
+class TokenError(SystemExit):
+    """`[github] token_file` can't be used. A SystemExit, so a command stops with its message; the driver catches it
+    by name, as a thread drops a SystemExit without a word."""
+
+
+TOKEN_FIX = "; put the token back in it, or take token_file out of config.toml"
+
+
+def github_token(p):
+    """The token in `[github] token_file`, or "" when none is set. A set file that can't be read stops the command:
+    falling back to the user's own gh login would quietly give every session all their repos."""
+    f = token_path(p)
+    if not f:
+        return ""
+    try:
+        token = f.read_text().strip()
+    except OSError as e:
+        raise TokenError(f"windvane: [github] token_file: can't read {f} ({e.strerror}){TOKEN_FIX}")
+    if not token or len(token.split()) != 1:
+        raise TokenError(f"windvane: [github] token_file: {f} should hold just the token{TOKEN_FIX}")
+    return token
+
+
 def toplevel(start=None):
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=start or os.getcwd(), capture_output=True,
                        text=True)
@@ -294,6 +340,8 @@ class Project:
         self.perms, self.perm_problems = permissions(c["permissions"], self.periodic)
         self.append_only = rules(c.get("append_only", []))
         self.shared_notes = notes(c["shared_notes"])
+        env_keep(c["env"]["keep"])
+        token_path(self)
 
     def main_root(self):
         """The main checkout, also when `root` is one of its worktrees."""
