@@ -174,3 +174,33 @@ windvane never writes ntfy topics, emails or tokens into code, prompts, logs, pu
 Sessions inherit your Claude Code login and your `gh` login; they don't get any other credentials from windvane.
 Treat an autopilot like a colleague with push access to the repository: give it the access the work needs and no
 more.
+
+### What `.windvane/` holds
+
+`.windvane/` is committed and pushed, and it has to stay that way: the autopilot reads the tickets, the queue and the
+config from the remote's main branch, not from your checkout. Adding it to `.gitignore` looks like a privacy fix, but
+it stops the autopilot, as no run finds a ticket. So everything in it is as visible as your code: the tickets, the
+queue, `QUESTIONS.md` with your answers (the ones in your own words too), `CRITIC.md`, `CALIBRATION.md`, `IDEAS.md`,
+and anything a session writes there. Git keeps a deleted file's lines in its history, so deleting one doesn't take it
+back.
+
+What stays on your machine and never reaches the repository: the phone settings and ntfy topics
+(`~/.config/windvane/phone.toml`), your quiet times (`~/.config/windvane/quiet.txt`), the machine settings, and every
+project's logs, transcripts, critic packs and usage ledger (`~/.local/state/windvane/`).
+
+Never type a password, a token or a personal detail into an answer or a ticket. windvane catches the obvious ones:
+`windvane answer` refuses text holding a token, an ntfy URL or topic, a personal email address, or a word you listed
+in `~/.config/windvane/private-terms.txt` (one per line: a name, a client, an address). A change windvane is about to
+push to main whose new `.windvane/` lines hold one stays on its local branch instead, and a ticket holding one isn't
+merged; either way your phone hears the kind and the file and line, never the text. These checks match patterns, so
+they can't catch everything you'd rather keep to yourself. A repository that stays private can let a kind through
+with [`scan_allow`](configuration.md) (e.g. your private words, when its tickets name your other projects).
+
+Before you make a repository public, check its history, not only its files:
+```sh
+windvane doctor --leaks
+```
+It lists every token, ntfy topic, personal email, private word, and this machine's home path, username and hostname
+that any commit on any branch adds, by kind and place (`file:line in <commit>`), never the text. One in an old commit
+means rewriting that history and changing the secret; a later commit that deletes it doesn't help. With
+`forge = "github"`, `windvane init` and `windvane doctor` warn when the repository is already public.

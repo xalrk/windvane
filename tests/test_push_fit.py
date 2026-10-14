@@ -256,6 +256,20 @@ def planned(p, patch, s):
     return {"planned 1 ticket": ("API Error",)}
 
 
+def secret_aside(p, patch, s):
+    pilot(p).secret_aside("T-001", "t-001-x", "0" * 40, [("token", f".windvane/{'x' * 250}.md:1 in 1a2b3c4")])
+    return {"Set aside": ("Not merged: its commits add a token at .windvane/", "which would stay in main's history.")}
+
+
+def kept_secret(p, patch, s):
+    ensure_worktree(p, p.plan_dir, setup=False)
+    (p.plan_dir / ".windvane/IDEAS.md").write_text("try " + "ghp_" + "Zq7" * 12 + "\n")
+    s.git("add", "-A", ".windvane", cwd=p.plan_dir)
+    held_mod.land(p, p.plan_dir, "ideas-1", LONG, "body")
+    return {"Not pushed": ("Its .windvane/ lines hold a token at .windvane/IDEAS.md:1 in ",
+                           "then the next run pushes it.")}
+
+
 def tmp_full(p, patch, s):
     patch(scratch, "fullness", lambda path=None: (93.4, 20))
     pilot(p).clean_tmp()
@@ -264,7 +278,7 @@ def tmp_full(p, patch, s):
 
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, teardown_failed, leftovers, restarted, crashed_stopped,
-         held, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full]
+         held, secret_aside, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full]
 
 
 def drive(site):

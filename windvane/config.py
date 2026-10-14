@@ -46,6 +46,7 @@ DEFAULTS = {
     "heavy_reuses": [],  # process-name regexes of helpers its heavy jobs reuse (an emulator): their memory counts free
     "overview_extra": "",  # a command whose output `windvane overview` adds (the project's own milestones)
     "shared_notes": [],  # notes files every ticket appends to: no Touches overlap, appended sections merge on their own
+    "scan_allow": [],  # leak kinds the guards on answers and pushes let into .windvane/ (["private-term"]: a private repo)
     "models": {"worker": "opus", "worker_effort": "high", "reviewer": "opus", "reviewer_effort": "high",
                "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high",
                "preflight": "sonnet", "preflight_effort": "medium",  # preflight: a light read of the next tickets

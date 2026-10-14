@@ -11,6 +11,7 @@ import re
 import sys
 from datetime import datetime, timedelta
 
+from . import privacy
 from .config import slots
 from .driver import REVIEW_DENY
 from .held import land
@@ -310,7 +311,10 @@ def ask(p, qs, inp=input, say=print):
         if reply.strip().lower() == "q":
             break
         got = parse(reply, x)
-        if got:
+        why = got and got[1] and privacy.refusal(p, got[1])
+        if why:
+            say(f"  not taken: {why}; answer it again with `windvane answer {x['id']}`")
+        elif got:
             answers.append((x, *got))
     if answers:
         say(record(p, answers))

@@ -5,7 +5,8 @@ import re
 import subprocess
 import time
 
-from . import actions, net
+from . import actions, net, privacy
+from .config import DIR
 from .phone import cut, whole
 from .util import git, gout, load_json, log, push, save_json
 from .worktree import clean_detach, ensure_worktree
@@ -129,10 +130,26 @@ def land(p, cd, branch, title, body, commit=True, tries=2):
     title = actions.tag(p, title, cd)
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
-    ok, where = _land(p, cd, branch, title, body, tries)
+    found = privacy.outgoing(cd, p.upstream, "HEAD", DIR, privacy.guarded(p))
+    ok, where = (False, kept_secret(p, cd, branch, title, found)) if found else _land(p, cd, branch, title, body, tries)
     if is_local(where):
         hold(p, branch, "land")
     return ok, where
+
+
+def kept_secret(p, cd, branch, title, found):
+    """Keep a change whose new `.windvane/` lines hold a secret on its local branch, held with the reason, and tell the
+    phone once (the next run's `push_held` scans it again, and holds it again until it's taken out). The reason names
+    kinds and places only: it goes to a log and a phone."""
+    why = (f"its {DIR}/ lines hold {privacy.said(found)}; take it out of the branch's commit "
+           f"(`git switch {branch}`, edit, `git commit -a --amend`), then the next run pushes it")
+    told = branch in load_json(p.state / "held.json", {})
+    git(cd, "branch", "-f", branch, "HEAD")
+    hold(p, branch, "land", why)
+    log(p, f"{branch}: {why}")
+    if not told:
+        push(f"Not pushed: {title}", whole("", why[:1].upper() + why[1:], ".", log=lambda m: log(p, m)), 4, "warning")
+    return f"the local branch {branch} ({why})"
 
 
 def _land(p, cd, branch, title, body, tries):
