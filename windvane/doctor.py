@@ -11,16 +11,16 @@ import sys
 from pathlib import Path
 
 from . import actions, heavy, install, phone, privacy, runner, scratch, selfupdate, statedir
-from .config import CHECKOUT, DIR, HOME, Project
+from .config import CHECKOUT, DIR, HOME, Project, author, github_token
 from .util import gout, load_json
 
 # The triggers that run a workflow on its own for every autopilot ticket: its PR and the merge push to main.
 AUTO_TRIGGERS = ("push", "pull_request", "pull_request_target")
 
 
-def run_quiet(cmd, timeout=20, cwd=None):
+def run_quiet(cmd, timeout=20, cwd=None, env=None):
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -224,7 +224,9 @@ def checks(p=None):
         r = run_quiet(["gh", "auth", "status"])
         add(r and r.returncode == 0, github, "gh logged in", "gh auth login")
         if github and getattr(p, "root", None):
-            out += public_warnings(p)
+            out += public_warnings(p) + token_warnings(p)
+    if github and getattr(p, "root", None):
+        out += identity_warnings(p)
     add(shutil.which("tmux"), False, "tmux (for `windvane run --detach`)", "install tmux (e.g. sudo apt install tmux)")
     add(shutil.which("notify") and shutil.which("notify-ask") or phone.on(phone.conf()), False,
         "phone pushes and questions (ntfy)", "windvane phone setup; without it, questions wait for `windvane answer`")
@@ -251,6 +253,40 @@ def public_warnings(p):
     return [("warn", f"this repo is public on GitHub, and so is {DIR}/ (tickets, your answers, the critic's notes)",
              f"keep secrets and personal details out of them; `windvane doctor --leaks` checks its history "
              f"(docs/safety.md, \"What {DIR}/ holds\")")]
+
+
+def identity_warnings(p):
+    """A warning when the email windvane's commits carry (`author`, else git's own) isn't a GitHub noreply address:
+    every commit pushed to GitHub shows it, and on a public repo anyone can read it."""
+    email = author(p)[1] or gout(p.root, "config", "user.email")
+    if email.endswith("@users.noreply.github.com"):
+        return []
+    return [("warn", f"commits here carry {'no email' if not email else 'an email that is not a GitHub noreply one'}",
+             f'set author = "Name <id+login@users.noreply.github.com>" in {DIR}/config.toml '
+             "(GitHub: Settings, Emails)")]
+
+
+def token_warnings(p):
+    """`[github] token_file`, when set: it can reach this repo and none of the user's other private ones. Checked
+    through gh with the token in its environment; the token itself is never printed."""
+    try:
+        token = github_token(p)
+    except SystemExit as e:
+        return [("warn", str(e).removeprefix("windvane: "), "fix the file, or take token_file out of config.toml")]
+    if not token:
+        return []
+    env = {**os.environ, "GH_TOKEN": token}
+    r = run_quiet(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], 15, p.root, env)
+    repo = r.stdout.strip() if r and r.returncode == 0 else ""
+    if not repo:
+        return [("warn", "[github] token_file: its token can't read this repo",
+                 "make a fine-grained token for it with Contents, Pull requests and Metadata (docs/configuration.md)")]
+    r = run_quiet(["gh", "api", "user/repos?visibility=private&per_page=100", "-q", ".[].full_name"], 15, p.root, env)
+    others = sorted(set(r.stdout.split()) - {repo}) if r and r.returncode == 0 else []
+    if others:
+        return [("warn", f"[github] token_file: its token also reaches {len(others)} other private repo(s)",
+                 f"limit it to {repo} alone (Repository access: Only select repositories)")]
+    return []
 
 
 def leaks(p):

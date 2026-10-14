@@ -2,6 +2,7 @@
 tickets, spending crash retries or dying of a git timeout. `online()` says whether the API and the git remote can be
 reached; `wait()` pauses until they can; `git`/`sh`/`call` run the commands that talk to the network (fetch, push,
 ls-remote, gh) without ever raising, and wait and try again when one fails with the network down."""
+import json
 import os
 import re
 import socket
@@ -21,6 +22,7 @@ waiter = None  # set by the driver: waits for the network, False when a stop or 
 hosts = []  # (host, port) of the git remote, set by the driver; the API host is always probed
 answered = set()  # the hosts that answered a probe in this process: only these are believed when they don't
 lock = threading.Lock()  # parallel slots wait one at a time: the outage is logged and pushed once
+forks = set()  # the fork PRs own_prs dropped in this process: each is logged once
 
 
 def api_host():
@@ -129,3 +131,24 @@ def sh(cwd, *cmd):
     """stdout of a network command, stripped; "" when it fails (as util.sh)."""
     r = call(list(cmd), cwd)
     return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def own_prs(p, *args):
+    """`gh pr list *args` as dicts (number, state, headRefName), only the PRs whose branch is in this repo, or None
+    when gh fails. `--head` matches a branch name in any fork (gh can't filter it by owner), so an outsider's PR from a
+    fork whose branch is named like a ticket's would be taken for that ticket's: its body would reach the reviewer, its
+    number the worker. A fork PR is dropped, and logged once."""
+    r = call(["gh", "pr", "list", *args, "--json", "number,state,headRefName,isCrossRepository,headRepositoryOwner"],
+             p.main_root())
+    try:
+        prs = json.loads(r.stdout.strip() or "[]") if r.returncode == 0 else None
+    except ValueError:
+        return None
+    if not isinstance(prs, list):
+        return None
+    for pr in prs:
+        if pr.get("isCrossRepository") and pr.get("number") not in forks:
+            forks.add(pr.get("number"))
+            who = (pr.get("headRepositoryOwner") or {}).get("login") or "someone"
+            log(p, f"PR #{pr.get('number')} is from {who}'s fork (branch {pr.get('headRefName')}): not ours, ignored")
+    return [pr for pr in prs if not pr.get("isCrossRepository")]

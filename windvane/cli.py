@@ -21,7 +21,7 @@ from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, exe, find, slots, toplevel
 from .config import periodic as periodic_entries
 from .queue import Queue
-from .runner import Usage, inherited_stop, plain_error
+from .runner import Usage, inherited_stop, plain_error, scope_github
 from .stats import cmd_stats, shared_line  # cmd_stats: main runs `stats` by its name
 from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 
@@ -816,6 +816,7 @@ def main(argv=None):
         sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60, mem=a.mem, reuse=reuse))
     p = find()
     phone.use(p)
+    scope_github(p)
     if a.cmd == "run":
         for k in ("cap", "week_cap", "ticket_hours", "min_slot", "answer_wait"):
             if getattr(a, k) is None:

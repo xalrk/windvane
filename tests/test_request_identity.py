@@ -21,9 +21,10 @@ GH = f"""#!/bin/sh
 here="$(dirname "$0")"
 echo "$*" >> "$here/gh.log"
 case "$*" in
-  *"--head {CLOSED} "*) if [ -f "$here/reopened" ]; then echo OPEN; else echo CLOSED; fi;;
-  *"--head "*) echo OPEN;;
-  *"--state open"*) [ -f "$here/reopened" ] && echo {CLOSED};;
+  *"--head {CLOSED} "*) if [ -f "$here/reopened" ]; then s=OPEN; else s=CLOSED; fi
+                         echo '[{{"number": 1, "state": "'$s'"}}]';;
+  *"--head "*) echo '[{{"number": 2, "state": "OPEN"}}]';;
+  *"--state open"*) [ -f "$here/reopened" ] && echo '[{{"number": 1, "state": "OPEN", "headRefName": "{CLOSED}"}}]';;
 esac
 exit 0
 """

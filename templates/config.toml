@@ -13,7 +13,7 @@ setup = ""                # run once in each fresh autopilot worktree (e.g. "npm
 setup_minutes = 20        # a setup still running then is killed: the run stops, as for a failed setup
 isolate = true            # work in the autopilot's own worktrees; false: in this checkout (for huge builds)
 goal = ""                 # what `windvane plan` and `run --replan` aim at when given no goal
-author = ""               # "Name <email>" for the driver's own commits (merges, plans); default: git's
+author = ""               # "Name <email>" for every commit windvane and its workers make; default: git's
 heavy_check = false       # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
 overview_extra = ""       # a command whose output (15 lines, 30 s) `windvane overview` and the phone's add
 shared_notes = []         # notes files every ticket appends to (["NOTES.md"]): no Touches overlap, sections merge
@@ -83,6 +83,16 @@ desk_fixes = 2            # fix sessions per red or conflicting desk PR before i
 # [permissions]
 # worker_allow = ["Bash(tools/*)"]   # your own scripts, which auto mode might refuse
 # critic_deny = ["Edit", "Write"]
+
+# Sessions get your environment without variables named like credentials (*TOKEN*, *SECRET*, *PASSWORD*, *_KEY,
+# AWS_*), but for Claude Code's and gh's own. Name any your project's tools need:
+# [env]
+# keep = ["NPM_TOKEN"]
+
+# A GitHub token for this repo alone (fine-grained: Contents, Pull requests, Metadata), used instead of your gh
+# login by sessions and the driver, so they can't reach your other repos. Recommended for public repos.
+# [github]
+# token_file = "~/.config/windvane/myproject.token"
 
 # An append-only numbered file (decisions, ADRs, migrations; none by default): two branches that each append an entry
 # conflict on the same next number. The driver resolves that itself: main's entries, then the branch's, renumbered

@@ -21,7 +21,7 @@ PROVISIONAL = ("# Q\n\n## Open\n\n## Provisional\n\n### T-002: Which colour?\nct
                "Recommendation: A, because it's louder\nBuilt: A; to change it: COLOUR in theme.py\n\n## Answered\n")
 # Records every call; `pr list` finds PR 7 unless NO_PR is set.
 FAKE_GH = ('#!/bin/sh\necho "$@" >> "$GH_LOG"\n'
-           'if [ "$2" = list ] && [ -z "$NO_PR" ]; then echo 7; fi\n'
+           'if [ "$2" = list ] && [ -z "$NO_PR" ]; then echo \'[{"number": 7, "state": "OPEN"}]\'; fi\n'
            'if [ "$2" = comment ] && [ -n "$FAIL_COMMENT" ]; then exit 1; fi\n')
 
 

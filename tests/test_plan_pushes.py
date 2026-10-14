@@ -107,7 +107,7 @@ class Refusals(unittest.TestCase):
 # A repo with 301 PRs: the old closed plan PR is past any `--limit 300` list, but `--head` finds it.
 BUSY_GH = """#!/bin/sh
 case "$*" in
-  *"--head plan-20250101-000000 "*) echo CLOSED;;
+  *"--head plan-20250101-000000 "*) echo '[{"number": 1, "state": "CLOSED"}]';;
   *"--head "*) ;;
   *"--limit"*) i=0; while [ $i -lt 300 ]; do echo "feature-$i MERGED"; i=$((i+1)); done;;
 esac

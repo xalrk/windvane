@@ -166,10 +166,11 @@ def nth(n):
 
 
 def pr_for(p, branch):
+    """The open PR of `branch` in this repo, never a fork's of the same name (net.own_prs), or ""."""
     if p.cfg["forge"] != "github" or not branch:
         return ""
-    return net.sh(p.main_root(), "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number",
-                  "-q", ".[0].number")
+    prs = net.own_prs(p, "--head", branch, "--state", "open")
+    return str(prs[0]["number"]) if prs else ""
 
 
 def also(tickets, most=NTFY):

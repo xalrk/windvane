@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import actions, scratch
-from .config import HOME
+from .config import HOME, author, github_token
 from .util import append_jsonl, load_json, save_json, started_at
 
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
@@ -24,11 +24,82 @@ GRACE = 3  # seconds a nested session gets to end on SIGTERM before SIGKILL: sho
 POLL = 5  # seconds between a quiet session's stop checks (small file reads, no tokens): how soon `stop --now` acts
 
 
-def env(extra=None):
-    """The sessions' environment: AUTOPILOT=1 keeps the user's ntfy hook quiet (the driver pushes its own). The Bash
-    tool's default timeout is 2 minutes; the rules and `windvane await` assume a tool call may run 10."""
-    return {**os.environ, "AUTOPILOT": "1", "BASH_DEFAULT_TIMEOUT_MS": TOOL_MS, "BASH_MAX_TIMEOUT_MS": TOOL_MS,
-            **(extra or {})}
+# Variable names that look like credentials: a session gets none of them from the driver's environment, but for what
+# Claude Code logs in with (ANTHROPIC_*, CLAUDE_*, and AWS_* when it runs on Bedrock), gh's token and `[env] keep`.
+CREDENTIAL = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|_KEY$|^AWS_", re.I)
+GH_TOKENS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+# git reaching github.com over https through gh, so a push uses gh's token (an SSH key reaches all the user's repos)
+GH_GIT = (("credential.https://github.com.helper", ""), ("credential.https://github.com.helper", "!gh auth git-credential"),
+          ("url.https://github.com/.insteadOf", "git@github.com:"),
+          ("url.https://github.com/.insteadOf", "ssh://git@github.com/"))
+
+
+def env(extra=None, p=None):
+    """The sessions' environment: the driver's, scrubbed of credentials (`scrub`), with project `p`'s GitHub token
+    and commit identity. AUTOPILOT=1 keeps the user's ntfy hook quiet (the driver pushes its own). The Bash tool's
+    default timeout is 2 minutes; the rules and `windvane await` assume a tool call may run 10. Claude Code's
+    subprocess scrub keeps its own login (kept here, as it needs it) out of the commands a session runs."""
+    out = scrub(os.environ, p.cfg["env"]["keep"] if p else ())
+    if p:
+        out = {**github_env(p, out), **identity(p)}
+    extra = extra or {}
+    out.update({"AUTOPILOT": "1", "BASH_DEFAULT_TIMEOUT_MS": TOOL_MS, "BASH_MAX_TIMEOUT_MS": TOOL_MS,
+                "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1"},
+               **{k: v for k, v in extra.items() if not k.startswith("GIT_CONFIG_")})
+    return with_git_config(out, git_config(extra))
+
+
+def scrub(environ, keep=()):
+    """`environ` without the variables whose names look like credentials (CREDENTIAL): tokens the user's shell
+    exports for other work must not reach a session that reads untrusted text and can run commands and push."""
+    bedrock = environ.get("CLAUDE_CODE_USE_BEDROCK")
+    return {k: v for k, v in environ.items()
+            if not CREDENTIAL.search(k) or k in keep or k in GH_TOKENS or re.match(r"(ANTHROPIC|CLAUDE)_", k)
+            or bedrock and k.startswith("AWS_")}
+
+
+def github_env(p, environ):
+    """`environ` with `[github] token_file`'s token as gh's only one, and git's github.com pushes going through gh, so
+    sessions and the driver reach this one repo, not every repo the user's own login can. Unchanged without one."""
+    token = github_token(p)
+    if not token:
+        return environ
+    return with_git_config({**{k: v for k, v in environ.items() if k not in GH_TOKENS}, "GH_TOKEN": token}, GH_GIT)
+
+
+def scope_github(p):
+    """Give this process (the driver, a desk command) the project's GitHub token, for its own gh and git calls."""
+    scoped = github_env(p, dict(os.environ))
+    if scoped != os.environ:
+        os.environ.clear()
+        os.environ.update(scoped)
+
+
+def identity(p):
+    """The configured `author` as git's commit identity: a worker's commits carry it, not the machine's global one.
+    Set in the environment, not the repo's config, which the user's checkout shares."""
+    name, email = author(p)
+    return {f"GIT_{who}_{what}": v for who in ("AUTHOR", "COMMITTER") for what, v in (("NAME", name), ("EMAIL", email))
+            } if email else {}
+
+
+def git_config(environ):
+    """The (key, value) settings git reads from `environ`'s GIT_CONFIG_COUNT and GIT_CONFIG_KEY_n/VALUE_n."""
+    n = int(environ.get("GIT_CONFIG_COUNT") or 0)
+    return [(environ[f"GIT_CONFIG_KEY_{i}"], environ.get(f"GIT_CONFIG_VALUE_{i}", ""))
+            for i in range(n) if f"GIT_CONFIG_KEY_{i}" in environ]
+
+
+def with_git_config(environ, pairs):
+    """`environ` with the git settings `pairs` after the ones it has, unless it has them all already."""
+    have = git_config(environ)
+    if all(pair in have for pair in pairs):
+        return environ
+    out = {k: v for k, v in environ.items() if not k.startswith("GIT_CONFIG_")}
+    for i, (k, v) in enumerate([*have, *pairs]):
+        out[f"GIT_CONFIG_KEY_{i}"], out[f"GIT_CONFIG_VALUE_{i}"] = k, v
+    out["GIT_CONFIG_COUNT"] = str(len(have) + len(pairs))
+    return out
 
 
 def over_caps(u, cap, week_cap):
@@ -344,7 +415,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     # `windvane request` from outside its tree: who it is (requests.py), written first: the session may ask at once
     (own.parent / "role").write_text(role)
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            start_new_session=True, env=env(extra))
+                            start_new_session=True, env=env(extra, p))
     mark = p.state / "nested" / parent / str(proc.pid) if parent else None
     own.write_text(owner_line(proc.pid))
     if mark:
