@@ -263,6 +263,7 @@ class StopsAndSessions(Base):
                        .split(") ")[-1][:1], 10, "the command's own group")
 
     def test_keep_goes_with_heavy(self):
+        self.addCleanup(os.chdir, os.getcwd())  # -C moves into the sandbox, which goes at the test's end
         with self.assertRaisesRegex(SystemExit, "--keep goes with --heavy"):
             cli.main(["-C", str(self.s.root), "bg", "--keep", "job", "true"])
         self.assertFalse(self.job.parent.exists())

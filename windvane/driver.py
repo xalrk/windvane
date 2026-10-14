@@ -1329,9 +1329,10 @@ class Pilot(Desk, Periodic):
     def kept_slots(self):
         """slot -> the ticket a kept job runs for (or ended for, its session not yet told) in that slot's work tree: no
         other ticket may take the tree it writes into, in this run or the next."""
-        trees = {t: i for i in range(self.n) if (t := jobs.worktree(self.slot_dirs(i)[0]))}
+        kept = jobs.kept_jobs(self.p)
+        trees = {t: i for i in range(self.n) if (t := jobs.worktree(self.slot_dirs(i)[0]))} if kept else {}
         out = {}
-        for b in jobs.kept_jobs(self.p):
+        for b in kept:
             where = jobs.job_cwd(b)
             i = trees.get(jobs.worktree(where)) if where else None
             if i is not None:
@@ -1349,7 +1350,8 @@ class Pilot(Desk, Periodic):
             jobs.follow(self.p, until)
             on = [f"{b.parent.name}'s '{b.name}'" for b in jobs.running_kept(self.p)]
             if on:
-                self.kept_note = f"Kept jobs run on until {hhmm(until)} (the next run resumes them): {', '.join(on)}.\n"
+                self.kept_note = (f"Kept jobs run on until {hhmm(until)}; the next run resumes their "
+                                  f"tickets when they end: {', '.join(on)}.\n")
         else:
             killed = jobs.end_kept(self.p)
             if killed:

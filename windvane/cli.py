@@ -184,13 +184,13 @@ def cmd_preflight(a, p):
 
 
 def cmd_stop(a, p):
+    killed = jobs.end_kept(p, why="windvane stop")  # a run's own end would too, but one past its stop has no run
+    if killed:
+        print(f"{p.display}: killed kept jobs: {', '.join(killed)}")
     if a.if_running and not running(p):
         print(f"{p.display}: autopilot isn't running")
         return
     p.state.mkdir(parents=True, exist_ok=True)
-    killed = jobs.end_kept(p, why="windvane stop")  # a run's own end would too, but one past its stop has no run
-    if killed:
-        print(f"{p.display}: killed kept jobs: {', '.join(killed)}")
     stop_now = getattr(a, "now", False)  # callers that predate --now pass a Namespace without it
     if stop_now and not running(p):
         return print(f"{p.display}: autopilot isn't running")
