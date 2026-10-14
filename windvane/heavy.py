@@ -12,6 +12,9 @@ that tool, waiting on its own lock); instead it waits until no process matching 
 A job's own `--mem`, or its project's `heavy_mem`, replaces `min_free_gb` for it. Its project's `heavy_reuses` names
 helpers its heavy jobs reuse (an emulator, a build daemon): the memory theirs hold counts as free for it. Free memory
 comes from Linux's /proc; elsewhere (macOS) it isn't known, and only `busy` is waited on.
+
+Each job's run time is kept (`times_file`), so a waiter can say how much work is ahead of it and whether it likely
+starts after its session's wrap-up; one waiting on memory names the processes that hold the most.
 """
 import fcntl
 import json
@@ -45,6 +48,12 @@ STOP_AT = "WINDVANE_STOP_AT"
 # The driver's check also follows the run's deadline file (its path in this env var), read as it waits: a deadline the
 # user moved earlier ends the wait then, not at the end it had when the check started.
 DEADLINE_ENV = "WINDVANE_HEAVY_DEADLINE"
+# A session's wrap-up is this long before its stop (as the worker prompt tells it): a job likely to start after it is
+# one the session should plan around.
+WRAP_UP_S = 20 * 60
+WRAP_UP = "heavy: likely to start after your wrap-up ({}); still waiting: plan the ticket without it"
+# Run times kept: the last few runs of each command, of the commands run most recently.
+KEEP_RUNS, KEEP_CMDS = 5, 100
 
 
 def machine_file():
@@ -68,6 +77,28 @@ def free_gb():
         return int(m.group(1)) / 1048576 if m else None
     except OSError:
         return None
+
+
+def largest(n=3):
+    """The `n` processes holding the most memory, as "pid 412 qemu-system-x86 3.4 GB in emu/slot-1" (the last two
+    parts of the working directory): a job waiting on memory says who holds it, an idle helper of another project
+    plainly among them. Empty without /proc."""
+    if not util.PROC.is_dir():
+        return []
+    rss = [(status_field(int(d), "VmRSS") or 0, int(d)) for d in os.listdir(util.PROC) if d.isdigit()]
+    out = []
+    for kb, pid in sorted(rss, reverse=True)[:n]:
+        try:
+            name = (util.PROC / str(pid) / "comm").read_text().strip()
+        except OSError:
+            name = "?"
+        try:
+            where = "/".join(Path(os.readlink(util.PROC / str(pid) / "cwd")).parts[-2:])
+        except OSError:  # someone else's: its folder can't be read
+            where = None
+        if kb:
+            out.append(f"pid {pid} {name} {kb / 1048576:.1f} GB " + (f"in {where}" if where else "(folder unreadable)"))
+    return out
 
 
 def in_dirs(path, dirs):
@@ -184,9 +215,10 @@ def queue_dir():
     return lock_path().with_name("windvane-heavy.queue")
 
 
-def join_queue(need):
+def join_queue(need, key=None):
     """An entry in the queue, named by arrival time so they sort in order, and flocked while this job lives. It holds
-    the job's memory need, for the waiters behind it to see whether it lets them by.
+    the job's memory need, for the waiters behind it to see whether it lets them by, and its `job_key`, for them to
+    tell how long it usually runs.
 
     It's flocked and written under a hidden name first and only then renamed into place, so a scan never sees a live
     entry unlocked or empty. The open file keeps the entry; closing it (or dying) frees it."""
@@ -195,7 +227,7 @@ def join_queue(need):
     name = f"{time.time_ns():020d}-{os.getpid()}"
     fd = os.open(q / f".{name}", os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
-    os.write(fd, json.dumps({"mem": need}).encode())
+    os.write(fd, json.dumps({"mem": need, "key": key}).encode())
     os.rename(q / f".{name}", q / name)
     return fd, q / name
 
@@ -268,8 +300,119 @@ def need_of(path):
     return need if isinstance(need, (int, float)) and not isinstance(need, bool) else None
 
 
+def key_of(path):
+    """A waiter's `job_key`, from its queue entry; None when it can't be read."""
+    try:
+        return json.loads(Path(path).read_text() or "{}").get("key")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def times_file():
+    return user_dir("XDG_STATE_HOME", ".local/state") / "heavy-times.json"
+
+
+def project_dir(cwd):
+    """The project a job runs for: the main checkout of the git repo `cwd` is in, which every slot's worktree
+    shares, so a job times the same from any slot; else `cwd` itself."""
+    common = util.sh(cwd, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if common:
+        return str(Path(common).parent) if Path(common).name == ".git" else common
+    return str(Path(cwd).resolve())
+
+
+def job_key(cmd, cwd):
+    """What a job's run time is kept under: its project and its command, spaces folded."""
+    text = cmd if isinstance(cmd, str) else shlex.join(cmd)
+    return f"{project_dir(cwd or os.getcwd())} {' '.join(text.split())}"
+
+
+def load_times():
+    """{job key: its last few run times in minutes, oldest first}; {} when there are none yet."""
+    try:
+        times = json.loads(times_file().read_text())
+    except (OSError, ValueError):
+        return {}
+    return times if isinstance(times, dict) else {}
+
+
+def record(key, minutes):
+    """Keep a job's run time: the last KEEP_RUNS of each command, for the KEEP_CMDS commands run most recently. Its
+    writer holds the heavy lock, so no two write at once; written whole and renamed, so a reader never sees half."""
+    times = load_times()
+    runs = runs_of(times, key)
+    times.pop(key, None)
+    times[key] = (runs + [round(minutes, 2)])[-KEEP_RUNS:]
+    times = dict(list(times.items())[-KEEP_CMDS:])
+    f = times_file()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_name(f".{f.name}.{os.getpid()}")
+        tmp.write_text(json.dumps(times))
+        os.replace(tmp, f)
+    except OSError:
+        pass  # an estimate the next waiter can't make, not a reason to fail the job
+
+
+def runs_of(times, key):
+    """A job's kept run times, skipping anything that isn't one: a hand-edited file isn't a reason to fail a job."""
+    runs = times.get(key) if key else None
+    if not isinstance(runs, list):
+        return []
+    return [r for r in runs if isinstance(r, (int, float)) and not isinstance(r, bool)]
+
+
+def usual(key, times):
+    """A job's usual run time in minutes (the median of its last runs), or None for a command never seen."""
+    runs = sorted(runs_of(times, key))
+    return runs[len(runs) // 2] if runs else None
+
+
+def work_ahead(info, keys, times, now=None):
+    """The heavy work before a job can start, behind the holder `info` and the waiters with `keys` ahead of it:
+    (minutes known, how many jobs have no known time, how many jobs, the holder's usual minutes when it ran past
+    them). The holder counts its usual time less what it ran so far; one past its usual time has no known end."""
+    now = time.time() if now is None else now
+    jobs = [(info.get("key"), now - info.get("since", now))] if info.get("pid") and still_held(info) else []
+    mins, unknown, over = 0, 0, None
+    for key, ran in jobs + [(k, 0) for k in keys]:
+        u = usual(key, times)
+        if u is None or u < ran / 60:
+            unknown += 1
+            over = over if u is None else u
+        else:
+            mins += u - ran / 60
+    return mins, unknown, len(jobs) + len(keys), over
+
+
+def minutes(m):
+    return f"{m:.0f} min" if m >= 1 else "under 1 min"
+
+
+def estimate(work, now=None):
+    """`work_ahead` as words, "about 25 min of work ahead (until about 01:30)", a lower bound when some job's end
+    isn't known (never timed, or a holder past its usual time), "work ahead unknown" when none is; None with nothing
+    ahead. A clock time too, since the line is read later."""
+    mins, unknown, jobs, over = work
+    if not jobs:
+        return None
+    never = unknown - (over is not None)
+    why = []
+    if over is not None:
+        why.append("the holder is past its usual " + (f"{over:.0f} min" if over >= 1 else "time"))
+    if never:
+        why.append("never timed" if never == jobs else f"{never} never timed")
+    why = "; ".join(why)
+    if unknown == jobs or (unknown and mins < 1):
+        return f"work ahead unknown ({why})"
+    until = time.strftime("%H:%M", time.localtime((time.time() if now is None else now) + mins * 60))
+    if unknown:
+        return f"at least {minutes(mins)} of work ahead (until {until} or later; {why})"
+    return ("under 1 min" if mins < 1 else f"about {minutes(mins)}") + f" of work ahead (until about {until})"
+
+
 def ahead(entry):
-    """The memory needs of the live waiters that arrived before this one, oldest first. Clears dead entries on the
+    """The queue entries of the live waiters that arrived before this one, oldest first. Clears dead entries on the
     way (and a waiter's hidden one left by a kill between creating and renaming it). A paused waiter (Ctrl-Z) isn't
     in it: it keeps its entry, but would hold up the whole line until its wait times out; resumed, it gets in line
     again."""
@@ -283,7 +426,7 @@ def ahead(entry):
             except OSError:
                 pass
         elif name < mine and alive(path) and not paused(entry_pid(name)):
-            needs.append(need_of(path))
+            needs.append(path)
     return needs
 
 
@@ -296,13 +439,13 @@ def holder(lock):
         return {}
 
 
-def claim(lock, cmd, cwd):
+def claim(lock, cmd, cwd, key=None):
     """Write this job into the lock it now holds, for the waiters' log line."""
     text = cmd if isinstance(cmd, str) else shlex.join(cmd)
     text = " ".join(text.split())
     where = Path(cwd or os.getcwd()).resolve().parts[-2:]
     info = {"pid": os.getpid(), "start": started_at(os.getpid()), "since": time.time(), "cmd": text if len(text) <= 60 else text[:59] + "…",
-            "cwd": "/".join(where)}
+            "cwd": "/".join(where), "key": key}
     os.ftruncate(lock, 0)
     os.lseek(lock, 0, os.SEEK_SET)
     os.write(lock, json.dumps(info).encode())
@@ -328,8 +471,9 @@ def held_by(info):
     return f"held by pid {info['pid']} ({info.get('cmd', '?')} in {info.get('cwd', '?')}, since {since})"
 
 
-def waiting_line(info, n):
-    return f"heavy: waiting for the machine lock: {held_by(info)}; " + (f"{n} ahead of this job" if n else "next in line")
+def waiting_line(info, n, est=None):
+    line = f"heavy: waiting for the machine lock: {held_by(info)}; " + (f"{n} ahead of this job" if n else "next in line")
+    return line + (f"; {est}" if est else "")
 
 
 def gave_up(log):
@@ -366,11 +510,15 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
     wait on that memory too: so the first waiter behind it whose own need is met may go first, while the head stays
     the head and gets the first try once its memory is free. Only memory lets a job by: a waiter ahead whose need is
     met, or unknown, keeps its turn. This job's own project's helpers (`reuse`) count as free for it alone: a waiter
-    ahead is judged on what's free for anyone."""
-    said, busy_why, retry = None, None, 0
+    ahead is judged on what's free for anyone.
+
+    Each time what it waits on changes, the line says so: the work ahead (`estimate`), or for a wait on memory the
+    processes holding most. With a session's stop known it says once that the job likely starts after the wrap-up:
+    when the known work ahead runs past it, or the wrap-up came with the job still waiting."""
+    said, busy_why, retry, warned, looked = None, None, 0, False, 0
     while True:
         line, mem = ahead(entry), free_gb()
-        turn = all(short(w, mem) for w in line)  # the head, or every waiter ahead waits on memory it doesn't have
+        turn = all(short(need_of(w), mem) for w in line)  # the head, or all ahead wait on memory
         mine = short(need, mem, helpers_gb(reuse) if mem is not None else 0) if turn else None
         if turn and not mine and time.time() >= retry:
             try:
@@ -387,8 +535,17 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
         info = holder(lock)
         n = 0 if turn else len(line)
         key = "memory" if mine else why or (info.get("pid"), info.get("since"), n)
-        if key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
-            say(f"heavy: waiting: {why}" if why else waiting_line(info, n))
+        if key != said or time.time() >= looked + 60:  # the wrap-up is looked at again each minute as time passes
+            work, looked = work_ahead(info, [key_of(w) for w in line[:n]], load_times()), time.time()
+            if key != said and mine:
+                say(f"heavy: waiting: {why}" + (f"; largest: {', '.join(big)}" if (big := largest()) else ""))
+            elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
+                say(f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work)))
+            wrap, now = wrap_up(), time.time()
+            late = wrap and (now >= wrap or work[1] < work[2] and now + work[0] * 60 > wrap)
+            if late and not warned:
+                say(WRAP_UP.format(time.strftime("%H:%M", time.localtime(wrap))))
+                warned = True
             said = key
         gone = f": {why}" if why else f" lock: {held_by(info)}"
         if stopped():
@@ -398,6 +555,14 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
             say(GAVE_UP + gone)
             return False
         time.sleep(1)
+
+
+def wrap_up():
+    """A session's wrap-up time (`WRAP_UP_S` before its stop, `STOP_AT`), or None outside a session."""
+    try:
+        return float(os.environ[STOP_AT]) - WRAP_UP_S
+    except (KeyError, ValueError):
+        return None
 
 
 def moved(path):
@@ -442,7 +607,8 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None):
     if os.environ.get("WINDVANE_HEAVY_HELD") == str(path):  # nested: the outer one already holds it
         return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
     need = cfg["min_free_gb"] if mem is None else mem
-    entry = join_queue(need)
+    key = job_key(cmd, cwd)
+    entry = join_queue(need, key)
     lock = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
     try:
         if not take(lock, entry, need, cfg, until, say, stopped, reuse):
@@ -450,10 +616,13 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None):
         leave_queue(entry)  # the next waiter becomes the head and waits on the lock
         entry = None
         try:
-            claim(lock, cmd, cwd)
+            claim(lock, cmd, cwd, key)
             if (s := round(time.time() - t0)) >= 1:
                 say(WAITED.format(s))
-            return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
+            t1 = time.time()
+            code = subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
+            record(key, (time.time() - t1) / 60)  # still holding the lock: the next job's estimate counts it
+            return code
         finally:
             os.ftruncate(lock, 0)
     finally:
@@ -464,7 +633,8 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None):
 
 def status():
     """Who holds the lock and who waits, in order, without waiting or taking either: the holder's line (it writes it
-    in when it takes the lock, and empties it on the way out), then a line per live waiter."""
+    in when it takes the lock, and empties it on the way out), then a line per live waiter with the work ahead of it,
+    and for a head short of memory the processes holding most."""
     try:
         info = json.loads(lock_path().read_text() or "{}")
     except (OSError, ValueError):
@@ -472,7 +642,7 @@ def status():
     line = held_by(info) if info.get("pid") else "free"
     if line != "free" and paused(info["pid"]):
         line += " (paused: everyone waits on it)"
-    lines, head = [line], True
+    lines, head, keys, times = [line], True, [], load_times()
     q = queue_dir()
     for name in sorted(os.listdir(q)) if q.is_dir() else []:
         pid = entry_pid(name)
@@ -480,13 +650,20 @@ def status():
             continue
         since = time.strftime("%H:%M", time.localtime(int(name.split("-")[0]) / 1e9))
         line = f"waiting: pid {pid}, since {since}"
+        big = []
         if paused(pid):
             line += " (paused: skipped)"
-        elif head:
-            head, need, mem = False, need_of(q / name), free_gb()
-            if short(need, mem):
-                line += f" (waiting for {need:.10g} GB, {mem:.1f} free; letting smaller jobs by)"
+        else:
+            est = estimate(work_ahead(info, keys, times))
+            keys.append(key_of(q / name))
+            if head:
+                head, need, mem = False, need_of(q / name), free_gb()
+                if short(need, mem):
+                    line += f" (waiting for {need:.10g} GB, {mem:.1f} free; letting smaller jobs by)"
+                    big = largest()
+            line += f"; {est}" if est else ""
         lines.append(line)
+        lines += [f"  holds memory: {b}" for b in big]
     return lines
 
 

@@ -33,7 +33,8 @@ class Deadline(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(prefix="windvane-")
         self.addCleanup(tmp.cleanup)
         self.d = Path(tmp.name)
-        self.env = {**os.environ, **machine(self.d, HEAVY_WAIT), "PYTHONPATH": str(ROOT)}
+        self.env = {**os.environ, **machine(self.d, HEAVY_WAIT), "PYTHONPATH": str(ROOT),
+                    "XDG_STATE_HOME": str(self.d / "st")}
         for k in ("WINDVANE_HEAVY_HELD", heavy.STOP_AT, heavy.STOP_ENV):
             self.env.pop(k, None)
 

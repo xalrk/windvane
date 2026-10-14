@@ -33,7 +33,8 @@ class HeavyStop(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.d = d = Path(tmp.name)
         self.stop = d / "STOP"
-        self.env = {**os.environ, **machine(d, 60), "PYTHONPATH": str(ROOT), heavy.STOP_ENV: str(self.stop)}
+        self.env = {**os.environ, **machine(d, 60), "PYTHONPATH": str(ROOT), heavy.STOP_ENV: str(self.stop),
+                    "XDG_STATE_HOME": str(d / "st")}
         self.env.pop("WINDVANE_HEAVY_HELD", None)
         self.env.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
         self.order = d / "order"
@@ -179,8 +180,8 @@ class HeavyStop(unittest.TestCase):
         self.assertEqual(len(lines), 3, lines)
         self.assertRegex(lines[0], re.escape(f"held by pid {held.pid} (touch running; while [ ! -e release ]; do "
                                              f"sleep 0.05; done in {where}, since ") + r"\d\d:\d\d\)$")
-        self.assertRegex(lines[1], rf"^waiting: pid {a.pid}, since \d\d:\d\d$")
-        self.assertRegex(lines[2], rf"^waiting: pid {b.pid}, since \d\d:\d\d$")
+        self.assertRegex(lines[1], rf"^waiting: pid {a.pid}, since \d\d:\d\d; work ahead unknown \(never timed\)$")
+        self.assertRegex(lines[2], rf"^waiting: pid {b.pid}, since \d\d:\d\d; work ahead unknown \(never timed\)$")
         self.assertEqual(len(self.waiters()), 2)  # it took no place in line
         if Path("/proc/self/stat").exists():
             a.send_signal(signal.SIGSTOP)

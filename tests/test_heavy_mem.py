@@ -34,6 +34,7 @@ class HeavyMem(unittest.TestCase):
         (d / "cfg/windvane").mkdir(parents=True)
         (d / "cfg/windvane/machine.toml").write_text("busy = []\nmin_free_gb = 6\n")
         self.env = {**os.environ, "XDG_RUNTIME_DIR": str(d), "XDG_CONFIG_HOME": str(d / "cfg"),
+                    "XDG_STATE_HOME": str(d / "st"),
                     "PYTHONPATH": str(ROOT)}
         for k in ("WINDVANE_HEAVY_HELD", "WINDVANE_STOP_AT", heavy.STOP_ENV, heavy.DEADLINE_ENV):
             self.env.pop(k, None)  # a session running the tests has some
@@ -68,8 +69,9 @@ class HeavyMem(unittest.TestCase):
         big = self.job("big", wait_s=1, stderr=subprocess.PIPE, text=True)
         err = big.communicate(timeout=30)[1]
         self.assertEqual(big.returncode, heavy.TIMED_OUT)
-        self.assertEqual(err.splitlines(), ["heavy: waiting: only 4.0 GB free (want 6)",
-                                            f"{heavy.GAVE_UP}: only 4.0 GB free (want 6)"])
+        lines = err.splitlines()
+        self.assertTrue(lines[0].startswith("heavy: waiting: only 4.0 GB free (want 6)"), lines)  # then who holds it
+        self.assertEqual(lines[1:], [f"{heavy.GAVE_UP}: only 4.0 GB free (want 6)"])
         self.assertEqual(self.ran(), ["small"])
 
     def test_a_small_job_goes_by_a_head_short_of_memory_which_runs_next(self):
@@ -80,7 +82,8 @@ class HeavyMem(unittest.TestCase):
         self.assertEqual(self.ran(), ["small"])
         self.assertIsNone(head.poll())
         self.assertEqual(len(self.waiters()), 1)  # still the head, still in line
-        with mock.patch.dict(os.environ, {k: self.env[k] for k in ("XDG_RUNTIME_DIR", "XDG_CONFIG_HOME")}), \
+        with mock.patch.dict(os.environ, {k: self.env[k] for k in ("XDG_RUNTIME_DIR", "XDG_CONFIG_HOME",
+                                                                   "XDG_STATE_HOME")}), \
                 mock.patch.object(heavy, "free_gb", lambda: 4.1):
             lines = heavy.status()
         self.assertEqual(lines[0], "free")  # it waits without the lock
@@ -182,7 +185,8 @@ class MemSetting(unittest.TestCase):
     def test_a_heavy_check_waits_for_the_projects_heavy_mem(self):
         (self.d / "cfg/windvane").mkdir(parents=True)
         (self.d / "cfg/windvane/machine.toml").write_text("busy = []\nmin_free_gb = 0\nheavy_wait = 0.02\n")
-        env = {"XDG_RUNTIME_DIR": str(self.d), "XDG_CONFIG_HOME": str(self.d / "cfg")}
+        env = {"XDG_RUNTIME_DIR": str(self.d), "XDG_CONFIG_HOME": str(self.d / "cfg"),
+               "XDG_STATE_HOME": str(self.d / "st")}
         with mock.patch.dict(os.environ, env):
             for k in ("WINDVANE_HEAVY_HELD", "WINDVANE_STOP_AT", TICKET):
                 os.environ.pop(k, None)

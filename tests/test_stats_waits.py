@@ -99,7 +99,8 @@ class RowsWritten(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(prefix="windvane-")
         self.addCleanup(tmp.cleanup)
         self.d = Path(tmp.name)
-        patch = mock.patch.dict(os.environ, {**machine(self.d, 1), TICKET: "T-001", ROLE: "worker"})
+        patch = mock.patch.dict(os.environ, {**machine(self.d, 1), "XDG_STATE_HOME": str(self.d / "st"),
+                                             TICKET: "T-001", ROLE: "worker"})
         patch.start()
         self.addCleanup(patch.stop)
         os.environ.pop("WINDVANE_HEAVY_HELD", None)

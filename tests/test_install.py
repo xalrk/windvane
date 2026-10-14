@@ -146,7 +146,8 @@ class Checkout(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         r = subprocess.run([str(REPO / "bin/windvane"), "heavy", "--", sys.executable, "-c",
                             "import os; print(os.environ.get('PYTHONPATH'))"], capture_output=True, text=True,
-                           env={**env, "XDG_CONFIG_HOME": str(cfg), "XDG_RUNTIME_DIR": str(cfg)})
+                           env={**env, "XDG_CONFIG_HOME": str(cfg), "XDG_RUNTIME_DIR": str(cfg),
+                                "XDG_STATE_HOME": str(cfg)})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip().splitlines()[-1], "None")
 
