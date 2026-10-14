@@ -37,6 +37,40 @@ class Scanner(unittest.TestCase):
                                            "pkg@v2026.10.13"), [])
         self.assertNotIn(TOKEN, privacy.said([("token", "x:1 in abc")]))
 
+    def test_version_ranges_and_lan_logins_arent_emails_and_only_a_bots_noreply_is(self):
+        self.assertEqual(privacy.scan_text("react@18.x, ssh pi@" + "pihole.local, bot@" + "nas.lan"), [])
+        self.assertEqual(privacy.scan_text("ask someone@" + "anthropic.com"), ["email"])
+
+    def test_the_guard_needs_no_login_name(self):
+        def none():
+            raise KeyError("no passwd entry")
+        env = {k: os.environ.pop(k) for k in ("USER", "LOGNAME") if k in os.environ}
+        self.addCleanup(os.environ.update, env)
+        self.addCleanup(setattr, privacy.getpass, "getuser", privacy.getpass.getuser)
+        privacy.getpass.getuser = none
+        self.assertEqual(privacy.scan_text(TOKEN), ["token"])
+        self.assertNotIn("username", privacy.rules(tuple(privacy.NAMES)))
+
+    def test_a_line_that_looks_like_a_header_and_a_merges_own_lines_are_scanned(self):
+        s = Sandbox()
+        self.addCleanup(s.close)
+        base = s.git("rev-parse", "HEAD")
+        s.write(".windvane/IDEAS.md", "a\n")
+        s.git("add", "-A")
+        s.git("commit", "-qm", "a")
+        s.write(".windvane/IDEAS.md", "a\n++ b\n" + TOKEN + "\n")  # `+++ b` in the diff
+        s.git("commit", "-qam", "b")
+        s.git("switch", "-qc", "side", base)
+        s.write(".windvane/IDEAS.md", "c\n")
+        s.git("add", "-A")
+        s.git("commit", "-qm", "c")
+        subprocess.run(["git", "merge", "-q", "main"], cwd=s.root, capture_output=True)  # a conflict
+        s.write(".windvane/IDEAS.md", "c\nkey " + TOKEN[:4] + "Y" * 32 + "\n")
+        s.git("commit", "-qam", "resolved")
+        sha = {s.git("rev-parse", "--short", r): r for r in ("main", "HEAD")}
+        found = {(k, w.split(" in ")[0], sha.get(w.split(" in ")[1])) for k, w in privacy.outgoing(s.root, base)}
+        self.assertEqual(found, {("token", ".windvane/IDEAS.md:3", "main"), ("token", ".windvane/IDEAS.md:2", "HEAD")})
+
 
 class Answers(unittest.TestCase):
     def setUp(self):
