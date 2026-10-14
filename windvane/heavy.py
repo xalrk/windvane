@@ -390,7 +390,7 @@ def estimate(work, now=None):
     if not jobs:
         return None
     never = unknown - (over is not None)
-    why = "; ".join(([f"the holder is past its usual {minutes(over)}"] if over is not None else [])
+    why = "; ".join((["the holder is past its usual " + (f"{over:.0f} min" if over >= 1 else "time")] if over is not None else [])
                     + (["never timed" if never == jobs else f"{never} never timed"] if never else []))
     if unknown == jobs or (unknown and mins < 1):
         return f"work ahead unknown ({why})"
@@ -643,14 +643,14 @@ def status():
         if paused(pid):
             line += " (paused: skipped)"
         else:
-            if est := estimate(work_ahead(info, keys, times)):
-                line += f"; {est}"
+            est = estimate(work_ahead(info, keys, times))
             keys.append(key_of(q / name))
             if head:
                 head, need, mem = False, need_of(q / name), free_gb()
                 if short(need, mem):
                     line += f" (waiting for {need:.10g} GB, {mem:.1f} free; letting smaller jobs by)"
                     big = largest()
+            line += f"; {est}" if est else ""
         lines.append(line)
         lines += [f"  holds memory: {b}" for b in big]
     return lines
