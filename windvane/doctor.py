@@ -223,7 +223,7 @@ def checks(p=None):
     if has_gh:
         r = run_quiet(["gh", "auth", "status"])
         add(r and r.returncode == 0, github, "gh logged in", "gh auth login")
-        if github:
+        if github and getattr(p, "root", None):
             out += public_warnings(p)
     add(shutil.which("tmux"), False, "tmux (for `windvane run --detach`)", "install tmux (e.g. sudo apt install tmux)")
     add(shutil.which("notify") and shutil.which("notify-ask") or phone.on(phone.conf()), False,
