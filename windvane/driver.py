@@ -275,7 +275,7 @@ class Pilot(Desk, Periodic):
         with self.lock:
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
-                                        "secrets": dict(self.secrets),
+                                        "secrets": dict(self.secrets), "aside": dict(self.aside),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
                                         "running": dict(self.running)})
 
@@ -370,10 +370,9 @@ class Pilot(Desk, Periodic):
             self.set_aside(tid, error)
             return False
         if aside:
-            self.skip.add(tid)
-            self.aside[tid] = f"on trial: its sessions died ({self.said_error(error)})"
+            held = self.put_aside(tid, f"on trial: its sessions died ({self.said_error(error)})")
             self.log(f"  {label}: {own[0]} sessions died ({error}); set aside while another ticket runs: if its "
-                     "session dies too, the run stops")
+                     f"session dies too, the run stops{held}")
             return False
         wait = self.p.ap["retry_minutes"] * 2 ** (max(self.crashes, own[0] if own else 0) - 1)
         if self.crashes > n:
@@ -407,12 +406,25 @@ class Pilot(Desk, Periodic):
         return any(t != tid for t in self.running) or any(
             t != tid and t not in self.skip and q.status(t, blocked) in ("wip", "todo") for t in q.order)
 
+    def put_aside(self, tid, why):
+        """Leave a ticket out of the rest of the run, `why` for the summary (and `windvane queue`, from the state
+        file). Returns what its log line adds: the open tickets waiting on it, which wait with it."""
+        self.skip.add(tid)
+        self.aside[tid] = why
+        self.save()
+        return self.holds_up(tid)
+
+    def holds_up(self, tid):
+        """`; T-004 waits on it` for the open tickets whose `Depends on:` names `tid`, or nothing."""
+        q = getattr(self, "queue", None)
+        waiting = q.waiting_for(tid) if q else []
+        return f"; {', '.join(waiting)} wait{'s' * (len(waiting) == 1)} on it" if waiting else ""
+
     def set_aside(self, tid, error):
         """A ticket whose own sessions keep dying while others' don't: the rest of the run goes on without it."""
-        self.skip.add(tid)
-        self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work")
-        logged = lambda m: None  # noqa: E731  the line above has the whole error: the cuts below don't log it again
-        self.aside[tid] = f"its sessions kept dying: {self.said_error(error, logged)}"
+        logged = lambda m: None  # noqa: E731  the line below has the whole error: the cuts don't log it again
+        held = self.put_aside(tid, f"its sessions kept dying: {self.said_error(error, logged)}")
+        self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work{held}")
         error = plain_error(error)
         died = f"Sessions died {self.p.ap['retries'] + 1}×: "
         why = "Other sessions worked, so it's this ticket's doing."
@@ -427,9 +439,8 @@ class Pilot(Desk, Periodic):
     def set_aside_limit(self, tid, limit, fix):
         """A worker run stopped at a limit of its own (the time box, max turns or budget): the ticket is too big for
         one run as it stands, so the run goes on without it and the phone says which limit and what to change."""
-        self.skip.add(tid)
-        self.aside[tid] = f"hit {limit}"
-        self.log(f"{tid}: the run hit {limit}; set aside")
+        held = self.put_aside(tid, f"hit {limit}")
+        self.log(f"{tid}: the run hit {limit}; set aside{held}")
         push(f"Set aside: {self.name(tid)}", whole("Hit ", limit, f". {fix} Branch kept.", log=self.log), 3,
              "hourglass")
 
@@ -439,12 +450,11 @@ class Pilot(Desk, Periodic):
         later runs too while its head stays `sha` (`secrets_unchanged`): no session is paid to find it again. The
         phone hears kind and place once, never the text."""
         p = self.p
-        self.skip.add(tid)
-        self.aside[tid] = f"its {DIR}/ lines hold {privacy.said(found, 1)}"
         with self.lock:
             self.secrets[tid] = {"branch": branch, "sha": sha}
-        self.save()
-        self.log(f"{tid}: not merged: the lines its commits add under {DIR}/ hold {privacy.said(found)}; set aside")
+        held = self.put_aside(tid, f"its {DIR}/ lines hold {privacy.said(found, 1)}")
+        self.log(f"{tid}: not merged: the lines its commits add under {DIR}/ hold {privacy.said(found)}; set "
+                 f"aside{held}")
         push(f"Set aside: {self.name(tid)}",
              whole("Not merged: its commits add ", privacy.said(found), f", which would stay in {p.main}'s history.",
                    log=self.log)
@@ -468,9 +478,9 @@ class Pilot(Desk, Periodic):
             elif not privacy.outgoing(root, self.p.upstream, ref, DIR, privacy.guarded(self.p)):
                 why = "holds nothing the guard refuses now"
             else:
-                self.skip.add(tid)
-                self.aside[tid] = f"its {DIR}/ lines still hold a secret: {s['branch']} unchanged since it was set aside"
-                self.log(f"{tid}: {self.aside[tid]}; left be")
+                held = self.put_aside(tid, f"its {DIR}/ lines still hold a secret: {s['branch']} unchanged since it "
+                                      "was set aside")
+                self.log(f"{tid}: {self.aside[tid]}; left be{held}")
                 continue
             with self.lock:
                 self.secrets.pop(tid, None)
@@ -588,8 +598,8 @@ class Pilot(Desk, Periodic):
             self.partials[tid] = self.partials.get(tid, 0) + 1
             self.log(f"{tid}: partial ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
-                self.skip.add(tid)
-                self.aside[tid] = f"{self.partials[tid]} runs in a row ran out of time"
+                held = self.put_aside(tid, f"{self.partials[tid]} runs in a row ran out of time")
+                self.log(f"{tid}: set aside: {self.aside[tid]}{held}")
                 push(f"Set aside: {self.name(tid)}", f"{self.partials[tid]} runs in a row ran out of time. Split it. "
                      f"Branch kept.\nLeft: {rest}", 3, "hourglass")
             return
@@ -2025,7 +2035,7 @@ class Pilot(Desk, Periodic):
                 + f"Failed: {names(self.failed)}.\n"
                 + (f"Stopped at the deadline (resumes next run): {names(self.stopped)}.\n" if self.stopped else "")
                 + self.kept_note
-                + "".join(f"Set aside: {self.name(t)} ({why}).\n" for t, why in self.aside.items())
+                + "".join(f"Set aside: {self.name(t)} ({why}{self.holds_up(t)}).\n" for t, why in self.aside.items())
                 + (f"{self.usage.text()}." if self.usage.five is not None else "")
                 + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else "")
                 + schedule.next_line(p))

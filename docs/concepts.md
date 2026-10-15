@@ -22,8 +22,10 @@ Retry with exponential backoff, at most 5 tries. Don't change the upload API.
 
 - **Depends on:** tickets that must be merged first. A ticket waits until all of them are. Anything else named here
   (`the user`, `M9`, free text) makes it wait too, until a `- done: M9 (why)` line in `QUEUE.md` names it.
-  `windvane queue` shows what each waiting ticket waits on. To release one ticket waiting on `the user`, edit its
-  `Depends on:` line; `- done: the user` releases all of them. A worker that finds its ticket can't go on until
+  `windvane queue` shows what each waiting ticket waits on, and a hint for each wait that only you can end: the
+  `- done:` line to add for an item that isn't a ticket, the `- parked:` line to remove for a parked dependency, or
+  that the dependency was set aside this run. To release one ticket waiting on `the user`, edit its `Depends on:`
+  line; `- done: the user` releases all of them. A worker that finds its ticket can't go on until
   another ticket merges adds that ticket's id here on its own branch: the queue reads the line there too (it can add
   a ticket, never drop one main has), holds the ticket until that one merges, then resumes it first. To release it
   sooner, edit the line on that branch; a push says so when the ticket it waits on can't merge first.
@@ -33,6 +35,11 @@ Retry with exponential backoff, at most 5 tries. Don't change the upload API.
   Related tickets never run side by side.
 - **Goal / Scope / Done when:** what the worker builds and checks itself against. "Done when" points should be
   checkable, ideally by a test. The reviewer judges the change against them.
+
+The header keys are read from the first 8 lines, and a key must start its line (`  Depends on:`, indented, isn't
+one) or follow a ` · ` on a line that puts several keys together (`Milestone: M9 · Depends on: T-004`). A key inside
+backticks is quoted, not read, so an unclosed backtick hides every key after it on that line. `windvane queue` warns
+of both above its list.
 
 `windvane new "<title>"` writes a ticket from the template with the next free id. `windvane plan "<goal>"` has a
 planner session write several, from a goal and the critic's follow-up notes; it opens a pull request with them for
