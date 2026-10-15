@@ -109,7 +109,7 @@ class HeavyStop(unittest.TestCase):
             os.environ.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
             os.environ.pop(TICKET, None)
             holder = hold(self, self.d)
-            p = SimpleNamespace(state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True})
+            p = SimpleNamespace(root=self.d, state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True})
             threading.Timer(1.5, lambda: (p.state / "STOP").touch()).start()
             start = time.time()
             ok, summary, log = jobs.check(p, self.d, ticket="T-1")

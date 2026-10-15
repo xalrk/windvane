@@ -62,7 +62,7 @@ class HeavyCheckWait(unittest.TestCase):
         os.environ.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
         os.environ.pop(TICKET, None)
         (self.d / "work").mkdir()
-        self.p = SimpleNamespace(state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True})
+        self.p = SimpleNamespace(root=self.d, state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True})
 
     def test_a_timed_out_wait_is_not_run_naming_the_holder(self):
         holder = hold(self, self.d)

@@ -839,7 +839,7 @@ def main(argv=None):
         return cmd_request(a)
     if a.cmd == "heavy":
         if a.status:
-            return print("\n".join(heavy.status()))
+            return print("\n".join(heavy.status(heavy.reuse_of(Project(root)) if (root := toplevel()) else None)))
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
         if not cmd:
             sys.exit("heavy: give a command")

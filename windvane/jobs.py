@@ -148,6 +148,8 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None):
                 beat.set()
         if p.cfg["heavy_check"] and code == heavy.TIMED_OUT:
             waited = heavy.gave_up(log)
+        for hint in heavy.hints_in(log) if p.cfg["heavy_check"] else []:
+            util.log(p, f"heavy check: {hint}")
     finally:
         mins = (time.time() - start) / 60
         wait_s = round(mins * 60) if waited else heavy.waited(log) if p.cfg["heavy_check"] else 0
