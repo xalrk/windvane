@@ -351,7 +351,7 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None):
     if session and not keep:  # killed with the session that started it (runner.kill_nested), not left by a stop
         mark = p.state / "nested" / session / str(proc.pid)
         mark.parent.mkdir(parents=True, exist_ok=True)
-        mark.touch()
+        mark.write_text(util.stamp(proc.pid) or "")
     if keep:
         print(f"started '{name}', kept past this session (log {base}.log): commit, push and end your run "
               f"PARTIAL naming it; the ticket resumes when it ends")

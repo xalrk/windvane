@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .config import HOME, user_dir
-from .util import load_json, now, save_json
+from .util import load_json, now, recorded_stamp, same_process, save_json, started_at
 
 ROLE = "WINDVANE_ROLE"  # the session's role, set by runner.py: a request records who filed it
 NEST = "WINDVANE_SESSION"  # runner.py's name for the session: a worker run's count of requests is kept under it
@@ -168,8 +168,8 @@ def process_role():
 def process_session():
     """(name, role) of the nearest session among this process's ancestors (a `nested/<name>/session` file's first
     field is its pid), or ("", "") under none. A pid recorded by a session that ended may be someone else's now: it
-    counts only if that process started before its file was written. A recorded desk is "session": no session is
-    the desk."""
+    counts only if it is the process the file records (`same_process`), or, in an older windvane's file that records
+    none, if it started before the file was written. A recorded desk is "session": no session is the desk."""
     recorded = {}
     for f in user_dir("XDG_STATE_HOME", ".local/state").glob("*/nested/*/session"):
         try:
@@ -177,14 +177,17 @@ def process_session():
         except (OSError, IndexError):
             continue
         if pid.isdigit():
-            recorded.setdefault(int(pid), []).append((f.parent, mtime))
+            recorded.setdefault(int(pid), []).append((f.parent, recorded_stamp(f), mtime))
     if not recorded:
         return "", ""
-    from .runner import started_at
     for pid in ancestors():
-        for d, mtime in recorded.get(pid, ()):
-            t = started_at(pid)
-            if t is not None and t <= mtime + 2:  # /proc's boot time and ps's are in whole seconds
+        for d, known, mtime in recorded.get(pid, ()):
+            if known is not None:
+                ours = same_process(pid, known)
+            else:
+                t = started_at(pid)
+                ours = t is not None and t <= mtime + 2  # /proc's boot time and ps's are in whole seconds
+            if ours:
                 try:
                     role = (d / "role").read_text(errors="replace").strip()
                 except OSError:
