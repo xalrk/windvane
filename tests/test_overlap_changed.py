@@ -63,6 +63,17 @@ class Overlap(unittest.TestCase):
         pilot.pick([1])
         self.assertIn(f"T-002 waits: {WAIT}", pilot.waits)
 
+    def test_a_pass_keeps_the_last_waits_until_it_has_new_ones(self):
+        """Another thread may read `waits` while a pass runs git: it sees the last pass's, never an empty list."""
+        pilot = self.running_t001()
+        self.commit("b.py")
+        pilot.pick([1])
+        before, seen, outside = list(pilot.waits), [], pilot.outside
+        pilot.outside = lambda busy: seen.append(list(pilot.waits)) or outside(busy)
+        pilot.pick([1])
+        self.assertEqual(seen, [before])
+        self.assertIn(f"T-002 waits: {WAIT}", pilot.waits)
+
     def test_an_uncommitted_change_holds_it_too(self):
         pilot = self.running_t001()
         (self.p.work_dir / "b.py").write_text("x\n")  # untracked

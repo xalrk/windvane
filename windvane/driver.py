@@ -1430,7 +1430,7 @@ class Pilot(Desk, Periodic):
         # merged this run: a slot can merge and free itself after this pass's fetch, so the queue may not show it yet
         self.secrets_unchanged()
         avoid = set(self.skip) | set(busy) | set(self.merged)
-        self.waits = []
+        waits = []  # set whole at the end: another thread may read `self.waits` while this pass runs git
         extra = self.outside(busy)  # once a pass: two git calls a running ticket
         kept, held = {}, self.kept_slots()
         for b in jobs.running_kept(self.p):
@@ -1442,7 +1442,8 @@ class Pilot(Desk, Periodic):
                    else f"last, {ahead[0]} still to run" if ahead and t in q.last else self.clash(t, busy, extra))
             if why:
                 avoid.add(t)
-                self.waits.append(f"{t} waits: {why}")
+                waits.append(f"{t} waits: {why}")
+        self.waits = waits
         while True:
             tid, *rest = q.pick(avoid, tickets(self.questions))
             if tid is None:
