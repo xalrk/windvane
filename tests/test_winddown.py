@@ -76,6 +76,7 @@ class CtrlCInWindDown(Base):
                 self.pilot.state_file.unlink(missing_ok=True)
                 ctrl_c()
         self.on_push = stopped
+        before = signal.getsignal(signal.SIGINT)
         self.run_once()  # no KeyboardInterrupt
         self.assertTrue(self.pilot.state_file.exists())
         self.assertEqual(self.marker.read_text().split(), ["teardown"])
@@ -83,7 +84,7 @@ class CtrlCInWindDown(Base):
         self.assertEqual((self.p.state / "lock").read_text(), "")  # torn down: the next run has nothing to do
         self.assertIn("Ctrl-C: already stopping: finishing the wind-down (the save, the teardown); press Ctrl-C 2 "
                       "times more to quit at once, skipping them", self.log())
-        self.assertIs(signal.getsignal(signal.SIGINT), signal.default_int_handler)  # the handlers are back
+        self.assertIs(signal.getsignal(signal.SIGINT), before)  # the handlers are back
         self.assertTrue(self.pilot.kill_all)
 
     def test_two_presses_from_a_slow_teardown_still_end_it_whole(self):
