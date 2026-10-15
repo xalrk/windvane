@@ -662,6 +662,17 @@ def gb(text):
     return v
 
 
+def expected(text):
+    """An `--expect` value: minutes, more than 0."""
+    try:
+        v = float(text)
+    except ValueError:
+        v = 0
+    if not 0 < v < float("inf"):
+        raise argparse.ArgumentTypeError(f"{text!r}: use a number of minutes (more than 0)")
+    return v
+
+
 def public_check(root, github):
     """`public-check` (and `doctor --leaks`): any git repository, windvane's or not. Exit 2 outside one, as for a
     scan that failed."""
@@ -762,6 +773,7 @@ def main(argv=None):
     s.add_argument("--mem", type=gb, help="with --heavy: GB of free memory it needs (default: as `heavy`)")
     s.add_argument("--keep", action="store_true", help="with --heavy: it outlives the session (until the run's "
                                                        "stop); the ticket resumes when it ends")
+    s.add_argument("--expect", type=expected, help="with --heavy: minutes it likely runs (as `heavy --expect`)")
     s.add_argument("name")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
@@ -769,6 +781,8 @@ def main(argv=None):
                                               "(default: the session's stop, else machine.toml's heavy_wait, 60)")
     s.add_argument("--mem", type=gb, help="GB of free memory it needs before starting "
                                              "(default: the project's heavy_mem, else machine.toml's min_free_gb)")
+    s.add_argument("--expect", type=expected, help="minutes it likely runs, for the estimate of the jobs waiting "
+                                                   "behind it until it has run times of its own")
     s.add_argument("--status", action="store_true", help="who holds the lock and who waits, without waiting")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("await", help="wait (up to ~9.5 min) for a bg command (this ticket's own)")
@@ -830,7 +844,7 @@ def main(argv=None):
             p = Project(root)
             a.mem = p.cfg["heavy_mem"] if a.mem is None else a.mem
             reuse = heavy.reuse_of(p)
-        sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60, mem=a.mem, reuse=reuse))
+        sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60, mem=a.mem, reuse=reuse, expect=a.expect))
     p = find()
     phone.use(p)
     try:
@@ -844,10 +858,10 @@ def main(argv=None):
                 setattr(a, k, p.ap[k])
     if a.cmd == "bg":
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
-        for flag, given in (("--mem", a.mem is not None), ("--keep", a.keep)):
+        for flag, given in (("--mem", a.mem is not None), ("--keep", a.keep), ("--expect", a.expect is not None)):
             if given and not a.heavy:
                 sys.exit(f"bg: {flag} goes with --heavy")
-        return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy, a.mem, a.keep) if cmd else sys.exit("bg: give a command")
+        return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy, a.mem, a.keep, a.expect) if cmd else sys.exit("bg: give a command")
     if a.cmd == "await":
         return jobs.await_(p, a.name, a.lines)
     if a.cmd == "watch":

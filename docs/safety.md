@@ -118,9 +118,10 @@ holds up keeps everyone behind it waiting.
 While it waits, its log says who holds the lock (pid, command, since when), how many jobs are ahead of it and about
 how long their work takes, or the memory it waits for and the three processes holding the most (pid, name, GB and the
 last two parts of their folder, so another project's idle emulator shows at once); `windvane heavy --status` shows the
-same at any time. The estimate comes from each job's last few run times, kept per project and command in
-`~/.local/state/windvane/heavy-times.json`: the holder's usual time less what it ran so far, plus each waiter's. A
-command never seen, or a holder past its usual time, makes it `at least N min`, or `unknown` when nothing is known.
+same at any time, with how long the holder has run. The estimate comes from each job's last few run times, kept per
+project and command in `~/.local/state/windvane/heavy-times.json`, else from the minutes it was started with
+(`--expect`, for a command's first run): the holder's time less what it ran so far, plus each waiter's. A job with
+neither, or a holder past its usual or expected time, makes it `at least N min`, or `unknown` when nothing is known.
 In a session, a job says once when it likely starts after the wrap-up (20 minutes before the session's stop): when the
 known work ahead runs past it, or when the wrap-up comes and the job still waits. It keeps waiting; the session decides
 whether to plan without it.
