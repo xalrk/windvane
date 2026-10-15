@@ -30,6 +30,7 @@ from . import (actions, critic, install, jobs, net, phone, privacy, renumber, re
                util, worktree)
 from .renumber import noted, old_numbers, said
 from .desk import Desk
+from .heavy import minutes
 from .held import author_ident, push_held
 from .periodic import Periodic
 from .phone import NTFY, REASON, cut, whole
@@ -57,6 +58,7 @@ BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
            "secret": ("the scan for secrets", "autopilot", "check_retries", 0, "")}
 DIGEST_RETRY = 600  # seconds between tries to push provisional answers the phone missed, outside a quiet time
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
+DRAIN_AFTER = 3 * 3600  # seconds a driver may run behind its install's code before it stops refilling slots for it
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
@@ -241,6 +243,10 @@ class Pilot(Desk, Periodic):
         self.home = HOME if CHECKOUT and os.environ.get("WINDVANE_SELF_UPDATE") != "0" else None
         self.argv, self.execv, self.update_said, self.newer = sys.argv[1:], os.execv, [], None
         self.pulled = (0, -1)  # (when, merges then): pull after each merge, else every PULL_EVERY seconds at most
+        # The install commit this driver's code came from, when the install first had newer code (it restarts when no
+        # ticket runs), and the drain once that is DRAIN_AFTER old: [since, last pass, idle slots then, slot-seconds].
+        self.loaded = selfupdate.loaded(self.home) if self.home else None
+        self.behind, self.drain = None, None
         self.stash_failed = set()  # what waited, or was skipped, on a failed stash of the checkout: pushed once a run
         self.periodic_at, self.held = {}, []  # [[periodic]] (periodic.py): name -> merges when it last ran; tickets held
         self.groups_seen, self.groups_read = {}, (None, None)  # name -> groups finished then; (main's sha, its queue)
@@ -1618,8 +1624,10 @@ class Pilot(Desk, Periodic):
             if why:
                 self.stop_reason = why
                 return
-            if not self.running:
-                self.self_update()
+            self.self_update()
+            if self.draining():
+                self.pause()
+                continue
             free = [i for i in range(self.n) if i not in self.running.values()]
             if not free or len(self.running) >= self.limit:
                 self.pause()
@@ -1691,33 +1699,64 @@ class Pilot(Desk, Periodic):
                 self.poll_questions()
 
     def self_update(self):
-        """Pulls the windvane install between tickets (nothing running) and, when the driver's own code changed,
-        restarts it in place with the deadline as it now is. Each reason to leave the install alone is logged once."""
-        if self.home is None or (time.time() - self.pulled[0] < PULL_EVERY and self.pulled[1] == len(self.merged)):
-            return
+        """Pulls the windvane install after each merge (or every PULL_EVERY seconds), tickets running or not, and
+        notes when the install's driver code first differs from what this driver runs. Each reason to leave the
+        install alone is logged once. Restarts the driver on that code when no ticket runs."""
+        if self.home is not None and (time.time() - self.pulled[0] >= PULL_EVERY or self.pulled[1] != len(self.merged)):
+            self.pull()
+        if self.behind and not self.running:
+            self.restart()
+
+    def pull(self):
         self.pulled = (time.time(), len(self.merged))
+        self.loaded = self.loaded or gout(self.home, "rev-parse", "HEAD")  # an install set after start (the tests')
         said = []
         with self.critical():
-            again = selfupdate.pull(self.home, said)
+            again = selfupdate.pull(self.home, said, self.loaded)
         for line in said:
             if line not in self.update_said:
                 self.log(line)
                 self.update_said.append(line)
-        if again:
-            names = lambda ids: ", ".join(ids) or "none"
-            self.log(f"windvane restarting with its new code (so far merged: {names(self.merged)}; "
-                     f"failed: {names(self.failed)})")
-            self.hand_over()
-            # The lock stays open: its fd closes on exec (Python's are non-inheritable), so the restarted driver takes
-            # it again, and an exec that fails leaves the lock held for this run's own teardown.
-            os.environ["WINDVANE_RESTARTED"] = "1"  # no second "windvane started" push; it reads restart.json
-            cmd = [*exe(), *selfupdate.restart_args(self.argv, self.end())]
-            try:
-                self.execv(cmd[0], cmd)
-            except OSError as e:  # a moved or broken interpreter: the run ends with why (exec's own error names no file)
-                os.environ.pop("WINDVANE_RESTARTED", None)  # the teardown's helpers aren't a restarted driver's
-                raise RuntimeError(f"windvane couldn't restart on its new code ({cmd[0]}: {e.strerror.lower()}); "
-                                   "run `windvane doctor`, then start the run again") from e
+        if again and not self.behind:
+            self.behind = time.time()
+
+    def draining(self):
+        """True while new code waits for the running tickets: once the driver has been behind its install for
+        DRAIN_AFTER, freed slots aren't refilled, so a run whose slots never all go idle still restarts. Sooner,
+        it restarts whenever no ticket happens to run. Counts the slot time left idle, for the restart's log line."""
+        if not (self.behind and self.running) or time.time() - self.behind < DRAIN_AFTER:
+            return False
+        t, idle = time.time(), max(0, min(self.n, self.limit) - len(self.running))
+        if self.drain is None:
+            self.drain = [t, t, idle, 0.0]
+            self.log(f"new windvane code waits for {', '.join(sorted(self.running))} to finish: no new tickets "
+                     f"until then (behind since {hhmm(datetime.fromtimestamp(self.behind))})")
+        else:
+            self.drain[3] += (t - self.drain[1]) * self.drain[2]
+            self.drain[1:3] = [t, idle]
+        return True
+
+    def restart(self):
+        """Restarts the driver in place on the install's new code, with the deadline as it now is."""
+        names = lambda ids: ", ".join(ids) or "none"
+        drained = ""
+        if self.drain:
+            t = time.time()
+            idle = self.drain[3] + (t - self.drain[1]) * self.drain[2]
+            drained = f"drained {minutes((t - self.drain[0]) / 60)}, {minutes(idle / 60)} of slot time idle; "
+        self.log(f"windvane restarting with its new code ({drained}so far merged: {names(self.merged)}; "
+                 f"failed: {names(self.failed)})")
+        self.hand_over()
+        # The lock stays open: its fd closes on exec (Python's are non-inheritable), so the restarted driver takes
+        # it again, and an exec that fails leaves the lock held for this run's own teardown.
+        os.environ["WINDVANE_RESTARTED"] = "1"  # no second "windvane started" push; it reads restart.json
+        cmd = [*exe(), *selfupdate.restart_args(self.argv, self.end())]
+        try:
+            self.execv(cmd[0], cmd)
+        except OSError as e:  # a moved or broken interpreter: the run ends with why (exec's own error names no file)
+            os.environ.pop("WINDVANE_RESTARTED", None)  # the teardown's helpers aren't a restarted driver's
+            raise RuntimeError(f"windvane couldn't restart on its new code ({cmd[0]}: {e.strerror.lower()}); "
+                               "run `windvane doctor`, then start the run again") from e
 
     def hand_over(self):
         """Leaves the run's memory for the driver that replaces this one (`carry_over`)."""

@@ -10,10 +10,24 @@ CODE = ("windvane/", "bin/", "prompts/")  # read once by the driver: a change he
 SOURCE = "https://github.com/xalrk/windvane"  # where `pipx install git+...` took it from
 
 
-def pull(home, said):
-    """Fast-forwards a clean checkout of `main` to its remote's; "restart" when driver code changed, else None.
+_loaded = {}  # install -> the commit this process's code came from
+
+
+def loaded(home):
+    """The install commit this process runs: its HEAD the first time it is asked (the driver asks as it starts).
+    Another driver, or a `git pull` by hand, may move the shared install later; this process keeps the old code."""
+    key = str(home)
+    if key not in _loaded:
+        _loaded[key] = gout(home, "rev-parse", "HEAD")
+    return _loaded[key]
+
+
+def pull(home, said, ran=None):
+    """Fast-forwards a clean checkout of `main` to its remote's; "restart" when driver code differs between `ran`
+    (the commit the caller runs, by default `loaded`) and the install's HEAD, whoever moved it, else None.
     Anything else (local changes, another branch, local commits) is left alone: the reason goes into `said`, which
     the caller logs once."""
+    ran = ran or loaded(home)
     branch = gout(home, "rev-parse", "--abbrev-ref", "HEAD")
     if branch != "main":
         return skip(said, f"on branch {branch or '?'}, not main")
@@ -23,15 +37,23 @@ def pull(home, said):
     if r.returncode:
         return skip(said, "git fetch timed out" if r.returncode == 124 else "git fetch failed")
     old, new = gout(home, "rev-parse", "HEAD"), gout(home, "rev-parse", "FETCH_HEAD")
-    if old == new or not new:
-        return None
-    if run(["git", "merge-base", "--is-ancestor", "HEAD", new], home).returncode:
-        return skip(said, "its main has commits origin/main doesn't")
-    if run(["git", "merge", "-q", "--ff-only", new], home).returncode:
-        return skip(said, "the fast-forward failed")
-    said.append(f"windvane updated to {new[:8]}")
-    changed = gout(home, "diff", "--name-only", old, new).splitlines()
-    return "restart" if any(f.startswith(CODE) for f in changed) else None
+    if new and old != new:
+        if run(["git", "merge-base", "--is-ancestor", "HEAD", new], home).returncode:
+            return skip(said, "its main has commits origin/main doesn't")
+        if run(["git", "merge", "-q", "--ff-only", new], home).returncode:
+            return skip(said, "the fast-forward failed")
+        said.append(f"windvane updated to {new[:8]}")
+    return "restart" if code_changed(home, ran) else None
+
+
+def code_changed(home, ran):
+    """Whether the driver's code at the install's HEAD differs from `ran`'s. A commit git can't compare (gone from
+    the install) counts as changed: a restart loads what is there, and then runs it."""
+    head = gout(home, "rev-parse", "HEAD")
+    if not ran or ran == head:
+        return False
+    r = run(["git", "diff", "--name-only", ran, head], home)
+    return bool(r.returncode) or any(f.startswith(CODE) for f in r.stdout.splitlines())
 
 
 def skip(said, why):

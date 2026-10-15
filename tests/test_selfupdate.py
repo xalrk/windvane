@@ -1,8 +1,11 @@
 """Between tickets the driver fast-forwards a clean windvane checkout on main and restarts itself, with the same
 deadline, when its own code changed; any other install is left alone, with one log line."""
 import io
+import json
+import os
 import subprocess
 import sys
+import time
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta
@@ -80,6 +83,36 @@ class Pull(unittest.TestCase):
         self.assertEqual(self.i.head(), old)
         self.assertEqual(said, ["windvane not updated: it has local changes"])
         self.assertEqual((self.i.home / "windvane/driver.py").read_text(), "my edit\n")
+
+    def test_install_moved_by_someone_else_still_restarts(self):
+        self.assertIsNone(selfupdate.pull(self.i.home, []))  # this driver starts on v1
+        self.i.commit("windvane/driver.py", "v2\n")
+        self.assertEqual(selfupdate.pull(self.i.home, []), "restart")  # another project's driver moves the install
+        self.assertEqual(selfupdate.pull(self.i.home, []), "restart")  # this one still runs v1: it must restart too
+
+    def test_an_install_pulled_by_hand_restarts_the_driver_that_runs_older_code(self):
+        ran = self.i.head()
+        self.i.commit("prompts/worker.md", "new rule\n")
+        self.s.git("pull", "-q", "--ff-only", cwd=self.i.home)  # the user's own `git pull`, or another driver's
+        said = []
+        self.assertEqual(selfupdate.pull(self.i.home, said, ran), "restart")
+        self.assertEqual(said, [])  # nothing left to fetch: it only notices the install is ahead of its code
+        self.assertIsNone(selfupdate.pull(self.i.home, [], self.i.head()))  # the restarted driver runs it already
+
+    def test_an_install_dirty_at_start_then_moved_by_another_driver_restarts_this_one(self):
+        ran = self.i.head()
+        (self.i.home / "windvane/driver.py").write_text("a moment's edit\n")
+        self.assertIsNone(selfupdate.pull(self.i.home, [], ran))  # left alone, with its reason
+        self.s.git("checkout", "--", ".", cwd=self.i.home)
+        self.i.commit("windvane/driver.py", "v2\n")
+        self.s.git("pull", "-q", "--ff-only", cwd=self.i.home)  # another project's driver takes it up first
+        self.assertEqual(selfupdate.pull(self.i.home, [], ran), "restart")
+
+    def test_an_install_moved_by_someone_else_with_only_docs_changed_needs_no_restart(self):
+        ran = self.i.head()
+        self.i.commit("README.md", "docs\n")
+        self.s.git("pull", "-q", "--ff-only", cwd=self.i.home)
+        self.assertIsNone(selfupdate.pull(self.i.home, [], ran))
 
     def test_other_branch_is_left_alone(self):
         self.s.git("switch", "-q", "-c", "desk-parallel", cwd=self.i.home)
@@ -235,6 +268,77 @@ class Driver(unittest.TestCase):
 
     def test_off_in_tests_by_default(self):
         self.assertIsNone(driver.Pilot(self.p, args(parallel=1)).home)
+
+
+class Drain(unittest.TestCase):
+    """A driver whose slots never all go idle: new code in its install waits for the running tickets once it has
+    been behind for DRAIN_AFTER, and refills slots as before until then."""
+
+    def setUp(self):
+        self.s = Sandbox()
+        self.i = Install(self.s)
+        os.environ["FAKE_WORK_S"], os.environ["FAKE_SLOW"] = "0.3", "T-002=4"  # T-002 keeps its slot busy
+        for tid, path in (("T-001", "a.py"), ("T-002", "docs/"), ("T-003", "b.py")):
+            self.s.ticket(tid, touches=path)
+        self.s.publish()
+        self.p = Project(self.s.root)
+        self.pilot = driver.Pilot(self.p, args(parallel=2))
+        self.pilot.home, self.pilot.argv = self.i.home, ["run", "--for", "6h", "--detach"]
+        self.pilot.pulled = (time.time(), 0)  # its first look is after the first merge, with T-002 still running
+        self.calls = []
+
+        def execv(path, argv):
+            self.calls.append(argv)
+            raise Restarted()
+        self.pilot.execv = execv
+        self.i.commit("windvane/driver.py", "v2\n")
+
+    def tearDown(self):
+        self.s.close()
+
+    def run_pilot(self):
+        with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
+            self.pilot.run(now() + timedelta(minutes=15))
+        return (self.p.state / "autopilot.log").read_text()
+
+    def started(self):
+        return {json.loads(l)["prompt"].split()[0] for l in (self.s.tmp / "calls.jsonl").read_text().splitlines()
+                if json.loads(l)["system"] == "span"}
+
+    def test_behind_too_long_it_stops_refilling_and_restarts_once_none_runs(self):
+        orig, driver.DRAIN_AFTER = driver.DRAIN_AFTER, 0
+        self.addCleanup(setattr, driver, "DRAIN_AFTER", orig)
+        log = self.run_pilot()
+        self.assertEqual(sorted(self.pilot.merged), ["T-001", "T-002"])
+        self.assertEqual(self.started(), {"T-001", "T-002"})  # T-001's freed slot wasn't refilled with T-003
+        self.assertEqual(log.count("new windvane code waits for T-002 to finish: no new tickets until then"), 1)
+        self.assertEqual(len(self.calls), 1)
+        line = [l for l in log.splitlines() if "windvane restarting with its new code" in l][0]
+        self.assertRegex(line, r"\(drained under 1 min, (under 1|\d) min of slot time idle; so far merged: ")
+
+    def test_the_restart_says_how_much_slot_time_the_drain_left_idle(self):
+        clock = [10_000.0]
+        orig = driver.time.time
+        driver.time.time = lambda: clock[0]
+        self.addCleanup(setattr, driver.time, "time", orig)
+        self.pilot.behind, self.pilot.running = clock[0] - driver.DRAIN_AFTER, {"T-001": 0, "T-002": 1}
+        self.assertTrue(self.pilot.draining())  # both slots busy: nothing idle yet
+        clock[0] += 300
+        del self.pilot.running["T-002"]
+        self.assertTrue(self.pilot.draining())  # one slot idle from here on
+        clock[0] += 600
+        self.pilot.running, self.pilot.deadline = {}, now() + timedelta(hours=2)
+        with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
+            self.pilot.self_update()
+        self.assertIn("(drained 15 min, 10 min of slot time idle; so far merged",
+                      (self.p.state / "autopilot.log").read_text())
+
+    def test_behind_for_less_it_refills_slots_and_restarts_when_none_runs(self):
+        log = self.run_pilot()
+        self.assertEqual(sorted(self.pilot.merged), ["T-001", "T-002", "T-003"])  # T-003 took T-001's slot
+        self.assertNotIn("waits for", log)
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("windvane restarting with its new code (so far merged: ", log)
 
 
 if __name__ == "__main__":

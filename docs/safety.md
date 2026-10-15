@@ -24,9 +24,15 @@ round or a desk PR cleans the checkout, they're stashed (`git stash list`: `wind
 push); if the stash fails, nothing is cleaned: the round or desk PR is skipped, and an approved ticket waits,
 its approval kept, trying again every 30 seconds.
 
-One exception: when windvane works on its own repository, the driver fast-forwards the windvane checkout it runs
-from between tickets, so what it merges takes effect from the next ticket. It only does so for a clean checkout on
-`main`; any other is left alone with one log line. An installed windvane (pipx, uv, `install.sh`) is never changed.
+One exception: a driver run from a windvane git checkout (not a packaged install) fast-forwards that checkout after
+each merge, so what lands on its `main` (merged by a run on windvane itself, or pushed upstream) takes effect without a
+manual restart. It only does so for a clean checkout on `main`; any other is left alone with one log line. Several
+projects' drivers may share one checkout: each remembers the commit its code came from, so a checkout another driver
+(or your own `git pull`) moved also counts as new code. When driver code (`windvane/`, `bin/`, `prompts/`) changed,
+the driver restarts itself, with the same deadline, as soon as no ticket runs. If its slots stay busy for 3 hours
+after that, it stops starting tickets, logs which ones the new code waits for, and restarts when they end; the
+restart's log line says how much slot time that drain left idle. An installed windvane (pipx, uv, `install.sh`) is
+never changed.
 
 ## What sessions may and may not do
 

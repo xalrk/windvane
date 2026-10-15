@@ -130,7 +130,7 @@ class Run(Merging):
         """The guard as the run uses it: the loop's self-update, on the main thread with the run's own handler."""
         done = []
 
-        def pull(home, said):
+        def pull(home, said, ran=None):
             self.merge()
             done.append(self.merged())
             return False
