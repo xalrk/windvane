@@ -106,7 +106,7 @@ class RowsWritten(unittest.TestCase):
         os.environ.pop("WINDVANE_HEAVY_HELD", None)
         os.environ.pop("WINDVANE_STOP_AT", None)  # a session running the tests has one
         (self.d / "work").mkdir()
-        self.p = SimpleNamespace(state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True})
+        self.p = SimpleNamespace(root=self.d, state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True})
 
     def ends(self):
         return [r for r in read_jsonl(self.p.state / "ledger.jsonl") if r["event"] == "check"]
