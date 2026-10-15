@@ -132,7 +132,7 @@ class LateAnswer(Base):
         self.addCleanup(stack.close)
         stack.enter_context(mock.patch.object(phone, "send", lambda c, title, msg, *a, **k:
                                               self.got.append((title, msg)) or True))
-        stack.enter_context(mock.patch.object(phone, "pump", lambda: 0))
+        stack.enter_context(mock.patch.object(phone, "pump", lambda **k: 0))
         self.qid = self.p.qid("T-001")
         pl = driver.Pilot(self.p, args(answer_wait=0))
         pl.questions["T-001"] = {"q": "Which cache?", "opts": {"A": "New", "B": "Old"}, "rec": "A",
@@ -146,7 +146,7 @@ class LateAnswer(Base):
         phone.handle(self.c, f"answer {self.qid} B")
         title, msg = self.got[-1]
         self.assertEqual(title, "Answer not taken")
-        self.assertIn("already building A; change it with `windvane answer T-001 <letter>`", msg)
+        self.assertIn("already building A (New); change it with `windvane answer T-001 <letter>`", msg)
         self.assertFalse((phone.state_dir() / "answers" / f"{self.qid}.json").exists())
 
     def test_a_bare_letter_with_only_a_timed_out_question_is_told_what_is_being_built(self):

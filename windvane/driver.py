@@ -1193,7 +1193,7 @@ class Pilot(Desk, Periodic):
         can't answer, so a question with a recommendation (sent or held) gets it built at once, never left waiting
         all night; one that must wait for the user, or was put off with "later", still waits."""
         p = self.p
-        phone.pump()
+        phone.pump(late=False)  # this pass's budget goes to the open questions first, late answers after them
         desk, settled = desk_answers(p), []
         quiet = quiet_now(p)[0]
         for key, q in list(self.questions.items()):
@@ -1240,6 +1240,7 @@ class Pilot(Desk, Periodic):
         if settled:  # read again: an answer `windvane answer` gave meanwhile (during a push) must not be lost
             save_json(p.state / "answers.json", {k: v for k, v in desk_answers(p).items() if k not in settled})
         self.save()
+        phone.late_pass()
 
     def go_with_rec(self, key, q, why, said, title):
         """Settle question `key` with its recommendation: the worker's feedback, the record `windvane answer` needs
@@ -1254,7 +1255,7 @@ class Pilot(Desk, Periodic):
                 note(p, lambda s: s["built"].update({key: q["q"]}))
         unseen_q = q["asked"] is None
         if not unseen_q:
-            phone.timed_out(p.qid(key), key, q["rec"])
+            phone.timed_out(p.qid(key), key, q["rec"], q["opts"].get(q["rec"], ""))
         sent = push(f"{title}: {self.name(tid, key)}", (f"{cut(q['q'], log=self.log)} " if unseen_q else "")
                     + whole(f"Going with {q['rec']}: ", q["opts"].get(q["rec"], ""), ".", log=self.log)
                     + f"\nTo change it later: windvane answer {key} <letter>.", 3, "hourglass")
