@@ -41,7 +41,8 @@ from .questions import (answered, desk_answers, give_answer, keys, mode, note, p
 from .queue import Queue, branch_depends
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
-from .worktree import TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, ensure_worktree, guard_pushes, teardown
+from .worktree import (TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, clear_scrub_stubs, ensure_worktree,
+                       guard_pushes, teardown)
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
@@ -1485,6 +1486,7 @@ class Pilot(Desk, Periodic):
         try:
             for d in self.slot_dirs(slot):
                 ensure_worktree(self.p, d, stop=self.setup_stop)
+                clear_scrub_stubs(self.p, d)  # before the worker starts: its `git add -A` would commit them
             return True
         except SetupFailed as e:
             if e.cut:  # stop_check gives the stop or the deadline as the run's reason
@@ -1544,6 +1546,7 @@ class Pilot(Desk, Periodic):
             self.fail(tid, f"driver error: {e}")
         finally:
             wd = self.wd
+            clear_scrub_stubs(self.p, wd)  # stubs alone aren't leftovers: they'd pin the slot to this ticket
             if gout(wd, "status", "--porcelain") or jobs.kept_jobs(self.p, tid):
                 self.owner[slot] = tid  # its leftovers stay here, or its kept job writes here: only it resumes here
             else:
