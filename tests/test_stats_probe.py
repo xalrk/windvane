@@ -135,7 +135,7 @@ class StoppedWait(unittest.TestCase):
 
     def test_a_check_stopped_while_waiting_counts_its_wait(self):
         state = Project(self.s.root).state
-        p = SimpleNamespace(state=state, cfg={"check": "echo checked", "heavy_check": True})
+        p = SimpleNamespace(root=self.s.root, state=state, cfg={"check": "echo checked", "heavy_check": True})
         hold(self, self.d)
         timer = threading.Timer(2.5, lambda: (state / "STOP").touch())
         timer.start()
