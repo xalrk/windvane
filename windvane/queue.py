@@ -120,7 +120,9 @@ class Queue:
         merges = gout(cwd, "log", ref, "--merges", "--format=%s")
         self.done = {p.norm(m) for m in merged_branches(merges, bp)}
         self.done |= {p.norm(m) for m in re.findall(rf"^\s*-\s*done:\s*({p.id_re})", qmd, re.M | re.I)}
-        self.parked = {p.norm(m) for m in re.findall(rf"^\s*-\s*parked:\s*({p.id_re})", qmd, re.M | re.I)}
+        self.parked_lines = {p.norm(m): line.strip() for line, m in
+                             re.findall(rf"^(\s*-\s*parked:\s*({p.id_re}).*)$", qmd, re.M | re.I)}
+        self.parked = set(self.parked_lines)
         self.done_words = {" ".join(m.split()).strip(" .`*").lower()
                            for m in re.findall(r"^\s*-\s*done:\s*([^(\n]+)", qmd, re.M | re.I)}
         self.asked = {}
@@ -205,7 +207,44 @@ class Queue:
         return None, (f"{left} tickets left, none ready (questions, dependencies or skipped)" if left
                       else "queue empty")
 
-    def listing(self, blocked=()):
+    def waiting_for(self, tid):
+        """The open tickets that wait on `tid` (or on its split parent), on main's `Depends on:` line or their
+        branch's: what a set-aside or parked `tid` holds up."""
+        on = lambda d: d == tid or re.fullmatch(rf"{re.escape(d)}[a-z]", tid)  # noqa: E731
+        return [t for t in self.order if t != tid and t not in self.done and t not in self.parked
+                and any(on(d) for d in self.deps.get(t, []) + self.branch_deps.get(t, []))]
+
+    def hints(self, tid, aside=None):
+        """How to release what `tid` waits on that won't come by itself: an outside item no `- done:` line names yet,
+        a parked dependency, or one the running driver set aside (`aside`: ticket -> why)."""
+        out, rel = [], self.p.queue_rel
+        for d in self.waits_on(tid):
+            if d in self.parked:
+                out.append(f"{d} is parked: to unpark it, take `{self.parked_lines[d]}` out of {rel}")
+            elif d in (aside or {}):
+                out.append(f"{d} was set aside this run ({aside[d]}): {tid} waits until it merges")
+            elif not self.known(d):
+                out.append(f"`{d}` isn't a ticket: once it's done, add `- done: {d} (why)` to {rel}, or take it out "
+                           f"of `Depends on:` in {self.files[tid]}")
+        return out
+
+    def warnings(self):
+        """Header lines the queue reads differently from how they look: a key indented off its line's start isn't a
+        key, and an unclosed backtick hides every key after it on its line."""
+        out, keys = [], r"(?:\*\*)?(?:Depends on|Related|Touches):"
+        for t in self.order:
+            for n, line in enumerate(self.text[t].splitlines()[:8], 1):
+                if re.match(rf"\s+{keys}", line, re.I):
+                    out.append(f"{self.files[t]} line {n}: `{line.strip()[:60]}` is indented: a key must start its "
+                               "line, so it isn't read")
+                if (not line.startswith("#") and line.count("`") % 2
+                        and re.search(rf"{keys}|[ \t]·[ \t]", line, re.I)):
+                    out.append(f"{self.files[t]} line {n}: an unclosed backtick: keys after it on this line aren't "
+                               "read")
+        return out
+
+    def listing(self, blocked=(), hints=False, aside=None):
+        """One row per ticket; with `hints`, a line under a waiting ticket for each wait that needs someone to act."""
         rows = []
         for t in self.order:
             s = self.status(t, blocked)
@@ -215,6 +254,8 @@ class Queue:
             rows.append(f"{t:8} {s:8} {'(last) ' * (t in self.last)}{self.titles[t][:70]}"
                         + (f"  [{' '.join(self.wip[t])}{', stale' if t in self.stale else ''}]"
                            if t in self.wip else "") + (f"  ({why})" if why else ""))
+            if hints and s == "waiting":
+                rows += [f"{'':8} hint: {h}" for h in self.hints(t, aside)]
         return "\n".join(rows)
 
     def next_id(self, taken=()):
