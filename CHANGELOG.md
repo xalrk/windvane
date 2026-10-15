@@ -39,6 +39,10 @@ release on the same day adds a number (`2026.10.9.1`).
 ### Changed
 - The head of the heavy line takes the lock only once its memory is free, and while it waits for memory a job behind
   it that fits runs first, instead of every job waiting behind it.
+- A driver run from a windvane checkout now takes up new code that another project's driver (or a `git pull`)
+  already put in the shared checkout, and looks for it after every merge, tickets running or not. It restarts when no
+  ticket runs; a driver whose slots stay busy stops starting tickets once it has run old code for 3 hours, and
+  restarts when they end. The restart's log line says how much slot time that drain left idle.
 
 ## 2026.10.13 - 2026-10-13
 
