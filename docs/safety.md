@@ -254,11 +254,27 @@ split or inside a binary file, commit messages, and pushes made outside windvane
 up for a merge. GitHub's push protection, on by default for public repositories, is a second check for known token
 formats.
 
-Before you make a repository public, check its history, not only its files:
+### Before going public
+
+Making a repository public publishes its whole history, not only its files. That includes every line any commit on
+any branch added, files deleted long ago, commit messages and the emails commits carry, and on GitHub its pull
+requests, their comments and its Actions logs. Check all of it first:
 ```sh
-windvane doctor --leaks
+windvane public-check --github
 ```
-It lists every token, ntfy topic, personal email, private word, and this machine's home path, username and hostname
-that any commit on any branch adds, by kind and place (`file:line in <commit>`), never the text. One in an old commit
-means rewriting that history and changing the secret; a later commit that deletes it doesn't help. With
-`forge = "github"`, `windvane init` and `windvane doctor` warn when the repository is already public.
+It reads and changes nothing. It lists every token, private key, file named like a secret, ntfy topic, personal email,
+private word, and this machine's home path, username and hostname. Each finding shows its kind and place (`file:line
+in <commit>`, `message of <commit>`, `PR #12 comment`), never the text. It also checks workflows that hand a fork's
+pull request secrets, and on GitHub secret scanning and push protection, existing Actions runs and artifacts (they
+turn public too), and whether your account keeps its email private. Without `--github` it reads only the local
+repository; `windvane doctor --leaks` is the same check.
+
+A later commit that deletes a secret doesn't help. Rewriting history doesn't reach forks, clones or GitHub's cached
+pull request refs, so [GitHub's advice](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
+is the order the check prints:
+1. Rotate the secret first.
+2. Then remove it with `git filter-repo --sensitive-data-removal`.
+3. Ask GitHub Support about cached pull request refs only if the secret can't be rotated.
+
+windvane never rewrites history itself. With `forge = "github"`, `windvane init` and `windvane doctor` warn when the
+repository is already public.
