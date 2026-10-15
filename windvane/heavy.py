@@ -476,10 +476,11 @@ def still_held(info):
     return now is None or abs(now - info["start"]) <= 2
 
 
-def held_by(info, times=None):
+def held_by(info, times=None, note=""):
     """The holder, "held by pid 12 (render.sh in game/work, since 01:56)". A clock time, not minutes held: the waiting
     line is printed once and read later, when minutes would be stale. Given `times` (for `status`, read live) it adds
-    how long it has run and its usual or expected time, "; running 72 min, usually 40"."""
+    how long it has run and its usual or expected time, "; running 72 min, usually 40"; a `note` goes inside the same
+    parentheses."""
     if not info.get("pid"):
         return "held by another heavy job"
     if not still_held(info):
@@ -491,12 +492,20 @@ def held_by(info, times=None):
         word = "usually" if kind == "usual" else "expected"
         since += f"; running {minutes((time.time() - at) / 60)}, " + (
             "never timed" if u is None else f"{word} {u:.0f}" if u >= 1 else f"{word} under 1 min")
-    return f"held by pid {info['pid']} ({info.get('cmd', '?')} in {info.get('cwd', '?')}, since {since})"
+    return f"held by pid {info['pid']} ({info.get('cmd', '?')} in {info.get('cwd', '?')}, since {since}{note})"
+
+
+def paused_note(pid, who):
+    """Why a stopped (Ctrl-Z) job matters and how to go on, for `status`'s parentheses."""
+    return f"paused, so {who}: resume it with kill -CONT {pid}"
 
 
 def waiting_line(info, n, est=None):
-    line = f"heavy: waiting for the machine lock: {held_by(info)}; " + (f"{n} ahead of this job" if n else "next in line")
-    return line + (f"; {est}" if est else "")
+    """A job about to wait, as said once. With the holder gone it waits only on the jobs ahead, so it says the lock
+    is free rather than "waiting for the machine lock: free"."""
+    holder = held_by(info)
+    lock = "the machine lock is free" if holder == "free" else f"waiting for the machine lock: {holder}"
+    return f"heavy: {lock}; " + (f"{n} ahead of this job" if n else "next in line") + (f"; {est}" if est else "")
 
 
 def gave_up(log):
@@ -664,9 +673,10 @@ def status():
     except (OSError, ValueError):
         info = {}
     times = load_times()
-    line = held_by(info, times) if info.get("pid") else "free"
-    if line != "free" and paused(info["pid"]):
-        line += " (paused: everyone waits on it)"
+    pid = info.get("pid")
+    line = held_by(info, times) if pid else "free"
+    if line != "free" and paused(pid):
+        line = held_by(info, times, "; " + paused_note(pid, "everyone waits"))
     lines, head, jobs = [line], True, []
     q = queue_dir()
     for name in sorted(os.listdir(q)) if q.is_dir() else []:
@@ -677,7 +687,7 @@ def status():
         line = f"waiting: pid {pid}, since {since}"
         big = []
         if paused(pid):
-            line += " (paused: skipped)"
+            line += f" ({paused_note(pid, 'skipped')})"
         else:
             est = estimate(work_ahead(info, jobs, times))
             jobs.append(job_of(q / name))
