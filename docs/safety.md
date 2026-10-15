@@ -202,9 +202,9 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
   without it, so a project's tools keep working. Three ways around it remain, each an action auto mode's classifier
   reviews, and it refuses reads of the login file: `windvane` and `git` commands run outside the sandbox (a
   background job must outlive its call, a critic's session must log in); a command that fails in the sandbox may be
-  retried outside it; and without bubblewrap (Linux) the sandbox doesn't start at all. On macOS the login sits in the
-  Keychain, not in a file. A `windvane` command that starts a session or a background job stops inside the sandbox
-  and says to run it on its own.
+  retried outside it; and without bubblewrap and socat (Linux) the sandbox doesn't start at all (`windvane doctor`
+  says so). On macOS the login sits in the Keychain, not in a file. A `windvane` command that starts a session or a
+  background job stops inside the sandbox and says to run it on its own.
 
 What a session can still read: any other file your user can (your home directory included), and the web. Run
 windvane on a machine or account that holds only what its projects need.

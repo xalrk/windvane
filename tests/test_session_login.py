@@ -6,12 +6,13 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import driver, jobs, runner  # noqa: E402
+from windvane import doctor, driver, jobs, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -81,6 +82,16 @@ class SessionLogin(unittest.TestCase):
             jobs.bg(self.p, "build", ["true"], self.s.root)
         self.assertIn("Bash sandbox", str(stop.exception))
         self.assertFalse(Path(f"{jobs.job_base(self.p, 'build')}.pid").exists(), "no job started")
+
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "bubblewrap is the sandbox on Linux")
+    def test_doctor_says_when_the_sandbox_cant_start(self):
+        which = doctor.shutil.which
+        for gone in ("bwrap", "socat"):
+            with mock.patch.object(doctor.shutil, "which", lambda tool, *a, **k: None if tool == gone else which(tool)):
+                rows = [r for r in doctor.checks() if r[1].startswith("bubblewrap and socat")]
+            self.assertEqual([r[0] for r in rows], ["optional"], gone)
+            self.assertIn("can read the login", rows[0][2])
 
 
 if __name__ == "__main__":
