@@ -1,5 +1,6 @@
 """The autopilot's own worktrees: made (and set up) when missing, reset to a commit between uses. Shared by the
 driver, the plan run and held-back pushes, so neither of those imports the driver."""
+import contextlib
 import os
 import shutil
 from datetime import timedelta
@@ -34,6 +35,48 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
                    else f"failed (exit {code})")
             cmd, where = f"`{p.cfg['setup']}`", short_path(p, path)
             raise SetupFailed(f"setup {cmd} {how} in {where}", lines, why, how, f"{cmd} in {where}")
+
+
+# What Claude Code makes in a session's cwd under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, for its sandbox to bind over: empty
+# files and dirs. It lists them in .git/info/exclude, which fails in a linked worktree (.git is a file), so git shows
+# them as untracked: a worker's `git add -A` commits them, and a slot holding them looks like a ticket's leftovers.
+SCRUB_STUBS = (".env", ".env.local",
+               *(f".env.{e}{s}" for e in ("development", "production", "test") for s in ("", ".local")),
+               "bunfig.toml", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", ".npmrc", ".yarnrc",
+               ".yarnrc.yml", ".gitmodules")
+SCRUB_DIRS = (".claude/commands", ".claude/agents", "node_modules/.bin")
+
+
+def clear_scrub_stubs(p, path):
+    """Removes the stubs above from the autopilot's worktree `path`: only files untracked, empty and at its root, and
+    the dirs when empty (then their parent, when that's empty too). Anything else stays: windvane never throws away
+    work it didn't make. Never in the user's checkout. Returns the names removed, and logs them."""
+    path = Path(path)
+    if path.resolve() == p.main_root().resolve() or not (path / ".git").exists():
+        return []
+    r = git(path, "ls-files", "-z", "--", *SCRUB_STUBS)
+    if r.returncode:  # can't tell what's tracked: remove nothing
+        return []
+    tracked = set(r.stdout.split("\0"))
+    gone = []
+    for name in SCRUB_STUBS:
+        f = path / name
+        if name not in tracked and f.is_file() and not f.is_symlink() and f.stat().st_size == 0:
+            f.unlink()
+            gone.append(name)
+    for name in SCRUB_DIRS:
+        d = path / name
+        try:
+            d.rmdir()  # only when empty: a tracked file in it, or anything else, keeps it
+        except OSError:
+            continue
+        gone.append(name + "/")
+        with contextlib.suppress(OSError):
+            d.parent.rmdir()
+    if gone:
+        log(p, f"{short_path(p, path)}: removed the empty stubs a session under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB left: "
+               + ", ".join(gone))
+    return gone
 
 
 HOOKS = "hooks"  # under the state dir: one hooks folder per worktree a session pushes from
