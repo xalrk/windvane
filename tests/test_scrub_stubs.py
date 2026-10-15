@@ -3,6 +3,7 @@ autopilot's own worktrees (only those, and only untracked, empty, named ones), s
 pin a slot to its last ticket."""
 import sys
 import unittest
+from unittest import mock
 from argparse import Namespace
 from pathlib import Path
 
@@ -77,6 +78,11 @@ class ScrubStubs(unittest.TestCase):
     def test_real_leftovers_still_keep_the_slot(self):
         self.assertEqual(self.slot_after("half-done.txt"), "T-001")
 
+    def test_a_kept_job_still_writing_there_keeps_its_files(self):
+        with mock.patch.object(driver.jobs, "kept_jobs", return_value=["build"]):
+            self.assertEqual(self.slot_after(), "T-001")
+        self.assertTrue((Project(self.s.root).work_dir / "package.json").exists())
+
     def test_stubs_are_gone_before_the_worker_starts(self):
         p = Project(self.s.root)
         ensure_worktree(p, p.work_dir, setup=False)
@@ -84,6 +90,10 @@ class ScrubStubs(unittest.TestCase):
         a = Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0, answer_wait=10, replan=0, goal="", parallel=1)
         self.assertTrue(driver.Pilot(p, a).prepare(0))
         self.assertEqual(gout(p.work_dir, "status", "--porcelain"), "")
+        log = (p.state / "autopilot.log").read_text()
+        self.assertEqual(log.count("removed the empty stubs"), 1)
+        self.assertTrue(driver.Pilot(p, a).prepare(0))  # nothing left to clear: nothing said
+        self.assertEqual((p.state / "autopilot.log").read_text(), log)
 
 
 if __name__ == "__main__":

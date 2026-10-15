@@ -1546,8 +1546,10 @@ class Pilot(Desk, Periodic):
             self.fail(tid, f"driver error: {e}")
         finally:
             wd = self.wd
-            clear_scrub_stubs(self.p, wd)  # stubs alone aren't leftovers: they'd pin the slot to this ticket
-            if gout(wd, "status", "--porcelain") or jobs.kept_jobs(self.p, tid):
+            kept = jobs.kept_jobs(self.p, tid)
+            if not kept:  # stubs alone aren't leftovers: they'd pin the slot to this ticket (a kept job pins it anyway)
+                clear_scrub_stubs(self.p, wd)
+            if gout(wd, "status", "--porcelain") or kept:
                 self.owner[slot] = tid  # its leftovers stay here, or its kept job writes here: only it resumes here
             else:
                 self.owner[slot] = None
