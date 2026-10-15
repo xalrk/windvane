@@ -111,7 +111,7 @@ class HeavyExpect(unittest.TestCase):
         proc.kill()
         proc.wait()
         self.assertEqual(heavy.status()[0], "free")
-        self.assertRegex(self.line([("bake", 5)]), r"lock: free; 1 ahead of this job; about 5 min of work ahead")
+        self.assertRegex(self.line([("bake", 5)]), r"^heavy: the machine lock is free; 1 ahead of this job; about 5 min of work ahead")
 
     def test_a_queue_entry_keeps_its_expect(self):
         entry = heavy.join_queue(0, "bake", 12.5)

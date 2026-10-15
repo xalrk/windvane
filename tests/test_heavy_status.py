@@ -52,7 +52,7 @@ class HeavyStatus(unittest.TestCase):
         self.write_lock(pid=me, start=start - 1000)  # a holder killed long ago, its pid now this process's
         self.assertEqual(heavy.status(), ["free"])
         info = json.loads(heavy.lock_path().read_text())
-        self.assertIn("lock: free; 1 ahead", heavy.waiting_line(info, 1))
+        self.assertIn("heavy: the machine lock is free; 1 ahead", heavy.waiting_line(info, 1))
         self.write_lock(pid=me, start=start)
         self.assertTrue(heavy.status()[0].startswith(f"held by pid {me} (make in a/b, since "))
         self.write_lock(pid=me)  # an older windvane's line, without a start: the pid alone says
@@ -71,12 +71,33 @@ class HeavyStatus(unittest.TestCase):
         self.assertIn("start", json.loads(heavy.lock_path().read_text()))
         line = heavy.status()[0]
         self.assertTrue(line.startswith(f"held by pid {job.pid} "), line)
-        self.assertFalse(line.endswith("(paused: everyone waits on it)"), line)
+        self.assertNotIn("paused", line)
         job.send_signal(signal.SIGSTOP)
         self.until(lambda: heavy.paused(job.pid))
         line = heavy.status()[0]
         self.assertTrue(line.startswith(f"held by pid {job.pid} "), line)
-        self.assertTrue(line.endswith(") (paused: everyone waits on it)"), line)
+        self.assertTrue(line.endswith(f"; paused, so everyone waits: resume it with kill -CONT -- -{os.getpgid(job.pid)})"),
+                        line)
+
+    @unittest.skipUnless(Path("/proc/self/stat").exists(), "reads a child's state from /proc")
+    def test_the_paused_holders_way_out_resumes_its_command_too(self):
+        """Ctrl-Z stops the whole group: waking only `windvane heavy`'s pid would leave its command stopped."""
+        job = subprocess.Popen([sys.executable, "-c", RUN, "echo $$ > child; exec sleep 30"], env=self.env,
+                               cwd=self.d, stderr=subprocess.DEVNULL, start_new_session=True)
+
+        def end():
+            os.killpg(job.pid, signal.SIGCONT)
+            os.killpg(job.pid, signal.SIGKILL)
+            job.wait()
+        self.addCleanup(end)
+        self.until(lambda: (self.d / "child").exists() and (self.d / "child").read_text().strip())
+        child = int((self.d / "child").read_text())
+        os.killpg(job.pid, signal.SIGSTOP)  # what Ctrl-Z does
+        self.until(lambda: heavy.paused(job.pid) and heavy.paused(child))
+        way_out = heavy.status()[0].rsplit("resume it with ", 1)[1].rstrip(")")
+        subprocess.run(way_out, shell=True, check=True)
+        self.until(lambda: not heavy.paused(child))
+        self.assertNotIn("paused", heavy.status()[0])
 
     def test_without_proc_ps_runs_once_per_pid_in_ten_seconds(self):
         bin_ = self.d / "bin"

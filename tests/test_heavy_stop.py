@@ -187,7 +187,7 @@ class HeavyStop(unittest.TestCase):
         if Path("/proc/self/stat").exists():
             a.send_signal(signal.SIGSTOP)
             self.until(lambda: heavy.paused(a.pid))
-            self.assertTrue(self.status()[1].endswith(" (paused: skipped)"))
+            self.assertTrue(self.status()[1].endswith(f" (paused, so skipped: resume it with kill -CONT -- -{os.getpgid(a.pid)})"))
             a.send_signal(signal.SIGCONT)
         (self.d / "release").touch()
         self.assertEqual([held.wait(10), a.wait(10), b.wait(10)], [0, 0, 0])
