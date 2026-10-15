@@ -69,6 +69,8 @@ REFUSALS = (
     ("login refused; {login} and the next run pushes it",
      re.compile(r"authentication failed|permission denied|permission to .* denied|could not read username|"
                 r"terminal prompts disabled|invalid username or password|\b403\b", re.I)),
+    ("the remote's ssh host key isn't trusted yet; connect once by hand (`ssh -T` to its host) to check and accept it, "
+     "and the next run pushes it", re.compile(r"host key verification failed", re.I)),
     ("refused by a hook or branch rule; change the rule, or push it by hand with `git push {remote} {branch}:{branch}-b` "
      "and {then}",
      re.compile(r"hook declined|protected branch|GH00\d|GH013|rule violation|remote rejected", re.I)),

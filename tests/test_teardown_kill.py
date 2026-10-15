@@ -43,6 +43,7 @@ class Base(unittest.TestCase):
     def push(self, title, msg="", *a, **k):
         if title.startswith("windvane "):
             self.pushes.append((title, msg, len(self.runs())))  # how many teardowns had run by then
+        return title != "windvane teardown failed"  # that one didn't go out: the next "started" push says it
 
     def config(self, teardown=None):
         teardown = f'teardown = "echo x >> {self.marker}"\n' if teardown is None else teardown
