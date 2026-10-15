@@ -127,7 +127,7 @@ class HeavyReuse(unittest.TestCase):
         (root / ".windvane").mkdir()
         with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(self.d / "st")}):
             p = config.Project(root)
-            self.assertIsNone(heavy.reuse_of(p))
+            self.assertEqual(heavy.reuse_of(p)[0], [])  # no patterns, but its dirs: for the waiting line's hint
             (root / ".windvane/config.toml").write_text('heavy_reuses = ["qemu-system"]\n')
             p = config.Project(root)
             pats, dirs = heavy.reuse_of(p)

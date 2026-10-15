@@ -190,7 +190,7 @@ class MemSetting(unittest.TestCase):
         with mock.patch.dict(os.environ, env):
             for k in ("WINDVANE_HEAVY_HELD", "WINDVANE_STOP_AT", TICKET):
                 os.environ.pop(k, None)
-            p = SimpleNamespace(state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True,
+            p = SimpleNamespace(root=self.d, state=self.d / "state", cfg={"check": "echo checked", "heavy_check": True,
                                                               "heavy_mem": 10 ** 6})
             ok, summary, log = jobs.check(p, self.d)
             self.assertIsNone(ok)

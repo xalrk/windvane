@@ -18,6 +18,7 @@ starts after its session's wrap-up; one waiting on memory names the processes th
 """
 import fcntl
 import json
+import math
 import os
 import re
 import shlex
@@ -79,10 +80,9 @@ def free_gb():
         return None
 
 
-def largest(n=3):
-    """The `n` processes holding the most memory, as "pid 412 qemu-system-x86 3.4 GB in emu/slot-1" (the last two
-    parts of the working directory): a job waiting on memory says who holds it, an idle helper of another project
-    plainly among them. Empty without /proc."""
+def holders(n=3):
+    """The `n` processes holding the most memory, as (pid, name, GB, the last two parts of the working directory, or
+    None when it can't be read). Empty without /proc."""
     if not util.PROC.is_dir():
         return []
     rss = [(status_field(int(d), "VmRSS") or 0, int(d)) for d in os.listdir(util.PROC) if d.isdigit()]
@@ -97,8 +97,60 @@ def largest(n=3):
         except OSError:  # someone else's: its folder can't be read
             where = None
         if kb:
-            out.append(f"pid {pid} {name} {kb / 1048576:.1f} GB " + (f"in {where}" if where else "(folder unreadable)"))
+            out.append((pid, name, kb / 1048576, where))
     return out
+
+
+def largest(n=3, big=None):
+    """The `n` processes holding the most memory (or `big`, from `holders`), as "pid 412 qemu-system-x86 3.4 GB in
+    emu/slot-1": a job waiting on memory says who holds it, an idle helper of another project plainly among them."""
+    return [f"pid {pid} {name} {gb:.1f} GB " + (f"in {where}" if where else "(folder unreadable)")
+            for pid, name, gb, where in (holders(n) if big is None else big)]
+
+
+HINT_MIN_GB = 1  # a holder smaller than this frees too little to be worth a config line
+
+
+def unreused(reuse, big, skip=()):
+    """The holders in `big` (from `holders`) that work for the project in `reuse` (`owned`) but match none of its
+    `heavy_reuses` patterns: a helper its heavy jobs may reuse yet count as taken. Not one this job runs under (its
+    session), one under a pid in `skip` (the lock's holder: that job's memory is in use), or one under `HINT_MIN_GB`."""
+    if not reuse or not util.PROC.is_dir():
+        return []
+    patterns, dirs = reuse
+    cwds = util.cwds()
+    mine = set(ancestors(os.getpid()))
+    return [h for h in big if h[2] >= HINT_MIN_GB and h[0] not in mine
+            and not set(skip) & set(ancestors(h[0])) and owned(h[0], dirs, cwds) and not matches(h[0], patterns)]
+
+
+def ancestors(pid):
+    """`pid` and the processes up its tree, to init."""
+    out = []
+    while pid > 1 and pid not in out:
+        out.append(pid)
+        pid = status_field(pid, "PPid") or 0
+    return out
+
+
+OWN = "is this project's own: if its heavy jobs reuse it, add"
+
+
+def reuse_hint(proc):
+    """The waiting line's clause for a holder from `unreused`."""
+    pid, name, gb, _ = proc
+    return f'{name} ({gb:.1f} GB) {OWN} "{name}" to heavy_reuses in .windvane/config.toml'
+
+
+def hints_in(log, head=65536):
+    """The `reuse_hint` clauses a heavy job whose output went to `log` said while it waited (from the log's head, as
+    `waited`), for the project log: the check's own log is gone by the next run."""
+    try:
+        with open(log, "rb") as f:
+            text = f.read(head).decode(errors="replace")
+    except OSError:
+        return []
+    return re.findall(r"; ([^;\n]* " + re.escape(OWN) + r" [^;\n]*)", text)
 
 
 def in_dirs(path, dirs):
@@ -174,12 +226,11 @@ def helpers_gb(reuse):
 
 def reuse_of(p):
     """A project's (`heavy_reuses` patterns, the dirs whose processes are its own: every checkout git knows of it, its
-    main one and the slots, and its state dir), or None when it names none."""
-    if not p.cfg.get("heavy_reuses"):
-        return None
+    main one and the slots, and its state dir). The dirs even with no patterns: a job waiting on memory its own
+    helper holds says to name it (`unreused`)."""
     out = util.gout(p.root, "worktree", "list", "--porcelain")
     dirs = {line[9:] for line in out.splitlines() if line.startswith("worktree ")} | {str(p.root), str(p.state)}
-    return list(p.cfg["heavy_reuses"]), sorted({os.path.realpath(d) for d in dirs})
+    return list(p.cfg.get("heavy_reuses") or []), sorted({os.path.realpath(d) for d in dirs})
 
 
 def busy(patterns):
@@ -206,9 +257,15 @@ def short(need, mem, helpers=0):
     helpers), or None: also when either is unknown (no /proc, or a waiter from an older windvane that didn't say)."""
     if mem is not None and need is not None and mem + helpers < need:
         if helpers:
-            return f"{mem:.1f} GB free + {helpers:.1f} GB in this project's helpers (want {need:.10g})"
-        return f"only {mem:.1f} GB free (want {need:.10g})"
+            return f"{down(mem)} GB free + {down(helpers)} GB in this project's helpers (want {need:.10g})"
+        return f"only {down(mem)} GB free (want {need:.10g})"
     return None
+
+
+def down(gb):
+    """`gb` to one decimal, rounded down: a job short of memory never reads as having enough ("5.9 GB free (want 6)",
+    not "6.0"). Within half a kB (meminfo's unit) of a tenth is that tenth: 4.2 GB in whole kB is a hair under it."""
+    return f"{math.floor(gb * 10 + 5 / 1048576) / 10:.1f}"
 
 
 def queue_dir():
@@ -552,9 +609,10 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
     ahead is judged on what's free for anyone.
 
     Each time what it waits on changes, the line says so: the work ahead (`estimate`), or for a wait on memory the
-    processes holding most. With a session's stop known it says once that the job likely starts after the wrap-up:
+    processes holding most, and once a wait, which of those are this project's own helpers not in its
+    `heavy_reuses` (`unreused`). With a session's stop known it says once that the job likely starts after the wrap-up:
     when the known work ahead runs past it, or the wrap-up came with the job still waiting."""
-    said, busy_why, retry, warned, looked = None, None, 0, False, 0
+    said, busy_why, retry, warned, looked, hinted = None, None, 0, False, 0, False
     while True:
         line, mem = ahead(entry), free_gb()
         turn = all(short(need_of(w), mem) for w in line)  # the head, or all ahead wait on memory
@@ -577,7 +635,11 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
         if key != said or time.time() >= looked + 60:  # the wrap-up is looked at again each minute as time passes
             work, looked = work_ahead(info, [job_of(w) for w in line[:n]], load_times()), time.time()
             if key != said and mine:
-                say(f"heavy: waiting: {why}" + (f"; largest: {', '.join(big)}" if (big := largest()) else ""))
+                big = holders()
+                own = [] if hinted else unreused(reuse, big, [info["pid"]] if info.get("pid") else [])
+                hinted = hinted or bool(own)
+                say(f"heavy: waiting: {why}" + (f"; largest: {', '.join(largest(big=big))}" if big else "")
+                    + "".join(f"; {reuse_hint(h)}" for h in own))
             elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
                 say(f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work)))
             wrap, now = wrap_up(), time.time()
@@ -671,10 +733,11 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None):
         os.close(lock)  # frees the lock
 
 
-def status():
+def status(reuse=None):
     """Who holds the lock and who waits, in order, without waiting or taking either: the holder's line (it writes it
     in when it takes the lock, and empties it on the way out), then a line per live waiter with the work ahead of it,
-    and for a head short of memory the processes holding most."""
+    and for a head short of memory the processes holding most: run from a project (`reuse`), its own helpers not in
+    its `heavy_reuses` are marked."""
     try:
         info = json.loads(lock_path().read_text() or "{}")
     except (OSError, ValueError):
@@ -700,8 +763,11 @@ def status():
             if head:
                 head, need, mem = False, need_of(q / name), free_gb()
                 if short(need, mem):
-                    line += f" (waiting for {need:.10g} GB, {mem:.1f} free; letting smaller jobs by)"
-                    big = largest()
+                    line += f" (waiting for {need:.10g} GB, {down(mem)} free; letting smaller jobs by)"
+                    procs = holders()
+                    own = {h[0] for h in unreused(reuse, procs, [info["pid"]] if info.get("pid") else [])}
+                    big = [b + (" (this project's)" if h[0] in own else "")
+                           for h, b in zip(procs, largest(big=procs))]
             line += f"; {est}" if est else ""
         lines.append(line)
         lines += [f"  holds memory: {b}" for b in big]
