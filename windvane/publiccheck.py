@@ -11,6 +11,7 @@ import io
 import json
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 from . import privacy
@@ -36,10 +37,13 @@ def history(root):
     message, and its author's and committer's emails. A line added on two branches is listed once."""
     cmd = ["git", "-c", "core.quotepath=off", "log", "--all", "-p", "-U0", "--no-color", "--no-ext-diff",
            "--no-textconv", "--no-renames", "--diff-merges=first-parent", "--format=%x01%h%x00%ae%x00%ce%n%B%x02"]
-    try:  # streamed: a big repo's whole history needn't fit in memory
-        with subprocess.Popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
+    try:  # streamed: a big repo's whole history needn't fit in memory; stderr to a file, so it can't fill a pipe
+        with tempfile.TemporaryFile() as errf, \
+                subprocess.Popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=errf) as p:
             found, commits = parse(io.TextIOWrapper(p.stdout, encoding="utf-8", errors="replace", newline="\n"))
-            err = p.stderr.read().decode("utf-8", "replace").strip()
+            p.wait()
+            errf.seek(0)
+            err = errf.read().decode("utf-8", "replace").strip()
     except OSError as e:
         raise ScanFailed(f"git couldn't run: {e}")
     if p.returncode and "does not have any commits" not in err:
@@ -103,10 +107,17 @@ def gh(root, *args, timeout=60):
     r = run_quiet(["gh", *args], timeout=timeout, cwd=root)
     if r is None:
         raise ScanFailed("gh is missing or timed out")
+    if r.returncode and "no git remotes found" in r.stderr:
+        raise ScanFailed("this repository has no GitHub remote")
     if r.returncode:
         first = (r.stderr.strip().splitlines() or ["no error given"])[0]
         raise ScanFailed(f"gh failed: {privacy.censor(first)[:120]}")
     return r.stdout
+
+
+def why(e):
+    """A failure in a few words: gh's own, or that its answer didn't read as expected (a ValueError's text is Python's)."""
+    return str(e) if isinstance(e, ScanFailed) else "gh's answer couldn't be read"
 
 
 def pull_requests(root):
@@ -135,12 +146,15 @@ def pull_requests(root):
 
 
 def workflows(root):
-    """(level, what, fix) for each committed workflow that a fork's pull request can reach with secrets."""
-    names = subprocess.run(["git", "ls-tree", "-r", "--name-only", "HEAD", "--", ".github/workflows"], cwd=root,
+    """(level, what, fix) for each workflow that a fork's pull request can reach with secrets, as the default branch
+    (`origin/HEAD`, else HEAD) has it: GitHub runs `pull_request_target` from there."""
+    rev = "origin/HEAD" if subprocess.run(["git", "rev-parse", "-q", "--verify", "origin/HEAD^{commit}"], cwd=root,
+                                          capture_output=True).returncode == 0 else "HEAD"
+    names = subprocess.run(["git", "ls-tree", "-r", "--name-only", rev, "--", ".github/workflows"], cwd=root,
                            capture_output=True, text=True).stdout.split("\n")
     out = []
     for f in [x for x in names if x.endswith((".yml", ".yaml"))]:
-        text = subprocess.run(["git", "show", f"HEAD:{f}"], cwd=root, capture_output=True,
+        text = subprocess.run(["git", "show", f"{rev}:{f}"], cwd=root, capture_output=True,
                               text=True, errors="replace").stdout
         text = "\n".join(line.split(" #")[0] for line in text.splitlines() if not line.lstrip().startswith("#"))
         if PR_TARGET.search(text):
@@ -158,7 +172,7 @@ def settings(root):
     try:
         repo = json.loads(gh(root, "api", "repos/{owner}/{repo}"))
     except (ScanFailed, ValueError) as e:
-        return [("skip", f"couldn't check the repository's settings ({e})", "")]
+        return [("skip", f"couldn't check the repository's settings ({why(e)})", "")]
     slug = repo.get("full_name", "")
     out, sa = [], repo.get("security_and_analysis")
     where = f"https://github.com/{slug}/settings/security_analysis"
@@ -175,7 +189,7 @@ def settings(root):
             count = int(gh(root, "api", f"repos/{{owner}}/{{repo}}/actions/{path}?per_page=1", "-q",
                            ".total_count").strip() or 0)
         except (ScanFailed, ValueError) as e:
-            out.append(("skip", f"couldn't count the {kind} ({e})", ""))
+            out.append(("skip", f"couldn't count the {kind} ({why(e)})", ""))
             continue
         out.append(("ok", f"no {kind}", "") if not count else
                    ("warn", f"{count} {kind} turn public with the repo",
@@ -233,12 +247,12 @@ def main(root, github=False):
     scan failed. GitHub's settings warn without changing it: a private repo can't turn push protection on, and runs
     already read stay counted."""
     print(f"windvane public-check: what {Path(root).name} would expose if its repository went public")
-    failed, found = False, 0
+    failed, found, leaks = False, 0, 0
     try:
         hist, commits = history(root)
         print(f"History: {commits} commit(s) on every branch and tag, deleted files included")
         print("\n".join(grouped(hist)) or "  ok       nothing found")
-        found += len(hist)
+        leaks += len(hist)
     except ScanFailed as e:
         print(f"History: couldn't scan it: {e}")
         failed = True
@@ -249,9 +263,9 @@ def main(root, github=False):
         try:
             prs = pull_requests(root)
             print("\n".join(grouped(prs)) or "  ok       nothing found")
-            found += len(prs)
+            leaks += len(prs)
         except (ScanFailed, ValueError) as e:
-            print(f"  couldn't check them ({e}); run it again once gh can reach the repository")
+            print(f"  couldn't check them ({why(e)}); run it again once gh can reach the repository")
             failed = True
         rows += settings(root)
     print("Repository settings" + ("" if github else " (only the workflow files)"))
@@ -260,9 +274,9 @@ def main(root, github=False):
         print(f"  {label[level]} {what}" + (f"  -> {fix}" if fix else ""))
     if not github:
         print("Run it with --github to check the pull requests and the repository's settings on GitHub too.")
-    if found:
+    if leaks:  # a workflow to fix needs no rotating or rewriting: its row says what to do
         print(NEXT)
     if failed:
         print("The scan didn't finish: the result above is incomplete.")
         return 2
-    return 1 if found else 0
+    return 1 if found or leaks else 0

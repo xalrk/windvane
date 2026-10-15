@@ -27,7 +27,7 @@ STATE = sys.argv.pop(1)
 a = sys.argv[1:]
 st = json.load(open(STATE))
 if st.get("fail"):
-    sys.exit("error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com")
+    sys.exit(st["fail"])
 if a[:2] == ["pr", "list"]:
     print(json.dumps(st.get("prs", [])))
 elif a[:3] == ["api", "--paginate", "repos/{owner}/{repo}/pulls/comments"]:
@@ -42,6 +42,7 @@ elif a[:2] == ["api", "user/emails"]:
         sys.exit("HTTP 404: Not Found (https://api.github.com/user/emails)")
     print(json.dumps(st["emails"]))
 '''
+OFFLINE = "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"
 SECURE = {"secret_scanning": {"status": "enabled"}, "secret_scanning_push_protection": {"status": "enabled"}}
 
 
@@ -171,6 +172,7 @@ class PublicCheck(unittest.TestCase):
         self.assertIn("WARNING  .github/workflows/test.yml runs on pull_request and uses secrets  -> fork PRs get no "
                       "secrets", out)
         self.assertNotIn("ok.yml", out)
+        self.assertNotIn("Rotate first", out)  # a workflow to fix is no secret to rotate
         self.edit(repo={"full_name": "me/proj", "security_and_analysis": {
             "secret_scanning": {"status": "enabled"}, "secret_scanning_push_protection": {"status": "disabled"}}},
                   runs=12, artifacts=3)
@@ -193,13 +195,17 @@ class PublicCheck(unittest.TestCase):
                       "\"Block command line pushes that expose my email\" at https://github.com/settings/emails", out)
 
     def test_gh_offline_says_couldnt_check_and_exits_2(self):
-        self.edit(fail=True)
+        self.edit(fail=OFFLINE)
         code, out = self.check("--github")
         self.assertEqual(code, 2, out)
-        self.assertIn("couldn't check them (gh failed: error connecting to api.github.com)",
-                      out)
+        self.assertIn("couldn't check them (gh failed: error connecting to api.github.com); run it again once gh can "
+                      "reach the repository", out)
         self.assertIn("SKIPPED  couldn't check the repository's settings (gh failed:", out)
-        self.assertIn("The scan didn't finish", out)
+        self.assertIn("The scan didn't finish: the result above is incomplete.", out)
+        self.edit(fail="no git remotes found")
+        code, out = self.check("--github")
+        self.assertEqual(code, 2, out)
+        self.assertIn("couldn't check them (this repository has no GitHub remote)", out)
 
     def test_exit_2_outside_a_repo_or_when_git_cant_read_its_history(self):
         elsewhere = self.s.tmp / "not-a-repo"
