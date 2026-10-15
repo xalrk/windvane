@@ -162,7 +162,7 @@ def censor(text, c):
 
 # ---------- sending
 
-def send(c, title, msg, prio=3, tags="", buttons=()):
+def send(c, title, msg, prio=3, tags="", buttons=(), wait=10):
     """One push to the push topic; each button ("Label=command") posts its command to the reply topic. Censored
     first: if the censor fails, nothing is sent. Never raises: a push is never worth stopping a run for."""
     try:
@@ -181,7 +181,7 @@ def send(c, title, msg, prio=3, tags="", buttons=()):
         body["actions"] = acts
     req = urllib.request.Request(server, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=10):
+        with urllib.request.urlopen(req, timeout=max(wait, 0.01)):
             return True
     except (OSError, ValueError):
         return False
@@ -208,17 +208,18 @@ def titled(text):
     return f"{_project}: {text}"
 
 
-def push(title, msg, prio=3, tags="", buttons=()):
+def push(title, msg, prio=3, tags="", buttons=(), wait=SEND_WAIT):
     """A push through the user's `notify` when it's on PATH, else the built-in one when the phone is on. True only
-    when it went out (`notify` exited 0, or ntfy took it): an answer counts as shown on the phone only then."""
+    when it went out (`notify` exited 0, or ntfy took it) within `wait` seconds: an answer counts as shown on the
+    phone only then."""
     title, msg = titled(title), fit(msg)
     if shutil.which("notify"):
         args = ["notify", "-t", title, "-p", str(prio), "-g", tags]
         for b in buttons[:3]:
             args += ["-a", b]
-        return (tool(args + [msg], SEND_WAIT) or (1,))[0] == 0
+        return (tool(args + [msg], wait) or (1,))[0] == 0
     c = conf()
-    return on(c) and send(c, title, msg, prio, tags, buttons)
+    return on(c) and send(c, title, msg, prio, tags, buttons, min(wait, 10))
 
 
 def whole_to_log(line):
@@ -294,11 +295,16 @@ def ask(qid, question, options):
 _pass_end = 0.0  # when the current pass's looks for answers must be done (see pump)
 
 
+def pass_left():
+    """Seconds the current pass's budget has left (0 or less: spent)."""
+    return _pass_end - time.time()
+
+
 def answer(qid, in_pass=False):
     """"ANSWER <letter>\t<text>", "LATER" or "" (not answered yet). `in_pass`: one of a pass's looks, which share
     the pass's SEND_WAIT, so a stalled network holds a pass over five questions for 30 s, not 2.5 min."""
     if shutil.which("notify-ask"):
-        wait = _pass_end - time.time() if in_pass else SEND_WAIT
+        wait = pass_left() if in_pass else SEND_WAIT
         got = tool(["notify-ask", "--get", qid], wait) if wait > 0 else None
         out = got[1].strip() if got else ""  # none: not answered yet, as far as this pass can tell
         return out if out.startswith(("ANSWER", "LATER")) else ""
@@ -309,19 +315,23 @@ def answer(qid, in_pass=False):
     return "LATER" if a.get("later") else f"ANSWER {a['option']}\t{a['text']}"
 
 
-def building(qid, key, rec):
-    return (f"{qid}: no answer came in time, so it's already building {rec}; change it with "
+def building(qid, key, rec, text=""):
+    """The reply to an answer that came after its question timed out: the option being built by its letter and its
+    text, so the user needn't scroll back to the question to see what A was."""
+    what = whole(f"{rec} (", text, ")", log=whole_to_log) if text else rec
+    return (f"{qid}: no answer came in time, so it's already building {what}; change it with "
             f"`windvane answer {key} <letter>`.")
 
 
-def timed_out(qid, key, rec):
+def timed_out(qid, key, rec, text=""):
     """Question `qid` (`windvane answer`'s `key`) waited out its time and `rec` is being built: a phone answer that
     comes after it gets told so, not "recorded" and then never read. The built-in phone marks its question file;
-    with the user's own `notify-ask`, `late.json` lists it for pump to look at."""
+    with the user's own `notify-ask`, `late.json` lists it for pump to look at. `text`: option `rec`'s text, which
+    that reply names."""
     if shutil.which("notify-ask"):
         try:
             with late_lock(block=True) as late:
-                late[qid] = [key, rec, time.time()]
+                late[qid] = {"key": key, "rec": rec, "text": text, "when": time.time()}
         except (OSError, TypeError):
             pass
         return
@@ -333,8 +343,9 @@ def timed_out(qid, key, rec):
 
 
 class late_lock:
-    """`late.json` ({qid: [key, rec, when timed out]}) under a lock, written back on leaving. Without `block`, None
-    when another process holds it: one run on this machine looks at the late answers, so none is told twice."""
+    """`late.json` ({qid: {key, rec, text, when timed out, `told`: the reply it owes}}) under a lock, written back
+    on leaving. Without `block`, None when another process holds it: one run on this machine looks at the late
+    answers, so none is told twice."""
     def __init__(self, block=False):
         self.f, self.block, self.late = state_dir() / "late.json", block, None
 
@@ -361,15 +372,27 @@ class late_lock:
 
 
 def late_answers():
-    """Each timed-out question's phone answer, looked at once a pass (on the pass's budget) for a day: one that isn't
-    what is being built gets one push saying so; after it, or the day, the question is dropped."""
+    """Each timed-out question's phone answer, looked at once a pass for a day on what the pass's budget has left
+    after the open questions: one that isn't what is being built gets one push saying so, sent on that budget too, or
+    on a later pass once it's spent (the answer is kept, not looked at again). After it, or the day, the question is
+    dropped."""
     with late_lock() as late:
-        for qid, (key, rec, when) in list((late or {}).items()):
-            if time.time() - when >= LATE_FOR:
+        for qid, e in list((late or {}).items()):
+            if isinstance(e, list):  # written by an older version: [key, rec, when]
+                e = late[qid] = dict(zip(("key", "rec", "when"), e))
+            if time.time() - e["when"] >= LATE_FOR:
                 late.pop(qid)
                 continue
-            got = answer(qid, in_pass=True)
-            if got and (got.split()[1:2] == [rec] or push("Answer not taken", building(qid, key, rec))):
+            if pass_left() <= 0:
+                return
+            if not e.get("told"):
+                got = answer(qid, in_pass=True)
+                if not got or got.split()[1:2] == [e["rec"]]:
+                    if got:
+                        late.pop(qid)
+                    continue
+                e["told"] = building(qid, e["key"], e["rec"], e.get("text", ""))
+            if pass_left() > 0 and push("Answer not taken", e["told"], wait=pass_left()):
                 late.pop(qid)
 
 
@@ -454,7 +477,7 @@ def answer_question(c, qid, letter, note=""):
     except (OSError, ValueError, KeyError):
         return reply(c, "Answer not taken", f"No open question {qid}.")
     if asked.get("built"):
-        return reply(c, "Answer not taken", building(qid, asked["key"], asked["built"]))
+        return reply(c, "Answer not taken", building(qid, asked["key"], asked["built"], opts.get(asked["built"], "")))
     if letter not in opts:
         return reply(c, "Answer not taken", f"{qid} has options {', '.join(sorted(opts))}.")
     (d / "answers").mkdir(parents=True, exist_ok=True)
@@ -582,6 +605,7 @@ def listen(once=False, until=lambda: False, since=None):
 
 
 _last_pump = 0.0
+_late_due = False  # a pass pump started whose late answers haven't been looked at yet
 _run_start = None
 
 
@@ -592,21 +616,20 @@ def start_run(p):
     _run_start = time.time()
 
 
-def pump():
+def pump(late=True):
     """A run's own look at the reply topic, at most every PUMP_EVERY seconds: answers and `stop` reach it even
     without the listener service. Nothing when the listener (or the user's ntfy-listen) already reads it. How many
     messages it acted on, so a waiting run wakes up for an answer. It starts a pass: the pass's looks for answers
-    (late ones here, then the driver's) share one SEND_WAIT."""
-    global _last_pump, _pass_end
+    and its replies to late ones share one SEND_WAIT. Open questions come first, so a stalled network spends it on
+    them: the driver, which looks at those, passes `late=False` and calls late_pass after its looks."""
+    global _last_pump, _pass_end, _late_due
     _pass_end = time.time() + SEND_WAIT
     if time.time() - _last_pump < PUMP_EVERY:
         return 0
     if shutil.which("notify-ask"):
-        _last_pump = time.time()
-        try:
-            late_answers()
-        except Exception:  # the phone must never stop a run
-            pass
+        _last_pump, _late_due = time.time(), True
+        if late:
+            late_pass()
         return 0
     if not on(conf()):
         return 0
@@ -615,6 +638,18 @@ def pump():
         return listen(once=True, since=_run_start) or 0
     except Exception:  # the phone must never stop a run
         return 0
+
+
+def late_pass():
+    """The late answers of the pass pump started (once a pass), on what its budget has left."""
+    global _late_due
+    if not _late_due:
+        return
+    _late_due = False
+    try:
+        late_answers()
+    except Exception:  # the phone must never stop a run
+        pass
 
 
 # ---------- `windvane phone ...` at the desk

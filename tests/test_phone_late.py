@@ -185,7 +185,7 @@ class LateAnswer(Late):
         phone.pump()
         told = self.pushed("already building")
         self.assertEqual(len(told), 1, told)
-        self.assertEqual(told[0]["args"][-1], f"{qid}: no answer came in time, so it's already building A; change "
+        self.assertEqual(told[0]["args"][-1], f"{qid}: no answer came in time, so it's already building A (New); change "
                                               "it with `windvane answer T-001 <letter>`.")
         self.assertEqual(self.looks().count(qid), 2, "looked at once a pass until answered, then dropped")
 
@@ -205,13 +205,13 @@ class LateAnswer(Late):
         phone.pump()
         phone.pump()
         self.assertEqual(len(self.pushed("already building")), 2)  # the failed one, then the one that went out
-        self.assertEqual(self.looks().count(qid), 2)
+        self.assertEqual(self.looks().count(qid), 1, "the answer is kept for the retry, not looked at again")
 
     def test_after_a_day_the_question_is_dropped(self):
         pl, qid = self.timed_out_pilot()
         f = phone.state_dir() / "late.json"
         late = json.loads(f.read_text())
-        late[qid][2] -= phone.LATE_FOR + 1
+        late[qid]["when"] -= phone.LATE_FOR + 1
         f.write_text(json.dumps(late))
         (self.answers / qid).write_text("ANSWER B\tOld")
         phone.pump()
