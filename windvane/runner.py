@@ -21,6 +21,7 @@ ROLE = "WINDVANE_ROLE"  # the session's role: `windvane request` records it, and
 NO_REQUEST = "Bash(windvane request *)"  # sessions other than workers (and the desk) don't file windvane requests
 TOOL_MS = "600000"
 GRACE = 3  # seconds a nested session gets to end on SIGTERM before SIGKILL: short, the driver waits on it
+NO_AUTO = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"  # set, Claude Code turns `--permission-mode auto` off
 POLL = 5  # seconds between a quiet session's stop checks (small file reads, no tokens): how soon `stop --now` acts
 
 
@@ -37,15 +38,16 @@ GH_GIT = (("credential.https://github.com.helper", ""), ("credential.https://git
 def env(extra=None, p=None):
     """The sessions' environment: the driver's, scrubbed of credentials (`scrub`), with project `p`'s GitHub token
     and commit identity. AUTOPILOT=1 keeps the user's ntfy hook quiet (the driver pushes its own). The Bash tool's
-    default timeout is 2 minutes; the rules and `windvane await` assume a tool call may run 10. Claude Code's
-    subprocess scrub keeps its own login (kept here, as it needs it) out of the commands a session runs."""
+    default timeout is 2 minutes; the rules and `windvane await` assume a tool call may run 10. Never
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (NO_AUTO), even from the user's shell: with it Claude Code forces the default
+    permission mode over `--permission-mode auto`, and a headless session can then write nothing."""
     out = scrub(os.environ, p.cfg["env"]["keep"] if p else ())
+    out.pop(NO_AUTO, None)
     if p:
         out = {**github_env(p, out), **identity(p)}
     extra = extra or {}
-    out.update({"AUTOPILOT": "1", "BASH_DEFAULT_TIMEOUT_MS": TOOL_MS, "BASH_MAX_TIMEOUT_MS": TOOL_MS,
-                "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1"},
-               **{k: v for k, v in extra.items() if not k.startswith("GIT_CONFIG_")})
+    out.update({"AUTOPILOT": "1", "BASH_DEFAULT_TIMEOUT_MS": TOOL_MS, "BASH_MAX_TIMEOUT_MS": TOOL_MS},
+               **{k: v for k, v in extra.items() if not k.startswith("GIT_CONFIG_") and k != NO_AUTO})
     return with_git_config(out, git_config(extra))
 
 

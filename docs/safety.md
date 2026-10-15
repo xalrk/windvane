@@ -188,8 +188,7 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
   one log line, so an outsider's PR named after a ticket's branch never reaches a worker or the reviewer.
 - **Credentials.** A session gets your environment without the variables named like credentials (`*TOKEN*`,
   `*SECRET*`, `*PASSWORD*`, `*_KEY`, `AWS_*`), except what Claude Code and `gh` log in with and what
-  [`[env] keep`](configuration.md#env) names. Claude Code's subprocess scrub keeps its own login out of the commands
-  a session runs.
+  [`[env] keep`](configuration.md#env) names.
 - **GitHub.** By default a session uses your `gh` login, and git your usual credentials: they reach every repository
   you can, private ones too. A [`[github] token_file`](configuration.md#github) with a fine-grained token for this
   repository alone narrows that for sessions and the driver alike; `windvane doctor` checks it can't see your other

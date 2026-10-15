@@ -144,8 +144,14 @@ class SessionEnv(Base):
         for kept in ("NPM_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN", "SSH_AUTH_SOCK"):
             self.assertEqual(env[kept], os.environ[kept])
         self.assertEqual((env["PATH"].split(os.pathsep)[-1], env["HOME"]), ("/bin", os.environ["HOME"]))
-        self.assertEqual(env["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"], "1")
+        self.assertNotIn("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", env)
         self.assertIn(("core.hooksPath", str(worktree.hooks_folder(self.p, self.p.work_dir))), runner.git_config(env))
+
+    def test_claude_codes_subprocess_scrub_never_reaches_a_session_as_it_turns_auto_mode_off(self):
+        os.environ["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
+        self.assertNotIn("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", self.work())
+        self.assertNotIn("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
+                         runner.env({"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1"}, p=self.p))
 
     def test_a_bad_git_config_count_in_the_users_environment_is_no_crash(self):
         self.assertEqual(runner.git_config({"GIT_CONFIG_COUNT": "x", "GIT_CONFIG_KEY_0": "a.b"}), [])
