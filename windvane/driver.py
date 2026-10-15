@@ -218,7 +218,7 @@ class Pilot(Desk, Periodic):
         self.stop_reason = "unknown"
         self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
         self.signalled, self.ending = None, False  # the SIGTERM or SIGHUP that ended the run; past its `finally`
-        self.presses = 0  # Ctrl-Cs since the wind-down began: the third ends it at once
+        self.presses = 0  # the run's Ctrl-Cs from the one that ended it: the third ends its wind-down at once
         self.guarded = 0  # how deep the main thread is in `critical` steps: a signal waits for them to end
         self.left = ""  # the pid in the lock file a run that ended without its teardown left (`take_lock`)
         self.kept_note = ""  # the summary's line on kept jobs (`bg --keep`) the run's end killed or let go on
@@ -1862,8 +1862,11 @@ class Pilot(Desk, Periodic):
                 with self.critical():
                     push_held(p)  # a plan a failed push kept locally, once a run: the network may be back
                 self.loop()
-        except Signalled:
-            pass  # on_signal set the stop reason
+        except Signalled:  # on_signal set the stop reason
+            self.presses = int(self.signalled == signal.SIGINT)  # the wind-down's Ctrl-Cs count from the one that
+        except KeyboardInterrupt:  # began it
+            self.presses = 1
+            raise
         except TokenError as e:  # a step outside the slots (a plan, a merge) found the token gone
             self.halt = self.stop_reason = str(e).removeprefix("windvane: ")
             self.log(self.stop_reason)
@@ -1938,8 +1941,8 @@ class Pilot(Desk, Periodic):
     def winding_down(self, sig):
         """A signal once `run`'s `finally` is under way (a user pressing Ctrl-C again to hurry it): the sessions still
         running are killed at their next poll, but the run isn't unwound, so the save, the teardown and the unlock
-        still happen and the next run finds neither stale state nor helpers left up. Only a third Ctrl-C ends it at
-        once, for a teardown that hangs."""
+        still happen and the next run finds neither stale state nor helpers left up. Only a third Ctrl-C (counting the
+        one that ended the run) ends it at once, for a teardown that hangs."""
         self.kill_all, self.signalled = True, self.signalled or sig  # an outage wait ends, a kept job doesn't run on
         what = "Ctrl-C" if sig == signal.SIGINT else signal.Signals(sig).name
         if sig == signal.SIGINT:

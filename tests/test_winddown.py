@@ -102,6 +102,17 @@ class CtrlCInWindDown(Base):
         self.assertFalse(self.lock_free())  # skipped: the process's end lets go of it
         self.pilot.lockfile.close()
 
+    def test_the_ctrl_c_that_ended_the_run_is_the_first_of_the_three(self):
+        def loop(pilot):
+            raise KeyboardInterrupt
+        with mock.patch.object(driver.Pilot, "loop", loop), \
+                mock.patch.object(driver, "tear_down", lambda p, **k: ctrl_c()):
+            with self.assertRaises(KeyboardInterrupt):  # the first press's own, once the wind-down is done
+                self.run_once()
+        self.assertIn("press Ctrl-C 1 time more to quit at once", self.log())
+        self.assertTrue(self.pilot.state_file.exists())
+        self.assertTrue(self.lock_free())
+
     def test_a_sigterm_in_the_wind_down_is_logged_and_changes_nothing(self):
         with mock.patch.object(driver, "tear_down", lambda p, **k: os.kill(os.getpid(), signal.SIGTERM)):
             self.run_once()
@@ -140,8 +151,8 @@ class NoPrompts(unittest.TestCase):
         self.addCleanup(setattr, util, "shielded", util.shielded)
         util.shielded = True
 
-    def env_of(self, env=None):
-        r = util.run(["sh", "-c", 'echo "$GIT_TERMINAL_PROMPT|$GIT_SSH_COMMAND"'], ".", env=env)
+    def env_of(self, env=None, cwd="."):
+        r = util.run(["sh", "-c", 'echo "$GIT_TERMINAL_PROMPT|$GIT_SSH_COMMAND"'], cwd, env=env)
         return r.stdout.strip()
 
     def test_a_shielded_command_gets_no_prompts_and_batch_mode(self):
@@ -176,9 +187,24 @@ class NoPrompts(unittest.TestCase):
         self.assertIn("BatchMode=yes", (s.tmp / "ssh-args").read_text())
         self.assertTrue(held.push_refusal(r.stderr).startswith("login refused"))
 
-    def test_an_unknown_host_key_reads_as_a_login_problem_too(self):
+    def test_an_unknown_host_key_says_to_accept_it_not_that_the_network_is_down(self):
         stderr = "Host key verification failed.\nfatal: Could not read from remote repository.\n"
-        self.assertTrue(held.push_refusal(stderr).startswith("login refused"))
+        self.assertEqual(held.push_refusal(stderr), "the remote's ssh host key isn't trusted yet; connect once by hand "
+                                                    "(`ssh -T` to its host) to check and accept it, and the next run "
+                                                    "pushes it")
+
+    def test_a_users_core_ssh_command_or_git_ssh_is_kept(self):
+        """Ours in GIT_SSH_COMMAND would override them, and the key they pick would never be used."""
+        s = Sandbox()
+        self.addCleanup(s.close)
+        with mock.patch.dict(os.environ, {}):
+            os.environ.pop("GIT_SSH_COMMAND", None)
+            self.assertEqual(self.env_of(cwd=s.root), "0|ssh -o BatchMode=yes")
+            os.environ["GIT_SSH"] = "/usr/local/bin/my-ssh"
+            self.assertEqual(self.env_of(cwd=s.root), "0|")
+            del os.environ["GIT_SSH"]
+            s.git("config", "core.sshCommand", "ssh -i ~/.ssh/work_key")
+            self.assertEqual(self.env_of(cwd=s.root), "0|")
 
 
 if __name__ == "__main__":

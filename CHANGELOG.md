@@ -48,7 +48,8 @@ release on the same day adds a number (`2026.10.9.1`).
 - A Ctrl-C while a run winds down no longer skips its save, teardown and unlock: it kills the sessions still running
   and the wind-down finishes (a third Ctrl-C quits at once). A failed teardown stays in the next "started" push until
   that push really goes out. Git steps the driver guards from Ctrl-C fail at once on a password or passphrase prompt
-  instead of hanging until the network timeout, and the refusal says it's a login problem.
+  instead of hanging until the network timeout, and the refusal says it's a login problem; an untrusted ssh host
+  key says to accept it by hand rather than that the network is down.
 
 ## 2026.10.13 - 2026-10-13
 

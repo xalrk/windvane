@@ -93,7 +93,8 @@ signal. A ticket's merge runs in its slot's thread and stops through the same se
 those steps works the same way: the step finishes, then the run stops (a second Ctrl-C changes nothing). The step's
 git commands run in a process group of their own, so the terminal's Ctrl-C reaches only the driver, not git, and with
 no terminal they never wait on a password or passphrase prompt: they fail at once, and the push's refusal says it's a
-login problem (`GIT_TERMINAL_PROMPT=0`, and ssh in BatchMode unless you set your own `GIT_SSH_COMMAND`). Outside them
+login problem (`GIT_TERMINAL_PROMPT=0`, and ssh in BatchMode unless you chose your own ssh command with
+`GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand`). Outside them
 Ctrl-C stops at once, except once the run is winding down: then a Ctrl-C (or another SIGTERM or SIGHUP) kills the
 sessions still running but lets the save, the teardown and the unlock finish; a third Ctrl-C quits at once. A step that fails while a signal waits still has its error named, in the log and the "stopped"
 push's why.
