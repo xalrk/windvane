@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import actions, heavy, install, phone, runner, scratch, selfupdate, statedir
+from . import actions, heavy, install, phone, runner, scratch, selfupdate, statedir, util
 from .config import CHECKOUT, DIR, HOME, TOKEN_FIX, Project, author, github_token
 from .util import gout, load_json
 
@@ -247,7 +247,40 @@ def checks(p=None):
     settings = install.claude_dir() / "settings.json"
     add(install.has_keyword_hook(settings, any_copy=True), False, f"the mention hook in {settings}",
         "windvane install")
-    return out + tmp_warnings(p) + state_warnings(p)
+    return out + moved_warnings(p) + tmp_warnings(p) + state_warnings(p)
+
+
+def moved_warnings(p):
+    """A warning when the project's running driver started from an interpreter or install that has gone since (a
+    reinstall, a Python upgrade): it runs on, but can't restart on new code or after a crash. Quiet when it can't
+    tell (no run, no /proc)."""
+    if p is None or not getattr(p, "exists", False) or not getattr(p, "state", None):
+        return []
+    try:
+        with open(p.state / "lock") as fh:  # its pid means a driver only while the lock is held
+            pid = int(fh.read().strip()) if util.held(fh) else 0
+    except (OSError, ValueError):
+        return []
+    missing = gone_from(pid) if pid else None
+    if not missing:
+        return []
+    return [("warn", f"the running driver (pid {pid}) started from {missing}, which is gone: it can't restart on new "
+             "code or after a crash", f"reinstall windvane ({selfupdate.REINSTALL})")]
+
+
+def gone_from(pid):
+    """The interpreter or script process `pid` was started from, when it has gone since; None when all is there or
+    it can't tell. A deleted program reads as "<path> (deleted)" in /proc; a script's path is its second word. Only
+    what is missing now counts: a restart execs the path, so a file replaced there since is no problem."""
+    try:
+        exe = os.readlink(f"/proc/{pid}/exe")
+        words = [os.fsdecode(w) for w in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if w]
+    except OSError:
+        return None
+    for w in [exe.removesuffix(" (deleted)"), *words[:2]]:  # a file replaced in place (an upgrade) is still there
+        if w.startswith("/") and not os.path.exists(w):
+            return w
+    return None
 
 
 def public_warnings(p):

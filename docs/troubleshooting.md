@@ -18,6 +18,12 @@ and log in to Claude Code; `windvane doctor` gives the command. After installing
 not found` means `~/.local/bin` isn't on your `PATH`: run `export PATH="$HOME/.local/bin:$PATH"` and add that line
 to your shell's startup file.
 
+**`new windvane code not taken up: ... is gone`, or `windvane couldn't start its driver`.**
+windvane was reinstalled or upgraded under a running autopilot, or a Python upgrade removed the interpreter it was
+installed with. Reinstall it: `pipx reinstall windvane`, or `sh install.sh` in the clone you installed from. A run that
+logged the first line goes on with its old code and restarts on the new one at its next update check; after the
+second, start the run again. `windvane doctor` warns while a running driver's interpreter or install is gone.
+
 **A ticket never starts beside the others (`T-024 waits: no Touches line, so it runs alone`).**
 A ticket without a `Touches:` line can't be proven independent of the running ones, so it waits for them. Add the
 line. Other `waits:` lines name the overlapping ticket and file.

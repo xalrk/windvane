@@ -45,6 +45,11 @@ release on the same day adds a number (`2026.10.9.1`).
   restarts when they end. The restart's log line says how much slot time that drain left idle.
 
 ### Fixed
+- An install that moves from under a run (a reinstall, a Python upgrade that removes the old interpreter) no longer
+  ends it: a self-update whose restart command is gone keeps the run going on its old code and says once how to
+  reinstall (it restarts on the new code at the next pull after that), and a `run --detach` that can't start its
+  driver tears down and pushes the reinstall step instead of crashing. `windvane doctor` names a running driver's
+  interpreter or install that has gone.
 - A Ctrl-C while a run winds down no longer skips its save, teardown and unlock: it kills the sessions still running
   and the wind-down finishes (a third Ctrl-C quits at once). A failed teardown stays in the next "started" push until
   that push really goes out. Git steps the driver guards from Ctrl-C fail at once on a password or passphrase prompt

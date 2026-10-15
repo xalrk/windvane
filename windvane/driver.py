@@ -1718,8 +1718,20 @@ class Pilot(Desk, Periodic):
             if line not in self.update_said:
                 self.log(line)
                 self.update_said.append(line)
-        if again and not self.behind:
+        if again and not self.behind and self.can_restart():
             self.behind = time.time()
+
+    def can_restart(self):
+        """Whether the command a restart execs is there: a reinstall or a Python upgrade may have taken it, and a
+        driver that hands over to nothing ends the run. Said once; the run goes on on its old code, and a pull after
+        windvane is reinstalled takes the new code up."""
+        missing = selfupdate.gone(exe())
+        line = (f"new windvane code not taken up: {missing} is gone; reinstall windvane ({selfupdate.REINSTALL}) "
+                "and the run restarts on it")
+        if missing and line not in self.update_said:
+            self.log(line)
+            self.update_said.append(line)
+        return not missing
 
     def draining(self):
         """True while new code waits for the running tickets: once the driver has been behind its install for
@@ -1739,6 +1751,9 @@ class Pilot(Desk, Periodic):
 
     def restart(self):
         """Restarts the driver in place on the install's new code, with the deadline as it now is."""
+        if not self.can_restart():  # gone since the pull: no more draining for a restart that can't happen
+            self.behind = self.drain = None
+            return
         names = lambda ids: ", ".join(ids) or "none"
         drained = ""
         if self.drain:
@@ -1757,7 +1772,7 @@ class Pilot(Desk, Periodic):
         except OSError as e:  # a moved or broken interpreter: the run ends with why (exec's own error names no file)
             os.environ.pop("WINDVANE_RESTARTED", None)  # the teardown's helpers aren't a restarted driver's
             raise RuntimeError(f"windvane couldn't restart on its new code ({cmd[0]}: {e.strerror.lower()}); "
-                               "run `windvane doctor`, then start the run again") from e
+                               f"reinstall windvane ({selfupdate.REINSTALL}), then start the run again") from e
 
     def hand_over(self):
         """Leaves the run's memory for the driver that replaces this one (`carry_over`)."""
@@ -2030,7 +2045,7 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
     restart is logged and pushed with the error. A stop, the deadline, an empty queue or a failed setup end the run
     as they end the driver. A driver killed by the system (OOM) is only pushed: its sessions, in process groups of
     their own, may still be at work in the worktrees a restart would resume. Returns the driver's last exit code."""
-    start = start or (lambda args, env: subprocess.run([*exe(), *args], env=env).returncode)
+    start = start or (lambda args, env: subprocess.run([*runnable(exe()), *args], env=env).returncode)
     began = util.clock()
     env = {**os.environ, SUPERVISED: "1"}
     env.pop("WINDVANE_RESTARTED", None)
@@ -2038,7 +2053,17 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
     while True:
         crash = p.state / "crash.json"
         crash.unlink(missing_ok=True)
-        rc = start(args, env)
+        try:
+            rc = start(args, env)
+        except OSError as e:  # the install moved (a reinstall, a Python upgrade): no driver to start or restart
+            why = f"{e.filename or exe()[0]}: {(e.strerror or str(e)).lower()}"
+            log(p, f"windvane couldn't start its driver ({why}); the run ends")
+            push("windvane stopped", whole("Why: windvane couldn't start its driver (", why, ").",
+                                          log=lambda m: log(p, m))
+                 + f"\nReinstall windvane ({selfupdate.REINSTALL}), then start the run again.", 4, "rotating_light",
+                 ("Status=status",))
+            tear_down(p, lock=True, tell=True)  # a driver that crashed before it left its helpers up
+            return 1
         info = load_json(crash, None)
         if info is None:
             if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
@@ -2076,6 +2101,15 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
             return rc
         args = selfupdate.restart_args(args, deadline)
         env["WINDVANE_RESTARTED"] = "1"
+
+
+def runnable(cmd):
+    """`cmd` when its files are there, else a FileNotFoundError naming the one gone (a script's own would name the
+    script when it is its #! interpreter that went)."""
+    missing = selfupdate.gone(cmd)
+    if missing:
+        raise FileNotFoundError(2, "No such file or directory", missing)
+    return cmd
 
 
 def tear_down(p, lock=False, tell=False):

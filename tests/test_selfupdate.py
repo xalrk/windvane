@@ -203,7 +203,8 @@ class Driver(unittest.TestCase):
         with redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError):
             self.pilot.run(now() + timedelta(hours=2))
         why = (f"driver error: windvane couldn't restart on its new code ({self.calls[0][0]}: no such file or "
-               "directory); run `windvane doctor`, then start the run again")
+               "directory); reinstall windvane (pipx reinstall windvane, or sh install.sh in its clone), then start "
+               "the run again")
         self.assertIn(why, self.log())
         self.assertNotIn("closed file", self.log())
         [msg] = [m for t, m in pushes if t == "windvane stopped"]
