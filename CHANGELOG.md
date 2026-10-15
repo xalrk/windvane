@@ -7,6 +7,9 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- Claude Code's login file is out of a session's reach, in auto mode: deny rules keep the file tools off it, and
+  sessions run Bash in Claude Code's sandbox, whose commands can't read it or see the login variables. Writes and the
+  network stay open in it; `windvane` and `git` commands run outside it.
 - Secrets kept out of `.windvane/`, which is pushed with your code: `windvane answer` refuses an answer holding a
   token, an ntfy URL or topic, a personal email or a word from `~/.config/windvane/private-terms.txt`; a change
   windvane would push to main, or a ticket it would merge, whose new `.windvane/` lines hold one stays local, and the

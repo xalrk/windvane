@@ -11,6 +11,9 @@ import weakref
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+# The suite run in Claude Code's Bash sandbox: windvane refuses to start sessions and jobs there, and the tests start
+# fakes of both
+os.environ.pop("SANDBOX_RUNTIME", None)
 PROC = Path("/proc")  # running() reads it; a test points it at an empty dir to take the macOS branch
 # A test still in its sandbox after this long is stuck (the slowest takes seconds): it prints every thread's stack and
 # ends the run, which names the hang instead of letting it use up a CI job's time limit in silence.

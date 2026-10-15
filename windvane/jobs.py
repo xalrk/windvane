@@ -19,7 +19,7 @@ from pathlib import Path
 from . import heavy, scratch, util
 from .config import exe
 from .heavy import STOP_AT
-from .runner import GRACE, NEST, ROLE, TICKET, signal_group
+from .runner import GRACE, NEST, ROLE, TICKET, outside_sandbox, signal_group
 from .util import append_jsonl, gout, now, read_jsonl
 
 _LOGS = itertools.count(1)  # a check log's number in this process
@@ -325,6 +325,7 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False):
     """Start `cmd` in the background. A session's job dies with it; a kept one (`keep`) goes on past it, until the
     run's stop, so a heavy job that can't both queue and run in one session still runs: the driver holds its ticket
     until it ends."""
+    outside_sandbox("a background job")  # it would end with the sandboxed call that started it
     if alive(find_job(p, name)[0]):
         sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
     base = job_base(p, name)

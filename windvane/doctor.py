@@ -212,6 +212,10 @@ def checks(p=None):
         lacks = claude_lacks()
         add(not lacks, True, f"Claude Code new enough ({version('claude') or '?'}"
             + (f" lacks {', '.join(lacks)})" if lacks else ")"), "claude update")
+    if sys.platform.startswith("linux"):  # without them Claude Code runs Bash unsandboxed, and says nothing
+        add(shutil.which("bwrap") and shutil.which("socat"), False,
+            "bubblewrap and socat (the Bash sandbox that keeps sessions' commands off Claude Code's login)",
+            "install them (e.g. sudo apt install bubblewrap socat); without them those commands can read the login")
     if p and p.exists:
         bad = p.perm_problems
         add(not bad, True, "[permissions] rules in config.toml" + (f": {'; '.join(bad)}" if bad else ""),

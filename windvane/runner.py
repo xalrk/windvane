@@ -22,6 +22,12 @@ NO_REQUEST = "Bash(windvane request *)"  # sessions other than workers (and the 
 TOOL_MS = "600000"
 GRACE = 3  # seconds a nested session gets to end on SIGTERM before SIGKILL: short, the driver waits on it
 NO_AUTO = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"  # set, Claude Code turns `--permission-mode auto` off
+LOGIN = ".credentials.json"  # Claude Code's login, in its config folder (macOS keeps it in the Keychain instead)
+LOGIN_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN")  # a login in the environment
+# Bash commands run outside the sandbox: windvane's own (a `bg` job must outlive the call, a critic's session must log
+# in) and git (`git add -A` fails on the sandbox's mount points, an SSH push can't take its proxy)
+OUTSIDE = ("windvane *", "git *")
+IN_SANDBOX = "SANDBOX_RUNTIME"  # set by Claude Code in a sandboxed Bash command's environment
 POLL = 5  # seconds between a quiet session's stop checks (small file reads, no tokens): how soon `stop --now` acts
 
 
@@ -334,10 +340,43 @@ def spent(final, seen):
             "cache_write": u.get("cache_creation_input_tokens", 0)}
 
 
+def login_file():
+    """Claude Code's login file: in CLAUDE_CONFIG_DIR when set, as Claude Code reads it, else in ~/.claude."""
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser().resolve() / LOGIN
+
+
+def login_rules():
+    """The deny rules that keep Claude Code's file tools (Read, Edit, and Grep and Glob through Read) off the login
+    file. Claude Code itself still reads it: permission rules govern the session's tool calls only."""
+    login = login_file()
+    return [f"Read(/{login})", f"Edit(/{login})"]  # `//` makes the path absolute in a permission rule
+
+
+def sandbox():
+    """Claude Code's Bash sandbox, there to keep commands off the login file and the login variables. Writes and the
+    network stay as open as without it (every host, the home folder), so a project's tools keep working; a command
+    that still fails in it can be retried outside it, which auto mode's classifier reviews. Where the sandbox can't
+    start (no bubblewrap on Linux), Claude Code runs commands without it."""
+    return {"enabled": True, "excludedCommands": list(OUTSIDE),
+            "filesystem": {"allowWrite": ["~/", "/tmp", "/var/tmp"]},
+            "credentials": {"files": [{"path": str(login_file()), "mode": "deny"}],
+                            "envVars": [{"name": n, "mode": "deny"} for n in LOGIN_VARS]},
+            "network": {"allowedDomains": ["*"], "allowLocalBinding": True, "allowAllUnixSockets": True}}
+
+
 def settings_json(allow=(), deny=()):
-    """The session's permission rules. A project's `[permissions]` rules come after windvane's own; deny wins over
-    allow in Claude Code, so a project's allow can't lift a deny that keeps a session off `main`."""
-    return json.dumps({"permissions": {"allow": list(allow), "deny": list(deny)}})
+    """The session's settings: permission rules and the sandbox. A project's `[permissions]` rules come after
+    windvane's own (the login file's first); deny wins over allow in Claude Code, so a project's allow can't lift a
+    deny that keeps a session off `main` or the login file."""
+    return json.dumps({"permissions": {"allow": list(allow), "deny": [*login_rules(), *deny]}, "sandbox": sandbox()})
+
+
+def outside_sandbox(what):
+    """Stop a command that can't work inside Claude Code's Bash sandbox (a session there can't log in, a job dies
+    with the call), saying how to run it outside: on its own, as OUTSIDE lets it."""
+    if os.environ.get(IN_SANDBOX):
+        raise SystemExit(f"windvane: {what} can't run inside the Bash sandbox: run the `windvane` command on its own "
+                         "(no pipe, redirect, `cd` or `&&`), so it runs outside it")
 
 
 OWN_LIMITS = {"error_max_turns": "max turns", "error_max_budget_usd": "dollar budget"}  # as the phone says them
@@ -395,6 +434,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     Returns (final text, why it was stopped or None, why it failed or None): a failure is the session's own
     (API error, crash), never the ticket's, so callers can retry it; a session out of its own turns or budget comes
     back stopped ("max turns")."""
+    outside_sandbox("a session")
     if p.perm_problems:  # the run and `windvane periodic` stop before this; a desk `plan` or `critic` stops here
         raise SystemExit(f"windvane: bad permission rules in config.toml: {'; '.join(p.perm_problems)}")
     own = p.perms.get(role, {})
