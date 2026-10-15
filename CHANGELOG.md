@@ -7,6 +7,9 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane heavy --expect <min>` and `bg --heavy --expect <min>`: a heavy job says how long it likely runs, so the
+  jobs waiting behind a command never timed before still get an estimate (recorded run times win over it).
+  `heavy --status` shows how long the holder has run and usually runs, `running 72 min, usually 40`.
 - `windvane public-check [--github]`: what a repository would expose if it went public, before it does. It reads
   every commit on every branch and tag in one pass (added lines, files named like secrets, commit messages, personal
   author emails), workflows that give a fork's pull request secrets, and with `--github` the pull requests and

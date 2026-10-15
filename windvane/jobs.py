@@ -321,7 +321,7 @@ def stray_line(name, base):
             f"tied to it): {how}; log {base}.log")
 
 
-def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False):
+def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None):
     """Start `cmd` in the background. A session's job dies with it; a kept one (`keep`) goes on past it, until the
     run's stop, so a heavy job that can't both queue and run in one session still runs: the driver holds its ticket
     until it ends."""
@@ -336,7 +336,8 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False):
     Path(f"{base}.start").write_text(str(int(time.time())))
     Path(f"{base}.cwd").write_text(str(Path(cwd).resolve()))  # ties it to its worktree, should job_base move again
     if heavy:
-        cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []), "--", *cmd]
+        cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []),
+               *(["--expect", f"{expect:.10g}"] if expect is not None else []), "--", *cmd]
     env = None
     if keep:  # it waits for the machine as long as it's kept (`watch` ends it), and belongs to no session
         Path(f"{base}.keep").write_text(os.environ.get(RUN_STOP, ""))

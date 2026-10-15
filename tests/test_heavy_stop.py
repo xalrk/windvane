@@ -179,7 +179,8 @@ class HeavyStop(unittest.TestCase):
         where = "/".join(self.d.resolve().parts[-2:])
         self.assertEqual(len(lines), 3, lines)
         self.assertRegex(lines[0], re.escape(f"held by pid {held.pid} (touch running; while [ ! -e release ]; do "
-                                             f"sleep 0.05; done in {where}, since ") + r"\d\d:\d\d\)$")
+                                             f"sleep 0.05; done in {where}, since ")
+                         + r"\d\d:\d\d; running under 1 min, never timed\)$")
         self.assertRegex(lines[1], rf"^waiting: pid {a.pid}, since \d\d:\d\d; work ahead unknown \(never timed\)$")
         self.assertRegex(lines[2], rf"^waiting: pid {b.pid}, since \d\d:\d\d; work ahead unknown \(never timed\)$")
         self.assertEqual(len(self.waiters()), 2)  # it took no place in line

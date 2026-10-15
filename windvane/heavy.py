@@ -215,10 +215,10 @@ def queue_dir():
     return lock_path().with_name("windvane-heavy.queue")
 
 
-def join_queue(need, key=None):
+def join_queue(need, key=None, expect=None):
     """An entry in the queue, named by arrival time so they sort in order, and flocked while this job lives. It holds
-    the job's memory need, for the waiters behind it to see whether it lets them by, and its `job_key`, for them to
-    tell how long it usually runs.
+    the job's memory need, for the waiters behind it to see whether it lets them by, and its `job_key` and own guess
+    of its run time (`expect`, minutes), for them to tell how long it runs.
 
     It's flocked and written under a hidden name first and only then renamed into place, so a scan never sees a live
     entry unlocked or empty. The open file keeps the entry; closing it (or dying) frees it."""
@@ -227,7 +227,7 @@ def join_queue(need, key=None):
     name = f"{time.time_ns():020d}-{os.getpid()}"
     fd = os.open(q / f".{name}", os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
-    os.write(fd, json.dumps({"mem": need, "key": key}).encode())
+    os.write(fd, json.dumps({"mem": need, "key": key, "expect": expect}).encode())
     os.rename(q / f".{name}", q / name)
     return fd, q / name
 
@@ -300,12 +300,13 @@ def need_of(path):
     return need if isinstance(need, (int, float)) and not isinstance(need, bool) else None
 
 
-def key_of(path):
-    """A waiter's `job_key`, from its queue entry; None when it can't be read."""
+def job_of(path):
+    """A waiter's (`job_key`, expected minutes), from its queue entry; Nones when it can't be read."""
     try:
-        return json.loads(Path(path).read_text() or "{}").get("key")
+        entry = json.loads(Path(path).read_text() or "{}")
+        return entry.get("key"), entry.get("expect")
     except (OSError, ValueError, AttributeError):
-        return None
+        return None, None
 
 
 def times_file():
@@ -368,21 +369,35 @@ def usual(key, times):
     return runs[len(runs) // 2] if runs else None
 
 
-def work_ahead(info, keys, times, now=None):
-    """The heavy work before a job can start, behind the holder `info` and the waiters with `keys` ahead of it:
-    (minutes known, how many jobs have no known time, how many jobs, the holder's usual minutes when it ran past
-    them). The holder counts its usual time less what it ran so far; one past its usual time has no known end."""
+def run_time(key, times, expect=None):
+    """A job's run time in minutes and where it comes from: (its `usual`, "usual"), else the `expect` it was started
+    with, (minutes, "expected"); (None, None) for a command never timed and never guessed. Recorded runs win: they
+    measured this machine, a guess didn't."""
+    if (u := usual(key, times)) is not None:
+        return u, "usual"
+    if isinstance(expect, (int, float)) and not isinstance(expect, bool) and expect > 0:
+        return expect, "expected"
+    return None, None
+
+
+def work_ahead(info, jobs, times, now=None):
+    """The heavy work before a job can start, behind the holder `info` and the waiters ahead of it (`jobs`, their
+    (key, expect)): (minutes known, how many jobs have no known time, how many jobs, the holder's (minutes, "usual"
+    or "expected") when it ran past them). The holder counts its time less what it ran so far; one past it has no
+    known end."""
     now = time.time() if now is None else now
-    jobs = [(info.get("key"), now - info.get("since", now))] if info.get("pid") and still_held(info) else []
+    held = info.get("pid") and still_held(info)
+    every = ([(info.get("key"), info.get("expect"), now - info.get("since", now))] if held else []) \
+        + [(k, e, 0) for k, e in jobs]
     mins, unknown, over = 0, 0, None
-    for key, ran in jobs + [(k, 0) for k in keys]:
-        u = usual(key, times)
+    for key, expect, ran in every:
+        u, kind = run_time(key, times, expect)
         if u is None or u < ran / 60:
             unknown += 1
-            over = over if u is None else u
+            over = over if u is None else (u, kind)
         else:
             mins += u - ran / 60
-    return mins, unknown, len(jobs) + len(keys), over
+    return mins, unknown, len(every), over
 
 
 def minutes(m):
@@ -399,7 +414,7 @@ def estimate(work, now=None):
     never = unknown - (over is not None)
     why = []
     if over is not None:
-        why.append("the holder is past its usual " + (f"{over:.0f} min" if over >= 1 else "time"))
+        why.append(f"the holder is past its {over[1]} " + (f"{over[0]:.0f} min" if over[0] >= 1 else "time"))
     if never:
         why.append("never timed" if never == jobs else f"{never} never timed")
     why = "; ".join(why)
@@ -439,13 +454,13 @@ def holder(lock):
         return {}
 
 
-def claim(lock, cmd, cwd, key=None):
+def claim(lock, cmd, cwd, key=None, expect=None):
     """Write this job into the lock it now holds, for the waiters' log line."""
     text = cmd if isinstance(cmd, str) else shlex.join(cmd)
     text = " ".join(text.split())
     where = Path(cwd or os.getcwd()).resolve().parts[-2:]
     info = {"pid": os.getpid(), "start": started_at(os.getpid()), "since": time.time(), "cmd": text if len(text) <= 60 else text[:59] + "…",
-            "cwd": "/".join(where), "key": key}
+            "cwd": "/".join(where), "key": key, "expect": expect}
     os.ftruncate(lock, 0)
     os.lseek(lock, 0, os.SEEK_SET)
     os.write(lock, json.dumps(info).encode())
@@ -461,13 +476,21 @@ def still_held(info):
     return now is None or abs(now - info["start"]) <= 2
 
 
-def held_by(info):
+def held_by(info, times=None):
+    """The holder, "held by pid 12 (render.sh in game/work, since 01:56)". A clock time, not minutes held: the waiting
+    line is printed once and read later, when minutes would be stale. Given `times` (for `status`, read live) it adds
+    how long it has run and its usual or expected time, "; running 72 min, usually 40"."""
     if not info.get("pid"):
         return "held by another heavy job"
     if not still_held(info):
         return "free"
-    # A clock time, not minutes held: the line is printed once and read later, when minutes would be stale.
-    since = time.strftime("%H:%M", time.localtime(info.get("since", time.time())))
+    at = info.get("since", time.time())
+    since = time.strftime("%H:%M", time.localtime(at))
+    if times is not None:
+        u, kind = run_time(info.get("key"), times, info.get("expect"))
+        word = "usually" if kind == "usual" else "expected"
+        since += f"; running {minutes((time.time() - at) / 60)}, " + (
+            "never timed" if u is None else f"{word} {u:.0f}" if u >= 1 else f"{word} under 1 min")
     return f"held by pid {info['pid']} ({info.get('cmd', '?')} in {info.get('cwd', '?')}, since {since})"
 
 
@@ -536,7 +559,7 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
         n = 0 if turn else len(line)
         key = "memory" if mine else why or (info.get("pid"), info.get("since"), n)
         if key != said or time.time() >= looked + 60:  # the wrap-up is looked at again each minute as time passes
-            work, looked = work_ahead(info, [key_of(w) for w in line[:n]], load_times()), time.time()
+            work, looked = work_ahead(info, [job_of(w) for w in line[:n]], load_times()), time.time()
             if key != said and mine:
                 say(f"heavy: waiting: {why}" + (f"; largest: {', '.join(big)}" if (big := largest()) else ""))
             elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
@@ -586,9 +609,10 @@ def deadline(cfg, wait_s):
         return time.time() + cfg["heavy_wait"] * 60
 
 
-def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None):
+def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None):
     """Run `cmd` under the machine-wide heavy lock, once `mem` GB (default: machine.toml's `min_free_gb`) are free,
-    counting the memory of its project's own reused helpers (`reuse_of`) as free.
+    counting the memory of its project's own reused helpers (`reuse_of`) as free. `expect` (minutes) is the job's own
+    guess of its run time, for the waiters' estimate until it has recorded times.
     Returns its exit code (TIMED_OUT if the wait timed out, at `deadline`, or as soon as the STOP file named in
     `STOP_ENV` appears while it waits).
 
@@ -608,7 +632,7 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None):
         return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
     need = cfg["min_free_gb"] if mem is None else mem
     key = job_key(cmd, cwd)
-    entry = join_queue(need, key)
+    entry = join_queue(need, key, expect)
     lock = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
     try:
         if not take(lock, entry, need, cfg, until, say, stopped, reuse):
@@ -616,7 +640,7 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None):
         leave_queue(entry)  # the next waiter becomes the head and waits on the lock
         entry = None
         try:
-            claim(lock, cmd, cwd, key)
+            claim(lock, cmd, cwd, key, expect)
             if (s := round(time.time() - t0)) >= 1:
                 say(WAITED.format(s))
             t1 = time.time()
@@ -639,10 +663,11 @@ def status():
         info = json.loads(lock_path().read_text() or "{}")
     except (OSError, ValueError):
         info = {}
-    line = held_by(info) if info.get("pid") else "free"
+    times = load_times()
+    line = held_by(info, times) if info.get("pid") else "free"
     if line != "free" and paused(info["pid"]):
         line += " (paused: everyone waits on it)"
-    lines, head, keys, times = [line], True, [], load_times()
+    lines, head, jobs = [line], True, []
     q = queue_dir()
     for name in sorted(os.listdir(q)) if q.is_dir() else []:
         pid = entry_pid(name)
@@ -654,8 +679,8 @@ def status():
         if paused(pid):
             line += " (paused: skipped)"
         else:
-            est = estimate(work_ahead(info, keys, times))
-            keys.append(key_of(q / name))
+            est = estimate(work_ahead(info, jobs, times))
+            jobs.append(job_of(q / name))
             if head:
                 head, need, mem = False, need_of(q / name), free_gb()
                 if short(need, mem):
