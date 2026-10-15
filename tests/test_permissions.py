@@ -51,6 +51,11 @@ class Permissions(unittest.TestCase):
         flags = call["flags"]
         return flags[flags.index("--settings") + 1]
 
+    def rules(self, settings):
+        """A session's permission rules without the login file's, which every session gets (test_session_login)."""
+        got = json.loads(settings)["permissions"]
+        return {**got, "deny": got["deny"][len(runner.login_rules()):]}
+
     def session(self, role, allow=(), deny=()):
         """The `--settings` one session of `role` got from the fake `claude`, as text."""
         runner.run_claude(self.p, role, f"{role}-run", "hi", "# windvane test", self.s.root, allow, deny)
@@ -62,15 +67,17 @@ class Permissions(unittest.TestCase):
                 "reviewer": (["Bash(tools/lint.sh)"], []), "planner": ([], ["Edit(src/**)"]),
                 "fix": (["Bash(make *)"], []), "preflight": ([], [])}
         for role, (allow, deny) in want.items():
-            got = json.loads(self.session(role, ["Bash(git *)"], ["Agent"]))["permissions"]
+            got = self.rules(self.session(role, ["Bash(git *)"], ["Agent"]))
             self.assertEqual(got, {"allow": ["Bash(git *)", *allow], "deny": ["Agent", *deny]}, role)
 
     def test_no_permissions_keeps_todays_settings_byte_for_byte(self):
         self.make()
         allow, deny = driver.worker_perms(self.p)
-        before = json.dumps({"permissions": {"allow": list(allow), "deny": list(deny)}})  # runner.py before T-031
+        login, sandbox = runner.login_rules(), runner.sandbox()
+        before = json.dumps({"permissions": {"allow": list(allow), "deny": [*login, *deny]}, "sandbox": sandbox})
         self.assertEqual(self.session("worker", allow, deny), before)
-        self.assertEqual(self.session("critic", (), ["Bash"]), '{"permissions": {"allow": [], "deny": ["Bash"]}}')
+        self.assertEqual(self.session("critic", (), ["Bash"]),
+                         json.dumps({"permissions": {"allow": [], "deny": [*login, "Bash"]}, "sandbox": sandbox}))
 
     def test_a_run_gives_the_worker_its_rules_after_the_drivers_own(self):
         self.make(PERMS)
@@ -80,7 +87,7 @@ class Permissions(unittest.TestCase):
         work = [c for c in self.calls() if c["system"].startswith("# windvane worker")]
         review = [c for c in self.calls() if c["system"].startswith("# windvane review")]
         self.assertTrue(work and review)
-        got = json.loads(self.settings(work[0]))["permissions"]
+        got = self.rules(self.settings(work[0]))
         own_allow, own_deny = driver.worker_perms(self.p)
         self.assertEqual(got, {"allow": [*own_allow, "Bash(tools/*)"], "deny": [*own_deny, "WebFetch"]})
         self.assertIn("Bash(tools/lint.sh)", json.loads(self.settings(review[0]))["permissions"]["allow"])

@@ -156,7 +156,8 @@ Sessions read text anyone can write on a public repo (issues, PR comments), so t
 the variables whose names look like credentials: any name holding `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD` or
 `API_KEY`, ending in `_KEY`, or starting with `AWS_`. What Claude Code logs in with stays (`ANTHROPIC_*`,
 `CLAUDE_*`, and `AWS_*` when `CLAUDE_CODE_USE_BEDROCK` is set), and so do gh's tokens (`GH_TOKEN`, `GITHUB_TOKEN`
-and their enterprise forms). `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is dropped too: Claude Code turns auto mode off
+and their enterprise forms), though the commands a session runs in its Bash sandbox don't get Claude Code's
+([safety](safety.md#whats-trusted-and-what-a-session-can-reach)). `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is dropped too: Claude Code turns auto mode off
 when it is set, and a headless session can then write nothing.
 
 | Key | Default | Meaning |
