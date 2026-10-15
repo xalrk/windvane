@@ -222,7 +222,8 @@ class Queue:
             if d in self.parked:
                 out.append(f"{d} is parked: to unpark it, take `{self.parked_lines[d]}` out of {rel}")
             elif d in (aside or {}):
-                out.append(f"{d} was set aside this run ({aside[d]}): {tid} waits until it merges")
+                out.append(f"{d} was set aside this run ({aside[d]}): {tid} waits until it merges, and the next run "
+                           f"takes {d} up again")
             elif not self.known(d):
                 out.append(f"`{d}` isn't a ticket: once it's done, add `- done: {d} (why)` to {rel}, or take it out "
                            f"of `Depends on:` in {self.files[tid]}")
@@ -232,7 +233,7 @@ class Queue:
         """Header lines the queue reads differently from how they look: a key indented off its line's start isn't a
         key, and an unclosed backtick hides every key after it on its line."""
         out, keys = [], r"(?:\*\*)?(?:Depends on|Related|Touches):"
-        for t in self.order:
+        for t in (t for t in self.order if not self.is_done(t)):  # a merged ticket's header no longer matters
             for n, line in enumerate(self.text[t].splitlines()[:8], 1):
                 if re.match(rf"\s+{keys}", line, re.I):
                     out.append(f"{self.files[t]} line {n}: `{line.strip()[:60]}` is indented: a key must start its "

@@ -66,13 +66,15 @@ class Hints(unittest.TestCase):
         with open(p.state / "lock", "a+") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
             out = self.queue_cli()
-        self.assertIn("hint: T-001 was set aside this run (hit its max turns): T-002 waits until it merges", out)
+        self.assertIn("hint: T-001 was set aside this run (hit its max turns): T-002 waits until it merges, and the next run "
+                      "takes T-001 up again", out)
         self.assertEqual(Queue(p).hints("T-003", {"T-001": "x"}), [])  # a ticket that doesn't wait gets none
 
     def test_an_unclosed_backtick_and_an_indented_key_are_warned_of_above_the_list(self):
         self.s.write(".windvane/tickets/T-001.md", "# T-001: x\nMilestone: `M9 · Depends on: T-003\nTouches: a.py.\n")
         self.s.write(".windvane/tickets/T-002.md", "# T-002: y `quoted\n  Depends on: T-003.\nTouches: b.py.\n")
-        self.publish()
+        self.s.write(".windvane/tickets/T-003.md", "# T-003: z\nMilestone: `M9 · Touches: c.py.\n")
+        self.publish("- done: T-003 (merged long ago: its header no longer matters)\n")
         out = self.queue_cli()
         warnings = [line for line in out.splitlines() if line.startswith("warning:")]
         self.assertEqual(warnings, [
