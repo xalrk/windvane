@@ -85,6 +85,11 @@ class HeavyHolder(FakeProc, unittest.TestCase):
                 self.sync(step=step)
                 self.assertTrue(heavy.still_held(info))
 
+    def test_a_line_written_now_reads_by_an_older_windvanes_rule_too(self):
+        info = self.claimed()  # an older windvane on the same machine reads `start` alone, as wall-clock seconds
+        self.assertLessEqual(abs(util.started_at(info["pid"]) - info["start"]), 2)
+        self.assertTrue(info["stamp"].startswith("boot:"))
+
     def test_a_reused_pid_after_a_reboot_is_free(self):
         info = self.claimed()
         self.reboot()
@@ -109,6 +114,7 @@ class Sweep(FakeProc, test_hangs.Hangs):
         d.mkdir(parents=True)
         with unittest.mock.patch.object(os, "getpid", return_value=self.owner.pid):
             (d / "session").write_text(runner.owner_line(self.worker.pid))
+        self.assertEqual(len((d / "session").read_text().split()), 5)
         (d / str(self.nested.pid)).write_text(util.stamp(self.nested.pid))
         self.owner.kill()
         self.owner.wait()

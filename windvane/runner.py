@@ -138,19 +138,21 @@ def inherited_stop(p, usage):
 
 
 def owner_line(pid):
-    """What a session's `session` file holds: its pid, then the pid and `stamp` of the process that owns it (the
-    driver, or a desk `plan`), so the sweep can tell a dead driver's worker from a desk session that's still wanted,
-    then the session's own `stamp`, so a number reused since isn't taken for it."""
+    """What a session's `session` file holds: its pid, then the pid, wall-clock start and `stamp` of the process that
+    owns it (the driver, or a desk `plan`), so the sweep can tell a dead driver's worker from a desk session that's
+    still wanted, then the session's own `stamp`, so a number reused since isn't taken for it. The wall-clock start
+    stays for an older windvane on the same machine, which reads only that far."""
     me = os.getpid()
-    return f"{pid} {me} {stamp(me) or '-'} {stamp(pid) or '-'}"
+    return f"{pid} {me} {started_at(me) or '-'} {stamp(me) or '-'} {stamp(pid) or '-'}"
 
 
 def owner_alive(owner):
-    """Whether the process named by a `session` file's owner fields ([pid, stamp]) still runs: the same pid, and the
-    same process (`same_process`: a reused number is someone else). A start it can't read either side counts as
-    alive."""
+    """Whether the process named by a `session` file's owner fields ([pid, start, stamp, ...]) still runs: the same
+    pid, and the same process (`same_process`: a reused number is someone else), by its stamp or, in an older
+    windvane's file, its wall-clock start. A start it can't read either side counts as alive."""
     try:
-        pid, start = int(owner[0]), owner[1] if owner[1:2] not in ([], ["-"]) else None
+        start, mark = ([None if f == "-" else f for f in owner[1:3]] + [None, None])[:2]
+        pid, start = int(owner[0]), mark or start
     except ValueError:
         return True  # unreadable: spared, as before owners were recorded
     try:

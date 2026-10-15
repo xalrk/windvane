@@ -298,13 +298,14 @@ def same_process(pid, recorded):
 
 
 def recorded_stamp(mark):
-    """The `stamp` a mark file holds: all of a group's mark, the last of a `session` file's four fields (its pid, then
-    its owner's pid and stamp, then its own). None for an older windvane's (empty, or without it): those go by mtime."""
+    """The `stamp` a mark file holds: all of a group's mark, the last of a `session` file's five fields (its pid, then
+    its owner's pid, start and stamp, then its own). None for an older windvane's (empty, or without it): those go by
+    mtime."""
     try:
         fields = mark.read_text(errors="replace").split()
     except OSError:
         return None
-    field = (fields[3:4] if mark.name == "session" else fields[:1]) or [""]
+    field = (fields[4:5] if mark.name == "session" else fields[:1]) or [""]
     return field[0] if field[0].startswith(("boot:", "wall:")) else None
 
 

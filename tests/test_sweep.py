@@ -121,8 +121,9 @@ class Owners(Sweep):
         line = runner.owner_line(123).split()
         self.assertEqual(line[:2], ["123", str(os.getpid())])
         self.assertTrue(runner.owner_alive(line[1:]))
-        self.assertTrue(re.fullmatch(r"boot:[0-9a-f-]+:\d+|wall:\d+(\.\d+)?", line[2]))  # a util.stamp
-        self.assertEqual(len(line), 4)  # then the session's own stamp
+        self.assertTrue(re.fullmatch(r"\d+(\.\d+)?", line[2]))  # an older windvane reads this far
+        self.assertTrue(re.fullmatch(r"boot:[0-9a-f-]+:\d+|wall:\d+(\.\d+)?", line[3]))  # a util.stamp
+        self.assertEqual(len(line), 5)  # then the session's own stamp
 
 
 if __name__ == "__main__":
