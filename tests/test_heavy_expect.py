@@ -94,6 +94,25 @@ class HeavyExpect(unittest.TestCase):
         self.assertEqual(join.call_args.args[2], 25)
         self.assertEqual(json.loads(out.read_text())["expect"], 25)
 
+    def test_an_older_lock_or_entry_without_expect_reads_as_never_timed(self):
+        proc = hold(self, self.d)
+        heavy.lock_path().write_text(json.dumps({"pid": proc.pid, "since": time.time() - 60, "cmd": "render.sh",
+                                                 "cwd": "game/work", "key": "render"}))
+        self.assertTrue(self.line().endswith("next in line; work ahead unknown (never timed)"))
+        self.assertTrue(heavy.status()[0].endswith("; running 1 min, never timed)"))
+        old = self.d / "entry"
+        old.write_text(json.dumps({"mem": 0, "key": "bake"}))
+        self.assertEqual(heavy.job_of(old), ("bake", None))
+
+    def test_a_dead_holders_expect_isnt_counted(self):
+        proc = hold(self, self.d)
+        heavy.lock_path().write_text(json.dumps({"pid": proc.pid, "since": time.time() - 60, "cmd": "render.sh",
+                                                 "cwd": "game/work", "key": "render", "expect": 30}))
+        proc.kill()
+        proc.wait()
+        self.assertEqual(heavy.status()[0], "free")
+        self.assertRegex(self.line([("bake", 5)]), r"lock: free; 1 ahead of this job; about 5 min of work ahead")
+
     def test_a_queue_entry_keeps_its_expect(self):
         entry = heavy.join_queue(0, "bake", 12.5)
         self.addCleanup(heavy.leave_queue, entry)

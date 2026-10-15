@@ -773,7 +773,7 @@ def main(argv=None):
     s.add_argument("--mem", type=gb, help="with --heavy: GB of free memory it needs (default: as `heavy`)")
     s.add_argument("--keep", action="store_true", help="with --heavy: it outlives the session (until the run's "
                                                        "stop); the ticket resumes when it ends")
-    s.add_argument("--expect", type=expected, help="with --heavy: minutes it likely runs (as `heavy --expect`)")
+    s.add_argument("--expect", type=expected, metavar="MIN", help="with --heavy: minutes it likely runs (as `heavy --expect`)")
     s.add_argument("name")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
@@ -781,7 +781,7 @@ def main(argv=None):
                                               "(default: the session's stop, else machine.toml's heavy_wait, 60)")
     s.add_argument("--mem", type=gb, help="GB of free memory it needs before starting "
                                              "(default: the project's heavy_mem, else machine.toml's min_free_gb)")
-    s.add_argument("--expect", type=expected, help="minutes it likely runs, for the estimate of the jobs waiting "
+    s.add_argument("--expect", type=expected, metavar="MIN", help="minutes it likely runs, for the estimate of the jobs waiting "
                                                    "behind it until it has run times of its own")
     s.add_argument("--status", action="store_true", help="who holds the lock and who waits, without waiting")
     s.add_argument("command", nargs=argparse.REMAINDER)
