@@ -305,7 +305,24 @@ class Drain(unittest.TestCase):
         self.assertEqual(log.count("new windvane code waits for T-002 to finish: no new tickets until then"), 1)
         self.assertEqual(len(self.calls), 1)
         line = [l for l in log.splitlines() if "windvane restarting with its new code" in l][0]
-        self.assertRegex(line, r"\(drained \d+ min, \d+ slot-min idle; so far merged: ")
+        self.assertRegex(line, r"\(drained under 1 min, (under 1|\d) min of slot time idle; so far merged: ")
+
+    def test_the_restart_says_how_much_slot_time_the_drain_left_idle(self):
+        clock = [10_000.0]
+        orig = driver.time.time
+        driver.time.time = lambda: clock[0]
+        self.addCleanup(setattr, driver.time, "time", orig)
+        self.pilot.behind, self.pilot.running = clock[0] - driver.DRAIN_AFTER, {"T-001": 0, "T-002": 1}
+        self.assertTrue(self.pilot.draining())  # both slots busy: nothing idle yet
+        clock[0] += 300
+        del self.pilot.running["T-002"]
+        self.assertTrue(self.pilot.draining())  # one slot idle from here on
+        clock[0] += 600
+        self.pilot.running, self.pilot.deadline = {}, now() + timedelta(hours=2)
+        with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
+            self.pilot.self_update()
+        self.assertIn("(drained 15 min, 10 min of slot time idle; so far merged",
+                      (self.p.state / "autopilot.log").read_text())
 
     def test_behind_for_less_it_refills_slots_and_restarts_when_none_runs(self):
         log = self.run_pilot()

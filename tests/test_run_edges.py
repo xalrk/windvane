@@ -64,7 +64,7 @@ class Edges(Merging):
 
 class StepError(Edges):
     def test_a_guarded_step_that_fails_while_a_sigterm_waits_names_its_error(self):
-        def pull(home, said):
+        def pull(home, said, ran=None):
             os.kill(os.getpid(), signal.SIGTERM)  # handled at once: waiting when the step then fails
             raise RuntimeError("boom")
 
@@ -123,7 +123,7 @@ class CtrlC(Edges):
     def test_a_run_ctrl_ced_during_its_self_update_finishes_the_pull_then_stops(self):
         done = []
 
-        def pull(home, said):
+        def pull(home, said, ran=None):
             self.signal_merge(signal.SIGINT)
             done.append(self.merged())
             return False

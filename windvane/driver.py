@@ -30,6 +30,7 @@ from . import (actions, critic, install, jobs, net, phone, privacy, renumber, re
                util, worktree)
 from .renumber import noted, old_numbers, said
 from .desk import Desk
+from .heavy import minutes
 from .held import author_ident, push_held
 from .periodic import Periodic
 from .phone import NTFY, REASON, cut, whole
@@ -1742,7 +1743,7 @@ class Pilot(Desk, Periodic):
         if self.drain:
             t = time.time()
             idle = self.drain[3] + (t - self.drain[1]) * self.drain[2]
-            drained = f"drained {(t - self.drain[0]) / 60:.0f} min, {idle / 60:.0f} slot-min idle; "
+            drained = f"drained {minutes((t - self.drain[0]) / 60)}, {minutes(idle / 60)} of slot time idle; "
         self.log(f"windvane restarting with its new code ({drained}so far merged: {names(self.merged)}; "
                  f"failed: {names(self.failed)})")
         self.hand_over()
