@@ -120,6 +120,13 @@ Workers' `gh` goes through a guard that refuses workflow starts, including throu
 gh command or one of your installed extensions (`gh dash`); gh's own commands still work. Run `gh alias list` to see
 why it fails (often a broken `~/.config/gh/config.yml`). The log says this once a run.
 
+**Empty `.env`, `package.json` or lock files appear in a worktree after a session.**
+Claude Code makes these zero-byte stubs (with empty `.claude/commands`, `.claude/agents` and `node_modules/.bin`)
+when `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is set, and in a git worktree it can't hide them from `git status`. windvane
+never sets it, and drops it from the sessions' environment even when your shell has it. Stubs older sessions left
+are removed from windvane's own worktrees when a slot starts a ticket and when it ends one: only untracked, empty
+files on that list, at the worktree's root. Any in your own checkout are yours to delete.
+
 **A push says "Temp dir nearly full".**
 windvane has already removed its own leftovers (and the `tmpXXXXXXXX` dirs older tests leaked, once a day old); see
 what's left with `du --inodes -s /tmp/* | sort -n | tail`, and remove what you don't need before it stops every command.
