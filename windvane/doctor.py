@@ -270,15 +270,14 @@ def moved_warnings(p):
 
 def gone_from(pid):
     """The interpreter or script process `pid` was started from, when it has gone since; None when all is there or
-    it can't tell. A deleted program reads as "<path> (deleted)" in /proc; a script's path is its second word."""
+    it can't tell. A deleted program reads as "<path> (deleted)" in /proc; a script's path is its second word. Only
+    what is missing now counts: a restart execs the path, so a file replaced there since is no problem."""
     try:
         exe = os.readlink(f"/proc/{pid}/exe")
         words = [os.fsdecode(w) for w in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if w]
     except OSError:
         return None
-    if exe.endswith(" (deleted)"):
-        return exe.removesuffix(" (deleted)")
-    for w in words[:2]:
+    for w in [exe.removesuffix(" (deleted)"), *words[:2]]:  # a file replaced in place (an upgrade) is still there
         if w.startswith("/") and not os.path.exists(w):
             return w
     return None

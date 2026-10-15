@@ -8,7 +8,8 @@ from .util import gout, run
 
 CODE = ("windvane/", "bin/", "prompts/")  # read once by the driver: a change here needs a restart
 SOURCE = "https://github.com/xalrk/windvane"  # where `pipx install git+...` took it from
-REINSTALL = "pipx reinstall windvane, or rerun install.sh"  # README's two ways in, for an install gone from under a run
+# README's two ways in, for an install gone from under a run
+REINSTALL = "pipx reinstall windvane, or sh install.sh in its clone"
 
 
 _loaded = {}  # install -> the commit this process's code came from

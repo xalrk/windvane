@@ -83,8 +83,8 @@ class SelfUpdate(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertFalse((self.p.state / "restart.json").exists())  # never handed over
         self.assertEqual(self.log().count(GONE), 1)
-        self.assertIn(f"{GONE}: {self.exe} is gone; reinstall windvane (pipx reinstall windvane, or rerun "
-                      "install.sh) and the run restarts on it", self.log())
+        self.assertIn(f"{GONE}: {self.exe} is gone; reinstall windvane (pipx reinstall windvane, or sh "
+                      "install.sh in its clone) and the run restarts on it", self.log())
         self.assertIsNone(self.pilot.behind)
         # Reinstalled: the next pull takes the new code up.
         self.exe.parent.mkdir(parents=True)
@@ -127,7 +127,8 @@ class Supervise(unittest.TestCase):
         self.assertTrue(self.mark.exists())
         self.assertEqual(self.pushes, [("windvane stopped", "Why: windvane couldn't start its driver "
                                         "(/old/venv/bin/windvane: no such file or directory).\nReinstall windvane "
-                                        "(pipx reinstall windvane, or rerun install.sh), then start the run again.")])
+                                        "(pipx reinstall windvane, or sh install.sh in its clone), then start the "
+                                        "run again.")])
         self.assertIn("couldn't start its driver (/old/venv/bin/windvane", (self.p.state / "autopilot.log").read_text())
         self.assertEqual((self.p.state / "lock").read_text(), "")
 
@@ -161,6 +162,7 @@ class Doctor(unittest.TestCase):
         fcntl.flock(fh, fcntl.LOCK_EX)
         fh.write(str(proc.pid))
         fh.flush()
+        self.pid = proc.pid
         return proc.pid
 
     def test_a_moved_interpreter_is_named_with_the_reinstall_step(self):
@@ -171,7 +173,17 @@ class Doctor(unittest.TestCase):
         python.unlink()
         self.assertEqual(doctor.moved_warnings(self.p), [
             ("warn", f"the running driver (pid {pid}) started from {python}, which is gone: it can't restart on new "
-             "code or after a crash", "reinstall windvane (pipx reinstall windvane, or rerun install.sh)")])
+             "code or after a crash", "reinstall windvane (pipx reinstall windvane, or sh install.sh in its clone)")])
+
+    def test_an_interpreter_replaced_in_place_is_no_warning(self):
+        """A distro upgrade or a reinstall puts a new file at the same path: a restart execs that, so all is well."""
+        python = self.s.tmp / "python3"
+        shutil.copy(shutil.which("sleep"), python)
+        self.running([str(python), "60"])
+        python.unlink()
+        shutil.copy(shutil.which("sleep"), python)
+        self.assertTrue(os.readlink(f"/proc/{self.pid}/exe").endswith(" (deleted)"))
+        self.assertEqual(doctor.moved_warnings(self.p), [])
 
     def test_a_moved_install_is_named(self):
         cmd = script(self.s.tmp / "windvane", "/bin/sh")

@@ -172,6 +172,15 @@ def killed(p, patch, s):
     return {"windvane stopped": ("killed (SIGKILL)", "Not restarted.")}
 
 
+def start_gone(p, patch, s):
+    p.state.mkdir(parents=True, exist_ok=True)
+
+    def start(a, e):
+        raise FileNotFoundError(2, "No such file or directory", f"/old/{LONG}/bin/python3")
+    driver.supervise(p, ["run"], now() + timedelta(hours=2), start=start)
+    return {"windvane stopped": ("couldn't start its driver",)}
+
+
 def teardown_failed(p, patch, s):
     cfg = s.root / ".windvane/config.toml"
     cfg.write_text(f'teardown = "exit 3 # {LONG}"\n' + cfg.read_text())
@@ -277,7 +286,7 @@ def tmp_full(p, patch, s):
 
 
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
-         quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, teardown_failed, leftovers, restarted, crashed_stopped,
+         quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
          held, secret_aside, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full]
 
 

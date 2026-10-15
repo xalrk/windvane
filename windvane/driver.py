@@ -2056,10 +2056,12 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
         try:
             rc = start(args, env)
         except OSError as e:  # the install moved (a reinstall, a Python upgrade): no driver to start or restart
-            why = f"windvane couldn't start its driver ({e.filename or exe()[0]}: {(e.strerror or str(e)).lower()})"
-            log(p, f"{why}; the run ends")
-            push("windvane stopped", f"Why: {why}.\nReinstall windvane ({selfupdate.REINSTALL}), then start the run "
-                 "again.", 4, "rotating_light", ("Status=status",))
+            why = f"{e.filename or exe()[0]}: {(e.strerror or str(e)).lower()}"
+            log(p, f"windvane couldn't start its driver ({why}); the run ends")
+            push("windvane stopped", whole("Why: windvane couldn't start its driver (", why, ").",
+                                          log=lambda m: log(p, m))
+                 + f"\nReinstall windvane ({selfupdate.REINSTALL}), then start the run again.", 4, "rotating_light",
+                 ("Status=status",))
             tear_down(p, lock=True, tell=True)  # a driver that crashed before it left its helpers up
             return 1
         info = load_json(crash, None)
