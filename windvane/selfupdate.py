@@ -8,6 +8,7 @@ from .util import gout, run
 
 CODE = ("windvane/", "bin/", "prompts/")  # read once by the driver: a change here needs a restart
 SOURCE = "https://github.com/xalrk/windvane"  # where `pipx install git+...` took it from
+REINSTALL = "pipx reinstall windvane, or rerun install.sh"  # README's two ways in, for an install gone from under a run
 
 
 _loaded = {}  # install -> the commit this process's code came from
@@ -77,6 +78,23 @@ def newer_release(current, tags=None):
         return best if best and key(best) > key(current) else None
     except ValueError:  # a local version like 0.1.0.dev1+g...: not comparable, say nothing
         return None
+
+
+def gone(cmd):
+    """The file a command `config.exe()` built can't start without, when it is missing or not executable: the program,
+    or the interpreter a script's #! line names (a Python upgrade removes it from under a pipx venv); else None.
+    Asked before an exec, whose own error names no file, and before the run hands over to a driver that can't start."""
+    if not (os.path.isfile(cmd[0]) and os.access(cmd[0], os.X_OK)):
+        return cmd[0]
+    try:
+        with open(cmd[0], "rb") as f:
+            line = f.readline(256)
+    except OSError:
+        return cmd[0]
+    words = line[2:].split() if line.startswith(b"#!") else []
+    if words and not (os.path.isfile(words[0]) and os.access(words[0], os.X_OK)):
+        return os.fsdecode(words[0])
+    return None
 
 
 def restart_args(argv, deadline):
