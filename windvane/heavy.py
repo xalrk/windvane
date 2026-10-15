@@ -150,7 +150,8 @@ def hints_in(log, head=65536):
             text = f.read(head).decode(errors="replace")
     except OSError:
         return []
-    return re.findall(r"^heavy: waiting: .*; ([^;\n]* " + re.escape(OWN) + r" [^;\n]*)$", text, re.M)
+    return [h for line in re.findall(r"^heavy: waiting: .*$", text, re.M)
+            for h in re.findall(r"; ([^;]* " + re.escape(OWN) + r" [^;]*)", line)]
 
 
 def in_dirs(path, dirs):

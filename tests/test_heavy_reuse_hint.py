@@ -145,6 +145,13 @@ class ReuseHint(unittest.TestCase):
         self.assertEqual(said.count(HINT), 1, said)
         self.assertIn("qemu-system-x86 (3.6 GB) " + HINT, said)
 
+    def test_two_own_helpers_both_reach_the_project_log(self):
+        self.ps(50, "qemu-system-x86", "state/slot-1", 3.6)
+        self.ps(51, "java", "proj", 1.5)
+        log = self.d / "check.log"
+        log.write_text(self.take([]) + "\n")
+        self.assertEqual([h.split()[0] for h in heavy.hints_in(log)], ["qemu-system-x86", "java"])
+
 
     def test_windvane_heavy_in_a_checkout_says_it(self):
         repo = self.d / "repo"
