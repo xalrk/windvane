@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import actions, scratch
 from .config import HOME, author, github_token
-from .util import append_jsonl, load_json, save_json, started_at
+from .util import append_jsonl, load_json, recorded_stamp, same_process, save_json, stamp, started_at
 
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
@@ -138,17 +138,21 @@ def inherited_stop(p, usage):
 
 
 def owner_line(pid):
-    """What a session's `session` file holds: its pid, then the pid and start time of the process that owns it (the
-    driver, or a desk `plan`), so the sweep can tell a dead driver's worker from a desk session that's still wanted."""
+    """What a session's `session` file holds: its pid, then the pid, wall-clock start and `stamp` of the process that
+    owns it (the driver, or a desk `plan`), so the sweep can tell a dead driver's worker from a desk session that's
+    still wanted, then the session's own `stamp`, so a number reused since isn't taken for it. The wall-clock start
+    stays for an older windvane on the same machine, which reads only that far."""
     me = os.getpid()
-    return f"{pid} {me} {started_at(me) or '-'}"
+    return f"{pid} {me} {started_at(me) or '-'} {stamp(me) or '-'} {stamp(pid) or '-'}"
 
 
 def owner_alive(owner):
-    """Whether the process named by a `session` file's owner fields ([pid, start]) still runs: the same pid, started
-    at the same time (a reused number is someone else). A start it can't read either side counts as alive."""
+    """Whether the process named by a `session` file's owner fields ([pid, start, stamp, ...]) still runs: the same
+    pid, and the same process (`same_process`: a reused number is someone else), by its stamp or, in an older
+    windvane's file, its wall-clock start. A start it can't read either side counts as alive."""
     try:
-        pid, start = int(owner[0]), float(owner[1]) if owner[1:2] not in ([], ["-"]) else None
+        start, mark = ([None if f == "-" else f for f in owner[1:3]] + [None, None])[:2]
+        pid, start = int(owner[0]), mark or start
     except ValueError:
         return True  # unreadable: spared, as before owners were recorded
     try:
@@ -157,23 +161,25 @@ def owner_alive(owner):
         return False
     except PermissionError:  # another user's: a reused number, which the start time shows
         pass
-    t = started_at(pid)
-    return t is None or start is None or abs(t - start) <= 2
+    return start is None or same_process(pid, start) is not False
 
 
 def signal_group(pgid, sig, mark=None, strict=False):
     """Send `sig` to a process group; False when it's gone. With `mark` (the file written as it started), a leader
-    started after it is someone else reusing the number (after a reboot, say), and is left alone. `strict` leaves it
-    alone too when its start time can't be read: numbers from a dead driver may well be a stranger's now."""
+    that isn't the process it names is someone else reusing the number (after a reboot, say), and is left alone; an
+    older windvane's mark names none, and a leader started after its mtime is someone else. `strict` leaves it alone
+    too when that can't be told: numbers from a dead driver may well be a stranger's now."""
     if mark:
-        t = started_at(pgid)
-        if t is None and strict:
+        if (known := recorded_stamp(mark)) is not None:
+            same = same_process(pgid, known)
+        else:
+            t = started_at(pgid)
+            try:  # /proc's boot time and ps's are in whole seconds
+                same = None if t is None else t <= mark.stat().st_mtime + 2
+            except OSError:
+                same = True
+        if same is False or (same is None and strict):
             return False
-        try:
-            if t is not None and t > mark.stat().st_mtime + 2:  # /proc's boot time and ps's are in whole seconds
-                return False
-        except OSError:
-            pass
     try:
         os.killpg(pgid, sig)
         return True
@@ -463,7 +469,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     own.write_text(owner_line(proc.pid))
     if mark:
         mark.parent.mkdir(parents=True, exist_ok=True)
-        mark.touch()
+        mark.write_text(stamp(proc.pid) or "")
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
     result, killed, final, noise, seen = "", None, {}, [], {}

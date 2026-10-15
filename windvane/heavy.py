@@ -30,7 +30,7 @@ from pathlib import Path
 
 from . import util
 from .config import user_dir
-from .util import started_at
+from .util import same_process, stamp, started_at
 
 # Process names, not command lines: `pgrep -f blender` would match any Claude session whose prompt says "blender".
 DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb": 6, "heavy_wait": 60}
@@ -459,7 +459,7 @@ def claim(lock, cmd, cwd, key=None, expect=None):
     text = cmd if isinstance(cmd, str) else shlex.join(cmd)
     text = " ".join(text.split())
     where = Path(cwd or os.getcwd()).resolve().parts[-2:]
-    info = {"pid": os.getpid(), "start": started_at(os.getpid()), "since": time.time(), "cmd": text if len(text) <= 60 else text[:59] + "…",
+    info = {"pid": os.getpid(), "start": started_at(os.getpid()), "stamp": stamp(os.getpid()), "since": time.time(), "cmd": text if len(text) <= 60 else text[:59] + "…",
             "cwd": "/".join(where), "key": key, "expect": expect}
     os.ftruncate(lock, 0)
     os.lseek(lock, 0, os.SEEK_SET)
@@ -468,12 +468,13 @@ def claim(lock, cmd, cwd, key=None, expect=None):
 
 def still_held(info):
     """Whether the holder named in the lock file still runs. A killed one leaves its line, and its pid may be reused
-    by some other process later: one that started at another time (2 s apart: /proc's boot time and ps's are in
-    whole seconds). A line without a start (an older windvane) or a start that can't be read goes by the pid alone."""
+    by some other process later, which `same_process` tells from it: by its `stamp`, or by the wall-clock `start`
+    in a line an older windvane wrote (which also reads `start`, so it stays). A line without either, or a start
+    that can't be read, goes by the pid alone."""
     if not lives(info["pid"]):
         return False
-    now = started_at(info["pid"]) if info.get("start") is not None else None
-    return now is None or abs(now - info["start"]) <= 2
+    known = info.get("stamp") or info.get("start")
+    return known is None or same_process(info["pid"], known) is not False
 
 
 def held_by(info, times=None, note=""):

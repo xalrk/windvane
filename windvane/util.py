@@ -267,6 +267,48 @@ def started_at(pid):
         return None
 
 
+def stamp(pid):
+    """Which process `pid` is, as text to record now and hand `same_process` later, or None when it's gone. On Linux
+    "boot:<boot id>:<start ticks since boot>" (/proc/<pid>/stat field 22): a step of the wall clock (NTP, a clock
+    set after resume) moves /proc's btime and so every `started_at`, but not this, and a reboot changes the boot id.
+    Elsewhere (macOS: `ps lstart`, no /proc) "wall:<its wall-clock start>", which such a step does move."""
+    if not PROC.is_dir():
+        t = started_at(pid)
+        return None if t is None else f"wall:{t}"
+    try:
+        ticks = int((PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[19])
+        return f"boot:{(PROC / 'sys/kernel/random/boot_id').read_text().strip()}:{ticks}"
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def same_process(pid, recorded):
+    """Whether process `pid` is the one `recorded` (a `stamp`) names, so a number reused since is someone else's;
+    None when it can't tell (gone, unreadable). A wall-clock start (macOS's, or written by an older windvane) is
+    compared by wall clock, 2 s apart at most: /proc's boot time and ps's are in whole seconds."""
+    if isinstance(recorded, str) and recorded.startswith("boot:"):
+        now = stamp(pid)
+        return None if now is None or not now.startswith("boot:") else now == recorded
+    try:
+        then = float(recorded.removeprefix("wall:") if isinstance(recorded, str) else recorded)
+    except (TypeError, ValueError):
+        return None
+    now = started_at(pid)
+    return None if now is None else abs(now - then) <= 2
+
+
+def recorded_stamp(mark):
+    """The `stamp` a mark file holds: all of a group's mark, the last of a `session` file's five fields (its pid, then
+    its owner's pid, start and stamp, then its own). None for an older windvane's (empty, or without it): those go by
+    mtime."""
+    try:
+        fields = mark.read_text(errors="replace").split()
+    except OSError:
+        return None
+    field = (fields[4:5] if mark.name == "session" else fields[:1]) or [""]
+    return field[0] if field[0].startswith(("boot:", "wall:")) else None
+
+
 def clock():
     """Now, on `started_at`'s clock: on Linux the boot time /proc gives in whole seconds plus the uptime, so a process
     started a moment after this reads as later, as it is; elsewhere the wall clock."""
