@@ -1,15 +1,29 @@
 """R-021, R-023: a heavy job waiting on memory that its own project's helper holds (an emulator its checks reuse),
 with no `heavy_reuses` pattern naming it, says once to add one; the free figure never reads as enough."""
+import io
 import os
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from contextlib import redirect_stderr, redirect_stdout
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from windvane import heavy, util  # noqa: E402
+from windvane import cli, heavy, jobs, util  # noqa: E402
+from windvane.runner import TICKET  # noqa: E402
+
+# The driver's heavy check waits in a python child: this stands in for its interpreter, reading the fake /proc.
+SHIM = """import sys
+from pathlib import Path
+from windvane import util
+util.PROC = Path({proc!r})
+code, sys.argv = sys.argv[2], ["-c", *sys.argv[3:]]
+exec(compile(code, "<string>", "exec"), {{"__name__": "__main__"}})
+"""
 
 GB = 1048576  # kB
 HINT = "is this project's own"
@@ -28,10 +42,14 @@ class ReuseHint(unittest.TestCase):
         for sub in ("proj", "state/slot-1", "other"):
             (d / sub / ".git").write_text("gitdir: x\n")
         self.dirs = [str(d / "proj"), str(d / "state"), str(d / "state/slot-1")]
-        for patch in (mock.patch.object(util, "PROC", self.proc),
-                      mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(d)})):
+        (d / "cfg/windvane").mkdir(parents=True)
+        (d / "cfg/windvane/machine.toml").write_text("busy = []\nmin_free_gb = 0\nheavy_wait = 0.03\n")  # 1.8 s
+        env = {"XDG_RUNTIME_DIR": str(d), "XDG_CONFIG_HOME": str(d / "cfg"), "XDG_STATE_HOME": str(d / "st")}
+        for patch in (mock.patch.object(util, "PROC", self.proc), mock.patch.dict(os.environ, env)):
             patch.start()
             self.addCleanup(patch.stop)
+        for k in ("WINDVANE_HEAVY_HELD", "WINDVANE_STOP_AT", TICKET):  # a session running the tests has them
+            os.environ.pop(k, None)
 
     def ps(self, pid, comm, cwd, rss_gb=0.0, ppid=1):
         p = self.proc / str(pid)
@@ -117,6 +135,55 @@ class ReuseHint(unittest.TestCase):
                                                'reuse it, add "qemu-system-x86" to heavy_reuses in '
                                                '.windvane/config.toml'])
         self.assertEqual(heavy.hints_in(self.d / "none.log"), [])
+        log.write_text("FAIL: test_hint\n  " + self.take([]).splitlines()[0].split("; ", 1)[1] + "\n")
+        self.assertEqual(heavy.hints_in(log), [])  # only the waiting line's own clause counts
+
+    def test_two_holders_of_one_name_are_named_once(self):
+        self.ps(50, "qemu-system-x86", "state/slot-1", 3.6)
+        self.ps(51, "qemu-system-x86", "proj", 1.5)
+        said = self.take([])
+        self.assertEqual(said.count(HINT), 1, said)
+        self.assertIn("qemu-system-x86 (3.6 GB) " + HINT, said)
+
+
+    def test_windvane_heavy_in_a_checkout_says_it(self):
+        repo = self.d / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / ".windvane").mkdir()
+        self.ps(50, "bash", "repo", 0.01)
+        self.ps(51, "qemu-system-x86", "sdk", 3.6, ppid=50)
+        err = io.StringIO()
+        with mock.patch.object(cli, "toplevel", return_value=repo), redirect_stderr(err), \
+                self.assertRaises(SystemExit) as e:
+            cli.main(["heavy", "--mem", "6", "--", "true"])
+        self.assertEqual(e.exception.code, heavy.TIMED_OUT)
+        self.assertEqual(err.getvalue().count(HINT), 1, err.getvalue())
+        self.assertIn('add "qemu-system-x86" to heavy_reuses', err.getvalue())
+        out = io.StringIO()
+        entry = heavy.join_queue(6)
+        try:
+            with mock.patch.object(cli, "toplevel", return_value=repo), mock.patch.object(heavy, "alive", bool), \
+                    redirect_stdout(out):
+                cli.main(["heavy", "--status"])
+        finally:
+            heavy.leave_queue(entry)
+        self.assertIn("qemu-system-x86 3.6 GB in tmp/sdk (this project's)".replace("tmp", self.d.name), out.getvalue())
+
+    def test_the_drivers_heavy_check_logs_it_to_the_project_log(self):
+        p = SimpleNamespace(root=self.d / "proj", state=self.d / "state",
+                            cfg={"check": "echo checked", "heavy_check": True, "heavy_mem": 6})
+        self.ps(50, "qemu-system-x86", "state/slot-1", 3.6)
+        shim = self.d / "python"
+        shim.write_text(f"#!{sys.executable}\n" + SHIM.format(proc=str(self.proc)))
+        shim.chmod(0o755)
+        with mock.patch.object(sys, "executable", str(shim)), redirect_stdout(io.StringIO()):
+            ok, summary, log = jobs.check(p, self.d / "proj", ticket="T-1")
+        self.assertIsNone(ok, summary)
+        self.assertEqual(log.read_text().count(HINT), 1, log.read_text())
+        project_log = (p.state / "autopilot.log").read_text().splitlines()
+        self.assertEqual([ln[17:] for ln in project_log if HINT in ln],
+                         ['heavy check: qemu-system-x86 (3.6 GB) is this project\'s own: if its heavy jobs reuse it, '
+                          'add "qemu-system-x86" to heavy_reuses in .windvane/config.toml'])
 
 
 if __name__ == "__main__":

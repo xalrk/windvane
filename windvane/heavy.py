@@ -150,7 +150,7 @@ def hints_in(log, head=65536):
             text = f.read(head).decode(errors="replace")
     except OSError:
         return []
-    return re.findall(r"; ([^;\n]* " + re.escape(OWN) + r" [^;\n]*)", text)
+    return re.findall(r"^heavy: waiting: .*; ([^;\n]* " + re.escape(OWN) + r" [^;\n]*)$", text, re.M)
 
 
 def in_dirs(path, dirs):
@@ -639,7 +639,8 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
                 own = [] if hinted else unreused(reuse, big, [info["pid"]] if info.get("pid") else [])
                 hinted = hinted or bool(own)
                 say(f"heavy: waiting: {why}" + (f"; largest: {', '.join(largest(big=big))}" if big else "")
-                    + "".join(f"; {reuse_hint(h)}" for h in own))
+                    + "".join(f"; {reuse_hint(h)}" for i, h in enumerate(own)
+                            if h[1] not in {g[1] for g in own[:i]}))  # a name once: the largest of it
             elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
                 say(f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work)))
             wrap, now = wrap_up(), time.time()
