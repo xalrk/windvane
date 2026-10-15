@@ -81,7 +81,9 @@ class PublicCheck(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("History: 1 commit(s) on every branch and tag", out)
         self.assertIn("ok       nothing found", out)
-        self.assertIn("Run it with --github", out)
+        self.assertEqual(out.count("--github"), 1, out)
+        self.assertIn("windvane public-check: what proj would expose", out)
+        self.assertNotIn(str(self.s.tmp), out)  # a path on this machine is a leak of its own
         self.assertNotIn("What to do next", out)
         code, out = self.check("--github")
         self.assertEqual(code, 0, out)
@@ -126,6 +128,11 @@ class PublicCheck(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn(f"a personal email as commit author or committer: 1 commit(s): {sha}\n", out)
         self.assertNotIn(EMAIL, out)
+
+    def test_a_file_name_git_quotes_is_named_as_it_is(self):
+        self.s.write('my "notes"\tdraft.txt', f"{TOKEN}\n")
+        sha = self.commit("notes")
+        self.assertIn(f'a token: 1 place(s): my "notes"\tdraft.txt:1 in {sha}', self.check()[1])
 
     def test_a_secret_in_a_commit_message_is_found(self):
         self.s.write("a.txt", "a\n")
@@ -173,13 +180,14 @@ class PublicCheck(unittest.TestCase):
         self.assertIn("WARNING  12 Actions runs (with their logs) turn public with the repo  -> read them", out)
         self.assertIn("WARNING  3 Actions artifacts turn public", out)
 
-    def test_settings_gh_cant_read_are_skipped_with_where_to_look(self):
-        self.edit(repo={"full_name": "me/proj"})
+    def test_settings_gh_cant_read_are_skipped_with_where_to_look_and_settings_warn_without_failing(self):
+        self.edit(repo={"full_name": "me/proj"}, runs=4)
         del_emails = json.loads(self.gh.read_text())
         del_emails.pop("emails")
         self.state(del_emails)
         code, out = self.check("--github")
-        self.assertEqual(code, 0, out)  # what can't be read is no finding
+        self.assertEqual(code, 0, out)  # what can't be read is no finding, nor what GitHub's settings warn of
+        self.assertIn("WARNING  4 Actions runs (with their logs) turn public with the repo", out)
         self.assertIn("SKIPPED  couldn't see secret scanning and push protection", out)
         self.assertIn("SKIPPED  couldn't read whether your account blocks pushes that expose its email  -> check "
                       "\"Block command line pushes that expose my email\" at https://github.com/settings/emails", out)

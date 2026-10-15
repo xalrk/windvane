@@ -11,6 +11,7 @@ import io
 import json
 import re
 import subprocess
+from pathlib import Path
 
 from . import privacy
 from .doctor import run_quiet
@@ -68,7 +69,7 @@ def parse(lines):
             line_kinds(text, f"message of {sha}")
         elif line.startswith("diff --git "):
             rest = line[len("diff --git "):]  # "a/NAME b/NAME": the same name twice, renames being off
-            name, head = rest[2:2 + (len(rest) - 5) // 2], True
+            name, head = diff_name(rest), True
         elif head and line.startswith("new file mode") and privacy.secret_file(name):
             found.append(("secret-file", f"{name} in {sha}"))
         elif head and line.startswith(("+++ ", "--- ")):
@@ -77,11 +78,24 @@ def parse(lines):
             m = re.match(r"@@ -\S+ \+(\d+)", line)
             n, head = int(m.group(1)) if m else 0, False
         elif line.startswith("+") and name and not head:
-            if (name, line) not in seen:
-                seen.add((name, line))
+            if hash((name, line)) not in seen:  # a hash, not the line: a big history's lines needn't all fit
+                seen.add(hash((name, line)))
                 line_kinds(line[1:], f"{name}:{n} in {sha}")
             n += 1
     return list(dict.fromkeys(found)), commits  # a message's two lines of one kind are one finding
+
+
+def diff_name(rest):
+    """The file a `diff --git a/NAME b/NAME` header names (renames are off, so both are the same), unquoting the C-style
+    quotes git puts around a name with a quote mark, backslash, tab or newline in it."""
+    if not rest.startswith('"'):
+        return rest[2:2 + (len(rest) - 5) // 2]
+    m = re.match(r'"((?:[^"\\]|\\.)*)"', rest)
+    raw = m.group(1) if m else rest
+    escapes = {"t": "\t", "n": "\n", '"': '"', "\\": "\\"}
+    raw = re.sub(r'\\([0-7]{3}|.)', lambda e: chr(int(e.group(1), 8)) if len(e.group(1)) == 3
+                 else escapes.get(e.group(1), e.group(1)), raw)
+    return raw[2:]
 
 
 def gh(root, *args, timeout=60):
@@ -215,8 +229,10 @@ NEXT = f"""What to do next, in this order:
 
 
 def main(root, github=False):
-    """Print the check; 0 when clean, 1 on findings, 2 when the history or (with `github`) the PR scan failed."""
-    print(f"windvane public-check: what {root} would expose if its repository went public")
+    """Print the check; 0 when clean, 1 on a leak or a workflow to fix, 2 when the history or (with `github`) the PR
+    scan failed. GitHub's settings warn without changing it: a private repo can't turn push protection on, and runs
+    already read stay counted."""
+    print(f"windvane public-check: what {Path(root).name} would expose if its repository went public")
     failed, found = False, 0
     try:
         hist, commits = history(root)
@@ -227,6 +243,7 @@ def main(root, github=False):
         print(f"History: couldn't scan it: {e}")
         failed = True
     rows = workflows(root)
+    found += sum(level == "warn" for level, _, _ in rows)
     if github:
         print("Pull requests: titles, bodies, comments and reviews")
         try:
@@ -234,14 +251,13 @@ def main(root, github=False):
             print("\n".join(grouped(prs)) or "  ok       nothing found")
             found += len(prs)
         except (ScanFailed, ValueError) as e:
-            print(f"  couldn't check them ({e}); try again once `gh auth status` works")
+            print(f"  couldn't check them ({e}); run it again once gh can reach the repository")
             failed = True
         rows += settings(root)
-    print("Repository settings" + ("" if github else " (only the workflow files: --github reads the rest from GitHub)"))
+    print("Repository settings" + ("" if github else " (only the workflow files)"))
     label = {"ok": "ok      ", "warn": "WARNING ", "skip": "SKIPPED "}
     for level, what, fix in rows:
         print(f"  {label[level]} {what}" + (f"  -> {fix}" if fix else ""))
-    found += sum(level == "warn" for level, _, _ in rows)
     if not github:
         print("Run it with --github to check the pull requests and the repository's settings on GitHub too.")
     if found:
