@@ -99,6 +99,15 @@ class Pull(unittest.TestCase):
         self.assertEqual(said, [])  # nothing left to fetch: it only notices the install is ahead of its code
         self.assertIsNone(selfupdate.pull(self.i.home, [], self.i.head()))  # the restarted driver runs it already
 
+    def test_an_install_dirty_at_start_then_moved_by_another_driver_restarts_this_one(self):
+        ran = self.i.head()
+        (self.i.home / "windvane/driver.py").write_text("a moment's edit\n")
+        self.assertIsNone(selfupdate.pull(self.i.home, [], ran))  # left alone, with its reason
+        self.s.git("checkout", "--", ".", cwd=self.i.home)
+        self.i.commit("windvane/driver.py", "v2\n")
+        self.s.git("pull", "-q", "--ff-only", cwd=self.i.home)  # another project's driver takes it up first
+        self.assertEqual(selfupdate.pull(self.i.home, [], ran), "restart")
+
     def test_an_install_moved_by_someone_else_with_only_docs_changed_needs_no_restart(self):
         ran = self.i.head()
         self.i.commit("README.md", "docs\n")
