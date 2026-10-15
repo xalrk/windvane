@@ -229,14 +229,6 @@ def branch_found(p, repo, head):
     return pushed(repo, p.upstream, [head, f"^{p.upstream}"], guarded(p))
 
 
-def history(repo):
-    """[(kind, "file:line in commit")] for every kind in the lines any commit on any ref adds: what a repository
-    shows once it's public, deleted files included."""
-    r = rules(tuple(NAMES))
-    return [(k, f"{name}:{n} in {sha}") for sha, name, n, text in added(repo, ["--all"])
-            for k in sorted(kinds_in(text, r))]
-
-
 def said(found, most=3):
     """Findings in words, kinds and places only: "a token at .windvane/QUESTIONS.md:12 in 1a2b3c4"."""
     parts = [f"{NAMES.get(k, k)} at {where}" for k, where in found[:most]]

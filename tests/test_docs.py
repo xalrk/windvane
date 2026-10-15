@@ -41,7 +41,7 @@ def help_text(*argv):
 
 def commands():
     """The subcommands `windvane --help` lists."""
-    m = re.search(r"\{([a-z,]+)\}", help_text())
+    m = re.search(r"\{([a-z,-]+)\}", help_text())
     return m.group(1).split(",")
 
 

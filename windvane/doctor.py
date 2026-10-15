@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import actions, heavy, install, phone, privacy, runner, scratch, selfupdate, statedir
+from . import actions, heavy, install, phone, runner, scratch, selfupdate, statedir
 from .config import CHECKOUT, DIR, HOME, TOKEN_FIX, Project, author, github_token
 from .util import gout, load_json
 
@@ -257,8 +257,8 @@ def public_warnings(p):
     if not r or r.returncode or r.stdout.strip().upper() != "PUBLIC":
         return []
     return [("warn", f"this repo is public on GitHub, and so is {DIR}/ (tickets, your answers, the critic's notes)",
-             f"keep secrets and personal details out of them; `windvane doctor --leaks` checks its history "
-             f"(docs/safety.md, \"What {DIR}/ holds\")")]
+             f"keep secrets and personal details out of them; `windvane public-check --github` checks its "
+             f"history and pull requests (docs/safety.md, \"What {DIR}/ holds\")")]
 
 
 def identity_warnings(p):
@@ -296,20 +296,6 @@ def token_warnings(p):
         return [("warn", f"[github] token_file: its token also reaches {len(others)} other private repo(s)",
                  f"limit it to {repo} alone (Repository access: Only select repositories)")]
     return []
-
-
-def leaks(p):
-    """`doctor --leaks`: every leak kind in the lines any commit adds, by kind with its places, never the text.
-    Exit status 1 when there are any, for a check before a repo goes public."""
-    found = {}
-    for kind, where in privacy.history(p.root):
-        found.setdefault(kind, []).append(where)
-    for kind, places in sorted(found.items()):
-        more = f" (+{len(places) - 20} more)" if len(places) > 20 else ""
-        print(f"{privacy.NAMES[kind]}: {len(places)} place(s): {', '.join(places[:20])}{more}")
-    print(f"{sum(map(len, found.values()))} place(s) to check in {p.root}'s history; a deleted file's lines stay in it"
-          if found else f"nothing found in {p.root}'s history")
-    return 1 if found else 0
 
 
 def tmp_scope(p):

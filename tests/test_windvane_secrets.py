@@ -298,7 +298,7 @@ class Public(unittest.TestCase):
         code, public = self.doctor("PUBLIC")
         self.assertIn("WARNING   this repo is public on GitHub, and so is .windvane/ (tickets, your answers, the "
                       "critic's notes)", public)
-        self.assertIn("windvane doctor --leaks", public)
+        self.assertIn("windvane public-check --github", public)
         for vis in ("PRIVATE", ""):  # "": gh fails, as offline
             self.assertEqual(self.doctor(vis), (code, public.replace(public[public.index("WARNING   this repo"):]
                                                                       .split("\n", 1)[0] + "\n", "")))

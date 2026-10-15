@@ -7,6 +7,11 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane public-check [--github]`: what a repository would expose if it went public, before it does. It reads
+  every commit on every branch and tag in one pass (added lines, files named like secrets, commit messages, personal
+  author emails), workflows that give a fork's pull request secrets, and with `--github` the pull requests and
+  comments, secret scanning, push protection and existing Actions runs. It prints kinds and places, never the text,
+  then the next steps: rotate first, then `git filter-repo`. `windvane doctor --leaks` now runs the same check.
 - Claude Code's login file is out of a session's reach, in auto mode: deny rules keep the file tools off it, and
   sessions run Bash in Claude Code's sandbox, whose commands can't read it or see the login variables. Writes and the
   network stay open in it; `windvane` and `git` commands run outside it.

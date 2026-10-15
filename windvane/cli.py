@@ -15,7 +15,8 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, questions, requests, schedule, watch
+from . import (doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, publiccheck, questions,
+               requests, schedule, watch)
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
@@ -661,6 +662,15 @@ def gb(text):
     return v
 
 
+def public_check(root, github):
+    """`public-check` (and `doctor --leaks`): any git repository, windvane's or not. Exit 2 outside one, as for a
+    scan that failed."""
+    if not root:
+        print("windvane public-check: run it in a git repository", file=sys.stderr)
+        return 2
+    return publiccheck.main(root, github)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="windvane", description=__doc__)
     ap.add_argument("-C", dest="cwd", help="run as if started in this directory")
@@ -680,8 +690,11 @@ def main(argv=None):
                    help="first remove windvane's leftover temp dirs, and what every project's state dir no longer "
                    "needs (idle merged worktrees, old transcripts, merged tickets' critic packs)")
     s.add_argument("--dry-run", action="store_true", help="with --clean: list what would go, with sizes")
-    s.add_argument("--leaks", action="store_true", help="instead: scan this repo's whole history for tokens, ntfy "
-                   "topics, personal emails, private words and this machine's names (before making it public)")
+    s.add_argument("--leaks", action="store_true", help="instead: `windvane public-check` without --github")
+    s = sub.add_parser("public-check", help="what this repo would expose if it went public: its whole history, and "
+                       "with --github its pull requests and settings (reads and changes nothing)")
+    s.add_argument("--github", action="store_true", help="also scan the pull requests and check the repo's settings, "
+                   "through gh")
     s = sub.add_parser("phone", help="pushes and questions on your phone (ntfy); off until `phone setup`")
     s.add_argument("action", choices=("setup", "off", "rotate", "listen"),
                    help="setup: turn it on and subscribe; off; rotate: new topics; listen: act on the phone's replies")
@@ -797,8 +810,10 @@ def main(argv=None):
     if a.cmd == "doctor":
         root = toplevel() if shutil.which("git") else None  # no git is one of the gaps doctor is there to name
         if a.leaks:
-            return doctor.leaks(Project(root)) if root else sys.exit("windvane doctor --leaks: run it in a git repo")
+            return public_check(root, False)
         return doctor.main(Project(root) if root else None, a.clean, a.dry_run)
+    if a.cmd == "public-check":
+        return public_check(toplevel() if shutil.which("git") else None, a.github)
     if a.cmd == "phone":
         root = toplevel()
         return phone.main(a, Project(root) if root and (root / DIR / "config.toml").is_file() else None)
