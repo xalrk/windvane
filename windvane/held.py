@@ -68,7 +68,8 @@ REFUSALS = (
      re.compile(r"push protection|cannot contain secrets|secret scanning", re.I)),
     ("login refused; {login} and the next run pushes it",
      re.compile(r"authentication failed|permission denied|permission to .* denied|could not read username|"
-                r"terminal prompts disabled|invalid username or password|\b403\b", re.I)),
+                r"terminal prompts disabled|invalid username or password|host key verification failed|\b403\b",
+                re.I)),
     ("refused by a hook or branch rule; change the rule, or push it by hand with `git push {remote} {branch}:{branch}-b` "
      "and {then}",
      re.compile(r"hook declined|protected branch|GH00\d|GH013|rule violation|remote rejected", re.I)),

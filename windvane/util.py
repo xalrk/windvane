@@ -35,8 +35,18 @@ def held(fh):
 
 def run(cmd, cwd, timeout=None, env=None):
     own = shielded and threading.current_thread() is threading.main_thread()
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env,
-                          **({"process_group": 0, "stdin": subprocess.DEVNULL} if own else {}))
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                          **({"process_group": 0, "stdin": subprocess.DEVNULL, "env": no_prompts(env)} if own else
+                             {"env": env}))
+
+
+def no_prompts(env=None):
+    """`env` (or ours) for a command out of the terminal's reach: git and ssh asking for a password or a passphrase
+    there would stop (SIGTTIN) until the network timeout, with nothing said; this way they fail at once, in words
+    `held.push_refusal` reads as a login problem. A `GIT_SSH_COMMAND` of the user's own is kept."""
+    env = dict(os.environ if env is None else env, GIT_TERMINAL_PROMPT="0")
+    env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+    return env
 
 
 def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1):

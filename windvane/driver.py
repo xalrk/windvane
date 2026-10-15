@@ -218,6 +218,7 @@ class Pilot(Desk, Periodic):
         self.stop_reason = "unknown"
         self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
         self.signalled, self.ending = None, False  # the SIGTERM or SIGHUP that ended the run; past its `finally`
+        self.presses = 0  # Ctrl-Cs since the wind-down began: the third ends it at once
         self.guarded = 0  # how deep the main thread is in `critical` steps: a signal waits for them to end
         self.left = ""  # the pid in the lock file a run that ended without its teardown left (`take_lock`)
         self.kept_note = ""  # the summary's line on kept jobs (`bg --keep`) the run's end killed or let go on
@@ -1850,9 +1851,9 @@ class Pilot(Desk, Periodic):
                                         f"started; nothing ran{ends}")
             elif ready and not restarted:
                 self.usage.probe(p)
-                push("windvane started", f"Until {hhmm(deadline)}. {self.usage.text()}.{failed_teardown(p)}", 2,
-                     "rocket", ("Status=status", "Stop=stop"))
-                (p.state / TEARDOWN_FAILED).unlink(missing_ok=True)  # said once
+                if push("windvane started", f"Until {hhmm(deadline)}. {self.usage.text()}.{failed_teardown(p)}", 2,
+                        "rocket", ("Status=status", "Stop=stop")):
+                    (p.state / TEARDOWN_FAILED).unlink(missing_ok=True)  # said once; unsent, the next run says it
             elif not ready:
                 self.stop_reason = self.halt or self.stop_check()
                 if self.stop_reason == "deadline" and not restarted:  # cut short during setup
@@ -1916,8 +1917,10 @@ class Pilot(Desk, Periodic):
 
     def on_signal(self, sig, frame):
         """The first SIGTERM or SIGHUP: every session is killed at its next poll, and the main thread unwinds to
-        `run`'s `finally`, unless it's there already. A second one changes nothing: the wind-down is under way.
-        Ctrl-C outside a guarded step is Python's own KeyboardInterrupt, at once, as without this handler."""
+        `run`'s `finally`. Once there, see `winding_down`. Ctrl-C outside a guarded step and the wind-down is Python's
+        own KeyboardInterrupt, at once, as without this handler."""
+        if self.ending:
+            return self.winding_down(sig)
         if sig == signal.SIGINT and not self.guarded:
             raise KeyboardInterrupt
         if self.signalled:
@@ -1926,12 +1929,29 @@ class Pilot(Desk, Periodic):
         if sig == signal.SIGHUP:  # its terminal is gone: a print there fails (EIO) and would cost the run its end
             sys.stdout = sys.stderr = open(os.devnull, "w")
         log(self.p, f"{SIGNALLED[sig]}: stopping now")
-        if not self.ending:
-            self.stop_reason = f"{SIGNALLED[sig]}; the running sessions were killed"
-            if self.guarded:
-                log(self.p, "  the step under way (a merge, a push, a pull) finishes first")
-                return
-            raise Signalled(sig)
+        self.stop_reason = f"{SIGNALLED[sig]}; the running sessions were killed"
+        if self.guarded:
+            log(self.p, "  the step under way (a merge, a push, a pull) finishes first")
+            return
+        raise Signalled(sig)
+
+    def winding_down(self, sig):
+        """A signal once `run`'s `finally` is under way (a user pressing Ctrl-C again to hurry it): the sessions still
+        running are killed at their next poll, but the run isn't unwound, so the save, the teardown and the unlock
+        still happen and the next run finds neither stale state nor helpers left up. Only a third Ctrl-C ends it at
+        once, for a teardown that hangs."""
+        self.kill_all, self.signalled = True, self.signalled or sig  # an outage wait ends, a kept job doesn't run on
+        what = "Ctrl-C" if sig == signal.SIGINT else signal.Signals(sig).name
+        if sig == signal.SIGINT:
+            self.presses += 1
+            if self.presses >= 3:
+                log(self.p, "Ctrl-C a third time: quitting now, without the rest of the wind-down")
+                raise KeyboardInterrupt
+        if sig == signal.SIGHUP and getattr(sys.stdout, "name", "") != os.devnull:  # as in on_signal
+            sys.stdout = sys.stderr = open(os.devnull, "w")
+        more = 3 - self.presses
+        log(self.p, f"{what}: already stopping: finishing the wind-down (the save, the teardown); "
+                    f"press Ctrl-C {said_times(more)} more to quit at once, skipping them")
 
     @contextmanager
     def critical(self):

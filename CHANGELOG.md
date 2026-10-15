@@ -44,6 +44,12 @@ release on the same day adds a number (`2026.10.9.1`).
   ticket runs; a driver whose slots stay busy stops starting tickets once it has run old code for 3 hours, and
   restarts when they end. The restart's log line says how much slot time that drain left idle.
 
+### Fixed
+- A Ctrl-C while a run winds down no longer skips its save, teardown and unlock: it kills the sessions still running
+  and the wind-down finishes (a third Ctrl-C quits at once). A failed teardown stays in the next "started" push until
+  that push really goes out. Git steps the driver guards from Ctrl-C fail at once on a password or passphrase prompt
+  instead of hanging until the network timeout, and the refusal says it's a login problem.
+
 ## 2026.10.13 - 2026-10-13
 
 The first public release of windvane, an autopilot for Claude Code. It works through a git project's tickets
