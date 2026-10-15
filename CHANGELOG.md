@@ -44,8 +44,9 @@ release on the same day adds a number (`2026.10.9.1`).
   ticket runs; a driver whose slots stay busy stops starting tickets once it has run old code for 3 hours, and
   restarts when they end. The restart's log line says how much slot time that drain left idle.
 - `windvane heavy --status` says a paused holder or waiter in one pair of parentheses with how to resume it
-  (`kill -CONT <pid>`), and a job whose lock holder has gone says `the machine lock is free` instead of waiting
-  for it. Sessions are told to pass `--mem` to heavy jobs that need more or less memory than a big build.
+  (`kill -CONT -- -<pgid>`, which wakes the stopped command along with `windvane heavy`), and a job whose lock
+  holder has gone says `the machine lock is free` instead of waiting for it. Sessions are told to pass `--mem` to
+  heavy jobs that need more or less memory than a big build.
 
 ### Fixed
 - A Ctrl-C while a run winds down no longer skips its save, teardown and unlock: it kills the sessions still running

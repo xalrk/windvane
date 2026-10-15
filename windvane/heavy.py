@@ -496,8 +496,14 @@ def held_by(info, times=None, note=""):
 
 
 def paused_note(pid, who):
-    """Why a stopped (Ctrl-Z) job matters and how to go on, for `status`'s parentheses."""
-    return f"paused, so {who}: resume it with kill -CONT {pid}"
+    """Why a stopped (Ctrl-Z) job matters and how to go on, for `status`'s parentheses. Ctrl-Z stops the whole
+    process group and the pid is only `windvane heavy`'s own, its command a child in that group, so the way out
+    wakes the group (under `bg --heavy` led by the shell around it); the bare pid only if the group can't be read."""
+    try:
+        target = f"-- -{os.getpgid(pid)}"
+    except OSError:
+        target = str(pid)
+    return f"paused, so {who}: resume it with kill -CONT {target}"
 
 
 def waiting_line(info, n, est=None):
@@ -674,9 +680,8 @@ def status():
         info = {}
     times = load_times()
     pid = info.get("pid")
-    line = held_by(info, times) if pid else "free"
-    if line != "free" and paused(pid):
-        line = held_by(info, times, "; " + paused_note(pid, "everyone waits"))
+    note = "; " + paused_note(pid, "everyone waits") if pid and paused(pid) else ""
+    line = held_by(info, times, note) if pid else "free"
     lines, head, jobs = [line], True, []
     q = queue_dir()
     for name in sorted(os.listdir(q)) if q.is_dir() else []:

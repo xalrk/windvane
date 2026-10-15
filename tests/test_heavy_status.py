@@ -76,7 +76,28 @@ class HeavyStatus(unittest.TestCase):
         self.until(lambda: heavy.paused(job.pid))
         line = heavy.status()[0]
         self.assertTrue(line.startswith(f"held by pid {job.pid} "), line)
-        self.assertTrue(line.endswith(f"; paused, so everyone waits: resume it with kill -CONT {job.pid})"), line)
+        self.assertTrue(line.endswith(f"; paused, so everyone waits: resume it with kill -CONT -- -{os.getpgid(job.pid)})"),
+                        line)
+
+    @unittest.skipUnless(Path("/proc/self/stat").exists(), "reads a child's state from /proc")
+    def test_the_paused_holders_way_out_resumes_its_command_too(self):
+        """Ctrl-Z stops the whole group: waking only `windvane heavy`'s pid would leave its command stopped."""
+        job = subprocess.Popen([sys.executable, "-c", RUN, "echo $$ > child; exec sleep 30"], env=self.env,
+                               cwd=self.d, stderr=subprocess.DEVNULL, start_new_session=True)
+
+        def end():
+            os.killpg(job.pid, signal.SIGCONT)
+            os.killpg(job.pid, signal.SIGKILL)
+            job.wait()
+        self.addCleanup(end)
+        self.until(lambda: (self.d / "child").exists() and (self.d / "child").read_text().strip())
+        child = int((self.d / "child").read_text())
+        os.killpg(job.pid, signal.SIGSTOP)  # what Ctrl-Z does
+        self.until(lambda: heavy.paused(job.pid) and heavy.paused(child))
+        way_out = heavy.status()[0].rsplit("resume it with ", 1)[1].rstrip(")")
+        subprocess.run(way_out, shell=True, check=True)
+        self.until(lambda: not heavy.paused(child))
+        self.assertNotIn("paused", heavy.status()[0])
 
     def test_without_proc_ps_runs_once_per_pid_in_ten_seconds(self):
         bin_ = self.d / "bin"

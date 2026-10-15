@@ -43,8 +43,12 @@ class HeavyWording(unittest.TestCase):
         with mock.patch.object(heavy, "paused", lambda pid: pid == me):
             line = heavy.status()[0]
         self.assertRegex(line, rf"^held by pid {me} \(make in a/b, since \d\d:\d\d; running .*; "
-                               rf"paused, so everyone waits: resume it with kill -CONT {me}\)$")
+                               rf"paused, so everyone waits: resume it with kill -CONT -- -{os.getpgid(me)}\)$")
         self.assertEqual((line.count("("), line.count(")")), (1, 1), line)
+
+    def test_a_pause_note_names_the_bare_pid_when_its_group_cant_be_read(self):
+        with mock.patch.object(heavy.os, "getpgid", side_effect=ProcessLookupError):
+            self.assertEqual(heavy.paused_note(12, "skipped"), "paused, so skipped: resume it with kill -CONT 12")
 
     def test_a_running_holder_has_no_pause_note(self):
         me = self.hold()
