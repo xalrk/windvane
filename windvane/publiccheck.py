@@ -39,8 +39,9 @@ def history(root):
            "--no-textconv", "--no-renames", "--diff-merges=first-parent", "--format=%x01%h%x00%ae%x00%ce%n%B%x02"]
     try:  # streamed: a big repo's whole history needn't fit in memory; stderr to a file, so it can't fill a pipe
         with tempfile.TemporaryFile() as errf, \
-                subprocess.Popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=errf) as p:
-            found, commits = parse(io.TextIOWrapper(p.stdout, encoding="utf-8", errors="replace", newline="\n"))
+                subprocess.Popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=errf) as p, \
+                io.TextIOWrapper(p.stdout, encoding="utf-8", errors="replace", newline="\n") as out:
+            found, commits = parse(out)
             p.wait()
             errf.seek(0)
             err = errf.read().decode("utf-8", "replace").strip()
