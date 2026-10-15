@@ -195,16 +195,14 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
   private repositories. Recommended for every public project.
 - **Commit identity.** Workers commit as `author` when it's set, not as your machine's global git identity, and on
   GitHub `windvane doctor` warns when that email isn't a noreply address.
-- **Claude Code's login.** Sessions run in auto mode with deny rules that keep Read, Edit, Grep and Glob off the
-  login file (`.credentials.json` in `CLAUDE_CONFIG_DIR`, or in `~/.claude`), and with Claude Code's Bash sandbox,
-  whose commands can't read that file and don't get `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or
-  `CLAUDE_CODE_OAUTH_TOKEN`. Claude Code itself still logs in. The sandbox leaves writes and the network as open as
-  without it, so a project's tools keep working. Three ways around it remain, each an action auto mode's classifier
-  reviews, and it refuses reads of the login file: `windvane` and `git` commands run outside the sandbox (a
-  background job must outlive its call, a critic's session must log in); a command that fails in the sandbox may be
-  retried outside it; and without bubblewrap and socat (Linux) the sandbox doesn't start at all (`windvane doctor`
-  says so). On macOS the login sits in the Keychain, not in a file. A `windvane` command that starts a session or a
-  background job stops inside the sandbox and says to run it on its own.
+- **Claude Code's login.** Deny rules keep a session's Read, Edit, Grep and Glob off the login file
+  (`.credentials.json` in `CLAUDE_CONFIG_DIR` or `~/.claude`), and its Bash runs in Claude Code's sandbox, whose
+  commands can't read that file or see `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`;
+  the session itself still logs in, in auto mode. The sandbox leaves writes and the network open, so a project's
+  tools keep working. Three ways around it are guarded only by auto mode's classifier, which refuses reads of the
+  login: `windvane` and `git` commands run outside the sandbox (a background job must outlive its call, a critic's
+  session must log in), a command that fails in it may be retried outside it, and without bubblewrap and socat
+  (Linux; `windvane doctor` says so) it doesn't start. On macOS the login is in the Keychain.
 
 What a session can still read: any other file your user can (your home directory included), and the web. Run
 windvane on a machine or account that holds only what its projects need.
