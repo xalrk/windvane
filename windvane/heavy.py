@@ -46,8 +46,8 @@ WAITED = "heavy: waited {} s for the machine"
 WAITED_RE = re.compile("^" + re.escape(WAITED).replace(r"\{\}", r"(\d+)") + "$", re.M)
 # A wait on memory with no need of its own (no `--mem`, no `heavy_mem`): the line says once where the need comes from,
 # since a small job may sit for an hour behind a default sized for a big build.
-DEFAULT_NEED = "the {} GB is machine.toml's min_free_gb: if this job needs less, give it --mem <GB> (or set heavy_mem " \
-               "for the project)"
+DEFAULT_NEED = "the {} GB is machine.toml's min_free_gb: if this job needs less, give it --mem <GB> (or set heavy_mem in " \
+               ".windvane/config.toml)"
 # A session's stop, as a Unix time: the driver sets it for each session (its `bg` jobs and checks inherit it) and for
 # its own checks. A job waits for the machine until then, not `heavy_wait`.
 STOP_AT = "WINDVANE_STOP_AT"

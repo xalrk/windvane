@@ -20,7 +20,8 @@ from windvane import heavy, jobs, scratch, util  # noqa: E402
 from windvane.runner import IN_SANDBOX, TICKET  # noqa: E402
 
 GB = 1048576  # kB
-CLAUSE = "is machine.toml's min_free_gb: if this job needs less, give it --mem <GB> (or set heavy_mem for the project)"
+CLAUSE = ("is machine.toml's min_free_gb: if this job needs less, give it --mem <GB> "
+          "(or set heavy_mem in .windvane/config.toml)")
 
 
 class DefaultNeed(unittest.TestCase):
