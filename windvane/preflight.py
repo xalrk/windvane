@@ -16,8 +16,8 @@ from .config import slots
 from .driver import REVIEW_DENY
 from .held import land
 from .planner import pending_ids
-from .questions import (BLOCK_RE, OPT_RE, blocks, give_answer, note, part, prov_numbers, qkey, shown, ticket_of,
-                        waiting_on)
+from .questions import (BLOCK_RE, OPT_RE, blocks, give_answer, note, part, prov_numbers, qkey, remembered, shown,
+                        ticket_of, waiting_on)
 from .queue import Queue
 from .runner import rules, run_claude
 from .util import git, gout, load_json, log, now, read_jsonl, save_json
@@ -55,12 +55,12 @@ def question(tid, q, body, kind, n):
             "built": built.group(1) if built else "", "change_at": built.group(2).strip() if built else ""}
 
 
-def provisionals(qtext, heading="Provisional", kind="provisional"):
+def provisionals(qtext, heading="Provisional", kind="provisional", p=None):
     """Provisional answers built without the user, as questions to ask again (ids `T-003.p1`, as `windvane status`
-    names them: `questions.prov_numbers`); or, for ## Open, questions left there that no run waits on (kind "stuck",
+    names them: `questions.prov_numbers`, and given the project, those it showed before); or, for ## Open, questions left there that no run waits on (kind "stuck",
     ids `T-003.o1`): they block their ticket for good."""
     out, seen = [], {}
-    nums = prov_numbers(qtext) if heading == "Provisional" else []
+    nums = (remembered(p, qtext) if p else prov_numbers(qtext)) if heading == "Provisional" else []
     for i, (tid, q, body) in enumerate(blocks(part(qtext, heading))):
         seen[tid] = seen.get(tid, 0) + 1
         out.append(question(tid, q, body, kind, f"{kind[0]}{nums[i] if nums else seen[tid]}"))
@@ -75,7 +75,7 @@ def waiting(p, qtext):
     for key, q in waiting_on(load_json(p.state / "state.json", {}).get("questions", {})).items():
         out.append({"id": key, "ticket": ticket_of(key, q), "kind": "open", "question": q["q"], "context": "",
                     "options": q["opts"], "recommendation": q["rec"], "why": "", "built": "", "change_at": ""})
-    prov = provisionals(qtext)
+    prov = provisionals(qtext, p=p)
     keys = {qkey(x) for x in prov}
     if qtext:  # the record keeps only those still provisional
         note(p, lambda s: s.update(preflight=[k for k in s["preflight"] if k in keys]))
@@ -142,7 +142,7 @@ def lookup(p, key):
         return x
     git(p.main_root(), "fetch", "-q", p.remote)
     qtext = gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")
-    return pick(provisionals(qtext)) or pick(provisionals(qtext, "Open", "stuck")) or built_answer(p, key, qtext)
+    return pick(provisionals(qtext, p=p)) or pick(provisionals(qtext, "Open", "stuck")) or built_answer(p, key, qtext)
 
 
 def built_answer(p, key, qtext):
@@ -150,7 +150,7 @@ def built_answer(p, key, qtext):
     answer push names that id), found by its question; None before it merges, or if the worker reworded it."""
     m = re.fullmatch(r"(?i)(.+)\.q(\d+)", key.strip())
     q = shown(p)["built"].get(f"{p.norm(m.group(1))}.q{m.group(2)}") if m and p.norm(m.group(1)) else None
-    hit = [x for x in provisionals(qtext) if q and x["ticket"] == p.norm(m.group(1)) and x["question"] == q]
+    hit = [x for x in provisionals(qtext, p=p) if q and x["ticket"] == p.norm(m.group(1)) and x["question"] == q]
     return hit[0] if len(hit) == 1 else None
 
 
@@ -184,14 +184,15 @@ def answered_block(found, ids, x):
     return (exact or named or (mine if len(mine) == 1 else [None]))[0]
 
 
-def file_answers(qtext, answers):
-    """QUESTIONS.md with each (question, letter, text) moved or added under ## Answered."""
+def file_answers(qtext, answers, known=None):
+    """QUESTIONS.md with each (question, letter, text) moved or added under ## Answered (`known`: the numbers of the
+    provisional ids shown, as `questions.prov_numbers` takes them)."""
     text = qtext or "# Questions for the user\n\n## Open\n\n## Provisional\n\n## Answered\n"
     answers = list(answers)
     for heading, kind in (("Provisional", "provisional"), ("Open", "stuck")):
         sec = part(text, heading)
         found = list(BLOCK_RE.finditer(sec))
-        ids = [f"{m.group(1)}.p{n}" for m, n in zip(found, prov_numbers(text))] if kind == "provisional" \
+        ids = [f"{m.group(1)}.p{n}" for m, n in zip(found, prov_numbers(text, known))] if kind == "provisional" \
             else [""] * len(found)
         hits = {}
         for j, (x, *rest) in enumerate(answers):
@@ -263,7 +264,7 @@ def record(p, answers):
                 filed[i] = (*a, tid)
         f = cd / p.questions_rel
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(file_answers(f.read_text() if f.exists() else "", filed))
+        f.write_text(file_answers(f.read_text() if f.exists() else "", filed, shown(p)["ids"]))
         git(cd, "add", "-A", ".windvane")
         ids = ", ".join(sorted({a[0]["ticket"] for a in filed}))
         ok, where = land(p, cd, f"answers-{now():%Y%m%d-%H%M%S}", f"Answers at the desk: {ids}",

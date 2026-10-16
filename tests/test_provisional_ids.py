@@ -3,6 +3,7 @@ added meanwhile, and `windvane status` and preflight name it the same way."""
 import contextlib
 import io
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -28,6 +29,12 @@ def merged(text, *blocks):
     """`text` with blocks a later ticket's merge put under ## Provisional."""
     head, sep, tail = text.partition("\n## Answered")
     return head.rstrip("\n") + "\n" + "\n".join(BLOCK.format(t=t, q=q, a=a) for t, q, a in blocks) + "\n" + sep + tail
+
+
+def above(text, *blocks):
+    """`text` with blocks a worker put at the top of ## Provisional."""
+    return text.replace("## Provisional\n", "## Provisional\n" + "".join(BLOCK.format(t=t, q=q, a=a) + "\n"
+                                                                         for t, q, a in blocks), 1)
 
 
 def ids(text):
@@ -69,6 +76,12 @@ class StableIds(unittest.TestCase):
         self.assertEqual(ids(merged(answer(qfile(FIRST, SECOND), "T-003.p2"), THIRD)), ["T-003.p1", "T-003.p3"])
         text = answer(answer(qfile(FIRST, SECOND), "T-003.p2"), "T-003.p1")
         self.assertEqual(ids(merged(text, THIRD)), ["T-003.p3"])
+
+    def test_a_question_put_above_the_shown_ones_takes_a_new_number(self):
+        shown = {"T-003: Red or blue?": 1, "T-003: Lamp or torch?": 2}
+        self.assertEqual(questions.prov_numbers(above(qfile(FIRST, SECOND), THIRD), shown), [3, 1, 2])
+        text = answer(qfile(FIRST, SECOND), "T-003.p1")
+        self.assertEqual(questions.prov_numbers(above(text, THIRD), {"T-003: Lamp or torch?": 2}), [3, 2])
 
     def test_the_middle_of_three_answered_leaves_the_others_alone(self):
         text = answer(qfile(FIRST, SECOND, THIRD), "T-003.p2")
@@ -120,6 +133,23 @@ class AnswerCommand(unittest.TestCase):
         lamp = [body for _, q, body in questions.blocks(questions.part(text, "Answered")) if q == "Lamp or torch?"]
         self.assertIn("Answer: A (confirmed the provisional answer)", lamp[0])
         self.assertIn(", as T-003.p2)", lamp[0])
+
+    def test_status_names_each_question_alike_while_others_are_answered_or_put_above(self):
+        self.assertEqual(self.status(), ["Red or blue? T-003.p1", "Lamp or torch? T-003.p2"])
+        self.s.write(".windvane/QUESTIONS.md", above(self.main_questions(), THIRD))
+        self.s.publish("a third, above")
+        self.assertEqual(self.status(), ["Tea or coffee? T-003.p3", "Red or blue? T-003.p1", "Lamp or torch? T-003.p2"])
+        self.cli("answer", "T-003.p2", "A")
+        self.assertEqual(self.status(), ["Tea or coffee? T-003.p3", "Red or blue? T-003.p1"])
+        self.assertEqual(answered(self.main_questions()), ["Lamp or torch?"])
+        self.cli("answer", "T-003.p3", "A")
+        self.assertEqual(self.status(), ["Red or blue? T-003.p1"])
+        self.assertEqual(answered(self.main_questions()), ["Lamp or torch?", "Tea or coffee?"])
+
+    def status(self):
+        """(question, id) of each provisional line `windvane status` prints."""
+        return [f"{m.group(1)} {m.group(2)}" for m in re.finditer(r"^provisional: T-003: (.+?) Built .* windvane answer "
+                                                                  r"(\S+) <letter>$", self.cli("status"), re.M)]
 
     def test_the_bare_ticket_id_answers_its_only_one_left(self):
         self.cli("answer", "T-003.p2", "A")

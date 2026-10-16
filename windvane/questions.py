@@ -85,27 +85,42 @@ def provisional(text):
     return out
 
 
-def prov_numbers(text):
+def prov_numbers(text, known=None):
     """For each block under ## Provisional, in order, its number among its ticket's provisional questions (the 2 of
-    `T-003.p2`), counting those already answered: their ## Answered block keeps the id it was filed under. So answering
-    one, in any order, never renumbers the rest, and an id the user was shown names the same question until it's
-    answered; a block merged later takes a number never shown for another."""
+    `T-003.p2`), so that an id the user was shown names the same question until it's answered: a block keeps the
+    number `known` ({qkey: number}, those shown) gives it wherever it now sits, and a new one takes the smallest number
+    neither shown nor filed (an answered block's Answer line keeps its id). Answering one, in any order, never
+    renumbers the rest, and a block merged later, even above the others, never takes an id shown for another."""
+    known = known or {}
     taken = {}
     for tid, _, body in blocks(part(text, "Answered")):
         taken.setdefault(tid, set()).update(int(n) for n in FILED_RE.findall(body))
-    last, out = {}, []
-    for tid, _, _ in blocks(part(text, "Provisional")):
-        n = last.get(tid, 0) + 1
-        while n in taken.get(tid, ()):
-            n += 1
-        last[tid] = n
+    for key, n in known.items():
+        taken.setdefault(key.split(": ", 1)[0], set()).add(n)
+    out = []
+    for tid, q, _ in blocks(part(text, "Provisional")):
+        n = known.get(f"{tid}: {q}")
+        if n is None:
+            n = min(set(range(1, len(taken.get(tid, ())) + 2)) - taken.get(tid, set()))
+        taken.setdefault(tid, set()).add(n)
         out.append(n)
     return out
 
 
-def with_ids(text):
-    """`provisional`'s answers, each with the id `windvane answer` and preflight take (`T-003.p2`)."""
-    return [{**q, "id": f"{q['ticket']}.p{n}"} for q, n in zip(provisional(text), prov_numbers(text))]
+def remembered(p, text):
+    """`prov_numbers` for `text` from the numbers shown before (shown.json's "ids"), which become these."""
+    nums = prov_numbers(text, shown(p)["ids"])
+    if text:
+        keys = [f"{tid}: {q}" for tid, q, _ in blocks(part(text, "Provisional"))]
+        note(p, lambda s: s.update(ids=dict(zip(keys, nums))))
+    return nums
+
+
+def with_ids(text, p=None):
+    """`provisional`'s answers, each with the id `windvane answer` and preflight take (`T-003.p2`); given the project,
+    the ids it showed before stay theirs."""
+    return [{**q, "id": f"{q['ticket']}.p{n}"}
+            for q, n in zip(provisional(text), remembered(p, text) if p else prov_numbers(text))]
 
 
 def blocks(text):
@@ -248,8 +263,8 @@ def qkey(q):
 def shown(p):
     """{"asked": {ticket: [questions sent to the phone]}, "pushed": [keys of provisional answers pushed],
     "preflight": [keys of provisional answers offered at the desk], "built": {`T-003.q2`: its question, built on a
-    timeout}}."""
-    return {"asked": {}, "pushed": [], "preflight": [], "built": {}, **load_json(p.state / "shown.json", {})}
+    timeout}, "ids": {key of a provisional answer: the number of the `T-003.p2` id it was shown with}}."""
+    return {"asked": {}, "pushed": [], "preflight": [], "built": {}, "ids": {}, **load_json(p.state / "shown.json", {})}
 
 
 def note(p, change):

@@ -67,7 +67,7 @@ class AskOnce(unittest.TestCase):
                                                                 "Provisional"))
         self.assertEqual(self.holding("Red or blue?"), ["Question", "Question"])  # T-001's and T-002's, nothing more
         done = dict(self.sent)["Done: do T-001 (T-001)"]
-        self.assertIn("\nBuilt A for T-001: red; to change: windvane answer T-001 <letter>.", done)
+        self.assertIn("\nBuilt A for T-001: red; to change: windvane answer T-001.p1 <letter>.", done)
         self.assertNotIn("Provisional: do T-001 (T-001)", dict(self.sent))  # no second push behind the Done one
         self.assertIn("T-001 (built A: red)", dict(self.sent)["windvane stopped"])
 
@@ -77,7 +77,7 @@ class AskOnce(unittest.TestCase):
         pl.merged_ok("T-001", "", self.s.git("rev-parse", "HEAD"))
         [(title, msg)] = self.sent
         self.assertTrue(title.startswith("Done:"), title)
-        self.assertIn("\nRed or blue? Built A without asking you: red; to change: windvane answer T-001 <letter>.",
+        self.assertIn("\nRed or blue? Built A without asking you: red; to change: windvane answer T-001.p1 <letter>.",
                       msg)
         self.patch(driver, "quiet_now", lambda p: (None, None))
         pl.was_quiet = True
@@ -138,7 +138,7 @@ class AskOnce(unittest.TestCase):
         out = io.StringIO()
         with redirect_stdout(out):
             cli.main(["-C", str(self.s.root), "status"])
-        self.assertIn("provisional: T-001: Red or blue? Built A: red. To change: windvane answer T-001 <letter>",
+        self.assertIn("provisional: T-001: Red or blue? Built A: red. To change: windvane answer T-001.p1 <letter>",
                       out.getvalue())
 
     def test_answer_takes_an_open_question_no_run_waits_on(self):
