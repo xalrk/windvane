@@ -429,7 +429,9 @@ def stop_groups(groups):
 def end_job(base, line):
     """Stop a job's process groups (its leader's, and a kept job's command's: see `watch`), then give its log `line`
     last, after whatever the job said as it died, and exit `KILLED` if it wrote none, so `await` and the session
-    that resumes a kept job's ticket are told."""
+    that resumes a kept job's ticket are told. False, touching nothing, when it has just ended on its own."""
+    if Path(f"{base}.exit").exists():
+        return False
     groups = []
     for end in ("pid", "child"):
         try:
@@ -442,6 +444,7 @@ def end_job(base, line):
     exit_f = Path(f"{base}.exit")
     if not exit_f.exists() or not exit_f.read_text().strip():  # killed between creating the file and writing it
         exit_f.write_text(str(KILLED))
+    return True
 
 
 def end_kept(p, ticket=None, why="the run's stop"):
@@ -466,10 +469,16 @@ def cancel(p, name):
         exit_f = Path(f"{base}.exit")
         how = f"exit {exit_code(exit_f, 0)}" if exit_f.exists() else "it died without an exit"
         sys.exit(f"bg --cancel: '{name}' already ended ({how}); log {base}.log")
-    was = "waiting for the machine" if heavy.waiting(f"{base}.log") else "running"
-    mins = (time.time() - int(Path(f"{base}.start").read_text())) / 60
-    end_job(base, CANCELLED)
-    print(f"cancelled '{name}' (was {was} for {mins:.0f} min)")
+    log, mins = f"{base}.log", (time.time() - int(Path(f"{base}.start").read_text())) / 60
+    queued, wait_m = heavy.waiting(log), heavy.waited(log) / 60
+    if not end_job(base, CANCELLED):
+        sys.exit(f"bg --cancel: '{name}' ended on its own just now (exit {exit_code(Path(f'{base}.exit'))}); log {log}")
+    if queued:
+        was = f"waiting for the machine for {mins:.0f} min"
+    else:  # the minutes it ran, not counting its wait in the queue
+        was = f"running for {mins - wait_m:.0f} min" + (f", after {wait_m:.0f} min in the heavy queue"
+                                                        if round(wait_m) else "")
+    print(f"cancelled '{name}' (was {was})")
 
 
 def ended_kept(p, ticket):

@@ -144,6 +144,22 @@ class BgCancel(unittest.TestCase):
         [line] = jobs.ended_kept(self.p, "T-001")
         self.assertTrue(line.startswith("- 'eval' cancelled (`bg --cancel`) after 0 min"), line)
 
+    def test_a_job_that_waited_says_how_long_it_ran_apart_from_its_wait(self):
+        base = self.bg("T-001", "eval", "sleep 60")
+        Path(f"{base}.start").write_text(str(int(time.time()) - 55 * 60))
+        Path(f"{base}.log").write_text("heavy: the machine lock is free; 1 ahead of this job\n"
+                                       + heavy.WAITED.format(50 * 60) + "\n")
+        out, err = self.call("T-001", jobs.cancel, "eval")
+        self.assertEqual(out.strip(), "cancelled 'eval' (was running for 5 min, after 50 min in the heavy queue)")
+
+    def test_a_job_that_ends_on_its_own_as_it_is_cancelled_is_left_as_it_ended(self):
+        base = self.bg("T-001", "eval", "echo done")
+        self.until(lambda: Path(f"{base}.exit").exists(), what="the job to end")
+        with mock.patch.object(jobs, "alive", return_value=True):  # it ended between cancel's look and its kill
+            out, err = self.call("T-001", jobs.cancel, "eval")
+        self.assertEqual(err, f"bg --cancel: 'eval' ended on its own just now (exit 0); log {base}.log")
+        self.assertEqual(jobs.tail(f"{base}.log", 1), "done")
+
     def test_cancelling_what_is_not_running_is_an_error(self):
         out, err = self.call("T-001", jobs.cancel, "eval")
         self.assertEqual(err, "bg --cancel: nothing started as 'eval' for T-001")
