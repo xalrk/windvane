@@ -370,7 +370,7 @@ class Sandbox:
         os.environ.clear()
         os.environ.update({**self.old_env, **self.env})
         for k in ("WINDVANE_SESSION", "WINDVANE_TICKET", "WINDVANE_STOP_AT", "WINDVANE_CAPS", "WINDVANE_ROLE",
-                  "WINDVANE_SUPERVISED", "WINDVANE_RESTARTED"):  # when the tests run inside a session
+                  "WINDVANE_SUPERVISED", "WINDVANE_RESTARTED", "WINDVANE_BG_JOB"):  # when run in a session or its job
             os.environ.pop(k, None)
         for k in [k for k in os.environ if k.startswith("GIT_CONFIG_")]:  # a worker's [skip ci] hook, for one
             os.environ.pop(k)
