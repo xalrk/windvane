@@ -74,6 +74,13 @@ class BgTmpdir(unittest.TestCase):
         # an output whose folder is only in the sandbox's dir: the job couldn't write it
         self.refused(str(self.outer / "v" / "eval.log"), self.inner / "v" / "eval.log")
 
+    def test_a_symlinked_tmpdir_is_seen_through(self):
+        (self.inner / "in.txt").write_text("hi\n")
+        link = self.s.tmp / "link"
+        link.symlink_to(self.outer)
+        os.environ["TMPDIR"] = str(link)
+        self.refused(str(self.outer / "in.txt"), self.inner / "in.txt")
+
     def test_heavy_refuses_it_too_and_runs_with_the_sandboxes_tmpdir(self):
         (self.inner / "in.txt").write_text("hi\n")
         os.chdir(self.s.root)

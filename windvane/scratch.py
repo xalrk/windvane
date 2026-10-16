@@ -54,9 +54,10 @@ def sandbox_twin(arg, inner=None):
     path = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
     if not os.path.isabs(path):
         return None
-    outer, here = os.path.normpath(root()), os.path.normpath(path)
-    rel = os.path.relpath(here, outer)
-    if rel == "." or rel.startswith(".."):
+    here = os.path.normpath(path)
+    rels = [os.path.relpath(here, d) for d in {os.path.normpath(root()), os.path.realpath(root())}]  # a symlinked one
+    rel = next((r for r in rels if r != "." and not r.startswith("..")), None)
+    if rel is None:
         return None
     twin = inner / rel
     if inner.resolve() in (Path(here).resolve(), *Path(here).resolve().parents):  # the sandbox's own dir, spelled out
