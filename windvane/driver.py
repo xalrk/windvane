@@ -1138,7 +1138,7 @@ class Pilot(Desk, Periodic):
         showed gets one line without its text; only one built without the user ever seeing it (a quiet time) is
         spelled out. Once the push went out, either way it counts as pushed: the digest leaves it out."""
         p = self.p
-        picks = [q for q in with_ids(provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")))
+        picks = [q for q in with_ids(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))
                  if p.norm(q["ticket"]) == tid]
         if not picks:
             return "", []

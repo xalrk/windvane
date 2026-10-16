@@ -16,7 +16,8 @@ from .config import slots
 from .driver import REVIEW_DENY
 from .held import land
 from .planner import pending_ids
-from .questions import BLOCK_RE, OPT_RE, blocks, give_answer, note, part, qkey, shown, ticket_of, waiting_on
+from .questions import (BLOCK_RE, OPT_RE, blocks, give_answer, note, part, prov_numbers, qkey, shown, ticket_of,
+                        waiting_on)
 from .queue import Queue
 from .runner import rules, run_claude
 from .util import git, gout, load_json, log, now, read_jsonl, save_json
@@ -55,12 +56,14 @@ def question(tid, q, body, kind, n):
 
 
 def provisionals(qtext, heading="Provisional", kind="provisional"):
-    """Provisional answers built without the user, as questions to ask again (ids `T-003.p1`); or, for ## Open,
-    questions left there that no run waits on (kind "stuck", ids `T-003.o1`): they block their ticket for good."""
+    """Provisional answers built without the user, as questions to ask again (ids `T-003.p1`, as `windvane status`
+    names them: `questions.prov_numbers`); or, for ## Open, questions left there that no run waits on (kind "stuck",
+    ids `T-003.o1`): they block their ticket for good."""
     out, seen = [], {}
-    for tid, q, body in blocks(part(qtext, heading)):
+    nums = prov_numbers(qtext) if heading == "Provisional" else []
+    for i, (tid, q, body) in enumerate(blocks(part(qtext, heading))):
         seen[tid] = seen.get(tid, 0) + 1
-        out.append(question(tid, q, body, kind, f"{kind[0]}{seen[tid]}"))
+        out.append(question(tid, q, body, kind, f"{kind[0]}{nums[i] if nums else seen[tid]}"))
     return out
 
 
@@ -164,32 +167,37 @@ def block(x, letter, text, followup=""):
             ans += f". Changes the built {x['built']}" + (f": {followup} makes the change" if followup else "")
     lines = [f"### {x['ticket']}: {x['question']}", x["context"],
              *[f"- **{k}**: {v}" for k, v in sorted(x["options"].items())],
-             f"Answer: {ans} (at the desk, {datetime.now():%Y-%m-%d})"]
+             f"Answer: {ans} (at the desk, {datetime.now():%Y-%m-%d}"
+             + (f", as {x['id']})" if x["kind"] == "provisional" else ")")]  # keeps the others' ids: prov_numbers
     return "\n".join(l for l in lines if l)
 
 
-def answered_block(prov, x):
-    """The ## Provisional block the answer `x` is for: the one with its exact question, else the one its id names
-    (`T-003.p2`: the ticket's second) with the same options, else the ticket's only one. A worker may reword the
-    question on its branch, and a block left behind would be asked again next run. The options guard the id: blocks
-    added or filed since preflight saved it shift the numbers, and a wrong block removed is never asked at all."""
-    mine = [m for m in BLOCK_RE.finditer(prov) if m.group(1) == x["ticket"]]
-    exact = [m for m in mine if m.group(2).strip() == x["question"]]
-    n = re.search(r"\.p(\d+)$", x["id"])
-    if exact:
-        return exact[0]
-    if n and 0 < int(n.group(1)) <= len(mine) and dict(OPT_RE.findall(mine[int(n.group(1)) - 1].group(3))) \
-            == x["options"]:
-        return mine[int(n.group(1)) - 1]
-    return mine[0] if len(mine) == 1 else None
+def answered_block(found, ids, x):
+    """The index in `found` (a section's blocks, `ids` theirs) of the block the answer `x` is for: the one with its
+    exact question, else the one its id names with the same options, else the ticket's only one. A worker may reword
+    the question on its branch, and a block left behind would be asked again next run. The options guard the id: one
+    saved before the ids were kept stable may name another block, and a wrong block removed is never asked at all."""
+    mine = [i for i, m in enumerate(found) if m.group(1) == x["ticket"]]
+    exact = [i for i in mine if found[i].group(2).strip() == x["question"]]
+    named = [i for i in mine if ids[i].lower() == x["id"].lower()
+             and dict(OPT_RE.findall(found[i].group(3))) == x["options"]]
+    return (exact or named or (mine if len(mine) == 1 else [None]))[0]
 
 
 def file_answers(qtext, answers):
     """QUESTIONS.md with each (question, letter, text) moved or added under ## Answered."""
     text = qtext or "# Questions for the user\n\n## Open\n\n## Provisional\n\n## Answered\n"
+    answers = list(answers)
     for heading, kind in (("Provisional", "provisional"), ("Open", "stuck")):
         sec = part(text, heading)
-        hits = {m.span(): m for x, *_ in answers if x["kind"] == kind and (m := answered_block(sec, x))}
+        found = list(BLOCK_RE.finditer(sec))
+        ids = [f"{m.group(1)}.p{n}" for m, n in zip(found, prov_numbers(text))] if kind == "provisional" \
+            else [""] * len(found)
+        hits = {}
+        for j, (x, *rest) in enumerate(answers):
+            if x["kind"] == kind and (i := answered_block(found, ids, x)) is not None:
+                hits[found[i].span()] = found[i]
+                answers[j] = ({**x, "id": ids[i]}, *rest) if ids[i] else answers[j]  # the id its block had
         keep = sec
         for (a, b) in sorted(hits, reverse=True):
             keep = keep[:a] + keep[b:]

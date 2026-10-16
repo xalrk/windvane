@@ -300,7 +300,7 @@ def cmd_status(a, p):
         print(f"slot {slot}: {tid}")
     for key, q in questions.waiting_on(st.get("questions", {})).items():
         print(f"waiting on you: {key}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
-    for q in questions.with_ids(questions.provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))):
+    for q in questions.with_ids(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")):
         print(f"provisional: {q['ticket']}: {q['question']} Built {q['built'] or '?'}"
               + (f": {q['option']}" if q["option"] else "") + f". To change: windvane answer {q['id']} <letter>")
     for line in requests.unseen(p):

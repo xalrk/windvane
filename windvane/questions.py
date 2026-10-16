@@ -25,6 +25,8 @@ from .config import user_dir
 from .util import load_json, save_json
 
 OPT_RE = re.compile(r"^- \*\*([A-E])\*\*:?\s*(.+)$", re.M)
+# An answered provisional block's id, at the end of its Answer line (preflight.block writes it)
+FILED_RE = re.compile(r"^Answer:.*\(at the desk, [\d-]+, as \S+?\.p(\d+)\)$", re.M)
 BLOCK_RE = re.compile(r"^### (\S+?):?[ \t]+(.*?)$(.*?)(?=^### |^PREFLIGHT:|^## |\Z)", re.M | re.S)
 
 
@@ -75,22 +77,35 @@ def parts(sec):
 def provisional(text):
     """[{ticket, question, built, option}] under ## Provisional."""
     out = []
-    for m in re.finditer(r"^### (\S+?):?\s+(.*?)$(.*?)(?=^### |\Z)", part(text, "Provisional"), re.M | re.S):
-        opts = dict(OPT_RE.findall(m.group(3)))
-        built = re.search(r"^Built:\s*([A-E])", m.group(3), re.M)
+    for tid, q, body in blocks(part(text, "Provisional")):
+        opts = dict(OPT_RE.findall(body))
+        built = re.search(r"^Built:\s*([A-E])", body, re.M)
         letter = built.group(1) if built else ""
-        out.append({"ticket": m.group(1), "question": m.group(2).strip(), "built": letter,
-                    "option": opts.get(letter, "")})
+        out.append({"ticket": tid, "question": q, "built": letter, "option": opts.get(letter, "")})
     return out
 
 
-def with_ids(picks):
-    """`provisional`'s answers, each with the id `windvane answer` takes: its ticket's, or preflight's `T-003.p2` when
-    the ticket has several."""
-    for q in picks:
-        mine = [x for x in picks if x["ticket"] == q["ticket"]]
-        q["id"] = q["ticket"] if len(mine) == 1 else f"{q['ticket']}.p{mine.index(q) + 1}"
-    return picks
+def prov_numbers(text):
+    """For each block under ## Provisional, in order, its number among its ticket's provisional questions (the 2 of
+    `T-003.p2`), counting those already answered: their ## Answered block keeps the id it was filed under. So answering
+    one, in any order, never renumbers the rest, and an id the user was shown names the same question until it's
+    answered; a block merged later takes a number never shown for another."""
+    taken = {}
+    for tid, _, body in blocks(part(text, "Answered")):
+        taken.setdefault(tid, set()).update(int(n) for n in FILED_RE.findall(body))
+    last, out = {}, []
+    for tid, _, _ in blocks(part(text, "Provisional")):
+        n = last.get(tid, 0) + 1
+        while n in taken.get(tid, ()):
+            n += 1
+        last[tid] = n
+        out.append(n)
+    return out
+
+
+def with_ids(text):
+    """`provisional`'s answers, each with the id `windvane answer` and preflight take (`T-003.p2`)."""
+    return [{**q, "id": f"{q['ticket']}.p{n}"} for q, n in zip(provisional(text), prov_numbers(text))]
 
 
 def blocks(text):
