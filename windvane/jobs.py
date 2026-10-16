@@ -19,7 +19,7 @@ from pathlib import Path
 from . import heavy, scratch, util
 from .config import exe
 from .heavy import STOP_AT
-from .runner import GRACE, NEST, ROLE, TICKET, outside_sandbox, signal_group
+from .runner import GRACE, IN_JOB, NEST, ROLE, TICKET, outside_sandbox, signal_group
 from .util import append_jsonl, gout, now, read_jsonl
 
 _LOGS = itertools.count(1)  # a check log's number in this process
@@ -43,7 +43,7 @@ CANCELLED = "windvane: cancelled"  # a job's last log line after `bg --cancel`
 WATCH_S = 2  # seconds between a kept job's looks at its end time
 AWAIT_S = 570  # how long `await` blocks: under one tool call's 10 minutes
 SESSION_CHECK = "check"  # the bg job a session's heavy check runs as
-CHECK_LOG = "check: log "  # its first line names the check's log, where its wait for the machine is said
+CHECK_LOG = "check: log "  # a check job's first line names the check's log, where its wait for the machine is said
 # A kept job's group leader: `watch` from this same windvane (its package dir is the first argument), outside PATH.
 WATCH = ("import sys; sys.path.insert(0, sys.argv[1]); from windvane.jobs import watch; "
          "sys.exit(watch(sys.argv[2], sys.argv[3:]))")
@@ -77,8 +77,8 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=Fal
     never ran: its wait for the machine timed out, which says nothing about the tree, so callers try it again.
     `stop_at` (a datetime): when a heavy check stops waiting for the machine, or earlier if the run's deadline is
     moved meanwhile (the driver's); a session's check has its own stop in the environment already. `mem` (GB): the
-    free memory a heavy check waits for, this once, instead of `heavy_mem`. `announce`: say the log first (a
-    session's check job, for `await` to read its wait from)."""
+    free memory a heavy check waits for, this once, instead of `heavy_mem`. `announce`: say the log first (in a
+    bg job, for `await` to read its wait from)."""
     cmd = p.cfg["check"]
     if not cmd:
         return True, "CHECK PASSED (no check configured)", None
@@ -356,7 +356,7 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
     if heavy:
         cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []),
                *(["--expect", f"{expect:.10g}"] if expect is not None else []), "--", *cmd]
-    env = {**os.environ, **tmp}
+    env = {**os.environ, **tmp, IN_JOB: name}
     if keep:  # it waits for the machine as long as it's kept (`watch` ends it), and belongs to no session
         Path(f"{base}.keep").write_text(os.environ.get(RUN_STOP, ""))
         cmd = [sys.executable, "-c", WATCH, str(Path(__file__).parents[1]), str(base), *cmd]
@@ -582,12 +582,11 @@ def session_check(p, cwd, mem=None, lines=60):
             ok, summary, _ = check(p, cwd)
             print(summary)
             return 0
-        bg(p, SESSION_CHECK, [*exe(), "check", "--in-job", "--lines", str(lines),
+        bg(p, SESSION_CHECK, [*exe(), "check", "--lines", str(lines),
                               *(["--mem", f"{mem:.10g}"] if mem is not None else [])], cwd, quiet=True)
     elif mem is not None:
-        print(f"check: one is already going: it keeps its own need (--mem {mem:g} is for the next one)")
+        print(f"check: the running check keeps its own need; --mem {mem:g} goes to the next one")
     code = await_(p, SESSION_CHECK, lines + 1)
-    if code is None:
-        print(f"The check keeps its place in line: call `windvane await {SESSION_CHECK}` for its result")
+    if code is None:  # await's line said to call it again: the job keeps its place in line meanwhile
         return heavy.TIMED_OUT
     return int(code) if code.isdigit() else 1

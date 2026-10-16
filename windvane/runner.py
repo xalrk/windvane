@@ -28,6 +28,9 @@ LOGIN_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TO
 # in) and git (`git add -A` fails on the sandbox's mount points, an SSH push can't take its proxy)
 OUTSIDE = ("windvane *", "git *")
 IN_SANDBOX = "SANDBOX_RUNTIME"  # set by Claude Code in a sandboxed Bash command's environment
+# Set in a bg job's environment (its name): a `windvane check` there runs in the job, in the foreground, as a
+# worker's own `bg chk windvane check` did, rather than as the session's `check` job (which it may be itself).
+IN_JOB = "WINDVANE_BG_JOB"
 POLL = 5  # seconds between a quiet session's stop checks (small file reads, no tokens): how soon `stop --now` acts
 
 
@@ -49,9 +52,11 @@ def env(extra=None, p=None):
     permission mode over `--permission-mode auto`, and a headless session can then write nothing. Never the
     CLAUDE_TMPDIR or CLAUDE_CODE_TMPDIR of a session the driver was started from (CLAUDECODE set): Claude Code keeps
     one it inherits as its sandbox's TMPDIR instead of making its own under the session's (scratch.sandbox_dir). A
-    CLAUDE_CODE_TMPDIR from the user's own shell is their setting, and kept."""
+    CLAUDE_CODE_TMPDIR from the user's own shell is their setting, and kept. Never a bg job's IN_JOB: a session
+    started from inside one isn't in it."""
     out = scrub(os.environ, p.cfg["env"]["keep"] if p else ())
     out.pop(NO_AUTO, None)
+    out.pop(IN_JOB, None)
     out.pop("CLAUDE_TMPDIR", None)
     if os.environ.get("CLAUDECODE"):
         out.pop("CLAUDE_CODE_TMPDIR", None)

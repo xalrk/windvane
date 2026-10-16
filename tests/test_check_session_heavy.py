@@ -14,10 +14,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import cli, heavy, jobs  # noqa: E402
+from windvane import cli, heavy, jobs, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.heavy import STOP_AT  # noqa: E402
-from windvane.runner import IN_SANDBOX, TICKET  # noqa: E402
+from windvane.runner import IN_JOB, IN_SANDBOX, TICKET  # noqa: E402
 from windvane.util import read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_heavy_check_wait import hold, machine  # noqa: E402
@@ -86,10 +86,10 @@ class SessionHeavyCheck(unittest.TestCase):
         self.assertLess(time.time() - t, LIMIT + 5)
         self.assertEqual(code, heavy.TIMED_OUT, out)
         self.assertEqual(len(self.queued()), 1)
-        code, out = self.windvane("check")  # asked again meanwhile: the same job, still one in line
+        code, out = self.windvane("check", "--mem", "2")  # asked again meanwhile: the same job, still one in line
         self.assertEqual(code, heavy.TIMED_OUT, out)
-        self.assertIn("WAITING check (in the heavy queue", out)
-        self.assertIn("call `windvane await check`", out)
+        self.assertEqual(out.splitlines()[0], "check: the running check keeps its own need; --mem 2 goes to the next one")
+        self.assertRegex(out, r"WAITING check \(in the heavy queue, 0 min so far\); call windvane await check again\n")
         self.assertIn("heavy: waiting for the machine lock: held by pid", out)
         self.assertEqual(len(self.queue()), 1)
         self.assertEqual(self.checks(), [])  # nothing ended, so no pass and no failure
@@ -110,11 +110,43 @@ class SessionHeavyCheck(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("CHECK PASSED (reused the pass", out)
 
-    def test_a_check_that_gets_the_machine_in_time_ends_with_its_own_result(self):
+    def session_check(self):
+        """`windvane check` once the machine is free: its own result, from `await` on a machine too slow for it."""
         code, out = self.windvane("check")
-        if code == heavy.TIMED_OUT:  # a slow machine: past the limit, `await` has it
+        if code == heavy.TIMED_OUT:
             code, out = self.windvane("await", "check")
+        return code, out
+
+    def test_a_check_that_gets_the_machine_in_time_ends_with_its_own_result(self):
+        code, out = self.session_check()
         self.assertEqual(code, 0, out)
+        self.assertRegex(out.splitlines()[-1], r"^CHECK PASSED in ")
+
+    def test_a_failing_check_exits_1_with_its_log_tail(self):
+        self.s.write(".windvane/config.toml", self.plain.replace('check = "test -f README"',
+                                                                 'check = "echo boom; exit 3"\nheavy_check = true'))
+        self.s.publish("failing")
+        code, out = self.session_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("boom", out)
+        self.assertRegex(out.splitlines()[-1], r"^CHECK FAILED \(exit 3\) in [\d.]+ min; log ")
+        self.assertEqual([r["passed"] for r in self.checks()], [False])
+
+    def test_a_workers_own_check_job_runs_the_check_in_it(self):
+        """The old recipe, `bg check windvane check` (or any name): the check runs in that job, which mustn't
+        wait on itself as the session's `check` job, and its wait shows in `await` as a check job's does."""
+        release = self.hold()
+        out = io.StringIO()
+        with redirect_stdout(out):
+            jobs.bg(self.p, "check", ["windvane", "check"], str(self.s.root))
+        self.queued()
+        code, out = self.windvane("await", "check")
+        self.assertIn("WAITING check (in the heavy queue", out)
+        release.touch()
+        for _ in range(10):
+            code, out = self.windvane("await", "check")
+            if "DONE" in out:
+                break
         self.assertRegex(out.splitlines()[-1], r"^CHECK PASSED in ")
 
     def test_mem_sets_the_need_over_heavy_mem(self):
@@ -131,12 +163,11 @@ class SessionHeavyCheck(unittest.TestCase):
 
     def test_mem_without_heavy_check_is_an_error_naming_it(self):
         self.config("")
-        code, _ = self.windvane("check", "--mem", "3")
-        self.assertNotEqual(code, 0)
         r = subprocess.run(["windvane", "check", "--mem", "3"], cwd=self.s.root, capture_output=True, text=True,
                            timeout=60)
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("heavy_check", r.stderr)
+        self.assertEqual(r.stderr, "check --mem: only a heavy check waits for free memory; this project has "
+                                   "heavy_check off (.windvane/config.toml)\n")
         self.assertNotIn("CHECK", r.stdout)
 
     def test_it_refuses_in_the_sandbox_touching_nothing(self):
@@ -155,6 +186,10 @@ class SessionHeavyCheck(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertRegex(out.splitlines()[-1], r"^CHECK PASSED in ")
         self.assertFalse(jobs.job_base(self.p, "check").with_suffix(".start").exists())
+
+    def test_a_session_started_from_a_job_isnt_in_it(self):
+        with mock.patch.dict(os.environ, {IN_JOB: "check"}):
+            self.assertNotIn(IN_JOB, runner.env())
 
 
 if __name__ == "__main__":
