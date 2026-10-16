@@ -16,7 +16,7 @@ from pathlib import Path
 from . import actions
 from . import critic as critic_mod
 from . import (doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, publiccheck, questions,
-               requests, schedule, watch)
+               requests, schedule, scratch, watch)
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
@@ -862,6 +862,7 @@ def main(argv=None):
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
         if not cmd:
             sys.exit("heavy: give a command")
+        os.environ.update(scratch.job_env(cmd, "heavy"))
         reuse = None
         if root := toplevel():
             p = Project(root)
