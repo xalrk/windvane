@@ -560,7 +560,8 @@ def await_(p, name, lines=40, limit=None):
     if exit_f.exists():
         code = exit_code(exit_f)
         print(f"DONE {name} exit {code} after {mins:.0f} min")
-        print(tail(f"{base}.log", lines))
+        out = tail(f"{base}.log", lines)  # a check job's log line was for the wait: its summary names a log it needs
+        print(out[out.index("\n") + 1:] if out.startswith(CHECK_LOG) and "\n" in out else out)
         return code
     log = watched_log(base)
     state = "WAITING" if heavy.waiting(log) else "RUNNING"
@@ -576,7 +577,8 @@ def session_check(p, cwd, mem=None, lines=60):
     it runs as the session's bg job `check` (the running one when there is one, never a second in line) and is
     awaited as `await` does. Its exit code: the check's own once it ended, else TIMED_OUT, `await check` going on."""
     outside_sandbox("a heavy check")  # the lock's folder is read-only there, and the job would die with the call
-    if not alive(find_job(p, SESSION_CHECK)[0]):
+    base, head = find_job(p, SESSION_CHECK)[0], gout(cwd, "rev-parse", "--short", "HEAD")
+    if not alive(base):
         key = tree_key(p, cwd)
         if not p.cfg["check"] or key and (p.state / "passes" / key).exists():  # nothing to wait for
             ok, summary, _ = check(p, cwd)
@@ -584,8 +586,13 @@ def session_check(p, cwd, mem=None, lines=60):
             return 0
         bg(p, SESSION_CHECK, [*exe(), "check", "--lines", str(lines),
                               *(["--mem", f"{mem:.10g}"] if mem is not None else [])], cwd, quiet=True)
-    elif mem is not None:
-        print(f"check: the running check keeps its own need; --mem {mem:g} goes to the next one")
+        Path(f"{base}.head").write_text(head)
+    else:
+        if mem is not None:
+            print(f"check: the running check keeps its own need; --mem {mem:g} goes to the next one")
+        was = tail(f"{base}.head", 1)
+        if was and was != head:  # a check passed on another head records no pass for this one
+            print(f"check: the running check started on {was}, not {head}: once it ends, run `windvane check` again")
     code = await_(p, SESSION_CHECK, lines + 1)
     if code is None:  # await's line said to call it again: the job keeps its place in line meanwhile
         return heavy.TIMED_OUT

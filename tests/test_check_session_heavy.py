@@ -92,7 +92,14 @@ class SessionHeavyCheck(unittest.TestCase):
         self.assertRegex(out, r"WAITING check \(in the heavy queue, 0 min so far\); call windvane await check again\n")
         self.assertIn("heavy: waiting for the machine lock: held by pid", out)
         self.assertEqual(len(self.queue()), 1)
-        self.assertEqual(self.checks(), [])  # nothing ended, so no pass and no failure
+        self.assertEqual(self.checks(), [])
+        old = self.s.git("rev-parse", "--short", "HEAD")
+        self.s.write("NOTES", "more\n")
+        self.s.publish("a new head meanwhile")
+        code, out = self.windvane("check")
+        self.assertIn(f"check: the running check started on {old}, not {self.s.git('rev-parse', '--short', 'HEAD')}: "
+                      "once it ends, run `windvane check` again\n", out)
+        self.assertEqual(len(self.queue()), 1)  # nothing ended, so no pass and no failure
         release.touch()
         for _ in range(10):
             code, out = self.windvane("await", "check")
@@ -106,7 +113,10 @@ class SessionHeavyCheck(unittest.TestCase):
         self.assertRegex(out.splitlines()[-1], r"^CHECK PASSED in ")
         self.assertEqual([r["passed"] for r in self.checks()], [True])
         self.assertEqual(self.queue(), [])
-        code, out = self.windvane("check")  # the pass is recorded for the tree: reused at once
+        self.assertFalse((self.p.state / "passes").exists())  # the tree changed under it: not recorded
+        code, out = self.session_check()  # that pass was for the old head: this one is checked on its own
+        self.assertRegex(out.splitlines()[-1], r"^CHECK PASSED in ")
+        code, out = self.windvane("check")  # and its pass is recorded for the tree: reused at once
         self.assertEqual(code, 0)
         self.assertIn("CHECK PASSED (reused the pass", out)
 
@@ -129,6 +139,7 @@ class SessionHeavyCheck(unittest.TestCase):
         code, out = self.session_check()
         self.assertEqual(code, 1, out)
         self.assertIn("boom", out)
+        self.assertEqual(out.count("log "), 1, out)  # the summary names the log; the job's own log line isn't shown
         self.assertRegex(out.splitlines()[-1], r"^CHECK FAILED \(exit 3\) in [\d.]+ min; log ")
         self.assertEqual([r["passed"] for r in self.checks()], [False])
 
