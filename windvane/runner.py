@@ -47,11 +47,14 @@ def env(extra=None, p=None):
     default timeout is 2 minutes; the rules and `windvane await` assume a tool call may run 10. Never
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (NO_AUTO), even from the user's shell: with it Claude Code forces the default
     permission mode over `--permission-mode auto`, and a headless session can then write nothing. Never the
-    CLAUDE_TMPDIR of a session the driver was started from: Claude Code keeps one it inherits as its sandbox's
-    TMPDIR instead of making its own under the session's (scratch.sandbox_dir)."""
+    CLAUDE_TMPDIR or CLAUDE_CODE_TMPDIR of a session the driver was started from (CLAUDECODE set): Claude Code keeps
+    one it inherits as its sandbox's TMPDIR instead of making its own under the session's (scratch.sandbox_dir). A
+    CLAUDE_CODE_TMPDIR from the user's own shell is their setting, and kept."""
     out = scrub(os.environ, p.cfg["env"]["keep"] if p else ())
     out.pop(NO_AUTO, None)
     out.pop("CLAUDE_TMPDIR", None)
+    if os.environ.get("CLAUDECODE"):
+        out.pop("CLAUDE_CODE_TMPDIR", None)
     if p:
         out = {**github_env(p, out), **identity(p)}
     extra = extra or {}

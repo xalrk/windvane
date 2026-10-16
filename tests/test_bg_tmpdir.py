@@ -90,8 +90,11 @@ class BgTmpdir(unittest.TestCase):
             cli.main(["heavy", "--", "cat", str(self.outer / "in.txt")])
         run.assert_not_called()
         seen = {}
-        with mock.patch.object(heavy, "run", side_effect=lambda *a, **k: seen.setdefault("t", os.environ["TMPDIR"])
-                               and 0), self.assertRaises(SystemExit):
+
+        def run(*a, **k):
+            seen["t"] = os.environ["TMPDIR"]
+            return 0
+        with mock.patch.object(heavy, "run", side_effect=run), self.assertRaises(SystemExit):
             cli.main(["heavy", "--", "cat", str(self.inner / "in.txt")])
         self.assertEqual(seen["t"], str(self.inner))
 
@@ -106,9 +109,19 @@ class BgTmpdir(unittest.TestCase):
 
 class SessionEnv(unittest.TestCase):
     def test_a_session_never_inherits_its_starters_sandbox_dir(self):
-        """Claude Code keeps a CLAUDE_TMPDIR it inherits: a session started from another would share its dir."""
-        with mock.patch.dict(os.environ, {"CLAUDE_TMPDIR": "/elsewhere/claude-1"}):
-            self.assertNotIn("CLAUDE_TMPDIR", runner.env({"TMPDIR": "/x"}))
+        """Claude Code keeps a CLAUDE_CODE_TMPDIR or CLAUDE_TMPDIR it inherits: a session started from another would
+        share its dir. Both are dropped when CLAUDECODE says the driver runs under a session."""
+        outer = {"CLAUDECODE": "1", "CLAUDE_TMPDIR": "/elsewhere/claude-1", "CLAUDE_CODE_TMPDIR": "/elsewhere/claude-1"}
+        with mock.patch.dict(os.environ, outer):
+            out = runner.env({"TMPDIR": "/x"})
+        self.assertNotIn("CLAUDE_TMPDIR", out)
+        self.assertNotIn("CLAUDE_CODE_TMPDIR", out)
+
+    def test_the_users_own_claude_code_tmpdir_is_kept(self):
+        """Outside a session, CLAUDE_CODE_TMPDIR is the user's choice of where Claude Code keeps its temp files."""
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_TMPDIR": "/mine"}):
+            os.environ.pop("CLAUDECODE", None)
+            self.assertEqual(runner.env({"TMPDIR": "/x"}).get("CLAUDE_CODE_TMPDIR"), "/mine")
 
 
 if __name__ == "__main__":

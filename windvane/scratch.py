@@ -64,7 +64,7 @@ def sandbox_twin(arg, inner=None):
         return None
     if os.path.lexists(here):
         return None
-    if twin.exists() or twin.parent.is_dir() and not os.path.isdir(os.path.dirname(here)):
+    if twin.exists() or (twin.parent.is_dir() and not os.path.isdir(os.path.dirname(here))):
         return twin
     return None
 
