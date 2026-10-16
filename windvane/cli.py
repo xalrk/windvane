@@ -122,6 +122,25 @@ def need(p):
     return p
 
 
+def too_short(left, min_slot, ticket_hours):
+    """Refuse a run that would start no ticket: one inside `min_slot`, or too short for any worker's wrap-up, or
+    with a time box (`ticket_hours`) too short for it. `left`: None for a scheduled window."""
+    worker = driver.WRAP_UP + driver.WRAP_LEAD
+    if ticket_hours * 60 < worker:
+        sys.exit(f"ticket_hours is {ticket_hours * 60:g} minutes, but a worker needs at least {worker}: it wraps up "
+                 f"{driver.WRAP_UP} minutes before it's stopped, and starts only with that {driver.WRAP_LEAD} or more "
+                 "minutes ahead. Raise it (e.g. --ticket-hours 1)")
+    if left is None:
+        return
+    if left <= timedelta(minutes=min_slot):
+        sys.exit(f"no ticket starts in a run's last {min_slot:g} minutes (min_slot), so this run would do nothing: "
+                 "give it longer (e.g. --for 2h)" + (" or --min-slot 0" if left > timedelta(minutes=worker) else ""))
+    if left <= timedelta(minutes=worker):
+        sys.exit(f"a worker starts only with its wrap-up ({driver.WRAP_UP} minutes before the stop) at least "
+                 f"{driver.WRAP_LEAD} minutes ahead, so a run of {worker} minutes or less would do nothing: "
+                 "give it longer (e.g. --for 1h)")
+
+
 def cmd_run(a, p):
     need(p)
     if not shutil.which("claude") and not os.environ.get(driver.SUPERVISED):  # (a restart's crash gets pushed)
@@ -136,9 +155,8 @@ def cmd_run(a, p):
         sys.exit("--from and --daily wait in a tmux session, as a terminal won't stay open; run: windvane "
                  + " ".join(shlex.quote(x) for x in sys.argv[1:]) + " --detach")
     deadline = window[1] if window else parse_deadline(a.until, a.for_)
-    if not window and not os.environ.get(driver.SUPERVISED) and deadline - now() <= timedelta(minutes=a.min_slot):
-        sys.exit(f"no ticket starts in a run's last {a.min_slot:g} minutes (min_slot), so this run would do nothing: "
-                 "give it longer (e.g. --for 2h) or --min-slot 0")  # (a restarted run still winds down)
+    if not os.environ.get(driver.SUPERVISED):  # (a restarted run still winds down)
+        too_short(None if window else deadline - now(), a.min_slot, a.ticket_hours)
     if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
         sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
     p.state.mkdir(parents=True, exist_ok=True)

@@ -15,7 +15,7 @@ from windvane import critic, driver, jobs, planner, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now, read_jsonl  # noqa: E402
-from helpers import Sandbox, running  # noqa: E402
+from helpers import Sandbox, no_wrap_up, running  # noqa: E402
 
 
 def args(**kw):
@@ -63,6 +63,7 @@ class Pipeline(unittest.TestCase):
         hook.write_text("#!/bin/sh\nwhile read old new ref; do\n  [ \"$ref\" = refs/heads/main ] && "
                         "git update-ref refs/heads/main \"$old\"\ndone\nexit 0\n")
         hook.chmod(0o755)
+        no_wrap_up(self)
         pilot = driver.Pilot(self.p, args())
         pilot.run(now() + timedelta(seconds=30))  # counted merged, T-001 would be redone until the deadline
         self.assertEqual(pilot.merged, [])
@@ -154,6 +155,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(self.pushes, ["windvane started", "windvane stopped"])
 
     def test_no_retry_past_the_deadline(self):
+        no_wrap_up(self)
         pilot = self.pilot("crash*")
         pilot.run(now() + timedelta(minutes=2))
         self.assertIn("no time left to retry it", pilot.stop_reason)
@@ -371,7 +373,7 @@ class Setup(unittest.TestCase):
         self.s.publish("setup")
         p = Project(self.s.root)
         pilot = driver.Pilot(p, args(parallel=parallel))
-        self.started = pilot.run(now() + timedelta(minutes=15))
+        self.started = pilot.run(now() + timedelta(minutes=40))
         return p, pilot
 
     def calls(self):
@@ -443,7 +445,7 @@ class Parallel(unittest.TestCase):
     def run_pilot(self):
         p = Project(self.s.root)
         pilot = driver.Pilot(p, args(parallel=2))
-        pilot.run(now() + timedelta(minutes=15))  # 10 min a ticket until measured: 2 need the 2nd slot
+        pilot.run(now() + timedelta(minutes=40))  # 10 min a ticket until measured: 2 need the 2nd slot
         return pilot
 
     def test_disjoint_tickets_run_at_once_and_both_merge(self):

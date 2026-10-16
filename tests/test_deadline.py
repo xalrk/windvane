@@ -125,7 +125,7 @@ class LiveRun(unittest.TestCase):
         os.environ.pop("FAKE_HANG")
         self.thread.join(30)
         pilot = driver.Pilot(self.p, args(parallel=1))
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         resumed = [w for w in self.workers() if w.startswith("Ticket T-001.")][1]
         self.assertIn("uncommitted changes from an earlier run", resumed)
         self.assertIn("half-done.txt", resumed)

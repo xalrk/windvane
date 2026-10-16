@@ -183,7 +183,7 @@ class TwoTickets(unittest.TestCase):
     def test_two_tickets_each_appending_d5_merge_without_a_second_worker_run(self):
         p = Project(self.s.root)
         pilot = driver.Pilot(p, args())
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
         rows = [json.loads(l) for l in (self.s.tmp / "calls.jsonl").read_text().splitlines()]
         self.assertEqual(len([r for r in rows if r["system"].startswith("# windvane worker")]), 2)

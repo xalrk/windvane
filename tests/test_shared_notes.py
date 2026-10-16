@@ -45,7 +45,7 @@ class Run(unittest.TestCase):
         pilot = driver.Pilot(self.p, args())
         if not run:
             return pilot
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
         self.log = (self.p.state / "autopilot.log").read_text()
         return pilot

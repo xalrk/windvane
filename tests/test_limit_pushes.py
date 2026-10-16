@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
+from helpers import no_wrap_up  # noqa: E402
 from test_hangs import alive  # noqa: E402
 from test_set_aside import Base, args  # noqa: E402
 
@@ -43,6 +44,7 @@ class SummaryAside(Base):
         os.environ["FAKE_HANG_ROLE"] = "# windvane worker run"
         poll, runner.POLL = runner.POLL, 0.2
         self.addCleanup(setattr, runner, "POLL", poll)
+        no_wrap_up(self)
         pilot = self.pilot()
         pilot.run(now() + timedelta(seconds=4))  # well inside the last 5 minutes
         self.assertNotIn("T-001", pilot.skip)  # no change to what is set aside: the next run resumes it
@@ -74,7 +76,7 @@ class SetupText(unittest.TestCase):
 
     def test_a_long_setup_command_is_quoted_whole_in_the_halt_push(self):
         long = "echo one && echo two && echo three && echo four && echo five && echo six; exit 3"
-        driver.Pilot(self.setup(long), args()).run(now() + timedelta(minutes=15))
+        driver.Pilot(self.setup(long), args()).run(now() + timedelta(minutes=40))
         [(title, msg)] = self.pushes
         self.assertEqual(title, "windvane couldn't start")
         self.assertEqual(msg.split("`")[1], long)
@@ -93,7 +95,7 @@ class SetupText(unittest.TestCase):
         threading.Thread(target=stop, daemon=True).start()
         pilot = driver.Pilot(p, args(parallel=2))
         t = time.monotonic()
-        self.assertTrue(pilot.run(now() + timedelta(minutes=15)))
+        self.assertTrue(pilot.run(now() + timedelta(minutes=40)))
         self.assertLess(time.monotonic() - t, 60)  # not the 10 min the setup sleeps
         self.addCleanup(lambda: alive(int(pid.read_text())) and os.killpg(int(pid.read_text()), 9))
         self.assertFalse(alive(int(pid.read_text())))

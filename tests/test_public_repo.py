@@ -206,7 +206,7 @@ class TokenFile(Base):
                                                replan=0, goal="", parallel=1))
         prepare = pilot.prepare
         pilot.prepare = lambda slot: (prepare(slot), self.token.unlink(missing_ok=True))[0]
-        pilot.run(datetime.now() + timedelta(minutes=15))
+        pilot.run(datetime.now() + timedelta(minutes=40))
         why = f"[github] token_file: can't read {self.token}"
         log = (self.p.state / "autopilot.log").read_text()
         self.assertIn(f"T-001: {why} (No such file or directory); put the token back in it, or take token_file out of "

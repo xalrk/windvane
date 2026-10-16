@@ -171,6 +171,8 @@ if system.startswith("# windvane worker run"):
         text = f"done\nRESULT: READY {tid} {sh('git', 'rev-parse', 'HEAD')}"
         if step == "quiet":
             text = "done, all pushed"
+        if behaviour == "partial":  # partial: every run ends out of time
+            text = f"pushed what there is\nRESULT: PARTIAL {tid} out of time"
         keep = os.environ.get("FAKE_KEEP")  # its first run starts this script as a kept heavy job and ends PARTIAL
         if keep and tid == os.environ.get("FAKE_KEEP_FOR", tid) and "kept jobs" not in prompt:
             out = subprocess.run(["windvane", "bg", "--heavy", "--keep", "job", "bash", "-c", keep],
@@ -293,6 +295,15 @@ emit({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", 
 emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01, "session_id": "fake-session",
       "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100}})
 '''
+
+
+def no_wrap_up(test):
+    """Workers start however near their stop is: for a test of what a deadline or time box does to a worker already
+    running, which in a real run started at least the wrap-up margin before it."""
+    from windvane import driver
+    for name in ("WRAP_UP", "WRAP_LEAD"):
+        test.addCleanup(setattr, driver, name, getattr(driver, name))
+        setattr(driver, name, 0)
 
 
 def running(pid):

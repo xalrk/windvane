@@ -48,7 +48,7 @@ class ConflictBounce(unittest.TestCase):
                 self.s.publish("desk change")
             return out
         pilot.review = desk_lands
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         self.assertEqual(pilot.merged, ["T-001"])
         return pilot
 

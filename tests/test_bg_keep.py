@@ -20,7 +20,7 @@ from windvane import cli, driver, jobs, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.runner import NEST, TICKET  # noqa: E402
 from windvane.util import now  # noqa: E402
-from helpers import Sandbox  # noqa: E402
+from helpers import Sandbox, no_wrap_up  # noqa: E402
 from test_heavy_check_wait import hold  # noqa: E402
 from test_parallel import args  # noqa: E402
 
@@ -165,6 +165,7 @@ class RunStop(Base):
 
     def run_to_stop(self, seconds=8):
         """A run that ends `seconds` from now, its kept job still in line."""
+        no_wrap_up(self)
         pilot = self.pilot()
         pilot.run(now() + timedelta(seconds=seconds))
         return pilot
@@ -182,7 +183,7 @@ class RunStop(Base):
         self.holder.wait(10)
         os.environ.pop("FAKE_KEEP")
         nxt = self.pilot()
-        nxt.run(now() + timedelta(minutes=10))
+        nxt.run(now() + timedelta(minutes=40))
         self.assertEqual(nxt.merged, ["T-001"])
         self.assertIn(f"- 'job' exit {jobs.KILLED}", self.workers()[-1])
         self.assertNotIn("the kept job ran", self.workers()[-1])
@@ -203,6 +204,7 @@ class KeepHours(Base):
 
     def test_heavy_keep_hours_lets_it_run_past_the_stop_and_the_next_run_resumes_it_when_it_ends(self):
         holder = hold(self, self.run_dir)
+        no_wrap_up(self)
         pilot = self.pilot()
         pilot.run(now() + timedelta(seconds=8))
         self.assertTrue(jobs.alive(self.job), "killed at the stop despite heavy_keep_hours")

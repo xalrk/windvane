@@ -226,7 +226,7 @@ class ResolutionHook(unittest.TestCase):
         os.environ["FAKE_WORKER"] = "ready"
         p = Project(self.s.root)
         pilot = driver.Pilot(p, test_renumber.args())
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         self.assertRegex((p.state / "autopilot.log").read_text(),
                          r"T-00\d: conflicts with main only in appended entries, but a commit hook refused the "
                          r"resolution \(lint: merge commits need a ticket id\); back to the worker")

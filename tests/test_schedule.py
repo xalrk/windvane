@@ -16,7 +16,7 @@ from windvane import driver, questions  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
-from helpers import Sandbox  # noqa: E402
+from helpers import Sandbox, no_wrap_up  # noqa: E402
 from test_parallel import args  # noqa: E402
 
 
@@ -32,7 +32,7 @@ class Schedule(unittest.TestCase):
         self.s.write(f".windvane/tickets/{tid}.md", f"# {tid}: do {tid}\nDepends on: nothing.\n"
                      + (f"Related: {related}.\n" if related else "") + f"Touches: {touches}.\n\n## Goal\n{body}\n")
 
-    def run_pilot(self, minutes=15, **kw):
+    def run_pilot(self, minutes=40, **kw):
         self.s.publish()
         self.p = Project(self.s.root)
         pilot = driver.Pilot(self.p, args(**kw))
@@ -82,6 +82,7 @@ class Schedule(unittest.TestCase):
         self.ticket("T-001", "a.py")
         self.ticket("T-002", "b.py")
         self.ticket("T-003", "c.py")
+        no_wrap_up(self)
         pilot = self.run_pilot(minutes=15)  # 3 x 10 min one at a time would miss it: all three start
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002", "T-003"])
         self.assertGreaterEqual(pilot.conflicts, 2)
@@ -129,7 +130,7 @@ class Schedule(unittest.TestCase):
         sleep = time.sleep
         self.addCleanup(setattr, time, "sleep", sleep)
         time.sleep = lambda sec: sleep(min(sec, 0.2))  # the idle wait for an answer polls often
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         self.assertEqual(pilot.merged, ["T-001"])
         self.assertGreater(time.time() - asked["T-001"], 6)
         self.assertLess(pilot.minutes[-1] * 60, 6)  # two worker attempts and the checks, not the wait

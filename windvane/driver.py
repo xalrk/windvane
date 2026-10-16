@@ -59,6 +59,8 @@ BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
 DIGEST_RETRY = 600  # seconds between tries to push provisional answers the phone missed, outside a quiet time
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 DRAIN_AFTER = 3 * 3600  # seconds a driver may run behind its install's code before it stops refilling slots for it
+WRAP_UP = 20  # minutes before its stop a worker is told to wrap up
+WRAP_LEAD = 5  # minutes a worker's wrap-up must still be ahead for it to start: less, and it ends PARTIAL at once
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
@@ -509,9 +511,7 @@ class Pilot(Desk, Periodic):
     def work(self, tid, kind, branches):
         p, wd = self.p, self.wd
         start_five = self.usage.five
-        limit = now() + timedelta(hours=self.a.ticket_hours)
-        kill_at = min(self.end(), limit)
-        wrap = kill_at - timedelta(minutes=20)
+        limit, kill_at, wrap = self.worker_times()
         ref = f"{p.remote}/{branches[0]}" if branches else p.upstream
         ticket = gout(wd, "show", f"{ref}:{p.tickets_rel}/{tid}.md") or self.queue.text.get(tid, "")
         dirty = gout(wd, "status", "--porcelain")
@@ -556,6 +556,26 @@ class Pilot(Desk, Periodic):
         if start_five is not None and self.usage.five is not None and self.usage.five >= start_five:
             self.costs.append(round(self.usage.five - start_five, 1))
         self.save()
+
+    def worker_times(self):
+        """A worker starting now: (its own time limit, when it's stopped, its wrap-up time)."""
+        limit = now() + timedelta(hours=self.a.ticket_hours)
+        kill_at = min(self.end(), limit)
+        return limit, kill_at, kill_at - timedelta(minutes=WRAP_UP)
+
+    def no_worker_time(self):
+        """Why no worker may start now, or "". The worker rules say to start nothing after the wrap-up, so a worker
+        launched with its wrap-up (nearly) behind it ends PARTIAL at once: its startup tokens are spent for nothing,
+        and its partial counts toward setting the ticket aside. `min_slot` doesn't catch it when set under the
+        margin, nor does a short `ticket_hours`."""
+        limit, kill_at, wrap = self.worker_times()
+        if wrap - now() >= timedelta(minutes=WRAP_LEAD):
+            return ""
+        if limit < self.end():  # the time box binds, not the deadline: hours left won't help
+            return (f"ticket_hours ({self.a.ticket_hours * 60:g} min) leaves a worker no time: it needs over "
+                    f"{WRAP_UP + WRAP_LEAD} min, as it wraps up {WRAP_UP} min before it's stopped")
+        when = "past" if wrap <= now() else f"under {WRAP_LEAD} min away"
+        return f"no time left for a worker: its wrap-up ({WRAP_UP} min before it's stopped) would be {when}"
 
     def answered(self, tid, ref):
         """The ticket's answered questions on main (preflight puts them there) and on its own branch."""
@@ -1671,6 +1691,14 @@ class Pilot(Desk, Periodic):
             self.queue = Queue(p)
             busy = bool(self.running)  # a slot that ends during the pick still had its ticket held back: pick again
             tid, kind, branches, slot = self.pick(free)
+            late = tid is not None and self.no_worker_time()
+            if late and (busy or self.running):  # a running ticket goes on; the deadline may yet move later
+                self.idle_note([f"{tid} waits: {late}"])
+                self.pause()
+                continue
+            if late:
+                self.stop_reason = late
+                return
             if tid is not None and over:  # no more slots until the window allows; the running ones go on
                 why = "usage limit reached" if self.usage.rejected else (
                     f"usage estimate ({self.usage.five:g}% + {k} x {self.est():.0f}% > cap {self.a.cap:g}%)")
