@@ -83,6 +83,7 @@ class BgTmpdir(unittest.TestCase):
 
     def test_heavy_refuses_it_too_and_runs_with_the_sandboxes_tmpdir(self):
         (self.inner / "in.txt").write_text("hi\n")
+        self.addCleanup(os.chdir, os.getcwd())  # back before the next test: the Sandbox's close removes its root
         os.chdir(self.s.root)
         with mock.patch.object(heavy, "run", return_value=0) as run, \
                 self.assertRaisesRegex(SystemExit, "^heavy: `.*` isn't there outside the sandbox"):
