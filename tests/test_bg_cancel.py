@@ -145,7 +145,9 @@ class BgCancel(unittest.TestCase):
         self.assertTrue(line.startswith("- 'eval' cancelled (`bg --cancel`) after 0 min"), line)
 
     def test_a_job_that_waited_says_how_long_it_ran_apart_from_its_wait(self):
-        base = self.bg("T-001", "eval", "sleep 60")
+        base = self.bg("T-001", "eval", "echo started; sleep 60")
+        # the job's shell truncates its log when it starts: write the fake one after that, not before
+        self.until(lambda: "started" in jobs.tail(f"{base}.log"), what="the job to start")
         Path(f"{base}.start").write_text(str(int(time.time()) - 55 * 60))
         Path(f"{base}.log").write_text("heavy: the machine lock is free; 1 ahead of this job\n"
                                        + heavy.WAITED.format(50 * 60) + "\n")
