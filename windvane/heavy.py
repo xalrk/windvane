@@ -173,6 +173,24 @@ def hints_in(log, head=65536):
             for h in re.findall(r"; ([^;]* " + re.escape(OWN) + r" [^;]*)", line)]
 
 
+NEED_SAID = DEFAULT_NEED.split("{}")[1]  # the default-need clause, past its figure
+WORD_RE = re.compile(r'"([^"]+)" to heavy_reuses')
+
+
+def memory_hints(log, head=65536):
+    """(the `heavy_reuses` words, in order, whether its need was the default one) that a heavy job whose output went
+    to `log` was told while it waited on memory: settings only the user can make, so the run's summary names them."""
+    lines = re.findall(r"^heavy: waiting: .*$", log_head(log, head), re.M)
+    words = [w for line in lines for w in WORD_RE.findall(line)]
+    return list(dict.fromkeys(words)), any(NEED_SAID in line for line in lines)
+
+
+def span(seconds):
+    """A wait as words, "under 1 min", "40 min" or "2 h 10 min": a run's waits add up to hours."""
+    m = round(seconds / 60)
+    return minutes(seconds / 60) if m < 60 else f"{m // 60} h" + (f" {m % 60} min" if m % 60 else "")
+
+
 def in_dirs(path, dirs):
     return any(path == d or path.startswith(d.rstrip("/") + "/") for d in dirs)
 

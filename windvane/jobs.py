@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from . import heavy, scratch, util
@@ -165,6 +166,33 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None):
                            **({} if code is not None else {"finished": False}), **({"not_run": True} if waited else {}),
                            **({"waited_s": wait_s} if wait_s else {})})
     return code, mins, waited
+
+
+def heavy_waits(p, since):
+    """{log: (seconds waited, heavy_reuses words, default need)} for each heavy job (a check, a ticket's `bg --heavy`
+    job) last at work at `since` or later that waited on memory and was told which settings would have spared it
+    (`heavy.memory_hints`). Read from the logs where they are: a check's in checks/ (its heartbeat keeps its time), a
+    bg job's until its ticket's scratch is dropped. A job that never got the machine waited all its time."""
+    out = {}
+    for log in [*(p.state / "checks").glob("*.log"), *(p.state / "bg").glob("*/*.log")]:
+        bg = log.parent.name != "checks"
+        end = max((f.stat().st_mtime for f in (log, log.with_suffix(".exit")) if f.exists()), default=0)
+        end = time.time() if bg and not log.with_suffix(".exit").exists() else end  # still waiting or running
+        if end < since:
+            continue
+        words, default = heavy.memory_hints(log)
+        if not words and not default:
+            continue
+        secs = heavy.waited(log)
+        if not secs and (heavy.waiting(log) or heavy.gave_up(log)):
+            try:
+                start = (float(log.with_suffix(".start").read_text()) if bg
+                         else datetime.strptime(log.name[:15], "%Y%m%d-%H%M%S").timestamp())  # `log_name`'s
+            except (OSError, ValueError):
+                start = end
+            secs = max(0, round(end - start))
+        out[log] = (secs, words, default)
+    return out
 
 
 def heartbeat(log):

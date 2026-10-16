@@ -107,6 +107,10 @@ if system.startswith("# windvane worker run"):
         h = subprocess.Popen(["sleep", "120"], start_new_session=True, stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         open(os.environ["FAKE_HELPER"], "w").write(str(h.pid))
+    if os.environ.get("FAKE_BG_HEAVY"):  # a `bg --heavy` job running this script, awaited to its end
+        subprocess.run(["windvane", "bg", "--heavy", "job", "bash", "-c", os.environ["FAKE_BG_HEAVY"]],
+                       capture_output=True)
+        subprocess.run(["windvane", "await", "job"], capture_output=True)
     branch = tid.lower() + "-work"
     if "In progress on branch" in prompt:
         sh("git", "switch", branch)
