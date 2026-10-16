@@ -13,9 +13,10 @@ never start.
 
 **`windvane run` refuses to start.**
 `no ticket starts in a run's last 30 minutes (min_slot), so this run would do nothing`: give the run longer than
-`min_slot` (`--for 2h`), or lower it (`--min-slot 0`). Even then a worker only starts while its wrap-up, 20 minutes
-before the stop, is at least 5 minutes ahead, so a run of 25 minutes or less is refused with `a worker starts only
-with its wrap-up ...`, and a run ends with `no time left for a worker` once that much is all that's left. `` windvane run needs Claude Code (`claude`) on PATH ``: install
+`min_slot` (`--for 2h`), or lower it (`--min-slot 0`). Workers need more still: one starts only while its wrap-up,
+20 minutes before it's stopped, is at least 5 minutes ahead, so `windvane run` refuses a run of 25 minutes or less
+(`a worker starts only with its wrap-up ...`) or a `ticket_hours` under 25 minutes, and a run ends with `no time left
+for a worker` once that is all that's left. `` windvane run needs Claude Code (`claude`) on PATH ``: install
 and log in to Claude Code; `windvane doctor` gives the command. After installing windvane itself, `windvane: command
 not found` means `~/.local/bin` isn't on your `PATH`: run `export PATH="$HOME/.local/bin:$PATH"` and add that line
 to your shell's startup file.
