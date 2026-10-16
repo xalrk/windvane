@@ -24,7 +24,7 @@ class HeavyReuse(unittest.TestCase):
         self.proc.mkdir()
         (self.proc / "meminfo").write_text(f"MemTotal: {32 * GB} kB\nMemAvailable: {int(4.2 * GB)} kB\n")
         # This project: its main checkout, two slot worktrees and its state dir; another project's checkout; an SDK.
-        for sub in ("proj", "state/slot-1", "state/slot-2", "other", "sdk"):
+        for sub in ("proj", "state/slot-1", "state/slot-2", "other", "sdk", "home/.gradle/daemon/9.8.0"):
             (d / sub).mkdir(parents=True)
         for sub in ("proj", "state/slot-1", "state/slot-2", "other"):
             (d / sub / ".git").write_text("gitdir: x\n")
@@ -34,13 +34,16 @@ class HeavyReuse(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def ps(self, pid, comm, cwd, rss_gb=0.0, ppid=1, cmdline=None):
+    def ps(self, pid, comm, cwd, rss_gb=0.0, ppid=1, cmdline=None, pwd=None):
+        """A fake process; `pwd`, the dir it was started from, gives it a readable environ."""
         p = self.proc / str(pid)
         p.mkdir()
         (p / "comm").write_text(comm + "\n")
         (p / "cmdline").write_bytes(b"\0".join(w.encode() for w in (cmdline or [comm])) + b"\0")
         (p / "status").write_text(f"Name:\t{comm}\nPPid:\t{ppid}\nVmRSS:\t{int(rss_gb * GB)} kB\n")
         os.symlink(self.d / cwd, p / "cwd")
+        if pwd is not None:
+            (p / "environ").write_bytes(f"HOME={self.d}/home\0PWD={self.d / pwd}\0LANG=C\0".encode())
 
     def helpers(self, reuse="default"):
         return round(heavy.helpers_gb(self.reuse if reuse == "default" else reuse), 1)
@@ -93,6 +96,21 @@ class HeavyReuse(unittest.TestCase):
         self.assertEqual(self.helpers(), 0)
         self.ps(72, "qemu-system-x86", "state/slot-2", 3.4, ppid=1)
         self.assertEqual(self.helpers(), 3.4)
+
+    def test_a_detached_daemon_goes_by_the_dir_it_was_started_from(self):
+        gradle = ["java", "-Xmx2g", "org.gradle.launcher.daemon.bootstrap.GradleDaemon", "9.8.0"]
+        kotlin = ["java", "-Xmx1g", "org.jetbrains.kotlin.daemon.KotlinCompileDaemon", "--daemon-runFilesPath", "x"]
+        daemon = "home/.gradle/daemon/9.8.0"  # in no checkout
+        self.ps(90, "java", daemon, 2.6, cmdline=gradle, pwd="state/slot-1")  # ./gradlew ran in a slot
+        self.assertEqual(self.helpers(), 2.6)
+        self.ps(91, "java", daemon, 1.2, ppid=90, cmdline=kotlin, pwd="state/slot-1")
+        self.assertEqual(self.helpers((self.reuse[0] + ["KotlinCompileDaemon"], self.reuse[1])), 3.8)
+        self.assertEqual([h[0] for h in heavy.unreused(self.reuse, heavy.holders(5))], [91])  # the hint sees it too
+        self.ps(92, "java", daemon, 3.0, cmdline=gradle, pwd="other")  # another project's build started it
+        self.ps(93, "java", daemon, 3.0, cmdline=gradle)  # no readable environ
+        self.ps(94, "java", daemon, 3.0, cmdline=gradle, pwd="sdk")  # started outside any checkout
+        self.ps(95, "java", "other", 3.0, cmdline=gradle, pwd="proj")  # its own cwd in another checkout decides
+        self.assertEqual(self.helpers(), 2.6)
 
     def test_a_cwd_it_cant_enter_doesnt_crash_the_wait(self):
         self.ps(80, "bash", "state/slot-1", 0.01)

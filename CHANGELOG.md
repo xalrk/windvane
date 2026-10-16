@@ -34,7 +34,10 @@ release on the same day adds a number (`2026.10.9.1`).
 - `windvane heavy --mem <GB>` (and `bg --heavy --mem`), and a project's `heavy_mem`: the free memory a heavy job
   waits for, instead of `machine.toml`'s one `min_free_gb` for every job.
 - A project's `heavy_reuses`: helpers its heavy jobs reuse between runs (an emulator, a Gradle daemon). The memory
-  they hold counts as free for that project's heavy jobs, which no longer wait on memory they'd never need.
+  they hold counts as free for that project's heavy jobs, which no longer wait on memory they'd never need. A
+  daemon that detached into its own dir (Gradle's, Kotlin's) counts by the checkout its build was started in. A
+  heavy job waiting on memory such a helper holds, with no pattern naming it, says the word to add (for a JVM its
+  main class, `GradleDaemon`, not `java`).
 
 ### Changed
 - The head of the heavy line takes the lock only once its memory is free, and while it waits for memory a job behind
