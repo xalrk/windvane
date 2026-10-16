@@ -51,13 +51,27 @@ class ReuseHint(unittest.TestCase):
         for k in ("WINDVANE_HEAVY_HELD", "WINDVANE_STOP_AT", TICKET):  # a session running the tests has them
             os.environ.pop(k, None)
 
-    def ps(self, pid, comm, cwd, rss_gb=0.0, ppid=1):
+    def ps(self, pid, comm, cwd, rss_gb=0.0, ppid=1, cmdline=None, pwd=None):
         p = self.proc / str(pid)
-        p.mkdir()
+        p.mkdir(parents=True, exist_ok=True)
         (p / "comm").write_text(comm + "\n")
-        (p / "cmdline").write_bytes(comm.encode() + b"\0")
+        (p / "cmdline").write_bytes(b"\0".join(w.encode() for w in (cmdline or [comm])) + b"\0")
         (p / "status").write_text(f"Name:\t{comm}\nPPid:\t{ppid}\nVmRSS:\t{int(rss_gb * GB)} kB\n")
+        (self.d / cwd).mkdir(parents=True, exist_ok=True)
         os.symlink(self.d / cwd, p / "cwd")
+        if pwd is not None:
+            (p / "environ").write_bytes(f"PWD={self.d / pwd}\0".encode())
+
+    def daemons(self, started_in):
+        """R-023's idle Gradle daemon and the Kotlin daemon it started: reparented to init, working under the home,
+        started by `./gradlew` in `started_in`."""
+        home = "home/.gradle/daemon/9.8.0"
+        self.ps(60, "java", home, 2.6, pwd=started_in,
+                cmdline=["java", "-Xmx2g", "-Dfile.encoding=UTF-8", "-cp", "/opt/gradle/lib/gradle-daemon-main.jar",
+                         "org.gradle.launcher.daemon.bootstrap.GradleDaemon", "9.8.0"])
+        self.ps(61, "java", home, 1.2, pwd=started_in,
+                cmdline=["java", "--add-opens", "java.base/java.util=ALL-UNNAMED", "-cp", "/k/kotlin-daemon.jar",
+                         "org.jetbrains.kotlin.daemon.KotlinCompileDaemon", "--daemon-runFilesPath", "/k/run"])
 
     def take(self, patterns):
         """What a job needing 6 GB of this project (its `heavy_reuses`: `patterns`) said while it waited a moment."""
@@ -152,6 +166,38 @@ class ReuseHint(unittest.TestCase):
         log.write_text(self.take([]) + "\n")
         self.assertEqual([h.split()[0] for h in heavy.hints_in(log)], ["qemu-system-x86", "java"])
 
+
+    def test_a_detached_daemon_is_named_by_its_main_class(self):
+        self.daemons("state/slot-1")
+        said = self.take([])
+        self.assertIn('java GradleDaemon (2.6 GB) is this project\'s own: if its heavy jobs reuse it, add '
+                      '"GradleDaemon" to heavy_reuses in .windvane/config.toml', said)
+        self.assertIn('java KotlinCompileDaemon (1.2 GB) is this project\'s own: if its heavy jobs reuse it, add '
+                      '"KotlinCompileDaemon" to heavy_reuses in .windvane/config.toml', said)
+        self.assertNotIn('add "java"', said)
+
+    def test_another_projects_detached_daemon_gets_no_hint(self):
+        self.daemons("other")
+        self.assertNotIn(HINT, self.take([]))
+
+    def test_windvane_heavy_starts_on_its_own_detached_daemons(self):
+        repo = self.d / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / ".windvane").mkdir()
+        self.daemons("repo")
+        err = io.StringIO()
+        with mock.patch.object(cli, "toplevel", return_value=repo), redirect_stderr(err), \
+                self.assertRaises(SystemExit) as e:
+            cli.main(["heavy", "--mem", "6", "--", "true"])
+        self.assertEqual(e.exception.code, heavy.TIMED_OUT)  # 2.4 GB free; the daemons' 3.8 GB not counted yet
+        self.assertIn('add "GradleDaemon" to heavy_reuses', err.getvalue())
+        (repo / ".windvane/config.toml").write_text('heavy_reuses = ["GradleDaemon", "KotlinCompileDaemon"]\n')
+        err = io.StringIO()
+        with mock.patch.object(cli, "toplevel", return_value=repo), redirect_stderr(err), \
+                self.assertRaises(SystemExit) as e:
+            cli.main(["heavy", "--mem", "6", "--", "true"])
+        self.assertEqual(e.exception.code, 0, err.getvalue())
+        self.assertNotIn("waiting", err.getvalue())
 
     def test_windvane_heavy_in_a_checkout_says_it(self):
         repo = self.d / "repo"

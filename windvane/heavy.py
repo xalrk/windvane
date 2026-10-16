@@ -139,7 +139,25 @@ OWN = "is this project's own: if its heavy jobs reuse it, add"
 def reuse_hint(proc):
     """The waiting line's clause for a holder from `unreused`."""
     pid, name, gb, _ = proc
-    return f'{name} ({gb:.1f} GB) {OWN} "{name}" to heavy_reuses in .windvane/config.toml'
+    word = reuse_word(pid, name)
+    label = name if word == name else f"{name} {word}"
+    return f'{label} ({gb:.1f} GB) {OWN} "{word}" to heavy_reuses in .windvane/config.toml'
+
+
+MAIN_CLASS = re.compile(r"(?:[A-Za-z_][\w$]*\.)+([A-Z][\w$]*)")
+
+
+def reuse_word(pid, name):
+    """The word to put in `heavy_reuses` for process `pid` named `name`: its name, but for a JVM the last part of its
+    main class (`GradleDaemon`, `KotlinCompileDaemon`), since every JVM is named `java` and "java" would count each of
+    the project's JVMs as a helper."""
+    if name != "java":
+        return name
+    try:
+        words = os.fsdecode((util.PROC / str(pid) / "cmdline").read_bytes()).split("\0")
+    except OSError:
+        return name
+    return next((m.group(1) for w in words[1:] if (m := MAIN_CLASS.fullmatch(w))), name)
 
 
 def hints_in(log, head=65536):
@@ -656,8 +674,8 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
                 own = [] if hinted else unreused(reuse, big, [info["pid"]] if info.get("pid") else [])
                 hinted = hinted or bool(own)
                 say(f"heavy: waiting: {why}" + (f"; largest: {', '.join(largest(big=big))}" if big else "")
-                    + "".join(f"; {reuse_hint(h)}" for i, h in enumerate(own)
-                            if h[1] not in {g[1] for g in own[:i]}))  # a name once: the largest of it
+                    + "".join(f"; {reuse_hint(h)}" for i, h in enumerate(own)  # a word once: the largest of it
+                            if reuse_word(h[0], h[1]) not in {reuse_word(g[0], g[1]) for g in own[:i]}))
             elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
                 say(f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work)))
             wrap, now = wrap_up(), time.time()
