@@ -43,6 +43,11 @@ STOP_ENV, STOPPED = "WINDVANE_HEAVY_STOP", "heavy: stopped while waiting for the
 # Said once the job got the machine after waiting, before its own output: a check reads it back (`waited`) for its
 # ledger row, so `stats` can tell the minutes a check queued from the minutes it ran.
 WAITED = "heavy: waited {} s for the machine"
+WAITED_RE = re.compile("^" + re.escape(WAITED).replace(r"\{\}", r"(\d+)") + "$", re.M)
+# A wait on memory with no need of its own (no `--mem`, no `heavy_mem`): the line says once where the need comes from,
+# since a small job may sit for an hour behind a default sized for a big build.
+DEFAULT_NEED = ("the {} GB is machine.toml's min_free_gb: if this job needs less, give it --mem <GB> "
+                "(or set heavy_mem in .windvane/config.toml)")
 # A session's stop, as a Unix time: the driver sets it for each session (its `bg` jobs and checks inherit it) and for
 # its own checks. A job waits for the machine until then, not `heavy_wait`.
 STOP_AT = "WINDVANE_STOP_AT"
@@ -163,12 +168,7 @@ def reuse_word(pid, name):
 def hints_in(log, head=65536):
     """The `reuse_hint` clauses a heavy job whose output went to `log` said while it waited (from the log's head, as
     `waited`), for the project log: the check's own log is gone by the next run."""
-    try:
-        with open(log, "rb") as f:
-            text = f.read(head).decode(errors="replace")
-    except OSError:
-        return []
-    return [h for line in re.findall(r"^heavy: waiting: .*$", text, re.M)
+    return [h for line in re.findall(r"^heavy: waiting: .*$", log_head(log, head), re.M)
             for h in re.findall(r"; ([^;]* " + re.escape(OWN) + r" [^;]*)", line)]
 
 
@@ -619,20 +619,31 @@ def gave_up(log):
     return m and (f"the machine{m.group(2) or ''} ({m.group(3)})", m.group(1) == STOPPED)
 
 
-def waited(log, head=65536):
-    """The seconds a heavy job whose output went to `log` waited before it ran, from `run`'s WAITED line (0 when it
-    didn't wait). Only the log's head is read: the line comes before the command's own output, after a few waiting
-    lines."""
+def log_head(log, head=65536):
+    """The first `head` bytes of a heavy job's log ("" when it can't be read): `take`'s lines and `run`'s WAITED line
+    come before the command's own output."""
     try:
         with open(log, "rb") as f:
-            text = f.read(head).decode(errors="replace")
+            return f.read(head).decode(errors="replace")
     except OSError:
-        return 0
-    m = re.search("^" + re.escape(WAITED).replace(r"\{\}", r"(\d+)") + "$", text, re.M)
+        return ""
+
+
+def waited(log, head=65536):
+    """The seconds a heavy job whose output went to `log` waited before it ran, from `run`'s WAITED line (0 when it
+    didn't wait)."""
+    m = WAITED_RE.search(log_head(log, head))
     return int(m.group(1)) if m else 0
 
 
-def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=None):
+def waiting(log, head=65536):
+    """Whether a heavy job whose output went to `log` is still waiting for the machine: `take` said why (always its
+    first line) and `run` hasn't said WAITED yet. A job that got the machine at once says neither."""
+    text = log_head(log, head)
+    return text.startswith("heavy: ") and not WAITED_RE.search(text)
+
+
+def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=None, default=False):
     """Wait for this job's turn, its memory and a machine clear of `busy` work, then take the lock. True once held,
     False at the deadline (a function: a moved deadline counts at once) or a stop.
 
@@ -646,8 +657,9 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
     Each time what it waits on changes, the line says so: the work ahead (`estimate`), or for a wait on memory the
     processes holding most, and once a wait, which of those are this project's own helpers not in its
     `heavy_reuses` (`unreused`). With a session's stop known it says once that the job likely starts after the wrap-up:
-    when the known work ahead runs past it, or the wrap-up came with the job still waiting."""
-    said, busy_why, retry, warned, looked, hinted = None, None, 0, False, 0, False
+    when the known work ahead runs past it, or the wrap-up came with the job still waiting. A `default` need (none of
+    its own) is named as such once, with how to lower it (`DEFAULT_NEED`)."""
+    said, busy_why, retry, warned, looked, hinted, told = None, None, 0, False, 0, False, not default
     while True:
         line, mem = ahead(entry), free_gb()
         turn = all(short(need_of(w), mem) for w in line)  # the head, or all ahead wait on memory
@@ -675,7 +687,9 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
                 hinted = hinted or bool(own)
                 say(f"heavy: waiting: {why}" + (f"; largest: {', '.join(largest(big=big))}" if big else "")
                     + "".join(f"; {reuse_hint(h)}" for i, h in enumerate(own)  # a word once: the largest of it
-                            if reuse_word(h[0], h[1]) not in {reuse_word(g[0], g[1]) for g in own[:i]}))
+                            if reuse_word(h[0], h[1]) not in {reuse_word(g[0], g[1]) for g in own[:i]})
+                    + ("" if told else "; " + DEFAULT_NEED.format(f"{need:.10g}")))
+                told = True
             elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
                 say(f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work)))
             wrap, now = wrap_up(), time.time()
@@ -749,7 +763,7 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None):
     entry = join_queue(need, key, expect)
     lock = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
     try:
-        if not take(lock, entry, need, cfg, until, say, stopped, reuse):
+        if not take(lock, entry, need, cfg, until, say, stopped, reuse, default=mem is None):
             return TIMED_OUT
         leave_queue(entry)  # the next waiter becomes the head and waits on the lock
         entry = None

@@ -497,5 +497,6 @@ def await_(p, name, lines=40, limit=570):
         print(f"DONE {name} exit {exit_code(exit_f)} after {mins:.0f} min")
         print(tail(f"{base}.log", lines))
     else:
-        print(f"RUNNING {name} ({mins:.0f} min so far); call windvane await {name} again")
+        idle = ", all of it waiting for the machine" if heavy.waiting(f"{base}.log") else ""
+        print(f"RUNNING {name} ({mins:.0f} min so far{idle}); call windvane await {name} again")
         print(tail(f"{base}.log", 3))
