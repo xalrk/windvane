@@ -475,7 +475,7 @@ def exit_code(exit_f, patience=2.0):
 def await_(p, name, lines=40, limit=570):
     """Block until a bg job ends, at most `limit` seconds (under one tool call's 10 minutes). The seconds it blocked
     go to the ledger as an `await` row (a ticket's only), so `stats` shows the time each role spends waiting."""
-    outside_sandbox("waiting on a background job")  # its own pid namespace hides the job: it would look dead
+    outside_sandbox("waiting for a background job")  # its own pid namespace hides the job: it would look dead
     (base, stray), ticket = find_job(p, name), os.environ.get(TICKET)
     if not Path(f"{base}.start").exists():
         sys.exit(f"await: nothing started as '{name}'" + (f" for {ticket}" if ticket else "")
