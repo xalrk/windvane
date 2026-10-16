@@ -31,6 +31,7 @@ from pathlib import Path
 
 from . import util
 from .config import user_dir
+from .runner import outside_sandbox
 from .util import same_process, stamp, started_at
 
 # Process names, not command lines: `pgrep -f blender` would match any Claude session whose prompt says "blender".
@@ -758,6 +759,7 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None):
     env["WINDVANE_HEAVY_HELD"] = str(path)
     if os.environ.get("WINDVANE_HEAVY_HELD") == str(path):  # nested: the outer one already holds it
         return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
+    outside_sandbox("the heavy lock")  # its $XDG_RUNTIME_DIR is read-only, and its pid namespace hides the holder
     need = cfg["min_free_gb"] if mem is None else mem
     key = job_key(cmd, cwd)
     entry = join_queue(need, key, expect)
@@ -788,6 +790,7 @@ def status(reuse=None):
     in when it takes the lock, and empties it on the way out), then a line per live waiter with the work ahead of it,
     and for a head short of memory the processes holding most: run from a project (`reuse`), its own helpers not in
     its `heavy_reuses` are marked."""
+    outside_sandbox("the heavy lock")  # its own pid namespace hides the holder and waiters: it would say `free`
     try:
         info = json.loads(lock_path().read_text() or "{}")
     except (OSError, ValueError):
