@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
+from helpers import no_wrap_up  # noqa: E402
 from test_hangs import alive  # noqa: E402
 from test_set_aside import Base, args  # noqa: E402
 
@@ -43,6 +44,7 @@ class SummaryAside(Base):
         os.environ["FAKE_HANG_ROLE"] = "# windvane worker run"
         poll, runner.POLL = runner.POLL, 0.2
         self.addCleanup(setattr, runner, "POLL", poll)
+        no_wrap_up(self)
         pilot = self.pilot()
         pilot.run(now() + timedelta(seconds=4))  # well inside the last 5 minutes
         self.assertNotIn("T-001", pilot.skip)  # no change to what is set aside: the next run resumes it

@@ -297,6 +297,15 @@ emit({"type": "result", "result": text, "num_turns": 3, "total_cost_usd": 0.01, 
 '''
 
 
+def no_wrap_up(test):
+    """Workers start however near their stop is: for a test of what a deadline or time box does to a worker already
+    running, which in a real run started at least the wrap-up margin before it."""
+    from windvane import driver
+    for name in ("WRAP_UP", "WRAP_LEAD"):
+        test.addCleanup(setattr, driver, name, getattr(driver, name))
+        setattr(driver, name, 0)
+
+
 def running(pid):
     """Whether process `pid` still runs: gone or ended (a zombie waiting to be reaped) is not running. /proc where
     there is one, else `ps` (macOS)."""

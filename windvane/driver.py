@@ -571,8 +571,8 @@ class Pilot(Desk, Periodic):
         wrap = self.worker_times()[2]
         if wrap - now() >= timedelta(minutes=WRAP_LEAD):
             return ""
-        return (f"no time left for a worker: its wrap-up ({hhmm(wrap)}) would be under {WRAP_LEAD} minutes away "
-                f"(workers wrap up {WRAP_UP} minutes before their stop)")
+        when = "past" if wrap <= now() else f"under {WRAP_LEAD} min away"
+        return f"no time left for a worker: its wrap-up ({WRAP_UP} min before it's stopped) would be {when}"
 
     def answered(self, tid, ref):
         """The ticket's answered questions on main (preflight puts them there) and on its own branch."""

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver, heavy  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now, read_jsonl  # noqa: E402
-from helpers import Sandbox  # noqa: E402
+from helpers import Sandbox, no_wrap_up  # noqa: E402
 from test_heavy_check_wait import hold, machine  # noqa: E402
 from test_parallel import args  # noqa: E402
 
@@ -116,6 +116,7 @@ class DriverCheckKeepsItsPlace(unittest.TestCase):
 
     def test_it_waits_past_its_workers_time_box(self):
         """The worker's box (6 s here) started with the worker: the check still waits on until the run's end."""
+        no_wrap_up(self)
         self.waits_in_place(args(parallel=1, ticket_hours=6 / 3600), 8)
 
     def test_a_deadline_moved_earlier_ends_the_wait_then(self):

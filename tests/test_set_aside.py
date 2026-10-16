@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
-from helpers import Sandbox  # noqa: E402
+from helpers import Sandbox, no_wrap_up  # noqa: E402
 
 TOO_LONG = "Prompt is too long"
 
@@ -67,6 +67,7 @@ class LimitPushes(Base):
         os.environ["FAKE_HANG_ROLE"] = "# windvane worker run"
         poll, runner.POLL = runner.POLL, 0.2
         self.addCleanup(setattr, runner, "POLL", poll)
+        no_wrap_up(self)
         pilot = self.pilot(ticket_hours=1 / 1800)  # two seconds
         pilot.run(now() + timedelta(hours=2))
         self.assertIn("T-001", pilot.skip)

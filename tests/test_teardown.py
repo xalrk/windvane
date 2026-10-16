@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import cli, driver, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
-from helpers import Sandbox  # noqa: E402
+from helpers import Sandbox, no_wrap_up  # noqa: E402
 from test_hangs import alive  # noqa: E402
 from test_pipeline import args  # noqa: E402
 import test_robust  # noqa: E402
@@ -77,6 +77,7 @@ class Teardown(unittest.TestCase):
         os.environ["FAKE_HANG_ROLE"] = "# windvane worker run"
         self.addCleanup(runner.__setattr__, "POLL", runner.POLL)
         runner.POLL = 0.2
+        no_wrap_up(self)
         _, took = self.run_until(timedelta(seconds=4))
         self.assertEqual(self.pilot.stop_reason, "deadline")
         self.assertEqual(self.pilot.stopped, ["T-001"])

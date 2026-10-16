@@ -16,7 +16,7 @@ from windvane import driver, questions  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
-from helpers import Sandbox  # noqa: E402
+from helpers import Sandbox, no_wrap_up  # noqa: E402
 from test_parallel import args  # noqa: E402
 
 
@@ -82,6 +82,7 @@ class Schedule(unittest.TestCase):
         self.ticket("T-001", "a.py")
         self.ticket("T-002", "b.py")
         self.ticket("T-003", "c.py")
+        no_wrap_up(self)
         pilot = self.run_pilot(minutes=15)  # 3 x 10 min one at a time would miss it: all three start
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002", "T-003"])
         self.assertGreaterEqual(pilot.conflicts, 2)
