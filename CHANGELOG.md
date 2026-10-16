@@ -7,6 +7,9 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane bg --cancel <name>`: end your own background job, waiting for the machine or running. Its whole
+  process group goes, its place in the heavy queue frees for the jobs behind it, and its log ends with
+  `windvane: cancelled`. `windvane await` now says `WAITING` for a `--heavy` job still in the queue.
 - `windvane heavy --expect <min>` and `bg --heavy --expect <min>`: a heavy job says how long it likely runs, so the
   jobs waiting behind a command never timed before still get an estimate (recorded run times win over it).
   `heavy --status` shows how long the holder has run and usually runs, `running 72 min, usually 40`.
