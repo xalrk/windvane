@@ -184,10 +184,11 @@ MERGE_TRIES, MERGE_WAIT = 6, 5  # a new PR's mergeability takes GitHub a few sec
 def merge_pr(p, cd, branch, pr_n, title):
     """Merge PR `pr_n`, retrying what clears without the user: tried before GitHub knew whether the new PR can merge
     (UNKNOWN), it waits and tries again; with main moved under it (CONFLICTING, BEHIND), the change (only additions to
-    .windvane/) is replayed onto the fetched main, force-pushed and tried once more. Returns (merged, the PR's last
-    merge state in lower case, for the user)."""
-    state, replays = "unknown", 1
-    for left in range(MERGE_TRIES - 1, -1, -1):
+    .windvane/) is replayed onto the fetched main, force-pushed and tried once more. Returns (merged, why not, in a
+    few words for the user)."""
+    state, tries, replays = MERGE_STATES["UNKNOWN"], MERGE_TRIES, 1
+    while tries:
+        tries -= 1
         res = net.call(["gh", "pr", "merge", pr_n, "--merge", *(["--subject", title] * (actions.SKIP in title))],
                        p.main_root())
         if res.returncode == 0:
@@ -201,23 +202,27 @@ def merge_pr(p, cd, branch, pr_n, title):
             return True, ""
         marks, state = {pr.get("mergeable"), pr.get("mergeStateStatus")}, merge_state(pr, res.stderr)
         if "UNKNOWN" in marks or not pr:
-            time.sleep(MERGE_WAIT * bool(left))
+            time.sleep(MERGE_WAIT * bool(tries))
         elif marks & {"CONFLICTING", "BEHIND", "DIRTY"} and replays and replayed(p, cd, branch):
-            replays -= 1
+            replays, tries = 0, max(tries, 1)  # a replay is always tried
         else:
             break
     return False, state
 
 
+# GitHub's merge states, in the user's words: the conflict or wait first, then what blocks a mergeable PR.
+MERGE_STATES = {"UNKNOWN": "GitHub hadn't worked out whether it can merge", "CONFLICTING": "it conflicts with main",
+                "DIRTY": "it conflicts with main", "BEHIND": "main moved on", "DRAFT": "it is a draft",
+                "BLOCKED": "a required check or review blocks it"}
+
+
 def merge_state(pr, stderr):
-    """Why a PR didn't merge, in a few words: its conflict or wait, else the merge state that blocks it (a required
-    check or review), else gh's own error when GitHub saw nothing in the way."""
+    """Why a PR didn't merge, in a few words: its conflict or wait, else the merge state that blocks it, else gh's own
+    error when GitHub saw nothing in the way."""
     mergeable, status = pr.get("mergeable", ""), pr.get("mergeStateStatus", "")
     if mergeable in ("CONFLICTING", "UNKNOWN"):
-        return mergeable.lower()
-    if status not in ("", "CLEAN", "HAS_HOOKS", "UNSTABLE"):
-        return status.lower()
-    return cut(" ".join(stderr.split())) or "unknown"
+        return MERGE_STATES[mergeable]
+    return MERGE_STATES.get(status) or cut(" ".join(stderr.split())) or MERGE_STATES["UNKNOWN"]
 
 
 def replayed(p, cd, branch=""):
@@ -243,7 +248,7 @@ def not_merged(p, cd, branch, pr, pr_n, state, close):
                   else net.git(root, "push", "-q", p.remote, "--delete", branch)).returncode == 0:
         return None, why
     git(cd, "branch", "-f", branch, "HEAD")
-    hold(p, branch, "land", f"{why}; merge it by hand")
+    hold(p, branch, "land", f"{why}; merge it by hand" + f" (gh pr merge {pr_n} --merge)" * pr_n.isdigit())
     return False, pr or branch
 
 

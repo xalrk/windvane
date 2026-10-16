@@ -13,7 +13,8 @@ from windvane.config import Project  # noqa: E402
 from windvane.worktree import clean_detach, ensure_worktree  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
-# A fake `gh` over the sandbox's bare remote: `pr create` opens PR #7 for --head; `pr merge` fast-forwards main to
+# A fake `gh` over the sandbox's bare remote: `pr create` opens PR #7 for --head (main moving to `moved` then,
+# with a `move` file); `pr merge` fast-forwards main to
 # the branch, failing while the `unknown` file counts (each `pr view` counts it down), while `blocked` exists, or when
 # main moved (the branch isn't on top of it); `pr view` says which; `pr close --delete-branch` deletes the branch;
 # `pr list` shows #7 open.
@@ -29,6 +30,8 @@ head = (st / "head").read_text() if (st / "head").exists() else ""
 unknown = int((st / "unknown").read_text()) if (st / "unknown").exists() else 0
 behind = bool(head) and git("merge-base", "--is-ancestor", "refs/heads/main", "refs/heads/" + head) != 0
 if args[:2] == ["pr", "create"]:
+    if (st / "move").exists():
+        git("update-ref", "refs/heads/main", "refs/heads/moved")
     (st / "head").write_text(args[args.index("--head") + 1])
     print("https://github.com/o/r/pull/7")
 elif args[:2] == ["pr", "merge"]:
@@ -93,6 +96,21 @@ class LandRetry(unittest.TestCase):
         self.s.git("commit", "-qm", "Plan: 1 new ticket", cwd=cd)
         return cd
 
+    def main_moves_when_the_pr_opens(self, rel, text):
+        """Main gets a commit of its own, adding `text` to `rel`, between the change's commit and its merge."""
+        f = self.s.root / rel
+        self.s.write(rel, (f.read_text() if f.exists() else "") + text)
+        self.s.git("add", "-A")
+        self.s.git("commit", "-qm", "main moves")
+        self.s.git("push", "-q", "origin", "HEAD:refs/heads/moved")
+        self.s.git("reset", "-q", "--hard", "origin/main")
+        (self.state / "move").touch()
+
+    def answer(self, x, letter):
+        self.p.state.mkdir(parents=True, exist_ok=True)
+        (self.p.state / "preflight.json").write_text(json.dumps({"questions": [x]}))
+        return preflight.record(self.p, [(x, letter, None)])
+
     def test_a_merge_tried_while_github_is_still_working_it_out_lands_on_a_later_try(self):
         (self.state / "unknown").write_text("2")
         cd = self.change()
@@ -116,11 +134,10 @@ class LandRetry(unittest.TestCase):
     def test_a_desk_answer_that_still_cant_merge_closes_its_pr_and_can_be_given_again(self):
         (self.state / "unknown").write_text("99")
         x = preflight.question("T-001", "Red or blue?", QUESTION, "new", 1)
-        self.p.state.mkdir(parents=True, exist_ok=True)
-        (self.p.state / "preflight.json").write_text(json.dumps({"questions": [x]}))
         before = self.s.git("rev-parse", "origin/main")
-        out = preflight.record(self.p, [(x, "B", None)])
-        self.assertEqual(out, "answers for T-001 not recorded (PR #7 couldn't merge: unknown); answer again with "
+        out = self.answer(x, "B")
+        self.assertEqual(out, "answers for T-001 not recorded (PR #7 couldn't merge: GitHub hadn't worked out "
+                              "whether it can merge); answer again with "
                               "windvane answer T-001.1 B")
         self.assertEqual(self.merges(), held.MERGE_TRIES)  # bounded
         self.assertIn("pr close 7 --delete-branch", self.gh())
@@ -143,9 +160,36 @@ class LandRetry(unittest.TestCase):
         self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {"plan-1": "land"})
         [(branch, why, _, on)] = held.held_now(self.p)
         self.assertEqual((branch, on), ("plan-1", "origin/plan-1"))
-        self.assertEqual(why, "PR #7 couldn't merge: blocked; merge it by hand")
-        self.assertIn("pushed to origin/plan-1, not merged: plan-1 (Plan: 1 new ticket): PR #7 couldn't merge: "
-                      "blocked; merge it by hand", held.held_lines(self.p)[0])  # not "open a PR": it has one
+        self.assertEqual(why, "PR #7 couldn't merge: a required check or review blocks it; merge it by hand "
+                              "(gh pr merge 7 --merge)")
+        self.assertIn(f"pushed to origin/plan-1, not merged: plan-1 (Plan: 1 new ticket): {why}",
+                      held.held_lines(self.p)[0])  # not "open a PR": it has one
+
+    def test_a_desk_answer_whose_replay_conflicts_closes_its_pr_and_can_be_given_again(self):
+        self.s.write(".windvane/QUESTIONS.md", "# Questions\n\n## Open\n\n## Provisional\n\n## Answered\n")
+        self.s.publish("questions")
+        self.main_moves_when_the_pr_opens(".windvane/QUESTIONS.md", "### T-009: Other?\nAnswer: A (other)\n")
+        x = preflight.question("T-001", "Red or blue?", QUESTION, "new", 1)
+        out = self.answer(x, "B")
+        self.assertEqual(out, "answers for T-001 not recorded (PR #7 couldn't merge: it conflicts with main); answer "
+                              "again with windvane answer T-001.1 B")
+        self.assertEqual(self.merges(), 1)  # a replay that conflicts isn't tried again
+        self.assertIn("pr close 7 --delete-branch", self.gh())
+        self.assertNotIn("### T-001", self.main_file(".windvane/QUESTIONS.md"))
+        self.assertIn("### T-009: Other?", self.main_file(".windvane/QUESTIONS.md"))  # main's own change stands
+        self.assertEqual(preflight.lookup(self.p, "T-001.1"), x)
+        self.assertNotIn("rebase", self.s.git("status", cwd=self.p.plan_dir))  # the tree isn't left mid-rebase
+        self.assertIn("1 answer recorded on main", self.answer(x, "B"))  # given again, it lands on the moved main
+        self.assertIn("### T-001: Red or blue?", self.main_file(".windvane/QUESTIONS.md"))
+
+    def test_a_plan_whose_replay_conflicts_keeps_its_pr_open_and_stays_held(self):
+        cd = self.change()
+        self.main_moves_when_the_pr_opens(".windvane/tickets/T-002.md", "# T-002: another\nDepends on: nothing.\n")
+        ok, where = held.land(self.p, cd, "plan-1", "Plan: 1 new ticket", "body", commit=False)
+        self.assertEqual((ok, where), (False, "https://github.com/o/r/pull/7"))
+        self.assertNotIn("pr close", " ".join(self.gh()))
+        self.assertEqual([(b, why) for b, why, *_ in held.held_now(self.p)], [
+            ("plan-1", "PR #7 couldn't merge: it conflicts with main; merge it by hand (gh pr merge 7 --merge)")])
 
     def test_a_held_change_landed_again_that_cant_merge_stays_held(self):
         (self.state / "blocked").touch()
