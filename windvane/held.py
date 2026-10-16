@@ -177,6 +177,7 @@ def _land(p, cd, branch, title, body, tries, close):
     return True, p.main
 
 
+CANT_MERGE = "couldn't merge"  # in a held change's reason: it has a PR, so `status` shows why, not "open a PR"
 MERGE_TRIES, MERGE_WAIT = 6, 5  # a new PR's mergeability takes GitHub a few seconds: half a minute of waits at most
 
 
@@ -235,7 +236,7 @@ def not_merged(p, cd, branch, pr, pr_n, state, close):
     """A change whose PR still can't merge. With `close` (desk answers, cheap to give again) its PR is closed and its
     branch deleted, so it can't sit conflicting with every later change: (None, why). Any other (a paid plan, a held
     change) keeps its PR and is held as one to land, so `status` lists it: (False, the PR)."""
-    why = f"PR #{pr_n} couldn't merge: {state}" if pr_n.isdigit() else "its PR couldn't be opened"
+    why = f"PR #{pr_n} {CANT_MERGE}: {state}" if pr_n.isdigit() else "its PR couldn't be opened"
     log(p, f"{branch}: {why}")
     root = p.main_root()
     if close and (net.call(["gh", "pr", "close", pr_n, "--delete-branch"], root) if pr_n.isdigit()
@@ -371,7 +372,8 @@ def held_lines(p, now=None, subject=60):
     merge = THEN.get(forge, THEN["git"]).format(main=p.main) + " and merge it" * (forge == "github")
     return [f"held back for {age(time.time() - at)}, " + (f"pushed to {on}, not merged" if on else "not pushed")
             + f": {b} ({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:subject]}): "
-            + (merge if on else why) for b, why, at, on in (held_now(p) if now is None else now)]
+            + (merge if on and CANT_MERGE not in why else why)
+            for b, why, at, on in (held_now(p) if now is None else now)]
 
 
 def age(seconds):

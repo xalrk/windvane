@@ -15,7 +15,8 @@ from helpers import Sandbox  # noqa: E402
 
 # A fake `gh` over the sandbox's bare remote: `pr create` opens PR #7 for --head; `pr merge` fast-forwards main to
 # the branch, failing while the `unknown` file counts (each `pr view` counts it down), while `blocked` exists, or when
-# main moved (the branch isn't on top of it); `pr view` says which; `pr close --delete-branch` deletes the branch; `pr list` shows #7 open.
+# main moved (the branch isn't on top of it); `pr view` says which; `pr close --delete-branch` deletes the branch;
+# `pr list` shows #7 open.
 GH = """#!{python}
 import json, subprocess, sys
 from pathlib import Path
@@ -49,7 +50,8 @@ elif args[:2] == ["pr", "list"]:
     print(json.dumps([{{"number": 7, "state": "OPEN", "headRefName": head}}] if head else []))
 """
 
-QUESTION = "### T-001: Red or blue?\nThe ticket doesn't say.\n- **A**: red\n- **B**: blue\nRecommendation: A, because.\n"
+QUESTION = ("### T-001: Red or blue?\nThe ticket doesn't say.\n- **A**: red\n- **B**: blue\n"
+            "Recommendation: A, because.\n")
 
 
 class LandRetry(unittest.TestCase):
@@ -142,7 +144,8 @@ class LandRetry(unittest.TestCase):
         [(branch, why, _, on)] = held.held_now(self.p)
         self.assertEqual((branch, on), ("plan-1", "origin/plan-1"))
         self.assertEqual(why, "PR #7 couldn't merge: blocked; merge it by hand")
-        self.assertIn("pushed to origin/plan-1, not merged: plan-1 (Plan: 1 new ticket)", held.held_lines(self.p)[0])
+        self.assertIn("pushed to origin/plan-1, not merged: plan-1 (Plan: 1 new ticket): PR #7 couldn't merge: "
+                      "blocked; merge it by hand", held.held_lines(self.p)[0])  # not "open a PR": it has one
 
     def test_a_held_change_landed_again_that_cant_merge_stays_held(self):
         (self.state / "blocked").touch()
