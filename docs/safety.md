@@ -135,6 +135,10 @@ neither, or a holder past its usual or expected time, makes it `at least N min`,
 In a session, a job says once when it likely starts after the wrap-up (20 minutes before the session's stop): when the
 known work ahead runs past it, or when the wrap-up comes and the job still waits. It keeps waiting; the session decides
 whether to plan without it.
+A session can't change `.windvane/config.toml` for itself, so when the run's heavy jobs waited on memory that a
+setting would have freed, the run's summary says how long they waited and what to set there, each once: `add
+"GradleDaemon" to heavy_reuses` for a helper of its own that no pattern names, `set heavy_mem to the GB they need`
+for a need left at `min_free_gb`.
 It waits for the machine until the session's stop for a job a session starts (`windvane heavy`, `bg --heavy`, `windvane
 check`), until the run's end (even one `windvane deadline` moves) for the driver's heavy check, and `machine.toml`'s
 `heavy_wait` minutes (default 60) for a command run by hand; `--wait` overrides each. A job that gave up sooner would
