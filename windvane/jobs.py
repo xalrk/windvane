@@ -39,6 +39,7 @@ STOPPING = "; the run is stopping, so don't run it again now"  # ...because a st
 # workers, is when it ends unless the driver moves it (`<job>.keep` holds the time it ends, empty for never).
 RUN_STOP = "WINDVANE_RUN_STOP"
 KILLED = 143  # a kept job's exit when the run's stop or a kill ended it (as SIGTERM's)
+CANCELLED = "windvane: cancelled"  # a job's last log line after `bg --cancel`
 WATCH_S = 2  # seconds between a kept job's looks at its end time
 # A kept job's group leader: `watch` from this same windvane (its package dir is the first argument), outside PATH.
 WATCH = ("import sys; sys.path.insert(0, sys.argv[1]); from windvane.jobs import watch; "
@@ -425,24 +426,59 @@ def stop_groups(groups):
         signal_group(g, signal.SIGKILL)
 
 
+def end_job(base, line):
+    """Stop a job's process groups (its leader's, and a kept job's command's: see `watch`), then give its log `line`
+    last, after whatever the job said as it died, and exit `KILLED` if it wrote none, so `await` and the session
+    that resumes a kept job's ticket are told. False, touching nothing, when it has just ended on its own."""
+    if Path(f"{base}.exit").exists():
+        return False
+    groups = []
+    for end in ("pid", "child"):
+        try:
+            groups.append((int(Path(f"{base}.{end}").read_text()), Path(f"{base}.{end}")))
+        except (OSError, ValueError):
+            pass
+    stop_groups(groups)
+    with open(f"{base}.log", "a") as f:
+        f.write(f"{line}\n")
+    exit_f = Path(f"{base}.exit")
+    if not exit_f.exists() or not exit_f.read_text().strip():  # killed between creating the file and writing it
+        exit_f.write_text(str(KILLED))
+    return True
+
+
 def end_kept(p, ticket=None, why="the run's stop"):
-    """Kill the kept jobs still waiting or running (a ticket's, or every one): each gets exit `KILLED` and a last log
-    line saying why, so the session that resumes its ticket is told. Their names."""
+    """Kill the kept jobs still waiting or running (a ticket's, or every one), each with a last log line saying why.
+    Their names."""
     out = []
     for b in running_kept(p, ticket):
-        with open(f"{b}.log", "a") as f:
-            f.write(f"windvane: kept job killed: {why}\n")
-        groups = []
-        for end in ("pid", "child"):  # the leader's group, and the command's own (see `watch`)
-            try:
-                groups.append((int(Path(f"{b}.{end}").read_text()), Path(f"{b}.{end}")))
-            except (OSError, ValueError):
-                pass
-        stop_groups(groups)
-        if not Path(f"{b}.exit").exists():
-            Path(f"{b}.exit").write_text(str(KILLED))
+        end_job(b, f"windvane: kept job killed: {why}")
         out.append(f"{b.parent.name}'s '{b.name}'")
     return out
+
+
+def cancel(p, name):
+    """End the caller's own job `name` (`bg --cancel`), waiting for the machine or running, kept or not: its heavy
+    queue entry goes with its process, so the jobs behind it move up and the name can start again at once."""
+    outside_sandbox("cancelling a background job")  # its own pid namespace hides the job: it would look dead
+    (base, stray), ticket = find_job(p, name), os.environ.get(TICKET)
+    if not Path(f"{base}.start").exists():
+        sys.exit(f"bg --cancel: nothing started as '{name}'" + (f" for {ticket}" if ticket else "")
+                 + (f"\n{stray_line(name, stray)}" if stray else ""))
+    if not alive(base):
+        exit_f = Path(f"{base}.exit")
+        how = f"exit {exit_code(exit_f, 0)}" if exit_f.exists() else "it died without an exit"
+        sys.exit(f"bg --cancel: '{name}' already ended ({how}); log {base}.log")
+    log, mins = f"{base}.log", (time.time() - int(Path(f"{base}.start").read_text())) / 60
+    queued, wait_m = heavy.waiting(log), heavy.waited(log) / 60
+    if not end_job(base, CANCELLED):
+        sys.exit(f"bg --cancel: '{name}' ended on its own just now (exit {exit_code(Path(f'{base}.exit'))}); log {log}")
+    if queued:
+        was = f"waiting for the machine for {mins:.0f} min"
+    else:  # the minutes it ran, not counting its wait in the queue
+        was = f"running for {mins - wait_m:.0f} min" + (f", after {wait_m:.0f} min in the heavy queue"
+                                                        if round(wait_m) else "")
+    print(f"cancelled '{name}' (was {was})")
 
 
 def ended_kept(p, ticket):
@@ -453,11 +489,12 @@ def ended_kept(p, ticket):
             continue
         exit_f = Path(f"{b}.exit")
         code = exit_code(exit_f, 0) if exit_f.exists() else "? (it died without one)"
+        how = "cancelled (`bg --cancel`)" if tail(f"{b}.log", 1) == CANCELLED else f"exit {code}"
         try:
             mins = f" after {(exit_f.stat().st_mtime - int(Path(f'{b}.start').read_text())) / 60:.0f} min"
         except (OSError, ValueError):
             mins = ""
-        lines.append(f"- '{b.name}' exit {code}{mins}; log {b}.log (`windvane await {b.name}` shows it)")
+        lines.append(f"- '{b.name}' {how}{mins}; log {b}.log (`windvane await {b.name}` shows it)")
         for end in ("keep", "child"):
             Path(f"{b}.{end}").unlink(missing_ok=True)
     return lines
@@ -497,6 +534,7 @@ def await_(p, name, lines=40, limit=570):
         print(f"DONE {name} exit {exit_code(exit_f)} after {mins:.0f} min")
         print(tail(f"{base}.log", lines))
     else:
-        idle = ", all of it waiting for the machine" if heavy.waiting(f"{base}.log") else ""
-        print(f"RUNNING {name} ({mins:.0f} min so far{idle}); call windvane await {name} again")
+        state = "WAITING" if heavy.waiting(f"{base}.log") else "RUNNING"
+        where = "in the heavy queue, " if state == "WAITING" else ""
+        print(f"{state} {name} ({where}{mins:.0f} min so far); call windvane await {name} again")
         print(tail(f"{base}.log", 3))

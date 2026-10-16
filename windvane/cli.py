@@ -796,6 +796,7 @@ def main(argv=None):
     s.add_argument("--keep", action="store_true", help="with --heavy: it outlives the session (until the run's "
                                                        "stop); the ticket resumes when it ends")
     s.add_argument("--expect", type=expected, metavar="MIN", help="with --heavy: minutes it likely runs (as `heavy --expect`)")
+    s.add_argument("--cancel", action="store_true", help="end your own job of that name instead, waiting or running")
     s.add_argument("name")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
@@ -883,6 +884,8 @@ def main(argv=None):
         for flag, given in (("--mem", a.mem is not None), ("--keep", a.keep), ("--expect", a.expect is not None)):
             if given and not a.heavy:
                 sys.exit(f"bg: {flag} goes with --heavy")
+        if a.cancel:
+            return sys.exit("bg --cancel: give only the job's name") if cmd or a.heavy else jobs.cancel(p, a.name)
         return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy, a.mem, a.keep, a.expect) if cmd else sys.exit("bg: give a command")
     if a.cmd == "await":
         return jobs.await_(p, a.name, a.lines)

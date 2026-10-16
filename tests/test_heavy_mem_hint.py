@@ -105,8 +105,7 @@ class AwaitWaiting(unittest.TestCase):
 
     def test_a_heavy_job_not_started_says_it_is_waiting(self):
         line = self.await_("heavy: waiting: only 3.3 GB free (want 6); largest: pid 9 qemu (4.0 GB)\n")
-        self.assertEqual(line, "RUNNING decode (48 min so far, all of it waiting for the machine); "
-                               "call windvane await decode again")
+        self.assertEqual(line, "WAITING decode (in the heavy queue, 48 min so far); call windvane await decode again")
 
     def test_once_it_got_the_machine_it_says_plain_running(self):
         line = self.await_("heavy: waiting: only 3.3 GB free (want 6)\n" + heavy.WAITED.format(2880) + "\nframe 1\n")
