@@ -28,9 +28,9 @@ reviewer reads your change, and the driver merges it.
    Reuse what you already ran. Then `windvane critic <ID>`, and do what its last line, `CRITIC STEP`, says: fix the
    "Fix in this ticket" points, refresh the pack, ask again; it tells you when to go on. Its "Beyond this ticket"
    points aren't yours: put them in the PR body.
-7. **Check:** `windvane check` on the final head, committed and pushed, with nothing uncommitted. A pass is recorded
-   for that tree, so the driver reuses it. On a failure, rerun only the failing part until it passes, then
-   `windvane check` once more.
+7. **Check:** `windvane check` (a heavy one takes `--mem <GB>` and says when to `await` it) on the final head,
+   committed and pushed, with nothing uncommitted. A pass is recorded for that tree, so the driver reuses it. On a
+   failure, rerun only the failing part until it passes, then check once more.
 8. **PR** (forge `github`): `gh pr create --title "<ID>: <title>"` with a short body: what changed and why, the check
    result, the critic's verdict and its "Beyond this ticket" points, provisional answers. Reuse the open PR if there
    is one (`gh pr view`), updating its body when it changed. Forge `git`: no PR, the branch is enough.

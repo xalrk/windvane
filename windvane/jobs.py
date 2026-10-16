@@ -41,6 +41,9 @@ RUN_STOP = "WINDVANE_RUN_STOP"
 KILLED = 143  # a kept job's exit when the run's stop or a kill ended it (as SIGTERM's)
 CANCELLED = "windvane: cancelled"  # a job's last log line after `bg --cancel`
 WATCH_S = 2  # seconds between a kept job's looks at its end time
+AWAIT_S = 570  # how long `await` blocks: under one tool call's 10 minutes
+SESSION_CHECK = "check"  # the bg job a session's heavy check runs as
+CHECK_LOG = "check: log "  # its first line names the check's log, where its wait for the machine is said
 # A kept job's group leader: `watch` from this same windvane (its package dir is the first argument), outside PATH.
 WATCH = ("import sys; sys.path.insert(0, sys.argv[1]); from windvane.jobs import watch; "
          "sys.exit(watch(sys.argv[2], sys.argv[3:]))")
@@ -69,11 +72,13 @@ def ledger(p, ticket, row, event="check"):
                                                 "role": os.environ.get(ROLE) or "driver", **row})
 
 
-def check(p, cwd, quiet=False, ticket=None, stop_at=None):
+def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=False):
     """Run the project's check in `cwd`. Returns (passed, summary line, log path); passed is None when a heavy check
     never ran: its wait for the machine timed out, which says nothing about the tree, so callers try it again.
     `stop_at` (a datetime): when a heavy check stops waiting for the machine, or earlier if the run's deadline is
-    moved meanwhile (the driver's); a session's check has its own stop in the environment already."""
+    moved meanwhile (the driver's); a session's check has its own stop in the environment already. `mem` (GB): the
+    free memory a heavy check waits for, this once, instead of `heavy_mem`. `announce`: say the log first (a
+    session's check job, for `await` to read its wait from)."""
     cmd = p.cfg["check"]
     if not cmd:
         return True, "CHECK PASSED (no check configured)", None
@@ -86,7 +91,9 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None):
     logs.mkdir(parents=True, exist_ok=True)
     prune(p, logs)
     log = logs / log_name()
-    code, mins, waited = run_logged(p, ticket, cmd, cwd, log, stop_at)
+    if announce:
+        print(f"{CHECK_LOG}{log}", flush=True)
+    code, mins, waited = run_logged(p, ticket, cmd, cwd, log, stop_at, mem)
     if waited:
         what, stopped = waited
         if stopped:
@@ -107,7 +114,7 @@ def log_name():
     return f"{now():%Y%m%d-%H%M%S}-{os.getpid()}-{next(_LOGS)}.log"
 
 
-def run_logged(p, ticket, cmd, cwd, log, stop_at=None):
+def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None):
     """Run the check into `log`, with a ledger row on each side, so a check that's cut off still counts: a
     `check-start` row first (all a SIGKILL or a killed driver leaves; `stats` calls it cut off), then the end row
     with the same `start`, written on the way out even for an exception or Ctrl-C (`finished: false`, the minutes
@@ -129,7 +136,7 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None):
             beat = heartbeat(log)
             try:
                 if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
-                    mem = p.cfg.get("heavy_mem")  # unset: machine.toml's min_free_gb
+                    mem = p.cfg.get("heavy_mem") if mem is None else mem  # unset: machine.toml's min_free_gb
                     code = subprocess.run([sys.executable, "-c", "import json, sys; from windvane.heavy import run; "
                                            "sys.exit(run(sys.argv[1], cwd=sys.argv[2], "
                                            "mem=float(sys.argv[3]) if sys.argv[3] else None, "
@@ -331,7 +338,7 @@ def stray_line(name, base):
             f"tied to it): {how}; log {base}.log")
 
 
-def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None):
+def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=False):
     """Start `cmd` in the background. A session's job dies with it; a kept one (`keep`) goes on past it, until the
     run's stop, so a heavy job that can't both queue and run in one session still runs: the driver holds its ticket
     until it ends."""
@@ -363,7 +370,9 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None):
         mark = p.state / "nested" / session / str(proc.pid)
         mark.parent.mkdir(parents=True, exist_ok=True)
         mark.write_text(util.stamp(proc.pid) or "")
-    if keep:
+    if quiet:
+        pass
+    elif keep:
         print(f"started '{name}', kept past this session (log {base}.log): commit, push and end your run "
               f"PARTIAL naming it; the ticket resumes when it ends")
     else:
@@ -471,7 +480,7 @@ def cancel(p, name):
         how = f"exit {exit_code(exit_f, 0)}" if exit_f.exists() else "it died without an exit"
         sys.exit(f"bg --cancel: '{name}' already ended ({how}); log {base}.log")
     log, mins = f"{base}.log", (time.time() - int(Path(f"{base}.start").read_text())) / 60
-    queued, wait_m = heavy.waiting(log), heavy.waited(log) / 60
+    queued, wait_m = heavy.waiting(watched_log(base)), heavy.waited(watched_log(base)) / 60
     if not end_job(base, CANCELLED):
         sys.exit(f"bg --cancel: '{name}' ended on its own just now (exit {exit_code(Path(f'{base}.exit'))}); log {log}")
     if queued:
@@ -501,6 +510,22 @@ def ended_kept(p, ticket):
     return lines
 
 
+def watched_log(base):
+    """The log that tells whether a job still waits for the machine: its own, or the check log a session's check
+    job names on its first line, since the check writes its heavy wait there."""
+    first = first_line(f"{base}.log")
+    return first.removeprefix(CHECK_LOG) if first.startswith(CHECK_LOG) else f"{base}.log"
+
+
+def first_line(path):
+    """A file's first line, or "" when it can't be read."""
+    try:
+        with open(path, errors="replace") as f:
+            return f.readline().rstrip("\n")
+    except OSError:
+        return ""
+
+
 def exit_code(exit_f, patience=2.0):
     """A job's exit code from its exit file. The shell creates the file before it writes the code into it, so a
     file seen the moment it appears can still be empty: wait a moment for the code rather than print none."""
@@ -510,16 +535,17 @@ def exit_code(exit_f, patience=2.0):
     return code or "?"
 
 
-def await_(p, name, lines=40, limit=570):
-    """Block until a bg job ends, at most `limit` seconds (under one tool call's 10 minutes). The seconds it blocked
-    go to the ledger as an `await` row (a ticket's only), so `stats` shows the time each role spends waiting."""
+def await_(p, name, lines=40, limit=None):
+    """Block until a bg job ends, at most `limit` seconds (default AWAIT_S). The seconds it blocked go to the ledger
+    as an `await` row (a ticket's only), so `stats` shows the time each role spends waiting. Its exit code (a
+    string), or None while it still waits or runs."""
     outside_sandbox("waiting for a background job")  # its own pid namespace hides the job: it would look dead
     (base, stray), ticket = find_job(p, name), os.environ.get(TICKET)
     if not Path(f"{base}.start").exists():
         sys.exit(f"await: nothing started as '{name}'" + (f" for {ticket}" if ticket else "")
                  + (f"\n{stray_line(name, stray)}" if stray else ""))
     t0 = time.time()
-    end = t0 + limit
+    end = t0 + (AWAIT_S if limit is None else limit)
     exit_f = Path(f"{base}.exit")
     while not exit_f.exists() and time.time() < end:
         if not pid_lives(base):
@@ -532,10 +558,36 @@ def await_(p, name, lines=40, limit=570):
         ledger(p, None, {"name": name, "seconds": blocked}, event="await")
     mins = (time.time() - int(Path(f"{base}.start").read_text())) / 60
     if exit_f.exists():
-        print(f"DONE {name} exit {exit_code(exit_f)} after {mins:.0f} min")
+        code = exit_code(exit_f)
+        print(f"DONE {name} exit {code} after {mins:.0f} min")
         print(tail(f"{base}.log", lines))
-    else:
-        state = "WAITING" if heavy.waiting(f"{base}.log") else "RUNNING"
-        where = "in the heavy queue, " if state == "WAITING" else ""
-        print(f"{state} {name} ({where}{mins:.0f} min so far); call windvane await {name} again")
-        print(tail(f"{base}.log", 3))
+        return code
+    log = watched_log(base)
+    state = "WAITING" if heavy.waiting(log) else "RUNNING"
+    where = "in the heavy queue, " if state == "WAITING" else ""
+    print(f"{state} {name} ({where}{mins:.0f} min so far); call windvane await {name} again")
+    print(tail(log, 3))
+    return None
+
+
+def session_check(p, cwd, mem=None, lines=60):
+    """A session's heavy check (`windvane check` with `STOP_AT` set). Its wait for the machine lasts until the
+    session's stop, hours past one tool call's 10 minutes, and a killed call would lose its place in the queue: so
+    it runs as the session's bg job `check` (the running one when there is one, never a second in line) and is
+    awaited as `await` does. Its exit code: the check's own once it ended, else TIMED_OUT, `await check` going on."""
+    outside_sandbox("a heavy check")  # the lock's folder is read-only there, and the job would die with the call
+    if not alive(find_job(p, SESSION_CHECK)[0]):
+        key = tree_key(p, cwd)
+        if not p.cfg["check"] or key and (p.state / "passes" / key).exists():  # nothing to wait for
+            ok, summary, _ = check(p, cwd)
+            print(summary)
+            return 0
+        bg(p, SESSION_CHECK, [*exe(), "check", "--in-job", "--lines", str(lines),
+                              *(["--mem", f"{mem:.10g}"] if mem is not None else [])], cwd, quiet=True)
+    elif mem is not None:
+        print(f"check: one is already going: it keeps its own need (--mem {mem:g} is for the next one)")
+    code = await_(p, SESSION_CHECK, lines + 1)
+    if code is None:
+        print(f"The check keeps its place in line: call `windvane await {SESSION_CHECK}` for its result")
+        return heavy.TIMED_OUT
+    return int(code) if code.isdigit() else 1

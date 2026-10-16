@@ -519,7 +519,13 @@ def cmd_answer(a, p):
 
 
 def cmd_check(a, p):
-    ok, summary, log = jobs.check(p, os.getcwd())
+    mem = getattr(a, "mem", None)
+    if mem is not None and not p.cfg["heavy_check"]:
+        sys.exit("check --mem: only a heavy check waits for free memory; this project has heavy_check off "
+                 f"({DIR}/config.toml)")
+    if p.cfg["heavy_check"] and os.environ.get(heavy.STOP_AT) and not getattr(a, "in_job", False):
+        sys.exit(jobs.session_check(p, os.getcwd(), mem, a.lines))
+    ok, summary, log = jobs.check(p, os.getcwd(), mem=mem, announce=getattr(a, "in_job", False))
     if ok is False and log:
         print(jobs.tail(log, a.lines))
     print(summary)
@@ -779,6 +785,9 @@ def main(argv=None):
     s.add_argument("answer", help="a letter, or free text in quotes")
     s = sub.add_parser("check", help="the project's check, reusing a pass for the same tree")
     s.add_argument("--lines", type=int, default=60)
+    s.add_argument("--mem", type=gb, help="with heavy_check: GB of free memory this check needs "
+                                          "(default: the project's heavy_mem, else machine.toml's min_free_gb)")
+    s.add_argument("--in-job", action="store_true", help=argparse.SUPPRESS)  # a session's check, as its bg job
     s = sub.add_parser("ci", help="start a GitHub Actions workflow, only within the month's minutes cap")
     s.add_argument("workflow", nargs="?", default="", help="its file or name (default: the repo's only one)")
     s.add_argument("--ref", default="", help="the branch to run it on (default: the current one)")
