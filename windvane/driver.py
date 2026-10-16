@@ -1107,7 +1107,7 @@ class Pilot(Desk, Periodic):
                 git(wd, "branch", "-q", "-D", branch)  # -d's own test would use the deleted remote branch
         self.merged.append(tid)
         jobs.end_kept(p, tid, "its ticket merged")
-        self.note_heavy()
+        self.note_heavy(tid)
         scratch.drop(p, tid)
         with self.lock:  # this attempt is still running: its time so far counts too
             ran = self.spent.pop(tid, 0) + time.time() - self.began.get(tid, time.time())
@@ -1153,7 +1153,7 @@ class Pilot(Desk, Periodic):
     def fail(self, tid, why):
         self.skip.add(tid)
         jobs.end_kept(self.p, tid, "its ticket failed")
-        self.note_heavy()
+        self.note_heavy(tid)
         scratch.drop(self.p, tid)
         self.failed.append(tid)
         self.approved.pop(tid, None)
@@ -2073,29 +2073,45 @@ class Pilot(Desk, Periodic):
                 + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else "")
                 + schedule.next_line(p))
 
-    def note_heavy(self):
-        """Keeps what the run's heavy jobs said while they waited on memory (`jobs.heavy_waits`), read before a ticket's
-        bg logs go with its scratch."""
-        found = {str(log): list(w) for log, w in jobs.heavy_waits(self.p, self.opened).items()}
+    def note_heavy(self, tid=None):
+        """Keeps what the run's heavy jobs said while they waited on memory (`jobs.heavy_waits`): a ticket's bg logs
+        as it ends, before they go with its scratch; every log at the summary."""
+        found = {str(log): list(w) for log, w in jobs.heavy_waits(self.p, self.opened, tid).items()}
         with self.lock:  # slots end tickets side by side
             self.heavy_waits.update(found)
 
     def heavy_line(self):
         """The summary's line on the run's waits on memory that the project's config would have shortened (R-030): a
         session sees the hint only in its job's log and can't edit the config, so the user hears of it here. A word
-        `heavy_reuses` already matches isn't suggested; a wait with nothing left to suggest isn't counted."""
+        `heavy_reuses` already matches isn't suggested, nor `heavy_mem` once it's set; a wait with nothing left to
+        suggest isn't counted, and waits that overlap count once."""
         self.note_heavy()
-        have = self.p.cfg.get("heavy_reuses") or []
+        have, mem_set = self.p.cfg.get("heavy_reuses") or [], self.p.cfg.get("heavy_mem") is not None
         new = lambda w: not any(re.search(pat, w) if valid(pat) else pat == w for pat in have)  # noqa: E731
-        waits = [(s, [w for w in words if new(w)], default) for s, words, default in self.heavy_waits.values()]
-        waits = [w for w in waits if w[1] or w[2]]
+        waits = [(start, secs, [w for w in words if new(w)], None if mem_set else need)
+                 for start, secs, words, need in sorted(self.heavy_waits.values())]  # the first wait's first
+        waits = [w for w in waits if w[2] or w[3] is not None]
         if not waits:
             return ""
-        words = list(dict.fromkeys(w for _, ws, _ in waits for w in ws))
+        words = list(dict.fromkeys(w for *_, ws, _ in waits for w in ws))
+        need = next((n for *_, n in waits if n is not None), None)
         quoted = ", ".join(f'"{w}"' for w in words)  # `memory_hints` read them from between quotes: none in them
-        what = " and ".join([f"heavy_reuses = [{quoted}]"] * bool(words) + ["heavy_mem"] * any(d for *_, d in waits))
-        return whole(f"Heavy jobs waited {heavy.span(sum(s for s, *_ in waits))} on memory: consider ", what,
-                     f" in {DIR}/config.toml.\n", log=self.log)
+        what = " and ".join([f"add {quoted} to heavy_reuses"] * bool(words)
+                            + [f"set heavy_mem to the GB they need (they waited for {need} GB, machine.toml's "
+                               "min_free_gb)"] * (need is not None))
+        return whole(f"Heavy jobs waited {heavy.span(covered((s, s + n) for s, n, *_ in waits))} on memory: in "
+                     f"{DIR}/config.toml, ", what, ".\n", log=self.log)
+
+
+def covered(spans):
+    """The seconds the (start, end) `spans` cover together: a check and a bg job waiting at once lost the time once."""
+    total, reach = 0, None
+    for a, b in sorted(spans):
+        if reach is None or a > reach:
+            total, reach = total + b - a, b
+        elif b > reach:
+            total, reach = total + b - reach, b
+    return total
 
 
 def valid(pattern):

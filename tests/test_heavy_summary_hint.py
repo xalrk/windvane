@@ -7,6 +7,7 @@ import time
 import unittest
 from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -49,39 +50,49 @@ class SummaryHint(unittest.TestCase):
         (self.s.tmp / "config/windvane/machine.toml").write_text("busy = []\nmin_free_gb = 0\nheavy_wait = 1\n")
         os.environ["XDG_RUNTIME_DIR"] = str(run_dir)
         os.environ.pop("WINDVANE_HEAVY_HELD", None)
-        self.s.ticket("T-001")
 
-    def run_one(self, check_out, job_out=None):
+    def run_one(self, check_out, job_out=None, tickets=("T-001",)):
         self.s.write("check-out.txt", check_out)
+        for t in tickets:
+            self.s.ticket(t, touches=f"{t}.txt")
         self.s.publish()
         if job_out is not None:
             (self.s.tmp / "job-out.txt").write_text(job_out)
             os.environ["FAKE_BG_HEAVY"] = f"cat {self.s.tmp / 'job-out.txt'}"
         self.p = Project(self.s.root)
-        pilot = driver.Pilot(self.p, args(parallel=1))
+        pilot = driver.Pilot(self.p, args(parallel=len(tickets)))
         pilot.run(now() + timedelta(minutes=30))
-        self.assertEqual(pilot.merged, ["T-001"])
+        self.assertEqual(sorted(pilot.merged), list(tickets))
         return pilot
+
+    def line(self, pilot):
+        summary = pilot.summary()
+        lines = [x for x in summary.splitlines() if x.startswith("Heavy jobs")]
+        self.assertEqual(len(lines), 1, summary)
+        self.assertEqual(pilot.summary().count("Heavy jobs"), 1)  # asked again, nothing counts twice
+        return lines[0]
 
     def test_the_summary_names_each_new_word_once_with_the_runs_wait(self):
         pilot = self.run_one(waited(4800, QEMU, GRADLE, ADB), waited(3000, GRADLE, default=False))
         self.assertFalse((self.p.state / "bg/T-001").exists(), "its bg logs outlived the ticket")
-        summary = pilot.summary()
-        lines = [x for x in summary.splitlines() if x.startswith("Heavy jobs")]
-        self.assertEqual(len(lines), 1, summary)
-        line = lines[0]
-        self.assertEqual(line, 'Heavy jobs waited 2 h 10 min on memory: consider heavy_reuses = ["qemu-system-x86", '
-                               f'"GradleDaemon"] and heavy_mem in {CFG}.')
-        self.assertNotIn("adb", line)  # its heavy_reuses already matches it
-        self.assertEqual(line.count("GradleDaemon"), 1)
-        self.assertEqual(pilot.summary().count("Heavy jobs"), 1)  # asked again, nothing counts twice
+        # the job's 50 min fall within the check's 80, which began a few seconds after it
+        self.assertEqual(self.line(pilot), f'Heavy jobs waited 1 h 20 min on memory: in {CFG}, add "GradleDaemon", '
+                                           '"qemu-system-x86" to heavy_reuses and set heavy_mem to the GB they need '
+                                           "(they waited for 6 GB, machine.toml's min_free_gb).")  # adb: configured
+
+    def test_tickets_side_by_side_name_a_word_once(self):
+        pilot = self.run_one("all good\n", waited(3000, GRADLE, default=False), tickets=("T-001", "T-002"))
+        self.assertEqual(self.line(pilot), f'Heavy jobs waited 50 min on memory: in {CFG}, add "GradleDaemon" to '
+                                           "heavy_reuses.")
 
     def test_a_run_whose_heavy_jobs_never_waited_has_no_line(self):
         pilot = self.run_one("all good\n", "job ran at once\n")
         self.assertNotIn("Heavy jobs", pilot.summary())
 
     def test_only_settings_already_made_say_nothing(self):
-        pilot = self.run_one(waited(600, ADB, default=False))
+        cfg = self.s.root / CFG
+        cfg.write_text("heavy_mem = 4\n" + cfg.read_text())
+        pilot = self.run_one(waited(600, ADB))
         self.assertNotIn("Heavy jobs", pilot.summary())
 
 
@@ -93,29 +104,65 @@ class Line(unittest.TestCase):
         self.pilot = driver.Pilot(self.p, args(parallel=1))
 
     def test_a_long_word_list_is_cut_by_wholes_rule_and_logged_whole(self):
-        self.pilot.heavy_waits = {f"/x/{i}.log": [60, [f"helper-number-{i}"], False] for i in range(300)}
+        self.pilot.heavy_waits = {f"/x/{i}.log": [i * 60, 60, [f"helper-number-{i}"], None] for i in range(300)}
         line = self.pilot.heavy_line()
         self.assertLess(len(line.encode()), MOST + 200)
-        self.assertTrue(line.endswith(f" in {CFG}.\n"), line)
-        self.assertTrue(line.startswith("Heavy jobs waited 5 h on memory: consider heavy_reuses = ["), line)
+        self.assertTrue(line.startswith(f'Heavy jobs waited 5 h on memory: in {CFG}, add "helper-number-0", '), line)
+        self.assertTrue(line.endswith('" (the rest is in the log).\n'), line)
+        self.assertEqual(line.count("\n"), 1)
         self.assertIn("helper-number-299", (self.p.state / "autopilot.log").read_text())
 
     def test_only_the_default_need_suggests_heavy_mem_alone(self):
-        self.pilot.heavy_waits = {"/x/a.log": [2400, [], True]}
-        self.assertEqual(self.pilot.heavy_line(), whole("Heavy jobs waited 40 min on memory: consider ", "heavy_mem",
-                                                        f" in {CFG}.\n", log=self.pilot.log))
+        self.pilot.heavy_waits = {"/x/a.log": [0, 2400, [], "6"]}
+        self.assertEqual(self.pilot.heavy_line(),
+                         whole(f"Heavy jobs waited 40 min on memory: in {CFG}, ", "set heavy_mem to the GB they need "
+                               "(they waited for 6 GB, machine.toml's min_free_gb)", ".\n", log=self.pilot.log))
+
+    def test_waits_at_the_same_time_count_once(self):
+        self.pilot.heavy_waits = {"/x/a.log": [0, 3600, ["a"], None], "/x/b.log": [1800, 3600, ["b"], None],
+                                  "/x/c.log": [9000, 600, ["a"], None]}
+        self.assertIn("waited 1 h 40 min on memory", self.pilot.heavy_line())
+
+    def test_the_waits_carry_over_a_restart(self):
+        self.pilot.heavy_waits = {"/x/a.log": [0, 2400, ["GradleDaemon"], "6"]}
+        line = self.pilot.heavy_line()
+        self.pilot.hand_over()
+        nxt = driver.Pilot(self.p, args(parallel=1))
+        nxt.carry_over(True)
+        self.assertEqual(nxt.opened, self.pilot.opened)
+        self.assertEqual(nxt.heavy_line(), line)
+
+    def bg_log(self, name, text, start, code="143"):
+        base = self.p.state / "bg/T-009" / name
+        base.parent.mkdir(parents=True, exist_ok=True)
+        base.with_suffix(".start").write_text(str(int(start)))
+        base.with_suffix(".log").write_text(text)
+        base.with_suffix(".exit").write_text(code + "\n")
+        return base
 
     def test_a_job_that_never_got_the_machine_counts_all_its_time(self):
-        base = self.p.state / "bg/T-009/job"
-        base.parent.mkdir(parents=True)
         start = time.time() - 3600
-        base.with_suffix(".start").write_text(str(int(start)))
-        base.with_suffix(".log").write_text(waited(0, GRADLE).split("\n")[0] + "\nwindvane: kept job stopped\n")
-        base.with_suffix(".exit").write_text("143\n")
-        found = jobs.heavy_waits(self.p, start - 1)
-        self.assertEqual(list(found.values()), [(found[base.with_suffix(".log")][0], ["GradleDaemon"], True)])
-        self.assertAlmostEqual(found[base.with_suffix(".log")][0], 3600, delta=5)
+        log = self.bg_log("job", waited(0, GRADLE).split("\n")[0] + "\nwindvane: kept job stopped\n", start)
+        found = jobs.heavy_waits(self.p, start - 1, "T-009")
+        self.assertEqual(list(found), [log.with_suffix(".log")])
+        began, secs, words, need = found[log.with_suffix(".log")]
+        self.assertEqual((int(began), words, need), (int(start), ["GradleDaemon"], "6"))
+        self.assertAlmostEqual(secs, 3600, delta=5)
         self.assertEqual(jobs.heavy_waits(self.p, time.time() + 60), {})  # last at work before the run: not its own
+
+    def test_a_log_removed_as_it_is_read_is_skipped(self):
+        start = time.time() - 600
+        gone = self.bg_log("a", waited(0, GRADLE).split("\n")[0] + "\n", start)
+        kept = self.bg_log("b", waited(0, QEMU).split("\n")[0] + "\n", start)
+        hints = heavy.memory_hints
+
+        def remove_then_read(log):  # another slot's ticket ending drops it between the stat and the read
+            if log == gone.with_suffix(".log"):
+                gone.with_suffix(".start").unlink()
+            return hints(log)
+        with mock.patch.object(heavy, "memory_hints", remove_then_read):
+            found = jobs.heavy_waits(self.p, start - 1)
+        self.assertEqual(list(found), [kept.with_suffix(".log")])
 
 
 if __name__ == "__main__":

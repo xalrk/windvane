@@ -168,31 +168,43 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None):
     return code, mins, waited
 
 
-def heavy_waits(p, since):
-    """{log: (seconds waited, heavy_reuses words, default need)} for each heavy job (a check, a ticket's `bg --heavy`
-    job) last at work at `since` or later that waited on memory and was told which settings would have spared it
-    (`heavy.memory_hints`). Read from the logs where they are: a check's in checks/ (its heartbeat keeps its time), a
-    bg job's until its ticket's scratch is dropped. A job that never got the machine waited all its time."""
+def heavy_waits(p, since, ticket=None):
+    """{log: (when it began waiting, seconds waited, heavy_reuses words, default need's GB or None)} for each heavy
+    job (a check, a ticket's `bg --heavy` job) last at work at `since` or later that waited on memory and was told
+    which settings would have spared it (`heavy.memory_hints`). Read from the logs where they are: a check's in
+    checks/ (its heartbeat keeps its time), a bg job's until its ticket's scratch is dropped; with a `ticket`, only
+    that ticket's bg jobs. A job that never got the machine waited all its time. A log removed as it's read (a prune,
+    another slot's ticket ending) is skipped."""
     out = {}
-    for log in [*(p.state / "checks").glob("*.log"), *(p.state / "bg").glob("*/*.log")]:
-        bg = log.parent.name != "checks"
-        end = max((f.stat().st_mtime for f in (log, log.with_suffix(".exit")) if f.exists()), default=0)
-        end = time.time() if bg and not log.with_suffix(".exit").exists() else end  # still waiting or running
-        if end < since:
+    logs = [*(p.state / "checks").glob("*.log"), *(p.state / "bg").glob("*/*.log")] if ticket is None else \
+        list((p.state / "bg" / ticket).glob("*.log"))
+    for log in logs:
+        try:
+            if found := heavy_wait(log, log.parent.name != "checks", since):
+                out[log] = found
+        except OSError:
             continue
-        words, default = heavy.memory_hints(log)
-        if not words and not default:
-            continue
-        secs = heavy.waited(log)
-        if not secs and (heavy.waiting(log) or heavy.gave_up(log)):
-            try:
-                start = (float(log.with_suffix(".start").read_text()) if bg
-                         else datetime.strptime(log.name[:15], "%Y%m%d-%H%M%S").timestamp())  # `log_name`'s
-            except (OSError, ValueError):
-                start = end
-            secs = max(0, round(end - start))
-        out[log] = (secs, words, default)
     return out
+
+
+def heavy_wait(log, bg, since):
+    """`heavy_waits`' row for one log, or None."""
+    exit_ = log.with_suffix(".exit")
+    end = log.stat().st_mtime if not bg else exit_.stat().st_mtime if exit_.exists() else time.time()  # bg: running
+    if end < since:
+        return None
+    words, need = heavy.memory_hints(log)
+    if not words and need is None:
+        return None
+    try:
+        start = (float(log.with_suffix(".start").read_text()) if bg
+                 else datetime.strptime(log.name[:15], "%Y%m%d-%H%M%S").timestamp())  # `log_name`'s
+    except ValueError:
+        start = end
+    secs = heavy.waited(log)
+    if not secs and (heavy.waiting(log) or heavy.gave_up(log)):
+        secs = max(0, round(end - start))
+    return start, secs, words, need
 
 
 def heartbeat(log):
