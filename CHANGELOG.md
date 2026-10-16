@@ -52,6 +52,10 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- No worker starts once its wrap-up time has passed, whatever `min_slot` says. With `--min-slot 0` (or a short
+  `ticket_hours`) a worker could start with its wrap-up behind it, end PARTIAL at once and be launched again until
+  its ticket was set aside. A worker now starts only while its wrap-up is at least 5 minutes ahead; otherwise the run
+  ends with `no time left for a worker`, and `windvane run` refuses a run of 25 minutes or less.
 - `windvane await` no longer reports a running job as `DONE ... exit 1`. Inside Claude Code's Bash sandbox it can't
   see the job's process, so it now refuses there as `bg` does, instead of writing a false exit that let a second copy
   start under the same name; outside it, a pid owned by another user (EPERM) counts as alive, not as a death.

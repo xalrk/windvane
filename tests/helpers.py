@@ -171,6 +171,8 @@ if system.startswith("# windvane worker run"):
         text = f"done\nRESULT: READY {tid} {sh('git', 'rev-parse', 'HEAD')}"
         if step == "quiet":
             text = "done, all pushed"
+        if behaviour == "partial":  # partial: every run ends out of time
+            text = f"pushed what there is\nRESULT: PARTIAL {tid} out of time"
         keep = os.environ.get("FAKE_KEEP")  # its first run starts this script as a kept heavy job and ends PARTIAL
         if keep and tid == os.environ.get("FAKE_KEEP_FOR", tid) and "kept jobs" not in prompt:
             out = subprocess.run(["windvane", "bg", "--heavy", "--keep", "job", "bash", "-c", keep],

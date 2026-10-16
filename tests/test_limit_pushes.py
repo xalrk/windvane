@@ -74,7 +74,7 @@ class SetupText(unittest.TestCase):
 
     def test_a_long_setup_command_is_quoted_whole_in_the_halt_push(self):
         long = "echo one && echo two && echo three && echo four && echo five && echo six; exit 3"
-        driver.Pilot(self.setup(long), args()).run(now() + timedelta(minutes=15))
+        driver.Pilot(self.setup(long), args()).run(now() + timedelta(minutes=40))
         [(title, msg)] = self.pushes
         self.assertEqual(title, "windvane couldn't start")
         self.assertEqual(msg.split("`")[1], long)
@@ -93,7 +93,7 @@ class SetupText(unittest.TestCase):
         threading.Thread(target=stop, daemon=True).start()
         pilot = driver.Pilot(p, args(parallel=2))
         t = time.monotonic()
-        self.assertTrue(pilot.run(now() + timedelta(minutes=15)))
+        self.assertTrue(pilot.run(now() + timedelta(minutes=40)))
         self.assertLess(time.monotonic() - t, 60)  # not the 10 min the setup sleeps
         self.addCleanup(lambda: alive(int(pid.read_text())) and os.killpg(int(pid.read_text()), 9))
         self.assertFalse(alive(int(pid.read_text())))

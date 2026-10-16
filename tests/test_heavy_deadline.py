@@ -134,7 +134,7 @@ class DriverCheckKeepsItsPlace(unittest.TestCase):
         mover.start()
         t = time.time()
         try:
-            pilot.run(now() + timedelta(minutes=10))
+            pilot.run(now() + timedelta(minutes=40))
         finally:
             done.set()
             mover.join()
@@ -164,7 +164,7 @@ class DriverCheckKeepsItsPlace(unittest.TestCase):
         watcher = threading.Thread(target=watch, daemon=True)
         watcher.start()
         try:
-            pilot.run(now() + timedelta(minutes=10))
+            pilot.run(now() + timedelta(minutes=40))
         finally:
             done.set()
             watcher.join()

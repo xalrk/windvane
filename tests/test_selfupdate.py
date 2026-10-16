@@ -299,7 +299,7 @@ class Drain(unittest.TestCase):
 
     def run_pilot(self):
         with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
-            self.pilot.run(now() + timedelta(minutes=15))
+            self.pilot.run(now() + timedelta(minutes=40))
         return (self.p.state / "autopilot.log").read_text()
 
     def started(self):

@@ -32,7 +32,7 @@ class Schedule(unittest.TestCase):
         self.s.write(f".windvane/tickets/{tid}.md", f"# {tid}: do {tid}\nDepends on: nothing.\n"
                      + (f"Related: {related}.\n" if related else "") + f"Touches: {touches}.\n\n## Goal\n{body}\n")
 
-    def run_pilot(self, minutes=15, **kw):
+    def run_pilot(self, minutes=40, **kw):
         self.s.publish()
         self.p = Project(self.s.root)
         pilot = driver.Pilot(self.p, args(**kw))
@@ -129,7 +129,7 @@ class Schedule(unittest.TestCase):
         sleep = time.sleep
         self.addCleanup(setattr, time, "sleep", sleep)
         time.sleep = lambda sec: sleep(min(sec, 0.2))  # the idle wait for an answer polls often
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         self.assertEqual(pilot.merged, ["T-001"])
         self.assertGreater(time.time() - asked["T-001"], 6)
         self.assertLess(pilot.minutes[-1] * 60, 6)  # two worker attempts and the checks, not the wait

@@ -182,7 +182,7 @@ class RunStop(Base):
         self.holder.wait(10)
         os.environ.pop("FAKE_KEEP")
         nxt = self.pilot()
-        nxt.run(now() + timedelta(minutes=10))
+        nxt.run(now() + timedelta(minutes=40))
         self.assertEqual(nxt.merged, ["T-001"])
         self.assertIn(f"- 'job' exit {jobs.KILLED}", self.workers()[-1])
         self.assertNotIn("the kept job ran", self.workers()[-1])

@@ -43,7 +43,7 @@ class Budgets(unittest.TestCase):
         pilot.log = lambda msg: (self.lines.append(msg), log(msg))
         if review:
             pilot.review = review(pilot.review)
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         return pilot
 
     def failure(self):

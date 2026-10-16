@@ -85,7 +85,7 @@ See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 | `cap` | `75` | Percent of Claude's 5-hour usage window. At this level the run pauses until the window resets, then carries on. |
 | `week_cap` | `95` | Percent of the weekly usage limit. At this level the run stops. |
 | `ticket_hours` | `3` | The longest one worker run may take. A run that hits it is stopped and the ticket is set aside. |
-| `min_slot` | `30` | Minutes. No new ticket (or retry) starts with less than this left before the deadline. |
+| `min_slot` | `30` | Minutes. No new ticket (or retry) starts with less than this left before the deadline. Whatever it says, a worker also needs 25 minutes before its stop (the deadline or `ticket_hours`): its wrap-up is 20 minutes before it, and must be at least 5 ahead. |
 | `answer_wait` | `10` | Minutes a question sent to the phone waits for an answer. After that the run builds the recommended option and records it as provisional, so you can change it later. |
 | `review_rounds` | `3` | Reviews in a row asking for changes before the ticket is set aside for you. A head sent back for a missing PR spends these too. |
 | `check_retries` | `2` | Red checks (on the head, or on it merged with main) a ticket may go back to its worker for. One more sets it aside. A slow or flaky check spends only this, never the reviewer's rounds. |

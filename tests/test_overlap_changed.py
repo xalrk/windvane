@@ -120,7 +120,7 @@ class Overlap(unittest.TestCase):
         ensure_worktree(self.p, self.p.work_dir, setup=False)
         (self.p.work_dir / "T-001.txt").write_text("from a run that was cut off\n")  # T-001 resumes in slot 0
         pilot = driver.Pilot(self.p, args())
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
         log = (self.p.state / "autopilot.log").read_text()
         self.assertIn("T-001: slot 0", log)
@@ -136,14 +136,14 @@ class Overlap(unittest.TestCase):
         ensure_worktree(self.p, self.p.work_dir, setup=False)
         (self.p.work_dir / "shared.txt").write_text("T-001, cut off\n")  # without it, the two ran beside and bounced
         pilot = driver.Pilot(self.p, args())
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
         self.assertEqual(pilot.conflicts, 0)
         self.assertNotIn("conflicts with", (self.p.state / "autopilot.log").read_text())
 
     def test_the_merge_logs_what_was_changed_outside_touches(self):
         pilot = self.pilot(T_001="a.py", T_002="T-002.txt")  # the fake worker writes <ID>.txt
-        pilot.run(now() + timedelta(minutes=15))
+        pilot.run(now() + timedelta(minutes=40))
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
         log = (self.p.state / "autopilot.log").read_text()
         self.assertEqual(log.count("changed outside its Touches line"), 1)
