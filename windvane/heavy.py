@@ -175,9 +175,10 @@ def owned(pid, dirs, cwds):
     """Whether process `pid` works for the project in `dirs`: the nearest process up its tree (itself, its parent,
     ...) whose working directory is in the project or in any git checkout decides. A launcher that `cd`s to an SDK
     dir leaves its emulator's cwd outside the project, but the shell that started it is inside; the walk stops at a
-    checkout so a shared ancestor (one tmux server for every project) can't claim another project's helper. A helper
-    reparented to init when its launcher left is decided by its own cwd alone."""
-    seen = set()
+    checkout so a shared ancestor (one tmux server for every project) can't claim another project's helper. A walk
+    that reaches no checkout (a build daemon reparented to init, working in its own dir under the home) is decided by
+    the dir the process was started from (`started_in`)."""
+    seen, first = set(), pid
     while pid > 1 and pid not in seen:
         seen.add(pid)
         cwd = cwds.get(pid)
@@ -187,7 +188,22 @@ def owned(pid, dirs, cwds):
             if in_checkout(cwd):
                 return False
         pid = status_field(pid, "PPid") or 0
-    return False
+    start = started_in(first)
+    return start is not None and in_dirs(start, dirs)
+
+
+def started_in(pid):
+    """The `PWD` in process `pid`'s environment, or None when it has none or it can't be read (another user's). A
+    daemon keeps the environment of the build that started it, so this is the checkout where `./gradlew` ran, though
+    the daemon itself works in `~/.gradle/daemon/<version>`."""
+    try:
+        env = (util.PROC / str(pid) / "environ").read_bytes()
+    except OSError:
+        return None
+    for var in env.split(b"\0"):
+        if var.startswith(b"PWD="):
+            return os.path.realpath(var[4:].decode(errors="replace"))
+    return None
 
 
 def status_field(pid, key):
