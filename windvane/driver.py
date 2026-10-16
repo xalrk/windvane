@@ -568,9 +568,12 @@ class Pilot(Desk, Periodic):
         launched with its wrap-up (nearly) behind it ends PARTIAL at once: its startup tokens are spent for nothing,
         and its partial counts toward setting the ticket aside. `min_slot` doesn't catch it when set under the
         margin, nor does a short `ticket_hours`."""
-        wrap = self.worker_times()[2]
+        limit, kill_at, wrap = self.worker_times()
         if wrap - now() >= timedelta(minutes=WRAP_LEAD):
             return ""
+        if limit < self.end():  # the time box binds, not the deadline: hours left won't help
+            return (f"ticket_hours ({self.a.ticket_hours * 60:g} min) leaves a worker no time: it needs over "
+                    f"{WRAP_UP + WRAP_LEAD} min, as it wraps up {WRAP_UP} min before it's stopped")
         when = "past" if wrap <= now() else f"under {WRAP_LEAD} min away"
         return f"no time left for a worker: its wrap-up ({WRAP_UP} min before it's stopped) would be {when}"
 
