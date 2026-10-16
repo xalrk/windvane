@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 from contextlib import redirect_stdout
 from datetime import timedelta
@@ -187,7 +188,12 @@ class Doctor(unittest.TestCase):
 
     def test_a_moved_install_is_named(self):
         cmd = script(self.s.tmp / "windvane", "/bin/sh")
-        self.running([str(cmd)])
+        pid = self.running([str(cmd)])
+        # The shell reads its script after exec: removed before that (a loaded machine), it just exits.
+        children = Path(f"/proc/{pid}/task/{pid}/children")
+        end = time.time() + 10
+        while not children.read_text().strip() and time.time() < end:  # its `sleep` started: the script was read
+            time.sleep(0.02)
         cmd.unlink()
         [(level, what, fix)] = doctor.moved_warnings(self.p)
         self.assertIn(f"started from {cmd}, which is gone", what)
