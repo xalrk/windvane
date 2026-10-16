@@ -70,8 +70,8 @@ class PushWhole(unittest.TestCase):
         return msg
 
     def test_done_and_provisional(self):
-        picks = [{"ticket": "T-001", "question": REASON, "built": "A", "option": REASON}]
-        self.patch(driver, "provisional", lambda text: picks)
+        picks = [{"ticket": "T-001", "question": REASON, "built": "A", "option": REASON, "id": "T-001.p1"}]
+        self.patch(driver, "with_ids", lambda text, p=None: picks)
         self.pilot(worktree=True).merged_ok("T-001", "", self.s.git("rev-parse", "HEAD"))
         self.assert_whole("Done")  # a provisional answer the user never saw comes with its question
 
