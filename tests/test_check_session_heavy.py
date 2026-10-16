@@ -99,6 +99,10 @@ class SessionHeavyCheck(unittest.TestCase):
             if "DONE" in out:
                 break
         self.assertIn("DONE check exit 0", out)
+        r = subprocess.run(["windvane", "await", "check"], cwd=self.s.root, capture_output=True, text=True,
+                           timeout=60)  # the real entry point: the code it prints isn't taken for an error message
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.assertRegex(r.stdout.splitlines()[-1], r"^CHECK PASSED in ")
         self.assertRegex(out.splitlines()[-1], r"^CHECK PASSED in ")
         self.assertEqual([r["passed"] for r in self.checks()], [True])
         self.assertEqual(self.queue(), [])
