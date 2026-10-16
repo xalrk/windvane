@@ -235,7 +235,7 @@ def record(p, answers):
     phone = [a for a in answers if a[0]["kind"] == "open"]
     for x, letter, text in phone:
         give_answer(p, x["id"], letter, text)
-    forget(p, {x["id"] for x, _, _ in answers})
+    forget(p, {x["id"] for x, _, _ in phone})
     filed = [a for a in answers if a[0]["kind"] != "open"]
     if not filed:
         return f"{len(phone)} answer{'s' * (len(phone) > 1)} passed to the waiting run" if phone else "no answers"
@@ -259,8 +259,13 @@ def record(p, answers):
         git(cd, "add", "-A", ".windvane")
         ids = ", ".join(sorted({a[0]["ticket"] for a in filed}))
         ok, where = land(p, cd, f"answers-{now():%Y%m%d-%H%M%S}", f"Answers at the desk: {ids}",
-                         "\n\n".join(block(*a) for a in filed))
+                         "\n\n".join(block(*a) for a in filed), close=True)
         clean_detach(p, cd, p.upstream)
+    if ok is None:  # its PR closed: the questions are still on main and saved, to answer again
+        typed = '"<your answer>"'
+        again = "; ".join(f"windvane answer {x['id']} {letter or typed}" for x, letter, *_ in filed)
+        return f"answers for {ids} not recorded ({where}); answer again with {again}"
+    forget(p, {a[0]["id"] for a in filed})
     if not ok:
         return f"answers for {ids} not merged; they wait on {where}"
     log(p, f"preflight: answers for {ids} on {p.main}", echo=False)

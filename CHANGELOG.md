@@ -55,6 +55,11 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- A change the driver lands through a PR (desk answers, a `--merge` plan, a held change) no longer gives up when
+  its first `gh pr merge` fails. While GitHub is still working out whether the new PR can merge it waits and tries
+  again (half a minute at most), and when main moved under it the change is replayed onto main, pushed again and
+  merged. Desk answers that still can't merge close their PR instead of leaving it to conflict with every later
+  change, and say how to answer again; a plan or held change keeps its PR open and `windvane status` lists it.
 - No worker starts once its wrap-up time has passed, whatever `min_slot` says. With `--min-slot 0` (or a short
   `ticket_hours`) a worker could start with its wrap-up behind it, end PARTIAL at once and be launched again until
   its ticket was set aside. A worker now starts only while its wrap-up is at least 5 minutes ahead; otherwise the run

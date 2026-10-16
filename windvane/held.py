@@ -1,6 +1,7 @@
 """The driver's own branches on their way to the remote: pushing them, holding back what a refused push kept
 locally (held.json) and pushing it again at a later run's start, and landing the driver's own changes on main."""
 import fcntl
+import json
 import re
 import subprocess
 import time
@@ -124,15 +125,17 @@ def local_push(where, kept, log):
     return whole("", why[:1].upper() + why[1:], ".", log=log) + f"\n{kept} {branch}."
 
 
-def land(p, cd, branch, title, body, commit=True, tries=2):
+def land(p, cd, branch, title, body, commit=True, tries=2, close=False):
     """Put the driver's own change in `cd` (staged, or committed when `commit` is off) on main: through a merged PR on
     github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is). One kept on a local
-    branch is noted as one to land when pushed again."""
+    branch, or whose PR can't merge, is noted as one to land; with `close`, a PR that can't merge is closed instead
+    and the result is (None, why)."""
     title, body = actions.tag(p, privacy.censor(title), cd), privacy.censor(body)  # a periodic or plan session's reply
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
     found = privacy.outgoing(cd, p.upstream, "HEAD", DIR, privacy.guarded(p))
-    ok, where = (False, kept_secret(p, cd, branch, title, found)) if found else _land(p, cd, branch, title, body, tries)
+    ok, where = (False, kept_secret(p, cd, branch, title, found)) if found \
+        else _land(p, cd, branch, title, body, tries, close)
     if is_local(where):
         hold(p, branch, "land")
     return ok, where
@@ -153,30 +156,100 @@ def kept_secret(p, cd, branch, title, found):
     return f"the local branch {branch} ({why})"
 
 
-def _land(p, cd, branch, title, body, tries):
+def _land(p, cd, branch, title, body, tries, close):
     if p.cfg["forge"] == "github":
         where = push_branch(p, cd, branch, tries)
         if is_local(where):
             return False, where
         pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title, "--body", body)
         pr_n = pr.rstrip("/").rsplit("/", 1)[-1]
-        merged = pr_n.isdigit() and (
-            net.call(["gh", "pr", "merge", pr_n, "--merge", *(["--subject", title] * (actions.SKIP in title))],
-                     p.main_root()).returncode
-            == 0 or net.sh(p.main_root(), "gh", "pr", "view", pr_n, "--json", "state", "-q", ".state") == "MERGED")
+        merged, state = merge_pr(p, cd, branch, pr_n, title) if pr_n.isdigit() else (False, "")
         if merged:
             net.git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
-        return merged, pr or branch
+            return True, pr
+        return not_merged(p, cd, branch, pr, pr_n, state, close)
     res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
     if res.returncode:  # main moved meanwhile: the change only adds to .windvane/, so replay it
-        net.git(p.main_root(), "fetch", "-q", p.remote)
-        if git(cd, *author_ident(p), "rebase", "-q", p.upstream).returncode == 0:
+        if replayed(p, cd):
             res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
-        else:
-            git(cd, "rebase", "--abort")
         if res.returncode:  # keep the paid-for work on its branch rather than drop it
             return False, push_branch(p, cd, branch, tries)
     return True, p.main
+
+
+CANT_MERGE = "couldn't merge"  # in a held change's reason: it has a PR, so `status` shows why, not "open a PR"
+MERGE_TRIES, MERGE_WAIT = 6, 5  # a new PR's mergeability takes GitHub a few seconds: half a minute of waits at most
+
+
+def merge_pr(p, cd, branch, pr_n, title):
+    """Merge PR `pr_n`, retrying what clears without the user: tried before GitHub knew whether the new PR can merge
+    (UNKNOWN), it waits and tries again; with main moved under it (CONFLICTING, BEHIND), the change (only additions to
+    .windvane/) is replayed onto the fetched main, force-pushed and tried once more. Returns (merged, why not, in a
+    few words for the user)."""
+    state, tries, replays = MERGE_STATES["UNKNOWN"], MERGE_TRIES, 1
+    while tries:
+        tries -= 1
+        res = net.call(["gh", "pr", "merge", pr_n, "--merge", *(["--subject", title] * (actions.SKIP in title))],
+                       p.main_root())
+        if res.returncode == 0:
+            return True, ""
+        try:
+            pr = json.loads(net.sh(p.main_root(), "gh", "pr", "view", pr_n, "--json",
+                                   "state,mergeable,mergeStateStatus") or "{}")
+        except ValueError:
+            pr = {}
+        if pr.get("state") == "MERGED":
+            return True, ""
+        marks, state = {pr.get("mergeable"), pr.get("mergeStateStatus")}, merge_state(pr, res.stderr)
+        if "UNKNOWN" in marks or not pr:
+            time.sleep(MERGE_WAIT * bool(tries))
+        elif marks & {"CONFLICTING", "BEHIND", "DIRTY"} and replays and replayed(p, cd, branch):
+            replays, tries = 0, max(tries, 1)  # a replay is always tried
+        else:
+            break
+    return False, state
+
+
+# GitHub's merge states, in the user's words: the conflict or wait first, then what blocks a mergeable PR.
+MERGE_STATES = {"UNKNOWN": "GitHub hadn't worked out whether it can merge", "CONFLICTING": "it conflicts with main",
+                "DIRTY": "it conflicts with main", "BEHIND": "main moved on", "DRAFT": "it is a draft",
+                "BLOCKED": "a required check or review blocks it"}
+
+
+def merge_state(pr, stderr):
+    """Why a PR didn't merge, in a few words: its conflict or wait, else the merge state that blocks it, else gh's own
+    error when GitHub saw nothing in the way."""
+    mergeable, status = pr.get("mergeable", ""), pr.get("mergeStateStatus", "")
+    if mergeable in ("CONFLICTING", "UNKNOWN"):
+        return MERGE_STATES[mergeable]
+    return MERGE_STATES.get(status) or cut(" ".join(stderr.split())) or MERGE_STATES["UNKNOWN"]
+
+
+def replayed(p, cd, branch=""):
+    """Replay `cd`'s change onto the fetched main (and force-push it to `branch`, leased on what was pushed there):
+    it only adds to .windvane/, so it replays unless main changed the same lines."""
+    pushed = gout(cd, "rev-parse", "HEAD")
+    net.git(p.main_root(), "fetch", "-q", p.remote)
+    if git(cd, *author_ident(p), "rebase", "-q", p.upstream).returncode:
+        git(cd, "rebase", "--abort")
+        return False
+    return not branch or net.git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{pushed}", p.remote,
+                                 f"HEAD:refs/heads/{branch}").returncode == 0
+
+
+def not_merged(p, cd, branch, pr, pr_n, state, close):
+    """A change whose PR still can't merge. With `close` (desk answers, cheap to give again) its PR is closed and its
+    branch deleted, so it can't sit conflicting with every later change: (None, why). Any other (a paid plan, a held
+    change) keeps its PR and is held as one to land, so `status` lists it: (False, the PR)."""
+    why = f"PR #{pr_n} {CANT_MERGE}: {state}" if pr_n.isdigit() else "its PR couldn't be opened"
+    log(p, f"{branch}: {why}")
+    root = p.main_root()
+    if close and (net.call(["gh", "pr", "close", pr_n, "--delete-branch"], root) if pr_n.isdigit()
+                  else net.git(root, "push", "-q", p.remote, "--delete", branch)).returncode == 0:
+        return None, why
+    git(cd, "branch", "-f", branch, "HEAD")
+    hold(p, branch, "land", f"{why}; merge it by hand" + f" (gh pr merge {pr_n} --merge)" * pr_n.isdigit())
+    return False, pr or branch
 
 
 def held_branches(p):
@@ -304,7 +377,8 @@ def held_lines(p, now=None, subject=60):
     merge = THEN.get(forge, THEN["git"]).format(main=p.main) + " and merge it" * (forge == "github")
     return [f"held back for {age(time.time() - at)}, " + (f"pushed to {on}, not merged" if on else "not pushed")
             + f": {b} ({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:subject]}): "
-            + (merge if on else why) for b, why, at, on in (held_now(p) if now is None else now)]
+            + (merge if on and CANT_MERGE not in why else why)
+            for b, why, at, on in (held_now(p) if now is None else now)]
 
 
 def age(seconds):
@@ -365,8 +439,9 @@ def push_one_held(p, cd, branch, how):
     if is_local(where):
         log(p, f"{branch}: still not pushed{where.removeprefix(f'the local branch {branch}')}")
         return ""
-    git(p.main_root(), "branch", "-D", branch)
-    save_held(p, {b: h for b, h in load_json(p.state / "held.json", {}).items() if b != branch})
+    if not to_land or landed:  # one whose PR can't merge stays held (`land` noted it), for `status` to list
+        git(p.main_root(), "branch", "-D", branch)
+        save_held(p, {b: h for b, h in load_json(p.state / "held.json", {}).items() if b != branch})
     no_pr = not to_land and p.cfg["forge"] == "github" and where == branch
     how = (("merged" if landed else "not merged; merge it by hand") if to_land
            else "pushed; no PR opened, open one by hand" if no_pr else "pushed")
