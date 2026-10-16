@@ -7,6 +7,7 @@ windvane makes."""
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -20,12 +21,64 @@ DAY = 86400  # seconds an old leak must have sat untouched: a `tmpXXXXXXXX` dir 
 LEAK = re.compile(r"tmp[a-z0-9_]{8}")  # tempfile.mkdtemp's names, which the tests used before they named theirs
 OURS = {"runs", "settings.json", "windvane-mentioned", "Critic", "critic.jsonl", "windvane-heavy.lock",
         "windvane-heavy.queue", "state.json", "answers.json"}  # all an old leak holds when it was a session's state dir
+# What Claude Code gives a sandboxed Bash command as its TMPDIR, the first one set: it sets CLAUDE_TMPDIR itself, to
+# its own dir under TMPDIR (`claude-<uid>`), and every command it runs inherits it, in the sandbox or outside it
+SANDBOX_VARS = ("CLAUDE_CODE_TMPDIR", "CLAUDE_TMPDIR")
 ORIGIN = re.compile(r'^\[remote "origin"\]\s*$((?:\n[^\[].*$)*)', re.M)
 
 
 def root():
     """The temp dir, read fresh: tempfile caches its first answer, and a test or session changes TMPDIR."""
     return Path(os.environ.get("TMPDIR") or tempfile.gettempdir())
+
+
+def sandbox_dir():
+    """The TMPDIR a sandboxed Bash command of the Claude Code session we run in gets, when it is a dir other than ours,
+    else None. A `windvane` command runs outside the sandbox, where TMPDIR is its parent (the session's TMPDIR), so a
+    `$TMPDIR/x` a worker wrote in the sandbox is another file out here."""
+    d = next((os.environ[k] for k in SANDBOX_VARS if os.environ.get(k)), None)
+    if d is None and os.environ.get("CLAUDECODE"):  # a Claude Code that doesn't export it: where it puts its dir
+        d = str(root() / f"claude-{os.getuid()}")
+    if d and os.path.isdir(d) and os.path.realpath(d) != os.path.realpath(root()):
+        return Path(d)
+    return None
+
+
+def sandbox_twin(arg, inner=None):
+    """The file in the sandbox's TMPDIR that `arg` (a path, or `--opt=path`) was meant to name, when `arg` is under
+    our TMPDIR and isn't there (nor its folder) while that file (or its folder) is: the shell running a `windvane`
+    command expanded `$TMPDIR` outside the sandbox. None for anything else: a path that exists, one outside TMPDIR."""
+    inner = inner or sandbox_dir()
+    if inner is None:
+        return None
+    path = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
+    if not os.path.isabs(path):
+        return None
+    outer, here = os.path.normpath(root()), os.path.normpath(path)
+    rel = os.path.relpath(here, outer)
+    if rel == "." or rel.startswith(".."):
+        return None
+    twin = inner / rel
+    if inner.resolve() in (Path(here).resolve(), *Path(here).resolve().parents):  # the sandbox's own dir, spelled out
+        return None
+    if os.path.lexists(here):
+        return None
+    if twin.exists() or twin.parent.is_dir() and not os.path.isdir(os.path.dirname(here)):
+        return twin
+    return None
+
+
+def job_env(cmd, who):
+    """What a `bg` or `heavy` job started from a session changes in its environment: the sandbox's TMPDIR, so the job
+    and the worker's sandboxed commands mean the same files by `$TMPDIR`. Exits, naming the full path to pass, when
+    an argument is the outside twin of a file in the sandbox's dir (`sandbox_twin`)."""
+    inner = sandbox_dir()
+    if inner is None:
+        return {}
+    for a in cmd:
+        if twin := sandbox_twin(a, inner):
+            sys.exit(f"{who}: `{a}` isn't there outside the sandbox; the file is `{twin}`: pass that path")
+    return {"TMPDIR": str(inner)}
 
 
 def session_dir(p, key):

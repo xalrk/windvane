@@ -338,6 +338,7 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None):
     outside_sandbox("a background job")  # it would end with the sandboxed call that started it
     if alive(find_job(p, name)[0]):
         sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
+    tmp = scratch.job_env(cmd, "bg")  # before anything is written: a refused job leaves no trace
     base = job_base(p, name)
     base.parent.mkdir(parents=True, exist_ok=True)
     pid = Path(f"{base}.pid")
@@ -348,11 +349,11 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None):
     if heavy:
         cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []),
                *(["--expect", f"{expect:.10g}"] if expect is not None else []), "--", *cmd]
-    env = None
+    env = {**os.environ, **tmp}
     if keep:  # it waits for the machine as long as it's kept (`watch` ends it), and belongs to no session
         Path(f"{base}.keep").write_text(os.environ.get(RUN_STOP, ""))
         cmd = [sys.executable, "-c", WATCH, str(Path(__file__).parents[1]), str(base), *cmd]
-        env = {**{k: v for k, v in os.environ.items() if k != NEST}, STOP_AT: "inf"}
+        env = {**{k: v for k, v in env.items() if k != NEST}, STOP_AT: "inf"}
     proc = subprocess.Popen(["bash", "-c", '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"', str(base), *cmd],
                             cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True, env=env)
