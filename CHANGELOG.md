@@ -52,6 +52,9 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- `windvane await` no longer reports a running job as `DONE ... exit 1`. Inside Claude Code's Bash sandbox it can't
+  see the job's process, so it now refuses there as `bg` does, instead of writing a false exit that let a second copy
+  start under the same name; outside it, a pid owned by another user (EPERM) counts as alive, not as a death.
 - An install that moves from under a run (a reinstall, a Python upgrade that removes the old interpreter) no longer
   ends it: a self-update whose restart command is gone keeps the run going on its old code and says once how to
   reinstall (it restarts on the new code at the next pull after that), and a `run --detach` that can't start its

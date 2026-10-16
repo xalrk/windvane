@@ -302,12 +302,19 @@ def worktree(path):
 def alive(base):
     """Whether a job runs: no exit written, and its pid is alive and started by the time `bg` wrote it. A number
     reused after a reboot is a stranger's, which mustn't hold a kept job's ticket and slot (or block the name)."""
-    if Path(f"{base}.exit").exists():
-        return False
+    return not Path(f"{base}.exit").exists() and pid_lives(base)
+
+
+def pid_lives(base):
+    """Whether the job's recorded pid is still the job's process. Only ESRCH (or no pid to look at) is a death: EPERM
+    means a process holds the number, and its start time tells whether it is the job or a stranger reusing it."""
     pid_f = Path(f"{base}.pid")
     try:
         pid = int(pid_f.read_text())
-        os.kill(pid, 0)
+        try:
+            os.kill(pid, 0)
+        except PermissionError:
+            pass
         t = util.started_at(pid)
         return t is None or t <= pid_f.stat().st_mtime + 2  # /proc's boot time and ps's are in whole seconds
     except (OSError, ValueError):
@@ -468,6 +475,7 @@ def exit_code(exit_f, patience=2.0):
 def await_(p, name, lines=40, limit=570):
     """Block until a bg job ends, at most `limit` seconds (under one tool call's 10 minutes). The seconds it blocked
     go to the ledger as an `await` row (a ticket's only), so `stats` shows the time each role spends waiting."""
+    outside_sandbox("waiting for a background job")  # its own pid namespace hides the job: it would look dead
     (base, stray), ticket = find_job(p, name), os.environ.get(TICKET)
     if not Path(f"{base}.start").exists():
         sys.exit(f"await: nothing started as '{name}'" + (f" for {ticket}" if ticket else "")
@@ -476,9 +484,7 @@ def await_(p, name, lines=40, limit=570):
     end = t0 + limit
     exit_f = Path(f"{base}.exit")
     while not exit_f.exists() and time.time() < end:
-        try:
-            os.kill(int(Path(f"{base}.pid").read_text()), 0)
-        except (OSError, ValueError):
+        if not pid_lives(base):
             time.sleep(1)
             if not exit_f.exists():
                 exit_f.write_text("1")
