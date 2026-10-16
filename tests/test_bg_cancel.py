@@ -100,7 +100,7 @@ class BgCancel(unittest.TestCase):
 
         out, err = self.call("T-001", jobs.cancel, "eval")
         self.assertIsNone(err)
-        self.assertEqual(out.strip(), "cancelled 'eval' (was waiting for the machine, 0 min after it started)")
+        self.assertEqual(out.strip(), "cancelled 'eval' (was waiting for the machine for 0 min)")
         self.assert_cancelled(mine)
         self.assertEqual(len(self.entries()), 1, "the cancelled job's queue entry is still there")
         self.assertTrue(jobs.alive(theirs), "another ticket's job of the same name was touched")
@@ -118,7 +118,7 @@ class BgCancel(unittest.TestCase):
         self.assertEqual(order.read_text(), "B\n")
 
         out, err = self.call("T-002", jobs.cancel, "eval")  # a running heavy job frees the lock for the next
-        self.assertIn("(was running,", out)
+        self.assertIn("(was running for", out)
         self.assert_cancelled(theirs)
         self.until(lambda: order.read_text() == "B\nA\n", what="the requeued job to run")
 
@@ -128,7 +128,7 @@ class BgCancel(unittest.TestCase):
         t0 = time.time()
         out, err = self.call("T-001", jobs.cancel, "loop")
         self.assertIsNone(err)
-        self.assertIn("cancelled 'loop' (was running,", out)
+        self.assertIn("cancelled 'loop' (was running for", out)
         self.assertGreaterEqual(time.time() - t0, 1, "it was killed before the grace")
         self.assert_cancelled(base)
         self.assertIn("got TERM", jobs.tail(f"{base}.log"))  # what it said as it died comes before the last line

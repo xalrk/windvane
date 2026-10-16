@@ -469,7 +469,7 @@ def cancel(p, name):
     was = "waiting for the machine" if heavy.waiting(f"{base}.log") else "running"
     mins = (time.time() - int(Path(f"{base}.start").read_text())) / 60
     end_job(base, CANCELLED)
-    print(f"cancelled '{name}' (was {was}, {mins:.0f} min after it started)")
+    print(f"cancelled '{name}' (was {was} for {mins:.0f} min)")
 
 
 def ended_kept(p, ticket):
