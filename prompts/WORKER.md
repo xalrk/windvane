@@ -39,14 +39,13 @@ Then stop. Don't start a second ticket.
 
 ## Long commands
 A tool call stops at 10 minutes. Start anything that may run longer with `windvane bg <name> <command...>` and wait with
-`windvane await <name>`, which blocks up to ~9.5 minutes; call it again until `DONE`; end one with `bg --cancel <name>`,
-never `kill`. Never poll with `sleep` loops: every poll re-reads your whole context. **Machine-heavy** commands (a game
-engine, a render, a big build) go only through `windvane heavy -- <command>` or
-`windvane bg --heavy <name> <command...>`, with `--mem <GB>` when it needs more or less free memory than a big build. It
-queues behind every heavy job on this machine: start it early; requeue it only if `await` says it likely starts after
-your wrap-up: with `bg --heavy --keep`, which outlives your run, then end PARTIAL. A helper your tools leave up (an
-emulator, a dev server) needs a `teardown` in `.windvane/config.toml`: set or extend it here. Stay in your worktree.
-Scratch files go in `$TMPDIR` (this ticket's own, gone when it ends), not `/tmp`.
+`windvane await <name>`, which blocks up to ~9.5 min; call it again until `DONE`; end one with `bg --cancel <name>`,
+never `kill`. Never poll with `sleep` loops: each re-reads all your context. **Machine-heavy** commands (an engine, a
+render, a big build) run only via `windvane heavy -- <command>` or `bg --heavy <name> <command...>`, with `--mem <GB>`
+if it needs more or less memory than a big build. It queues behind every heavy job on the machine: start early; if
+`await` says it likely starts after your wrap-up, requeue it with `bg --heavy --keep` (it outlives your run) and end
+PARTIAL. A helper your tools leave up (emulator, dev server) needs a `teardown` in `.windvane/config.toml`: set or
+extend it. Stay in your worktree. Scratch files go in `$TMPDIR` (this ticket's, gone when it ends), not `/tmp`.
 
 ## Decisions
 - **Engineering** calls the docs leave open (code layout, algorithms, test shape, tooling): make them, and say why in
