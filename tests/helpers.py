@@ -107,6 +107,10 @@ if system.startswith("# windvane worker run"):
         h = subprocess.Popen(["sleep", "120"], start_new_session=True, stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         open(os.environ["FAKE_HELPER"], "w").write(str(h.pid))
+    if os.environ.get("FAKE_BG_HEAVY"):  # a `bg --heavy` job running this script, awaited to its end
+        subprocess.run(["windvane", "bg", "--heavy", "job", "bash", "-c", os.environ["FAKE_BG_HEAVY"]],
+                       capture_output=True)
+        subprocess.run(["windvane", "await", "job"], capture_output=True)
     branch = tid.lower() + "-work"
     if "In progress on branch" in prompt:
         sh("git", "switch", branch)
@@ -366,7 +370,7 @@ class Sandbox:
         os.environ.clear()
         os.environ.update({**self.old_env, **self.env})
         for k in ("WINDVANE_SESSION", "WINDVANE_TICKET", "WINDVANE_STOP_AT", "WINDVANE_CAPS", "WINDVANE_ROLE",
-                  "WINDVANE_SUPERVISED", "WINDVANE_RESTARTED"):  # when the tests run inside a session
+                  "WINDVANE_SUPERVISED", "WINDVANE_RESTARTED", "WINDVANE_BG_JOB"):  # when run in a session or its job
             os.environ.pop(k, None)
         for k in [k for k in os.environ if k.startswith("GIT_CONFIG_")]:  # a worker's [skip ci] hook, for one
             os.environ.pop(k)
