@@ -4,7 +4,7 @@ import fcntl
 import re
 from pathlib import Path
 
-from . import actions, critic, net, privacy, requests
+from . import actions, critic, login, net, privacy, requests
 from .held import author_ident, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
 from .queue import Queue
@@ -167,9 +167,15 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
         text, killed, error = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd,
                                          ["Bash(git ls-files *)"], deny, usage, stop_if)
         m = last_match(PLAN_RE, text)
-        if killed or m or not net.down_wait():  # cut off by an outage: once it's back, plan again from scratch
+        if killed or m:
             break
-        log(p, "plan: the run was cut off with the network down; running it again")
+        if login.expired(error):  # once the login is back, plan again from scratch (the wait logs it)
+            if not login.down_wait("plan", error):
+                break
+        elif net.down_wait():  # cut off by an outage: the same
+            log(p, "plan: the run was cut off with the network down; running it again")
+        else:
+            break
         clean_detach(p, cd, p.upstream)
     changed = changed_paths(cd)
     if killed or not m or not changed:

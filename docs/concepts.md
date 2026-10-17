@@ -118,8 +118,8 @@ worker is told it's unavailable and goes on, and no score is recorded.
 
 An expired Claude login is no one's fault, so it spends no retry and sets no ticket aside: the run pushes once (once
 per machine, however many runs share the login) asking you to run `claude` and /login, starts no session meanwhile,
-and goes on by itself once `claude auth status` or the login file shows you're back. A deadline reached while it
-waits ends the run with "the Claude login expired at HH:MM".
+and goes on by itself, with a push saying so, once `claude auth status` or the login file shows you're back. A
+deadline reached while it waits ends the run with "the Claude login expired at HH:MM".
 
 ## Touches and parallel slots
 

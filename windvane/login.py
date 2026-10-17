@@ -3,10 +3,10 @@ in again. Like a network outage (net.py) it is nobody's fault, so the run spends
 ticket aside: it pushes once, asking for /login, and waits without starting sessions until the login looks back.
 
 Back is told without spending tokens: `claude auth status` turning to logged in, or the login file changing (a /login
-rewrites it). Where neither can show it (`auth status` never saying logged out, a login kept in the macOS Keychain), the
-session is tried again every `BLIND` minutes: one that dies of the login costs nothing. Runs on one machine share the login, so the expiry is
-pushed once per machine (a marker in the state root), and the first session that works again clears it and says
-the runs go on."""
+rewrites it). Where neither can show it (`auth status` never saying logged out, a login kept in the macOS Keychain),
+the session is tried again every `BLIND` minutes: one that dies of the login costs nothing. Runs on one machine share
+the login, so the expiry is pushed once per machine (a marker in the state root), and the first run to see the login
+back (or, after a blind try, a session that works) clears it and says the runs go on."""
 import json
 import os
 import re
@@ -29,6 +29,8 @@ status = None  # tests: a function standing in for `claude auth status`, returni
 lock = threading.Lock()  # parallel slots wait one at a time: the expiry is logged once per run
 waits = []  # one entry per slot waiting now (or queued on `lock`): the driver starts no session meanwhile
 back_at = 0.0  # when this process last saw the login look back: a session started before it is rerun at once
+waiter = None  # set by the driver: waits for the login after a session (label, error) died of it, False when a stop
+#                or the deadline ended the wait; without one (a desk command) a login death is an error as any
 
 
 def expired(error):
@@ -85,8 +87,8 @@ def said_once(since):
 
 
 def ok():
-    """A session ended well, so the login works: the first run on the machine to see it after an expiry pushes
-    that the runs go on."""
+    """The login works again (a wait saw it back, or a session ended well): the first run on the machine to see it
+    after an expiry pushes that the runs go on."""
     try:
         marker().unlink()
     except OSError:
@@ -97,6 +99,11 @@ def ok():
 def waiting():
     """Whether a slot of this run is waiting for the login: no session may start until it ends."""
     return bool(waits)
+
+
+def down_wait(label, error):
+    """After a session died of the login, wait for it (when a driver set a waiter): True to run it again."""
+    return bool(waiter) and waiter(label, error)
 
 
 def gate():
@@ -131,6 +138,7 @@ def wait(p, label, error, started, until, stopped, sleep=time.sleep):
                 state = logged_in(p.state)
                 if file_sig() != sig or (state and was_out):
                     why = "the Claude login looks back"
+                    ok()
                     break
                 was_out = was_out or state is False
                 if waited % BLIND == 0 and not was_out:  # `auth status` can't tell: it never said logged out

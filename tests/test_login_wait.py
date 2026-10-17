@@ -32,7 +32,6 @@ class Base(unittest.TestCase):
         self.p = Project(self.s.root)
         self.login = self.s.tmp / "login"
         os.environ["FAKE_LOGIN"] = str(self.login)
-        login.back_at = 0.0  # an earlier test's wait, in this same process
         self.waits, self.pushes = [], []
         for mod in (driver, login):
             orig = mod.push
@@ -185,6 +184,17 @@ class Waits(Base):
         self.run_pilot(pilot)
         self.assertEqual((pilot.merged, self.dead()), (["T-001", "T-002"], 1))
         self.assertNotIn("trying again", self.log())
+
+
+    def test_a_plan_run_that_dies_of_the_login_waits_and_plans_again(self):
+        self.s.write(".windvane/QUEUE.md", "# Queue\n- done: T-001 (x)\n- done: T-002 (x)\n")
+        self.s.publish("both done")
+        pilot = self.pilot(back_after=2, replan=1, goal="more")
+        self.run_pilot(pilot)
+        self.assertEqual((pilot.merged, pilot.aside, self.dead()), (["T-003"], {}, 1))
+        self.assertIn("plan died of the Claude login", self.log())
+        self.assertIn("the Claude login looks back: rerun plan, no retry spent", self.log())
+        self.assertEqual(self.pushes.count("Claude login expired"), 1)
 
 
 class Unit(Base):

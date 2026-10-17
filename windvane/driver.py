@@ -353,7 +353,9 @@ class Pilot(Desk, Periodic):
         deadline's stop reason then naming the login (`stop_check`)."""
         with self.lock:
             self.login_gone = self.login_gone or now()
-        return login.wait(self.p, label, error, getattr(self.tl, "started", 0), self.end,
+        # used once: a session this thread starts outside `claude` (the critic's, the planner's) dying again waits
+        started, self.tl.started = getattr(self.tl, "started", 0), time.time()
+        return login.wait(self.p, label, error, started, self.end,
                           lambda: self.signalled or self.ending or (self.p.state / "STOP").exists(), self.sleep)
 
     def crashed(self, label, error, tid=""):
@@ -1896,6 +1898,7 @@ class Pilot(Desk, Periodic):
         # Network calls wait out an outage (net.py) with this run's stop rule; the probe tries the remote's host too.
         net.hosts = list(filter(None, [net.remote_host(gout(p.main_root(), "remote", "get-url", p.remote))]))
         net.waiter = self.wait_online
+        login.waiter = self.wait_login
         net.learn()
         self.log(f"autopilot {'restarted' if restarted else 'started'}, until {hhmm(deadline)} (5h cap "
                  f"{self.a.cap:g}%, week cap {self.a.week_cap:g}%"
