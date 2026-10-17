@@ -33,7 +33,7 @@ class SessionHeavyCheck(unittest.TestCase):
         self.run_dir = self.s.tmp / "run"
         self.run_dir.mkdir()
         os.environ.update({**machine(self.run_dir, 60), TICKET: "T-001", STOP_AT: str(time.time() + 600)})
-        for k in (IN_SANDBOX, "WINDVANE_HEAVY_HELD"):
+        for k in (IN_SANDBOX, IN_JOB, "WINDVANE_HEAVY_HELD"):  # a suite run as a background job is in one
             os.environ.pop(k, None)
         self.plain = (self.s.root / ".windvane/config.toml").read_text()
         self.config("heavy_check = true")

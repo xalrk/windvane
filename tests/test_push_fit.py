@@ -108,7 +108,7 @@ def not_stashed(p, patch, s):
 
 
 def merged(p, patch, s):
-    patch(driver, "provisional", picks)
+    patch(driver, "with_ids", lambda text, p=None: [{**q, "id": "T-001.p1"} for q in picks(text)])
     pilot(p, worktree=True).merged_ok("T-001", "", s.git("rev-parse", "HEAD"), renumbered=["T-002 to T-003"] * 20)
     return {"Done": ("Built, checked, reviewed and merged.",)}
 
