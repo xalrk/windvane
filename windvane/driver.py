@@ -1140,12 +1140,12 @@ class Pilot(Desk, Periodic):
         showed gets one line without its text; only one built without the user ever seeing it (a quiet time) is
         spelled out. Once the push went out, either way it counts as pushed: the digest leaves it out."""
         p = self.p
-        picks = [q for q in with_ids(provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")))
-                 if p.norm(q["ticket"]) == tid]
+        text = gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}")
+        with self.lock:
+            picks = [q for q in with_ids(text, p) if p.norm(q["ticket"]) == tid]
+            new = unseen(picks, shown(p)["asked"].get(tid, []))
         if not picks:
             return "", []
-        with self.lock:
-            new = unseen(picks, shown(p)["asked"].get(tid, []))
         how = lambda q: f"to change: windvane answer {q['id']} <letter>."  # noqa: E731
         return "".join(f"\n{q['question']} Built {q['built']} without asking you: {q['option']}; {how(q)}" if q in new
                        else f"\nBuilt {q['built']} for {tid}: {q['option']}; {how(q)}" for q in picks), picks
