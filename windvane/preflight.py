@@ -44,13 +44,35 @@ def likely(p, q, hours, parallel=None):
     return [t for t in q.order if q.status(t) not in ("done", "parked")][:n]
 
 
+KEY_RE = re.compile(r"- \*\*[A-E]\*\*|Recommendation:|Built:|Waits for")
+
+
+def unwrap(body):
+    """(context, {key: whole line}) of a question block, a key being a `Recommendation:`, `Built:` or `Waits for`
+    line with the lines a worker wrapped it onto (up to the next option or key line, or a blank one) joined back with
+    spaces. A wrapped key line's tail must not read as context, nor its reason stop halfway. Options stay as
+    `OPT_RE` reads them: `answered_block` matches a block by them."""
+    context, keys, cur = [], {}, None
+    for l in body.splitlines():
+        if not l.strip():
+            cur = None
+        elif m := KEY_RE.match(l):
+            cur = None if m.group(0).startswith("- ") else m.group(0)
+            if cur:
+                keys.setdefault(cur, l.strip())
+        elif cur:
+            keys[cur] += " " + l.strip()
+        else:
+            context.append(l)
+    return "\n".join(context).strip(), keys
+
+
 def question(tid, q, body, kind, n):
     opts = dict(OPT_RE.findall(body))
-    rec = re.search(r"^Recommendation:\s*\**([A-E])\b\W*(?:because\b\s*)?(.*)$", body, re.M)
-    built = re.search(r"^Built:\s*([A-E])\W*(?:to change it:\s*)?(.*)$", body, re.M)
-    context = "\n".join(l for l in body.splitlines()
-                        if l.strip() and not re.match(r"- \*\*[A-E]\*\*|Recommendation:|Built:|Waits for", l))
-    return {"id": f"{tid}.{n}", "ticket": tid, "kind": kind, "question": q, "context": context.strip(),
+    context, keys = unwrap(body)
+    rec = re.match(r"Recommendation:\s*\**([A-E])\b\W*(?:because\b\s*)?(.*)$", keys.get("Recommendation:", ""))
+    built = re.match(r"Built:\s*([A-E])\W*(?:to change it:\s*)?(.*)$", keys.get("Built:", ""))
+    return {"id": f"{tid}.{n}", "ticket": tid, "kind": kind, "question": q, "context": context,
             "options": opts, "recommendation": rec.group(1) if rec else "", "why": rec.group(2).strip() if rec else "",
             "built": built.group(1) if built else "", "change_at": built.group(2).strip() if built else ""}
 
