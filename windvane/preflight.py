@@ -48,9 +48,10 @@ KEY_RE = re.compile(r"- \*\*[A-E]\*\*|Recommendation:|Built:|Waits for")
 
 
 def unwrap(body):
-    """(context, {key: whole line}) of a question block: an option or a `Recommendation:`, `Built:` or `Waits for`
-    line, with the lines a worker wrapped it onto (up to the next such line or a blank one) joined back with spaces.
-    A wrapped key line's tail must not read as context, nor its reason stop halfway."""
+    """(context, {key: whole line}) of a question block, a key being a `Recommendation:`, `Built:` or `Waits for`
+    line with the lines a worker wrapped it onto (up to the next option or key line, or a blank one) joined back with
+    spaces. A wrapped key line's tail must not read as context, nor its reason stop halfway. Options stay as
+    `OPT_RE` reads them: `answered_block` matches a block by them."""
     context, keys, cur = [], {}, None
     for l in body.splitlines():
         if not l.strip():

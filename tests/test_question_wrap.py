@@ -1,12 +1,17 @@
 """A question's `Recommendation:`, `Built:` or `Waits for` line wrapped over several lines (workers wrap at the repo's
 width) reads as one line: none of it is left in the context, and the reason and the place to change it are whole."""
+import contextlib
+import io
+import os
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import preflight, questions  # noqa: E402
+from windvane import cli, preflight, questions  # noqa: E402
+from helpers import Sandbox  # noqa: E402
 
 WRAPPED = """# Questions
 
@@ -70,6 +75,45 @@ class Wrapped(unittest.TestCase):
         self.assertIn(f"A: block it in the sandbox   <- recommended, because {WHY}", shown)
         self.assertNotIn("\n  the sandbox stops", shown)
         self.assertNotIn("every project's", shown)
+
+
+class Tty(io.StringIO):
+    """A terminal the user types into."""
+
+    def isatty(self):
+        return True
+
+
+class AtTheDesk(unittest.TestCase):
+    """`windvane preflight` at a terminal shows the wrapped block whole and files the answer on main without it."""
+
+    def setUp(self):
+        self.s = Sandbox()
+        self.s.ticket("T-007")
+        self.s.write(".windvane/QUESTIONS.md", WRAPPED)
+        self.s.publish("provisional")
+        self.addCleanup(os.chdir, os.getcwd())
+        self.addCleanup(setattr, sys, "stdin", sys.stdin)
+
+    def tearDown(self):
+        self.s.close()
+
+    def test_preflight_shows_the_whole_reason_and_files_a_clean_block(self):
+        sys.stdin, out = Tty("B\n"), io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["-C", str(self.s.root), "preflight"])
+        shown = out.getvalue()
+        self.assertIn(f"A: block it in the sandbox   <- recommended, because {WHY}", shown)
+        self.assertNotIn("every project's", shown)
+        self.s.git("fetch", "-q", "origin")
+        text = self.s.git("show", "origin/main:.windvane/QUESTIONS.md")
+        (_, _, body), = questions.blocks(questions.part(text, "Answered"))
+        self.assertEqual(body.splitlines()[:3], ["Workers could print the env file.",
+                                                 "- **A**: block it in the sandbox", "- **B**: warn in the prompt"])
+        self.assertIn("Answer: B (warn in the prompt). Changes the built A", body)
+        self.assertNotIn("the sandbox stops it", text)
+        followup = self.s.git("show", "origin/main:.windvane/tickets/T-008.md")
+        self.assertIn("(where it lives: the deny list in windvane/sandbox.py)", followup)
 
 
 class Flat(unittest.TestCase):
