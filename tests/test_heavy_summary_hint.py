@@ -93,7 +93,7 @@ class SummaryHint(unittest.TestCase):
 
     def test_only_settings_already_made_say_nothing(self):
         cfg = self.s.root / CFG
-        cfg.write_text("heavy_mem = 4\n" + cfg.read_text())
+        cfg.write_text("heavy_mem = 0\n" + cfg.read_text())  # set, and never waits on the real machine's memory
         pilot = self.run_one(waited(600, ADB))
         self.assertNotIn("Heavy jobs", pilot.summary())
 
