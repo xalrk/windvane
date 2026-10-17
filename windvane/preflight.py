@@ -57,8 +57,8 @@ def question(tid, q, body, kind, n):
 
 def provisionals(qtext, heading="Provisional", kind="provisional", p=None):
     """Provisional answers built without the user, as questions to ask again (ids `T-003.p1`, as `windvane status`
-    names them: `questions.prov_numbers`, and given the project, those it showed before); or, for ## Open, questions left there that no run waits on (kind "stuck",
-    ids `T-003.o1`): they block their ticket for good."""
+    names them: `questions.prov_numbers`, and given the project, those it showed before); or, for ## Open, questions
+    left there that no run waits on (kind "stuck", ids `T-003.o1`): they block their ticket for good."""
     out, seen = [], {}
     nums = (remembered(p, qtext) if p else prov_numbers(qtext)) if heading == "Provisional" else []
     for i, (tid, q, body) in enumerate(blocks(part(qtext, heading))):
