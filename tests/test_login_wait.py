@@ -98,6 +98,8 @@ class Waits(Base):
         pilot = self.pilot(back_after=10 ** 6)
         login.BLIND, blind = 2, login.BLIND  # no sign of it after 2 minutes: tried again, still dead, waits again
         self.addCleanup(setattr, login, "BLIND", blind)
+        login.status = lambda: True  # `auth status` says logged in all along, as with a stale token: no signal
+        self.addCleanup(setattr, login, "status", None)
 
         def sleep(s):
             self.waits.append(s)
@@ -176,6 +178,13 @@ class Waits(Base):
         self.assertEqual(self.dead(), 1)  # T-002's session waited for the login instead of dying of it
         self.assertEqual(self.waits, [60, 60, 60])  # one wait for both slots
         self.assertEqual(self.pushes.count("Claude login expired"), 1)
+
+
+    def test_auth_status_saying_logged_out_spares_the_blind_retries(self):
+        pilot = self.pilot(back_after=2 * login.BLIND + 1)
+        self.run_pilot(pilot)
+        self.assertEqual((pilot.merged, self.dead()), (["T-001", "T-002"], 1))
+        self.assertNotIn("trying again", self.log())
 
 
 class Unit(Base):

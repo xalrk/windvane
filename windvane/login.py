@@ -3,8 +3,8 @@ in again. Like a network outage (net.py) it is nobody's fault, so the run spends
 ticket aside: it pushes once, asking for /login, and waits without starting sessions until the login looks back.
 
 Back is told without spending tokens: `claude auth status` turning to logged in, or the login file changing (a /login
-rewrites it). Where neither can show it (a login kept in the macOS Keychain), the session is tried again every
-`BLIND` minutes: one that dies of the login costs nothing. Runs on one machine share the login, so the expiry is
+rewrites it). Where neither can show it (`auth status` never saying logged out, a login kept in the macOS Keychain), the
+session is tried again every `BLIND` minutes: one that dies of the login costs nothing. Runs on one machine share the login, so the expiry is
 pushed once per machine (a marker in the state root), and the first session that works again clears it and says
 the runs go on."""
 import json
@@ -133,7 +133,7 @@ def wait(p, label, error, started, until, stopped, sleep=time.sleep):
                     why = "the Claude login looks back"
                     break
                 was_out = was_out or state is False
-                if waited % BLIND == 0:
+                if waited % BLIND == 0 and not was_out:  # `auth status` can't tell: it never said logged out
                     why = f"no sign of the Claude login after {waited} min; trying again"
                     break
             log(p, f"  {why}: rerun {label}, no retry spent")
