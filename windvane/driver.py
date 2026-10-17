@@ -9,9 +9,9 @@ build their recommendation and record it instead.
 
 Stops at the deadline, `windvane stop`, two failed tickets in a row, an empty queue, the weekly cap, or sessions that
 keep dying across tickets (API errors, crashes; each is retried after a growing pause first; one ticket's alone set
-it aside). A network outage stops nothing: it is
-waited out (net.py), and what it broke is resumed with no retry spent. At the 5-hour cap it stops the running
-session and pauses until the window resets. A detached run's driver is itself restarted after a crash (`supervise`).
+it aside). A network outage or an expired Claude login stops nothing: it is waited out (net.py, login.py), and what it
+broke is resumed with no retry spent. At the 5-hour cap it stops the running session and pauses until the window
+resets. A detached run's driver is itself restarted after a crash (`supervise`).
 """
 import fcntl
 import os
@@ -26,8 +26,8 @@ from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import (actions, critic, heavy, install, jobs, net, phone, privacy, renumber, requests, scratch, selfupdate,
-               statedir, util, worktree)
+from . import (actions, critic, heavy, install, jobs, login, net, phone, privacy, renumber, requests, scratch,
+               selfupdate, statedir, util, worktree)
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .heavy import minutes
@@ -216,6 +216,7 @@ class Pilot(Desk, Periodic):
         # ticket whose own sessions keep dying can be told from a broken API. `suspect`: [ticket, error] set aside
         # on its own crashes alone, until another ticket's session shows the API works.
         self.ticket_crashes, self.oks, self.suspect = {}, 0, None
+        self.login_gone = None  # when a session first died of the Claude login, until one works again
         self.sleep = time.sleep  # the retry backoff's; tests make it instant
         self.stop_reason = "unknown"
         self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
@@ -321,6 +322,8 @@ class Pilot(Desk, Periodic):
         return stop_if
 
     def claude(self, role, label, prompt, system, cwd, limit, allow=(), deny=(), ticket="", env=None):
+        login.gate()
+        self.tl.started = time.time()  # a login wait reruns at once a session started before the login came back
         text, killed, error = run_claude(self.p, role, label, prompt, system, cwd, allow, deny, self.usage,
                                          self.stopper(limit), ticket,
                                          (min(limit, self.end()), self.a.cap, self.a.week_cap), env)
@@ -336,6 +339,8 @@ class Pilot(Desk, Periodic):
             self.crashes, self.oks = 0, self.oks + 1
             self.ticket_crashes.pop(tid, None)
             suspect, self.suspect = self.suspect, None
+            self.login_gone = None
+        login.ok()
         if suspect:
             self.set_aside(*suspect)
 
@@ -343,14 +348,25 @@ class Pilot(Desk, Periodic):
         """Wait out a network outage; False when a stop or the deadline ended the wait."""
         return net.wait(self.p, self.end, lambda: self.signalled or (self.p.state / "STOP").exists(), self.sleep)
 
+    def wait_login(self, label, error):
+        """Wait for the Claude login to come back (login.py); False when a stop or the deadline ended the wait, the
+        deadline's stop reason then naming the login (`stop_check`)."""
+        with self.lock:
+            self.login_gone = self.login_gone or now()
+        return login.wait(self.p, label, error, getattr(self.tl, "started", 0), self.end,
+                          lambda: self.signalled or self.ending or (self.p.state / "STOP").exists(), self.sleep)
+
     def crashed(self, label, error, tid=""):
-        """A session died for a reason outside its ticket (API overload, network, not logged in): pause, longer each
+        """A session died for a reason outside its ticket (API overload, network): pause, longer each
         time, and return True to run it again. Nothing is pushed for a retry. With the network down it waits for it
         instead, and the rerun spends no retry.
         When one ticket's sessions have died more than `retries` times, it is set aside for the run if other
         sessions ended well since its first crash; with none since, it is set aside on trial while other tickets
         can run, and the next session decides: a good one keeps it aside, a dead one stops the run. Sessions dying
-        across tickets stop the run instead of failing ticket after ticket on a broken API."""
+        across tickets stop the run instead of failing ticket after ticket on a broken API. An expired Claude login
+        is waited out the same way as an outage: no retry spent, nothing counted against the ticket or the run."""
+        if login.expired(error):
+            return self.wait_login(label, error)
         if not net.online():
             self.log(f"  {label} died ({error}) with the network down; rerun when it's back, no retry spent")
             return self.wait_online()
@@ -496,6 +512,8 @@ class Pilot(Desk, Periodic):
         tries = []
 
         def retry(error):
+            if login.expired(error):
+                return self.wait_login(f"{tid}-critic", error)
             if not net.online():
                 self.log(f"  {tid}-critic died ({error}) with the network down; rerun when it's back")
                 return self.wait_online()
@@ -1360,7 +1378,7 @@ class Pilot(Desk, Periodic):
         if self.halt:
             return self.halt
         if now() >= self.end() - timedelta(minutes=self.a.min_slot):
-            return "deadline"
+            return f"the Claude login expired at {hhmm(self.login_gone)}" if self.login_gone else "deadline"
         if self.fail_streak >= 2:
             return "two failed tickets in a row"
         if self.usage.five is None or (time.time() - self.usage.at > 300 and not self.idle):
@@ -1656,6 +1674,9 @@ class Pilot(Desk, Periodic):
             self.quiet_check()
             self.poll_questions()  # every pass, busy slots or not: a question's wait runs out on time
             jobs.follow(p, self.end())  # a deadline moved later keeps the kept jobs going as long
+            if login.waiting():  # its wait ends on a stop or the deadline too; then the checks below say why
+                self.pause()
+                continue
             why = self.stop_check()
             if why:
                 self.stop_reason = why
