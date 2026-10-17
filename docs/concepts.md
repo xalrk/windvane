@@ -116,6 +116,11 @@ ticket is set aside for the rest of the run, with one push, and its branch is ke
 as it does whenever sessions keep dying across tickets; a restart (self-update, `supervise`) keeps the trial. A dead critic is retried the same way; when it keeps dying the
 worker is told it's unavailable and goes on, and no score is recorded.
 
+An expired Claude login is no one's fault, so it spends no retry and sets no ticket aside: the run pushes once (once
+per machine, however many runs share the login) asking you to run `claude` and /login, starts no session meanwhile,
+and goes on by itself, with a push saying so, once `claude auth status` or the login file shows you're back. A
+deadline reached while it waits ends the run with "the Claude login expired at HH:MM".
+
 ## Touches and parallel slots
 
 With `parallel = "auto"` (the default), windvane starts another ticket beside the running ones when all of these hold:

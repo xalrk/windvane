@@ -27,6 +27,18 @@ FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, re, signal, subprocess, sys
 signal.signal(signal.SIGTERM, signal.SIG_DFL)  # dies on SIGTERM like `claude`, even under a shell that ignores it
 args = sys.argv[1:]
+# FAKE_LOGIN: a file holding "out" while the login is expired: `auth status` says so, every session dies of it
+gone = os.environ.get("FAKE_LOGIN") and os.path.exists(os.environ["FAKE_LOGIN"]) and \
+    open(os.environ["FAKE_LOGIN"]).read().strip() == "out"
+if args[:2] == ["auth", "status"]:
+    print(json.dumps({"loggedIn": not gone, "authMethod": "none" if gone else "claude.ai"}))
+    sys.exit(1 if gone else 0)
+if gone and "--append-system-prompt" in args:  # a session (the usage probe has no rules: it goes on)
+    rules = args[args.index("--append-system-prompt") + 1]
+    open(os.environ["FAKE_LOGIN"] + ".dead", "a").write(rules.split("\n")[0] + "\n")
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "num_turns": 0,
+                      "result": "Failed to authenticate: OAuth session expired and could not be refreshed"}))
+    sys.exit(1)
 prompt = args[args.index("-p") + 1]
 system = args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else ""
 emit = lambda ev: print(json.dumps(ev), flush=True)
@@ -374,8 +386,9 @@ class Sandbox:
             os.environ.pop(k, None)
         for k in [k for k in os.environ if k.startswith("GIT_CONFIG_")]:  # a worker's [skip ci] hook, for one
             os.environ.pop(k)
-        from windvane import net, scratch
+        from windvane import login, net, scratch
         net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage
+        login.waiter, login.back_at = None, 0.0  # nor an earlier test's run, in this same process
         self.fullness, scratch.fullness = scratch.fullness, lambda path=None: (10, 10)  # nor the real disk (a full one pushes)
         assert shutil.which("claude") == str(fake) and not shutil.which("notify"), "tests must not reach the real tools"
         self.git("init", "-q", "--bare", "-b", "main", str(self.remote), cwd=self.tmp)
@@ -419,7 +432,8 @@ class Sandbox:
         os.environ.clear()
         os.environ.update(self.old_env)
         self.rm()
-        from windvane import net, phone, scratch
+        from windvane import login, net, phone, scratch
         net.probe, net.waiter = None, None
+        login.waiter = None
         scratch.fullness = getattr(self, "fullness", scratch.fullness)
         phone.use(None)  # the next test's pushes name its own project
