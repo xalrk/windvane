@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver, heavy, jobs  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.phone import MOST, whole  # noqa: E402
+from windvane.runner import IN_JOB  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_parallel import args  # noqa: E402
@@ -49,7 +50,8 @@ class SummaryHint(unittest.TestCase):
         (self.s.tmp / "config/windvane").mkdir(parents=True, exist_ok=True)
         (self.s.tmp / "config/windvane/machine.toml").write_text("busy = []\nmin_free_gb = 0\nheavy_wait = 1\n")
         os.environ["XDG_RUNTIME_DIR"] = str(run_dir)
-        os.environ.pop("WINDVANE_HEAVY_HELD", None)
+        for k in (IN_JOB, "WINDVANE_HEAVY_HELD"):  # a suite run as a background job is in one
+            os.environ.pop(k, None)
 
     def run_one(self, check_out, job_out=None, tickets=("T-001",)):
         self.s.write("check-out.txt", check_out)
