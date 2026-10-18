@@ -23,6 +23,7 @@ from test_selfupdate import Install  # noqa: E402
 
 TITLE = "windvane update not taken up"
 REINSTALL = "Reinstall windvane (pipx reinstall windvane, or sh install.sh in its clone)."
+CHECK = "Check it can run there (a noexec mount or a bad #! line stops it), or "
 
 
 class RestartPush(unittest.TestCase):
@@ -85,8 +86,8 @@ class RestartPush(unittest.TestCase):
         def execv(path, argv):
             raise PermissionError(errno.EACCES, os.strerror(errno.EACCES))
         self.run_with(execv)
-        self.assertEqual(self.mine(), [f"{self.exe} can't be run (permission denied). {REINSTALL} Until then the "
-                                       "run goes on on its current code."])
+        self.assertEqual(self.mine(), [f"{self.exe} can't be run (permission denied). {CHECK}{REINSTALL[0].lower()}"
+                                       f"{REINSTALL[1:]} Until then the run goes on on its current code."])
         self.assertIn(f"new windvane code not taken up: {self.exe} can't be run (permission denied)", self.log())
 
     def test_an_install_removed_after_the_check_behaves_the_same(self):
@@ -95,8 +96,9 @@ class RestartPush(unittest.TestCase):
             self.assertFalse(Path(path).exists())  # so the real exec below can only fail
             os.execv(path, argv)
         self.run_with(execv)
-        self.assertEqual(self.mine(), [f"{self.exe} can't be run (no such file or directory). {REINSTALL} Until "
-                                       "then the run goes on on its current code."])
+        self.assertEqual(self.mine(), [f"{self.exe} can't be run (no such file or directory). {CHECK}"
+                                       f"{REINSTALL[0].lower()}{REINSTALL[1:]} Until then the run goes on on its "
+                                       "current code."])
 
     def test_new_code_or_a_reinstall_after_a_failed_exec_is_tried_again_without_a_second_push(self):
         self.exe.parent.mkdir(parents=True)

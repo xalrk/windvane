@@ -1936,7 +1936,7 @@ class Pilot(Desk, Periodic):
             self.not_taken_up(f"{missing} is gone", "and the run restarts on it")
         return not missing
 
-    def not_taken_up(self, why, then):
+    def not_taken_up(self, why, then, check=""):
         """Logs why new code can't be taken up (each reason once) and tells the phone once a run, since the run
         otherwise goes on on its old code with nothing to see but autopilot.log."""
         line = f"new windvane code not taken up: {why}; reinstall windvane ({selfupdate.REINSTALL}) {then}"
@@ -1945,9 +1945,9 @@ class Pilot(Desk, Periodic):
             self.update_said.append(line)
         if not self.stuck_pushed:
             self.stuck_pushed = True
-            push("windvane update not taken up", whole("", why[0].upper() + why[1:], f". Reinstall windvane "
-                 f"({selfupdate.REINSTALL}). Until then the run goes on on its current code.", log=self.log),
-                 3, "warning")
+            fix = f"{check}reinstall windvane ({selfupdate.REINSTALL})"
+            push("windvane update not taken up", whole("", why[0].upper() + why[1:], f". {fix[0].upper()}{fix[1:]}. "
+                 "Until then the run goes on on its current code.", log=self.log), 3, "warning")
 
     def draining(self):
         """True while new code waits for the running tickets: once the driver has been behind its install for
@@ -1992,7 +1992,8 @@ class Pilot(Desk, Periodic):
             self.behind = self.drain = None
             self.exec_failed = self.install_mark() if self.home else None
             self.not_taken_up(f"{cmd[0]} can't be run ({(e.strerror or str(e)).lower()})",
-                              "and the run restarts on it")
+                              "and the run restarts on it",
+                              "Check it can run there (a noexec mount or a bad #! line stops it), or ")
 
     def hand_over(self):
         """Leaves the run's memory for the driver that replaces this one (`carry_over`)."""
