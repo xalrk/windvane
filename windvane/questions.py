@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 
 from . import phone
 from .config import user_dir
-from .util import load_json, save_json
+from .util import edit_json, load_json
 
 OPT_RE = re.compile(r"^- \*\*([A-E])\*\*:?\s*(.+)$", re.M)
 # An answered provisional block's id, at the end of its Answer line (preflight.block writes it)
@@ -244,9 +244,16 @@ def desk_answers(p):
 
 
 def give_answer(p, tid, option=None, text=None):
-    a = desk_answers(p)
-    a[tid] = {"option": option, "text": text or "", "at": f"{datetime.now():%Y-%m-%d %H:%M}"}
-    save_json(p.state / "answers.json", a)
+    answer = {"option": option, "text": text or "", "at": f"{datetime.now():%Y-%m-%d %H:%M}"}
+    edit_json(p.state / "answers.json", lambda a: a.update({tid: answer}), {})
+
+
+def drop_answers(p, settled):
+    """Forget the answers to the questions in `settled`, keeping any a `windvane answer` gives meanwhile."""
+    def drop(a):
+        for k in settled:
+            a.pop(k, None)
+    edit_json(p.state / "answers.json", drop, {})
 
 
 def phone_answer(p, tid):
@@ -264,14 +271,20 @@ def shown(p):
     """{"asked": {ticket: [questions sent to the phone]}, "pushed": [keys of provisional answers pushed],
     "preflight": [keys of provisional answers offered at the desk], "built": {`T-003.q2`: its question, built on a
     timeout}, "ids": {key of a provisional answer: the number of the `T-003.p2` id it was shown with}}."""
-    return {"asked": {}, "pushed": [], "preflight": [], "built": {}, "ids": {}, **load_json(p.state / "shown.json", {})}
+    return {**blank_shown(), **load_json(p.state / "shown.json", {})}
+
+
+def blank_shown():
+    return {"asked": {}, "pushed": [], "preflight": [], "built": {}, "ids": {}}
 
 
 def note(p, change):
-    """Load the record, let `change` edit it, save it."""
-    s = shown(p)
-    change(s)
-    save_json(p.state / "shown.json", s)
+    """Load the record, let `change` edit it, save it, locked against another writer (the driver, `windvane status`)."""
+    def edit(s):
+        for k, v in blank_shown().items():
+            s.setdefault(k, v)
+        change(s)
+    edit_json(p.state / "shown.json", edit, {})
 
 
 def unseen(picks, asked):

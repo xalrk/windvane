@@ -37,8 +37,9 @@ from .phone import NTFY, REASON, cut, whole
 from .planner import plan
 from .config import CHECKOUT, DIR, HOME, TokenError, exe, slots
 from .jobs import check, tail, waited
-from .questions import (answered, desk_answers, give_answer, keys, mode, note, parts, phone_answer, provisional, qkey,
-                        quiet_note, quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on, with_ids)
+from .questions import (answered, desk_answers, drop_answers, give_answer, keys, mode, note, parts, phone_answer,
+                        provisional, qkey, quiet_note, quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on,
+                        with_ids)
 from .queue import Queue, branch_depends
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
@@ -1401,8 +1402,8 @@ class Pilot(Desk, Periodic):
                 for k in mine:
                     del self.questions[k]
                 self.skip.discard(tid)
-        if settled:  # read again: an answer `windvane answer` gave meanwhile (during a push) must not be lost
-            save_json(p.state / "answers.json", {k: v for k, v in desk_answers(p).items() if k not in settled})
+        if settled:
+            drop_answers(p, settled)
         self.save()
         phone.late_pass()
 

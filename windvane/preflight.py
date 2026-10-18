@@ -20,7 +20,7 @@ from .questions import (BLOCK_RE, OPT_RE, blocks, give_answer, note, part, prov_
                         ticket_of, waiting_on)
 from .queue import Queue
 from .runner import rules, run_claude
-from .util import git, gout, load_json, log, now, read_jsonl, save_json
+from .util import edit_json, git, gout, load_json, log, now, read_jsonl, save_json
 from .worktree import clean_detach, ensure_worktree
 
 PREFLIGHT_RE = re.compile(r"^PREFLIGHT: (\d+|NONE)", re.M)
@@ -256,8 +256,8 @@ def followup(p, cd, tid, x, letter, text):
 
 def forget(p, ids):
     """Drop answered questions from the saved preflight list, so they aren't offered again."""
-    save_json(p.state / "preflight.json", {**load_json(p.state / "preflight.json", {}),
-                                           "questions": [x for x in pending(p) if x["id"] not in ids]})
+    edit_json(p.state / "preflight.json",
+              lambda d: d.update(questions=[x for x in d.get("questions", []) if x["id"] not in ids]), {})
 
 
 def record(p, answers):
