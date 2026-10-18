@@ -2415,8 +2415,8 @@ def tear_down(p, lock=False, tell=False):
 def leftover_helpers(p, since):
     """[(pid, command)] of the processes still at work in the autopilot's trees once a run is over: the helpers its
     tools started (an emulator, a dev server, a container) that its `teardown` doesn't stop. With isolate off the tree
-    is the checkout, where the user works too: only what started after `since` with no terminal counts, so their
-    editor and shells never do."""
+    is the checkout, where the user works too: only what started after `since` (a `util.clock`, None when it had
+    none: then nothing) with no terminal counts, so their editor and shells never do."""
     if p.cfg["isolate"]:
         roots = [os.path.realpath(p.state / d) for d in util._listdir(p.state) if re.fullmatch(r"(work|ci)(-\d+)?", d)]
     else:
@@ -2427,7 +2427,7 @@ def leftover_helpers(p, since):
             continue
         if not (info := util.command(pid)):
             continue
-        if not p.cfg["isolate"] and (info[1] or (util.started_at(pid) or 0) < since):
+        if not p.cfg["isolate"] and (info[1] or since is None or (util.boot_started(pid) or 0) < since):
             continue
         out.append((pid, info[0]))
     return out

@@ -325,13 +325,26 @@ def recorded_stamp(mark):
 
 
 def clock():
-    """Now, on `started_at`'s clock: on Linux the boot time /proc gives in whole seconds plus the uptime, so a process
-    started a moment after this reads as later, as it is; elsewhere the wall clock."""
-    try:
-        boot = next(int(l.split()[1]) for l in (PROC / "stat").read_text().splitlines() if l.startswith("btime"))
-        return boot + float((PROC / "uptime").read_text().split()[0])
-    except (OSError, ValueError, IndexError, StopIteration):
+    """Now, on `boot_started`'s clock, or None when /proc can't say: on Linux the seconds since boot /proc/uptime
+    gives, which a step of the wall clock (NTP, a clock set after resume) doesn't move, as it moves /proc's btime and
+    so every `started_at`; elsewhere (macOS) the wall clock, as `ps` gives no other."""
+    if not PROC.is_dir():
         return time.time()
+    try:
+        return float((PROC / "uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def boot_started(pid):
+    """When process `pid` started on `clock`'s clock, or None when it's gone: on Linux its start ticks since boot
+    (/proc/<pid>/stat field 22), in seconds; elsewhere its `started_at`."""
+    if not PROC.is_dir():
+        return started_at(pid)
+    try:
+        return int((PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def command(pid):
