@@ -391,14 +391,19 @@ def alive(base):
 
 def pid_lives(base):
     """Whether the job's recorded pid is still the job's process. Only ESRCH (or no pid to look at) is a death: EPERM
-    means a process holds the number, and its start time tells whether it is the job or a stranger reusing it."""
-    pid_f = Path(f"{base}.pid")
+    means a process holds the number, and the `stamp` `bg` wrote beside it tells whether it is the job or a stranger
+    reusing it, through a step of the wall clock too. A job from an older windvane, with no stamp (or one older than
+    its pid, left by an older `bg` that started it again), goes by its start time against the pid file's mtime."""
+    pid_f, stamp_f = Path(f"{base}.pid"), Path(f"{base}.stamp")
     try:
         pid = int(pid_f.read_text())
         try:
             os.kill(pid, 0)
         except PermissionError:
             pass
+        recorded = util.recorded_stamp(stamp_f)
+        if recorded and stamp_f.stat().st_mtime >= pid_f.stat().st_mtime:
+            return util.same_process(pid, recorded) is not False  # None: it can't tell, and the number is held
         t = util.started_at(pid)
         return t is None or t <= pid_f.stat().st_mtime + 2  # /proc's boot time and ps's are in whole seconds
     except (OSError, ValueError):
@@ -425,7 +430,7 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
     base = job_base(p, name)
     base.parent.mkdir(parents=True, exist_ok=True)
     pid = Path(f"{base}.pid")
-    for end in ("exit", "keep", "child"):
+    for end in ("exit", "keep", "child", "stamp"):
         Path(f"{base}.{end}").unlink(missing_ok=True)
     Path(f"{base}.start").write_text(str(int(time.time())))
     Path(f"{base}.cwd").write_text(str(Path(cwd).resolve()))  # ties it to its worktree, should job_base move again
@@ -441,11 +446,13 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
                             cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True, env=env)
     pid.write_text(str(proc.pid))
+    if who := util.stamp(proc.pid):  # after the pid, which `pid_lives` checks it against; gone already: none
+        Path(f"{base}.stamp").write_text(who)
     session = os.environ.get(NEST)
     if session and not keep:  # killed with the session that started it (runner.kill_nested), not left by a stop
         mark = p.state / "nested" / session / str(proc.pid)
         mark.parent.mkdir(parents=True, exist_ok=True)
-        mark.write_text(util.stamp(proc.pid) or "")
+        mark.write_text(who or "")
     if quiet:
         pass
     elif keep:
