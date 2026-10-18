@@ -48,7 +48,7 @@ from .worktree import (TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, cl
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
-CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
+CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "fixes", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes", "opened", "heavy_waits",
            "stuck_pushed")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
@@ -85,6 +85,7 @@ class Signalled(BaseException):
 SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it reads."),
                   ("context limit", "Split the ticket, or trim what it reads."),
                   ("request too large", "Split the ticket, or trim what it reads."))
+REWRITE = "Rewrite its branch without the secret, as its push says."  # a secret's set-aside fix, for the queue hint
 
 
 
@@ -216,6 +217,7 @@ class Pilot(Desk, Periodic):
         self.secrets = s.get("secrets", {})  # ticket -> {"branch", "sha"}: a head set aside for a secret (secret_aside)
         self.skip, self.merged, self.failed = set(), [], []
         self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
+        self.fixes = {}  # ticket set aside -> what keeps it from being set aside again, for `windvane queue`'s hint
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
         self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
@@ -294,6 +296,7 @@ class Pilot(Desk, Periodic):
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "aside": dict(self.aside),
+                                        "fixes": dict(self.fixes), "failed": list(self.failed),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
                                         "running": dict(self.running)})
 
@@ -457,42 +460,53 @@ class Pilot(Desk, Periodic):
         return any(t != tid for t in self.running) or any(
             t != tid and t not in self.skip and q.status(t, blocked) in ("wip", "todo") for t in q.order)
 
-    def put_aside(self, tid, why):
-        """Leave a ticket out of the rest of the run, `why` for the summary (and `windvane queue`, from the state
-        file). Returns what its log line adds: the open tickets waiting on it, which wait with it."""
+    def put_aside(self, tid, why, fix=""):
+        """Leave a ticket out of the rest of the run, `why` for the summary and `fix` (what would keep it from being
+        set aside again) for `windvane queue`, from the state file. Returns what its log line adds: the open tickets
+        waiting on it, which wait with it."""
         self.skip.add(tid)
         self.aside[tid] = why
+        self.fixes[tid] = fix
         self.save()
         return self.holds_up(tid)
 
-    def holds_up(self, tid):
-        """`; T-004 waits on it` for the open tickets whose `Depends on:` names `tid`, or nothing."""
+    def holds_up(self, tid, most=None):
+        """`; T-004 waits on it` for the open tickets whose `Depends on:` names `tid`, or nothing. With `most`, at
+        most that many named and the rest counted: a push's clause stays short."""
         q = getattr(self, "queue", None)
         waiting = q.waiting_for(tid) if q else []
+        if most and len(waiting) > most:
+            waiting = waiting[:most - 1] + [f"{len(waiting) - most + 1} more"]
         return f"; {', '.join(waiting)} wait{'s' * (len(waiting) == 1)} on it" if waiting else ""
+
+    def held_line(self, tid):
+        """The set-aside push's last line: who waits on `tid` too, after the point and the fix the first line holds."""
+        held = self.holds_up(tid, 4)
+        return f"\n{held[2:]}." if held else ""
 
     def set_aside(self, tid, error):
         """A ticket whose own sessions keep dying while others' don't: the rest of the run goes on without it."""
         logged = lambda m: None  # noqa: E731  the line below has the whole error: the cuts don't log it again
-        held = self.put_aside(tid, f"its sessions kept dying: {self.said_error(error, logged)}")
+        hit = next(((text, fix) for text, fix in SELF_INFLICTED if text in plain_error(error).lower()), None)
+        held = self.put_aside(tid, f"its sessions kept dying: {self.said_error(error, logged)}", hit[1] if hit else "")
         self.log(f"{tid}: set aside: its sessions keep dying ({error}) while other sessions work{held}")
         error = plain_error(error)
         died = f"Sessions died {self.p.ap['retries'] + 1}×: "
         why = "Other sessions worked, so it's this ticket's doing."
-        hit = next(((text, fix) for text, fix in SELF_INFLICTED if text in error.lower()), None)
         if hit:  # the fix leads: the error's own words rarely say what to do
             body = (whole(died, hit[0], f". {hit[1]}", log=logged)
                     + "\n" + whole("The error: ", error, ".", log=logged) + f"\nBranch kept, run goes on. {why}")
         else:
             body = whole(died, error, ". Branch kept, run goes on.", log=logged) + f"\n{why}"
-        push(f"Set aside: {self.name(tid)}", body, 4, "warning")
+        push(f"Set aside: {self.name(tid)}", body + self.held_line(tid), 4, "warning")
 
     def set_aside_limit(self, tid, limit, fix):
         """A worker run stopped at a limit of its own (the time box, max turns or budget): the ticket is too big for
         one run as it stands, so the run goes on without it and the phone says which limit and what to change."""
-        held = self.put_aside(tid, f"hit {limit}")
+        held = self.put_aside(tid, f"hit {limit}", fix)
         self.log(f"{tid}: the run hit {limit}; set aside{held}")
-        push(f"Set aside: {self.name(tid)}", whole("Hit ", limit, f". {fix} Branch kept.", log=self.log), 3,
+        push(f"Set aside: {self.name(tid)}", whole("Hit ", limit, f". {fix} Branch kept.", log=self.log)
+             + self.held_line(tid), 3,
              "hourglass")
 
     def secret_aside(self, tid, branch, sha, found):
@@ -503,7 +517,7 @@ class Pilot(Desk, Periodic):
         p = self.p
         with self.lock:
             self.secrets[tid] = {"branch": branch, "sha": sha}
-        held = self.put_aside(tid, f"its {DIR}/ lines hold {privacy.said(found, 1)}")
+        held = self.put_aside(tid, f"its {DIR}/ lines hold {privacy.said(found, 1)}", REWRITE)
         self.log(f"{tid}: not merged: the lines its commits add under {DIR}/ hold {privacy.said(found)}; set "
                  f"aside{held}")
         push(f"Set aside: {self.name(tid)}",
@@ -512,7 +526,8 @@ class Pilot(Desk, Periodic):
              + f"\nRewrite the branch without it: `git fetch {p.remote} && git switch {branch} && git rebase -i "
              f"{p.upstream}`, then `git push --force-with-lease {p.remote} {branch}`. Change the secret if it's real: "
              "the branch is pushed already. Until it changes, runs leave it be; then the next one takes it up again.\n"
-             f"Not a secret? Let its kind through with `scan_allow` in {DIR}/config.toml.", 4, "warning")
+             f"Not a secret? Let its kind through with `scan_allow` in {DIR}/config.toml." + self.held_line(tid), 4,
+             "warning")
 
     def secrets_unchanged(self):
         """Set aside, without a session, each ticket `secret_aside` stopped whose branch still has that head and whose
@@ -530,7 +545,7 @@ class Pilot(Desk, Periodic):
                 why = "holds nothing the guard refuses now"
             else:
                 held = self.put_aside(tid, f"its {DIR}/ lines still hold a secret: {s['branch']} unchanged since it "
-                                      "was set aside")
+                                      "was set aside", REWRITE)
                 self.log(f"{tid}: {self.aside[tid]}; left be{held}")
                 continue
             with self.lock:
@@ -677,10 +692,10 @@ class Pilot(Desk, Periodic):
             self.partials[tid] = self.partials.get(tid, 0) + 1
             self.log(f"{tid}: partial ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
-                held = self.put_aside(tid, f"{self.partials[tid]} runs in a row ran out of time")
+                held = self.put_aside(tid, f"{self.partials[tid]} runs in a row ran out of time", "Split it.")
                 self.log(f"{tid}: set aside: {self.aside[tid]}{held}")
                 push(f"Set aside: {self.name(tid)}", f"{self.partials[tid]} runs in a row ran out of time. Split it. "
-                     f"Branch kept.\nLeft: {rest}", 3, "hourglass")
+                     f"Branch kept.\nLeft: {rest}" + self.held_line(tid), 3, "hourglass")
             return
         if status == "FAILED":
             return self.fail(tid, rest)
@@ -1304,6 +1319,7 @@ class Pilot(Desk, Periodic):
         self.failed.append(tid)
         self.approved.pop(tid, None)
         self.log(f"{tid}: FAILED: {why}")
+        self.save()  # `windvane queue` hints how to retry it to the tickets waiting on it
         # what `windvane stats` reads as the ticket's outcome, so a reworded log line can't hide a failure
         append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "failed"})
         if net.online():

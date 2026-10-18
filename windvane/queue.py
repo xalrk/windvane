@@ -21,8 +21,10 @@ import re
 import time
 from pathlib import Path
 
-from .questions import blocks, part
+from .questions import blocks, part, ticket_of, waiting_on
 from .util import gout
+
+PEOPLE = ("the user", "user", "you")  # outside items that stand for someone's answer, not a milestone
 
 
 def bullets(text, files, p):
@@ -125,10 +127,11 @@ class Queue:
         self.parked = set(self.parked_lines)
         self.done_words = {" ".join(m.split()).strip(" .`*").lower()
                            for m in re.findall(r"^\s*-\s*done:\s*([^(\n]+)", qmd, re.M | re.I)}
-        self.asked = {}
+        self.asked, self.asked_ids = {}, {}
         for t, question, _ in blocks(part(show(p.questions_rel), "Open")):
             if p.norm(t) in self.files:
                 self.asked.setdefault(p.norm(t), question)
+                self.asked_ids.setdefault(p.norm(t), []).append(t)
         self.done.discard(None)
         self.wip, fresh = {}, set()
         old = time.time() - float(p.ap["stale_days"]) * 86400
@@ -214,20 +217,52 @@ class Queue:
         return [t for t in self.order if t != tid and t not in self.done and t not in self.parked
                 and any(on(d) for d in self.deps.get(t, []) + self.branch_deps.get(t, []))]
 
-    def hints(self, tid, aside=None):
-        """How to release what `tid` waits on that won't come by itself: an outside item no `- done:` line names yet,
-        a parked dependency, or one the running driver set aside (`aside`: ticket -> why)."""
-        out, rel = [], self.p.queue_rel
-        for d in self.waits_on(tid):
-            if d in self.parked:
-                out.append(f"{d} is parked: to unpark it, take `{self.parked_lines[d]}` out of {rel}")
-            elif d in (aside or {}):
-                out.append(f"{d} was set aside this run ({aside[d]}): {tid} waits until it merges, and the next run "
-                           f"takes {d} up again")
-            elif not self.known(d):
-                out.append(f"`{d}` isn't a ticket: once it's done, add `- done: {d} (why)` to {rel}, or take it out "
-                           f"of `Depends on:` in {self.files[tid]}")
+    def hints(self, blocked=(), run=None):
+        """How to release each wait that won't end by itself, one line per cause naming every ticket waiting on it:
+        an outside item no `- done:` line names yet (someone's answer or a milestone), a parked dependency, or one
+        the running driver set aside, failed or holds for a question. `run` is the driver's state.json (its
+        `aside`, `fixes` and `failed` only while a run is on). {the first ticket waiting on it: [lines]}"""
+        run = run or {}
+        causes = {}
+        for t in self.order:
+            if self.status(t, blocked) == "waiting":
+                for d in self.waits_on(t):
+                    causes.setdefault(d, []).append(t)
+        asks = {}
+        for k, q in waiting_on(run.get("questions", {})).items():
+            asks.setdefault(self.p.norm(ticket_of(k, q)), []).append(k)
+        out = {}
+        for d, waiters in causes.items():
+            line = self.hint(d, waiters, blocked, asks, run)
+            if line:
+                out.setdefault(waiters[0], []).append(line)
         return out
+
+    def hint(self, d, waiters, blocked, asks, run):
+        """The line for one cause `d`, or "" when it ends by itself (a ticket that's just not merged yet)."""
+        rel, aside, fixes = self.p.queue_rel, run.get("aside", {}), run.get("fixes", {})
+        who = f"{', '.join(waiters)} wait{'s' * (len(waiters) == 1)}"
+        if d in self.parked:
+            return f"{d} is parked: {who}; to unpark it, take `{self.parked_lines[d]}` out of {rel}"
+        if d in aside:
+            fix = fixes.get(d, "").rstrip(".")
+            then = (f"before the next run takes it up again, {fix[:1].lower()}{fix[1:]}" if fix
+                    else "the next run takes it up again")
+            return f"{d} was set aside this run ({aside[d]}): {who} until it merges; {then}"
+        if d in run.get("failed", []):
+            return (f"{d} failed this run (the log says why): {who} until it merges; this run won't retry it, the "
+                    "next `windvane run` will")
+        if d in self.files and (d in blocked or d in self.asked):
+            ids = asks.get(d) or self.asked_ids.get(d)  # none: answered, it waits only for its ticket's next run
+            return "" if not ids else (f"{d} has an open question ({', '.join(ids)}): {who} until it's answered: `windvane answer "
+                    f"{ids[0]} <letter>`")
+        if self.known(d):
+            return ""
+        done = f"add `- done: {d} (why)` to {rel}"
+        if d.lower() in PEOPLE:
+            return f"`{d}`: {who}; once you've answered, {done}"
+        where = self.files[waiters[0]] if len(waiters) == 1 else "each of their tickets"
+        return f"`{d}` isn't a ticket: {who}; once it's done, {done}, or take it out of `Depends on:` in {where}"
 
     def warnings(self):
         """Header lines the queue reads differently from how they look: a key indented off its line's start isn't a
@@ -244,9 +279,10 @@ class Queue:
                                "read")
         return out
 
-    def listing(self, blocked=(), hints=False, aside=None):
-        """One row per ticket; with `hints`, a line under a waiting ticket for each wait that needs someone to act."""
-        rows = []
+    def listing(self, blocked=(), hints=False, run=None):
+        """One row per ticket; with `hints`, a line for each wait that needs someone to act, under the first ticket
+        waiting on it (`hints`, `run`)."""
+        rows, said = [], self.hints(blocked, run) if hints else {}
         for t in self.order:
             s = self.status(t, blocked)
             on = (f"{x} (from its branch)" if x in self.branch_deps.get(t, []) else x for x in self.waits_on(t))
@@ -255,8 +291,7 @@ class Queue:
             rows.append(f"{t:8} {s:8} {'(last) ' * (t in self.last)}{self.titles[t][:70]}"
                         + (f"  [{' '.join(self.wip[t])}{', stale' if t in self.stale else ''}]"
                            if t in self.wip else "") + (f"  ({why})" if why else ""))
-            if hints and s == "waiting":
-                rows += [f"{'':8} hint: {h}" for h in self.hints(t, aside)]
+            rows += [f"{'':8} hint: {h}" for h in said.get(t, [])]
         return "\n".join(rows)
 
     def next_id(self, taken=()):
