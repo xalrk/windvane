@@ -224,6 +224,39 @@ class KeepHours(Base):
         self.assertIn("- 'job' exit 0", self.workers()[-1])
         self.assertGreaterEqual(self.starts("T-001")[-1], float(self.ended.read_text()))  # resumed once it ended
 
+    def test_a_wind_down_slower_than_the_watch_doesnt_kill_it(self):
+        """The job's own watch looks at `.keep` every few seconds while the run winds down: told only the stop, it
+        killed the job before the run's end could move it on by the hours."""
+        hold(self, self.run_dir)
+        no_wrap_up(self)
+        pilot = self.pilot()
+        clean = pilot.clean_state
+        pilot.clean_state = lambda between: (time.sleep(5) if not between else None, clean(between))
+        pilot.run(now() + timedelta(seconds=8))
+        self.assertTrue(jobs.alive(self.job), "killed during the wind-down despite heavy_keep_hours")
+        self.assertAlmostEqual(jobs.kept_until(self.job), time.time() + 2 * 3600, delta=60)
+
+    def test_a_deadline_moved_earlier_brings_the_kept_jobs_stop_with_it(self):
+        pilot = self.pilot()
+        pilot.deadline = now() + timedelta(hours=1)
+        self.job.parent.mkdir(parents=True)
+        self.job.with_suffix(".keep").write_text(str(pilot.keep_until().timestamp()))  # as bg writes it
+        other = self.p.state / "bg" / "T-002" / "job"  # a desk job, or one an earlier run let go on longer
+        other.parent.mkdir(parents=True)
+        far = (now() + timedelta(hours=9)).timestamp()
+        other.with_suffix(".keep").write_text(str(far))
+        jobs_alive = jobs.alive
+        self.addCleanup(setattr, jobs, "alive", jobs_alive)
+        jobs.alive = lambda b: True
+        pilot.follow_kept()
+        (self.p.state / "DEADLINE").write_text((now() + timedelta(minutes=10)).isoformat())
+        pilot.follow_kept()
+        self.assertAlmostEqual(jobs.kept_until(self.job), time.time() + 600 + 2 * 3600, delta=60)
+        self.assertEqual(jobs.kept_until(other), far)
+        (self.p.state / "DEADLINE").write_text((now() + timedelta(hours=3)).isoformat())
+        pilot.follow_kept()
+        self.assertAlmostEqual(jobs.kept_until(self.job), time.time() + 5 * 3600, delta=60)
+
 
 class StopsAndSessions(Base):
     def bg(self, keep, session="worker-session", run_stop=None):

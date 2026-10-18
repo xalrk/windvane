@@ -55,6 +55,10 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- `heavy_keep_hours` keeps a kept job (`bg --heavy --keep`) running past the run's stop again. The job was told only
+  the stop, and its own watch killed it while the run wound down, before the hours were added. It is now told the
+  stop plus the hours from the start; `windvane stop` still kills it at once, and a deadline moved earlier brings its
+  stop earlier too.
 - A ticket whose branch a killed run left checked out in another slot's tree lands again. Its next worker couldn't
   switch to the branch, and every READY bounced with "No open PR" while the PR was open, until `review_rounds` failed
   it. The driver now detaches such a tree before the worker starts (one with uncommitted changes keeps the ticket, so

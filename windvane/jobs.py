@@ -492,13 +492,14 @@ def running_kept(p, ticket=None):
     return [b for b in kept_jobs(p, ticket) if alive(b)]
 
 
-def follow(p, until):
-    """Let every running kept job go on until at least `until` (a datetime): the run's deadline as it now is, or past
-    the run's stop by `heavy_keep_hours`."""
+def follow(p, until, was=0):
+    """Let every running kept job go on until at least `until` (a Unix time or a datetime), and bring those told a
+    stop after it, up to `was` (the latest a run gave out before a deadline moved earlier), back to it."""
+    until = until.timestamp() if isinstance(until, datetime) else until
     for b in running_kept(p):
         t = kept_until(b)
-        if t is not None and t < until.timestamp():
-            Path(f"{b}.keep").write_text(str(until.timestamp()))
+        if t is not None and (t < until or until < t <= was):
+            Path(f"{b}.keep").write_text(str(until))
 
 
 def stop_groups(groups):
