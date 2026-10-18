@@ -222,6 +222,8 @@ def merge_state(pr, stderr):
     mergeable, status = pr.get("mergeable", ""), pr.get("mergeStateStatus", "")
     if mergeable in ("CONFLICTING", "UNKNOWN"):
         return MERGE_STATES[mergeable]
+    if pr.get("isDraft"):  # its state can still read CLEAN
+        status = "DRAFT"
     return MERGE_STATES.get(status) or cut(" ".join(stderr.split())) or MERGE_STATES["UNKNOWN"]
 
 

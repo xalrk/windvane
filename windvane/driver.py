@@ -14,6 +14,7 @@ broke is resumed with no retry spent. At the 5-hour cap it stops the running ses
 resets. A detached run's driver is itself restarted after a crash (`supervise`).
 """
 import fcntl
+import json
 import os
 import signal
 import sys
@@ -31,7 +32,7 @@ from . import (actions, critic, heavy, install, jobs, login, net, phone, privacy
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .heavy import minutes
-from .held import author_ident, push_held
+from .held import MERGE_STATES, author_ident, merge_state, push_held
 from .periodic import Periodic
 from .phone import NTFY, REASON, cut, whole
 from .planner import plan
@@ -186,6 +187,19 @@ def pr_lookup(p, branch):
         return ""
     prs = net.own_prs(p, "--head", branch, "--state", "open")
     return None if prs is None else str(prs[0]["number"]) if prs else ""
+
+
+# A refused merge's states no retry clears: the third try would be refused as the first was.
+STUCK = (MERGE_STATES["DRAFT"], MERGE_STATES["BLOCKED"])
+
+
+def pr_state(p, pr):
+    """What GitHub says of a PR whose merge was refused, read once: {} when gh can't say."""
+    try:
+        return json.loads(net.sh(p.main_root(), "gh", "pr", "view", pr, "--json",
+                                 "state,mergeable,mergeStateStatus,isDraft") or "{}")
+    except ValueError:
+        return {}
 
 
 def also(tickets, most=NTFY):
@@ -1014,6 +1028,7 @@ class Pilot(Desk, Periodic):
         """Merge the approved head into main: test the merge, check the merged tree, then merge (PR or push)."""
         p, cd = self.p, self.cd
         title = self.queue.titles.get(tid, tid)
+        why, undrafted = "", False
         for _ in range(tries):
             if not self.clean_wait(tid, f"merging {tid}"):  # isolate off: the checkout was edited during the review
                 return None
@@ -1078,10 +1093,19 @@ class Pilot(Desk, Periodic):
                     net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
                            f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}."
                            + old_numbers(renumbered))
+                if not undrafted:
+                    if not self.undraft(tid, pr):
+                        return None
+                    undrafted = True
                 res = net.call(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", sha, "--subject", msg],
                                p.main_root())
-                merged = res.returncode == 0 or net.sh(p.main_root(), "gh", "pr", "view", pr, "--json", "state",
-                                                       "-q", ".state") == "MERGED"
+                state = {} if res.returncode == 0 else pr_state(p, pr)
+                merged = res.returncode == 0 or state.get("state") == "MERGED"
+                if not merged:
+                    why = merge_state(state, res.stderr or res.stdout)
+                    if why in STUCK:  # no retry clears it: fail now, saying why
+                        self.log(f"{tid}: merge refused ({why})")
+                        return self.fail(tid, f"the merge was refused: {why}")
             else:  # by sha, so nothing that moves the ci worktree's HEAD meanwhile can turn it into a no-op
                 res = net.git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
@@ -1089,8 +1113,28 @@ class Pilot(Desk, Periodic):
                 if self.landed(tid, branch, sha):  # the ci worktree is still on the merge
                     return self.merged_ok(tid, branch, sha, renumbered, self.off_touches(tid))
                 return None
-            self.log(f"{tid}: merge refused ({cut(' '.join((res.stderr or res.stdout).split()))}); trying again")
-        self.fail(tid, "the merge was refused three times")
+            why = why or cut(' '.join((res.stderr or res.stdout).split()))
+            self.log(f"{tid}: merge refused ({why}); trying again")
+        self.fail(tid, f"the merge was refused three times ({why})")
+
+    def undraft(self, tid, pr):
+        """A PR opened as a draft (`gh pr create --draft`, a project's own rules) is marked ready: the review is the
+        gate, and a draft can't merge on any try. One a person turned into a draft after opening it is their hold:
+        the ticket is set aside, not failed, and the push says how to let it go. False when it is held."""
+        root = self.p.main_root()
+        if net.sh(root, "gh", "pr", "view", pr, "--json", "isDraft", "-q", ".isDraft") != "true":
+            return True
+        events = net.call(["gh", "api", "--paginate", f"repos/{{owner}}/{{repo}}/issues/{pr}/timeline", "--jq",
+                           ".[].event"], root)
+        if events.returncode or "convert_to_draft" in events.stdout.split():  # unread, it may be a hold too
+            held_up = self.put_aside(tid, f"PR #{pr} is a draft on purpose", f"`gh pr ready {pr}`")
+            self.log(f"{tid}: PR #{pr} was made a draft after it was opened; left as it is, set aside{held_up}")
+            push(f"Held: {self.name(tid)}", f"Approved, but PR #{pr} was turned into a draft, so it isn't merged. To "
+                 f"let it go: `gh pr ready {pr}`; the next run takes it up again." + self.held_line(tid), 3, "pause")
+            return False
+        if net.call(["gh", "pr", "ready", pr], root).returncode == 0:
+            self.log(f"{tid}: PR #{pr} was a draft; marked ready")
+        return True  # unreadied, the merge is refused as a draft and says so
 
     def find_pr(self, tid, branch):
         """The branch's open PR, or "" when it has none. A failing gh (an API hiccup, a rate limit) isn't a missing PR:

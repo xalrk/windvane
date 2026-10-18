@@ -55,6 +55,9 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- An approved ticket whose PR was opened as a draft is marked ready and merged instead of failing after three
+  refused tries; one a person turned into a draft is set aside with a push saying `gh pr ready <n>` lets it go, and
+  a refused merge now says why (a draft, a required check or review), failing at once when no retry can clear it.
 - `heavy_keep_hours` keeps a kept job (`bg --heavy --keep`) running past the run's stop. The job was told only
   the stop, and its own watch killed it while the run wound down, before the hours were added. It is now told the
   stop plus the hours from the start; `windvane stop` still kills it at once, and a deadline moved earlier brings its
