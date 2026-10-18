@@ -16,11 +16,11 @@ from windvane.config import Project  # noqa: E402
 from windvane.util import append_jsonl, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
-# Three launches that stopped at once (one each side of the cut's edge), two that worked, one long PARTIAL (it worked,
-# then ran out of time) and a short READY: weighted = input + 1.25 cache_write + 5 output
-IDLE = [dict(turns=3, input=8000, cache_write=4000, output=400, result="PARTIAL"),  # 15k
-        dict(turns=stats.IDLE_TURNS, input=9000, output=200, result="BLOCKED"),  # 10k
-        dict(turns=2, input=5000, output=0, result="PARTIAL")]  # 5k
+# Three launches that stopped at once (one on the cut's edge, two for one ticket) and three that worked: a READY, a
+# PARTIAL one turn past the cut, a short READY. Weighted = input + 1.25 cache_write + 5 output
+IDLE = [dict(ticket="T-007", turns=3, input=8000, cache_write=4000, output=400, result="PARTIAL"),  # 15k
+        dict(ticket="T-009", turns=stats.IDLE_TURNS, input=9000, output=200, result="BLOCKED"),  # 10k
+        dict(ticket="T-007", turns=2, input=5000, output=0, result="PARTIAL")]  # 5k
 WORKED = [dict(turns=40, input=50000, output=10000, result="READY"),  # 100k
           dict(turns=stats.IDLE_TURNS + 1, input=30000, output=4000, result="PARTIAL"),  # 50k
           dict(turns=4, input=10000, output=2000, result="READY")]  # 20k
@@ -34,7 +34,7 @@ class Wasted(unittest.TestCase):
 
     def ledger(self, rows):
         for i, kw in enumerate(rows):
-            append_jsonl(self.p.state / "ledger.jsonl", dict(role="worker", ticket=f"T-00{i}", **kw))
+            append_jsonl(self.p.state / "ledger.jsonl", {"role": "worker", "ticket": f"T-00{i}", **kw})
         append_jsonl(self.p.state / "ledger.jsonl", dict(role="planner", turns=2, input=7000, result=None))
 
     def stats(self):
@@ -46,10 +46,11 @@ class Wasted(unittest.TestCase):
 
     def test_idle_launches_are_counted_with_their_tokens_and_share(self):
         self.ledger(IDLE + WORKED)
-        line = [x for x in self.stats().splitlines() if x.startswith("idle worker launches")]
+        out = " ".join(self.stats().split())  # the line wraps at 100 columns
         # 30k of the workers' 200k weighted; fresh in 8k + 4k + 9k + 5k, out 400 + 200
-        self.assertEqual(line, [f"idle worker launches: 3 (PARTIAL or BLOCKED within {stats.IDLE_TURNS} turns), "
-                                "26k fresh in, 1k out, 15% of worker weighted tokens"])
+        self.assertIn(f"idle worker launches: 3 (PARTIAL or BLOCKED within {stats.IDLE_TURNS} turns), 26k fresh in, "
+                      "1k out, 15% of worker weighted tokens; most: T-007 ×2, T-009 (autopilot.log says why)", out)
+        self.assertEqual(out.count("idle worker launches"), 1)
 
     def test_no_line_without_idle_launches(self):
         self.ledger(WORKED)

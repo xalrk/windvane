@@ -93,11 +93,11 @@ end row (its minutes) in the ledger before it goes, so its time still counts.
 
 The `died or killed` line is what outages, crashes and hung sessions cost: their runs' weighted tokens, and their
 share of all. `idle worker launches` counts worker runs that ended PARTIAL or BLOCKED within 8 turns, having done no
-work (started past their wrap-up, say), with their tokens and share of worker spend; none, no line. `orphaned process
-groups killed: N` follows when a run killed process groups a dead driver's sessions left running (the ledger's
-`swept` rows); without any, there's no line. `gh guard refused: N workflow starts` counts the times workers tried to
-start, re-run or enable a workflow past `windvane ci` (the ledger's `gh-refused` rows; `--by ticket` adds the ticket
-that tried most); none, no line.
+work (started past their wrap-up, say), with their tokens, share of worker spend and the tickets that had most; none,
+no line. `orphaned process groups killed: N` follows when a run killed process groups a dead driver's sessions left
+running (the ledger's `swept` rows); without any, there's no line. `gh guard refused: N workflow starts` counts the
+times workers tried to start, re-run or enable a workflow past `windvane ci` (the ledger's `gh-refused` rows; `--by
+ticket` adds the ticket that tried most); none, no line.
 
 By ticket (`--by ticket`), with each ticket's outcome and what a merged ticket costs:
 

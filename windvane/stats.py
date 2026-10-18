@@ -222,15 +222,20 @@ def session_stats(a, p, rows, swept=0, checks=(), refusals=(), awaits=()):
 
 def idle_stats(rows):
     """Worker launches that ended at once, PARTIAL or BLOCKED within IDLE_TURNS: each paid a worker's start-up
-    tokens for no work. Rows from before the ledger kept `result` don't count. No line when there were none."""
+    tokens for no work. The tickets with the most say where to look. Rows from before the ledger kept `result`
+    don't count. No line when there were none."""
     workers = [r for r in rows if r.get("role") == "worker"]
     idle = [r for r in workers if r.get("result") in ("PARTIAL", "BLOCKED") and (r.get("turns") or 0) <= IDLE_TURNS]
     if not idle:
         return
     fresh = sum((r.get("input") or 0) + (r.get("cache_write") or 0) for r in idle)
     share = 100 * sum(map(weighted, idle)) / max(1, sum(map(weighted, workers)))
-    print(f"idle worker launches: {len(idle)} (PARTIAL or BLOCKED within {IDLE_TURNS} turns), {k(fresh)} fresh in, "
-          f"{k(sum(r.get('output') or 0 for r in idle))} out, {share:.0f}% of worker weighted tokens")
+    top = Counter(r.get("ticket") or "no ticket" for r in idle).most_common()
+    names = ", ".join(f"{t} ×{n}" if n > 1 else t for t, n in top[:3])
+    names += f" and {len(top) - 3} more" if len(top) > 3 else ""
+    note(f"idle worker launches: {len(idle)} (PARTIAL or BLOCKED within {IDLE_TURNS} turns), {k(fresh)} fresh in, "
+         f"{k(sum(r.get('output') or 0 for r in idle))} out, {share:.0f}% of worker weighted tokens; most: {names} "
+         "(autopilot.log says why)")
 
 
 def lost_parts(died, killed):
