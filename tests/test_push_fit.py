@@ -270,6 +270,13 @@ def secret_aside(p, patch, s):
     return {"Set aside": ("Not merged: its commits add a token at .windvane/", "which would stay in main's history.")}
 
 
+def draft_held(p, patch, s):
+    patch(net, "sh", lambda *a: "true")
+    patch(driver, "gh_answer", lambda cmd, cwd: subprocess.CompletedProcess(cmd, 1, "", LONG))
+    pilot(p).undraft("T-001", "7")
+    return {"Held": ("Approved, but PR #7 is a draft and gh couldn't tell who made it one", "so it isn't merged.")}
+
+
 def kept_secret(p, patch, s):
     ensure_worktree(p, p.plan_dir, setup=False)
     (p.plan_dir / ".windvane/IDEAS.md").write_text("try " + "ghp_" + "Zq7" * 12 + "\n")
@@ -293,7 +300,7 @@ def not_taken_up(p, patch, s):
 
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
-         held, secret_aside, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full,
+         held, secret_aside, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full,
          not_taken_up]
 
 

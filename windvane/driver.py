@@ -202,6 +202,21 @@ def pr_state(p, pr):
         return {}
 
 
+# A gh error that is GitHub's answer (a 4xx, a GraphQL refusal), not a hiccup worth asking again about.
+DEFINITE = re.compile(r"HTTP 4\d\d|GraphQL:")
+
+
+def gh_answer(cmd, cwd):
+    """`cmd`'s result, or None for a failure GitHub may not repeat (a 5xx, a timeout): `gh_wait` asks again."""
+    res = net.call(cmd, cwd)
+    return None if res.returncode and not DEFINITE.search(res.stderr or "") else res
+
+
+def gh_error(res):
+    """A failed gh's error, in a few words."""
+    return cut(" ".join((res.stderr or res.stdout).split()))
+
+
 def also(tickets, most=NTFY):
     """The digest's line naming the answers past its first eight by ticket, each ticket once, or "". Kept under
     `most` bytes (what the push has left): a backlog too long for that ends with how many more."""
@@ -1113,37 +1128,23 @@ class Pilot(Desk, Periodic):
                 if self.landed(tid, branch, sha):  # the ci worktree is still on the merge
                     return self.merged_ok(tid, branch, sha, renumbered, self.off_touches(tid))
                 return None
-            why = why or cut(' '.join((res.stderr or res.stdout).split()))
+            why = why or gh_error(res)
             self.log(f"{tid}: merge refused ({why}); trying again")
         self.fail(tid, f"the merge was refused three times ({why})")
 
-    def undraft(self, tid, pr):
-        """A PR opened as a draft (`gh pr create --draft`, a project's own rules) is marked ready: the review is the
-        gate, and a draft can't merge on any try. One a person turned into a draft after opening it is their hold:
-        the ticket is set aside, not failed, and the push says how to let it go. False when it is held."""
-        root = self.p.main_root()
-        if net.sh(root, "gh", "pr", "view", pr, "--json", "isDraft", "-q", ".isDraft") != "true":
-            return True
-        events = net.call(["gh", "api", "--paginate", f"repos/{{owner}}/{{repo}}/issues/{pr}/timeline", "--jq",
-                           ".[].event"], root)
-        if events.returncode or "convert_to_draft" in events.stdout.split():  # unread, it may be a hold too
-            held_up = self.put_aside(tid, f"PR #{pr} is a draft on purpose", f"`gh pr ready {pr}`")
-            self.log(f"{tid}: PR #{pr} was made a draft after it was opened; left as it is, set aside{held_up}")
-            push(f"Held: {self.name(tid)}", f"Approved, but PR #{pr} was turned into a draft, so it isn't merged. To "
-                 f"let it go: `gh pr ready {pr}`; the next run takes it up again." + self.held_line(tid), 3, "pause")
-            return False
-        if net.call(["gh", "pr", "ready", pr], root).returncode == 0:
-            self.log(f"{tid}: PR #{pr} was a draft; marked ready")
-        return True  # unreadied, the merge is refused as a draft and says so
-
     def find_pr(self, tid, branch):
         """The branch's open PR, or "" when it has none. A failing gh (an API hiccup, a rate limit) isn't a missing PR:
-        that would spend a bounce and a full review on a ticket whose PR is open. It asks again after 1, 2, 4, then
-        every 5 minutes, as net.wait does for the network; None when a stop or the deadline ends the wait."""
+        that would spend a bounce and a full review on a ticket whose PR is open. None when a stop or the deadline
+        ends the wait."""
+        return self.gh_wait(tid, f"list {branch}'s PRs", lambda: pr_lookup(self.p, branch))
+
+    def gh_wait(self, tid, what, ask):
+        """`ask()` until it answers (None is gh failing), asking again after 1, 2, 4, then every 5 minutes, as net.wait
+        does for the network; None when a stop or the deadline ends the wait."""
         k = waited = 0
-        while (pr := pr_lookup(self.p, branch)) is None:
+        while (got := ask()) is None:
             if not k:  # one line for the whole wait, and one when it ends
-                self.log(f"{tid}: gh couldn't list {branch}'s PRs; asking again after 1, 2, 4, then every 5 min")
+                self.log(f"{tid}: gh couldn't {what}; asking again after 1, 2, 4, then every 5 min")
             wait = min(5, 2 ** k)
             if not self.backoff(wait):
                 self.log(f"{tid}: gh still failing after {waited} min; stopped waiting; the next run resumes the ticket")
@@ -1151,7 +1152,42 @@ class Pilot(Desk, Periodic):
             k, waited = k + 1, waited + wait
         if k:
             self.log(f"{tid}: gh answered again after {waited} min; landing goes on")
-        return pr
+        return got
+
+    def undraft(self, tid, pr):
+        """A PR opened as a draft (`gh pr create --draft`, a project's own rules) is marked ready: the review is the
+        gate, and a draft can't merge on any try. One a person turned into a draft after opening it is their hold:
+        the ticket is set aside, not failed, and the push says how to let it go. A gh hiccup is waited out
+        (`gh_wait`); a timeline GitHub won't show is taken for a hold. False when it isn't merged now."""
+        root = self.p.main_root()
+        if net.sh(root, "gh", "pr", "view", pr, "--json", "isDraft", "-q", ".isDraft") != "true":
+            return True
+        events = self.gh_wait(tid, f"read PR #{pr}'s timeline", lambda: gh_answer(
+            ["gh", "api", "--paginate", f"repos/{{owner}}/{{repo}}/issues/{pr}/timeline", "--jq", ".[].event"], root))
+        if events is None:
+            return False
+        if events.returncode or "convert_to_draft" in events.stdout.split():
+            err = gh_error(events)
+            why = (f"couldn't tell whether PR #{pr} is a draft on purpose ({err})" if events.returncode else
+                   f"PR #{pr} was made a draft after it was opened")
+            held_up = self.put_aside(tid, f"PR #{pr} is a draft, maybe on purpose" if events.returncode else
+                                     f"PR #{pr} is a draft on purpose", f"`gh pr ready {pr}`")
+            self.log(f"{tid}: {why}; left as it is, set aside{held_up}")
+            told = (whole(f"Approved, but PR #{pr} is a draft and gh couldn't tell who made it one (",
+                          " ".join((events.stderr or events.stdout).split()), "), so it isn't merged.", log=self.log)
+                    if events.returncode else f"Approved, but PR #{pr} was turned into a draft by hand, so it isn't "
+                    "merged.")
+            push(f"Held: {self.name(tid)}", f"{told}\nTo let it go: `gh pr ready {pr}`; the next run takes it up "
+                 "again." + self.held_line(tid), 3, "pause")
+            return False
+        res = self.gh_wait(tid, f"mark PR #{pr} ready", lambda: gh_answer(["gh", "pr", "ready", pr], root))
+        if res is None:
+            return False
+        if res.returncode:
+            self.fail(tid, f"PR #{pr} is a draft and GitHub refused to mark it ready ({gh_error(res)})")
+            return False
+        self.log(f"{tid}: PR #{pr} was a draft; marked ready")
+        return True
 
     def secret_bounce(self, tid, sha, found):
         """A branch whose commits add a secret outside `.windvane/` (pushed past the pre-push hook, or from outside

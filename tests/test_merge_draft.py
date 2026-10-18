@@ -18,8 +18,9 @@ from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
 # A fake `gh` over the sandbox's bare remote: every branch on it has PR #7 open. The state dir's files set the PR up:
-# `draft` (removed by `pr ready` unless `stuck`), `timeline` (its events, one a line; `fail` for an unreadable one)
-# and `refuse` (the mergeStateStatus a refused merge reports). `pr merge` merges --match-head-commit into main.
+# `draft` (removed by `pr ready` unless `stuck`), `timeline` (its events, one a line; `fail` for one GitHub won't
+# show), `refuse` (the mergeStateStatus a refused merge reports) and `blip` (`ready` or `api`: that call fails once
+# with a 502). `pr merge` merges --match-head-commit into main.
 GH = """#!{python}
 import json, subprocess, sys
 from pathlib import Path
@@ -29,6 +30,9 @@ with open(st / "log", "a") as f:
 def git(*a):
     return subprocess.run(["git", "--git-dir", "{remote}", *a], capture_output=True, text=True)
 draft, refuse = (st / "draft").exists(), (st / "refuse").exists() and (st / "refuse").read_text()
+if (st / "blip").exists() and (st / "blip").read_text() == args[1 - (args[0] == "api")]:
+    (st / "blip").unlink()
+    sys.exit("HTTP 502: Bad Gateway")
 if args[:2] == ["pr", "list"]:
     head = args[args.index("--head") + 1]
     there = git("rev-parse", "--verify", "-q", "refs/heads/" + head).returncode == 0
@@ -40,12 +44,12 @@ elif args[:2] == ["pr", "view"]:
                       "isDraft": draft}}))
 elif args[:2] == ["pr", "ready"]:
     if (st / "stuck").exists():
-        sys.exit("HTTP 403")
+        sys.exit("GraphQL: Resource not accessible by integration (markPullRequestReadyForReview)")
     (st / "draft").unlink()
 elif args[0] == "api" and "timeline" in args[2]:
     events = (st / "timeline").read_text() if (st / "timeline").exists() else "committed\\nreviewed\\n"
     if events == "fail":
-        sys.exit("HTTP 502: Bad Gateway")
+        sys.exit("gh: Not Found (HTTP 404)")
     print(events)
 elif args[:2] == ["pr", "merge"]:
     if draft:
@@ -128,11 +132,24 @@ class MergeDraft(unittest.TestCase):
         self.assertIn("`gh pr ready 7`; the next run takes it up again", msg)
         self.assertIn("T-001: PR #7 was made a draft after it was opened; left as it is, set aside", self.log())
 
-    def test_an_unreadable_timeline_is_taken_for_a_hold(self):
+    def test_a_timeline_github_wont_show_is_taken_for_a_hold_saying_so(self):
         pilot = self.run_pilot(draft="", timeline="fail")
         self.assertEqual((pilot.merged, pilot.failed), ([], []))
         self.assertNotIn("pr ready 7", self.gh())
-        self.assertTrue(any(t.startswith("Held") for t, _ in self.pushes))
+        self.assertIn("T-001: couldn't tell whether PR #7 is a draft on purpose (gh: Not Found (HTTP 404)); left "
+                      "as it is, set aside", self.log())
+        [msg] = [m for t, m in self.pushes if t.startswith("Held")]
+        self.assertIn("is a draft and gh couldn't tell who made it one (gh: Not Found (HTTP 404))", msg)
+        self.assertNotIn("by hand", msg)
+
+    def test_a_gh_hiccup_while_undrafting_is_waited_out_and_the_ticket_merges(self):
+        for call in ("api", "ready"):
+            with self.subTest(call):
+                self.setUp()
+                pilot = self.run_pilot(draft="", blip=call)
+                self.assertEqual((pilot.merged, pilot.failed), (["T-001"], []))
+                self.assertIn("T-001: gh answered again after 1 min; landing goes on", self.log())
+                self.assertIn("T-001: PR #7 was a draft; marked ready", self.log())
 
     def test_a_merge_blocked_by_a_required_review_fails_after_one_try_saying_so(self):
         pilot = self.run_pilot(refuse="BLOCKED")
@@ -141,10 +158,17 @@ class MergeDraft(unittest.TestCase):
         self.assertIn("T-001: merge refused (a required check or review blocks it)\n"
                       "T-001: FAILED: the merge was refused: a required check or review blocks it", self.log())
 
-    def test_a_draft_that_cant_be_readied_fails_at_once_as_a_draft(self):
+    def test_a_draft_github_refuses_to_ready_fails_at_once_saying_so(self):
         pilot = self.run_pilot(draft="", stuck="")
         self.assertEqual(pilot.failed, ["T-001"])
-        self.assertEqual(self.merges(), 1)
+        self.assertEqual(self.merges(), 0)
+        self.assertEqual(sum(c == "pr ready 7" for c in self.gh()), 1)
+        self.assertIn("T-001: FAILED: PR #7 is a draft and GitHub refused to mark it ready (GraphQL: Resource not "
+                      "accessible by integration", self.log())
+
+    def test_a_draft_refused_at_merge_fails_after_one_try_as_a_draft(self):
+        pilot = self.run_pilot(refuse="DRAFT")
+        self.assertEqual((pilot.failed, self.merges()), (["T-001"], 1))
         self.assertIn("T-001: FAILED: the merge was refused: it is a draft", self.log())
 
     def test_a_refusal_github_sees_nothing_behind_is_tried_three_times_with_its_error(self):
