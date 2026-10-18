@@ -1,6 +1,7 @@
 """A check run inside a sandbox records its pass: the sandbox's placeholders (character devices bound over paths it
 guards, never tracked by git) don't count as changes, while any real untracked file or change to a tracked one
 still keeps the pass unrecorded, and the summary names it."""
+import os
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,8 @@ class Base(unittest.TestCase):
         self.s = Sandbox()
         self.addCleanup(self.s.close)
         self.p = Project(self.s.root)
-        stub = mock.patch.object(jobs, "placeholder", lambda path: Path(path).name in STUBS)
+        # by name, made as files, but only where the path really is: a lookup in the wrong dir finds nothing
+        stub = mock.patch.object(jobs, "placeholder", lambda path: Path(path).name in STUBS and Path(path).exists())
         stub.start()
         self.addCleanup(stub.stop)
 
@@ -89,6 +91,43 @@ class Real(unittest.TestCase):
             link.symlink_to("/dev/null")
             self.assertFalse(jobs.placeholder(link))
 
+
+
+class FromASubdir(Base):
+    """A worker's shell keeps its cwd between calls: a check from a subdirectory is the gate's check all the same."""
+    def setUp(self):
+        super().setUp()
+        self.s.write("src/x.py", "")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-qm", "src")
+
+    def test_a_check_from_a_subdir_records_its_pass_past_the_placeholders(self):
+        self.placeholders()
+        ok, summary, _ = jobs.check(self.p, Path(self.s.root) / "src")  # its check, `test -f README`, needs the root
+        self.assertTrue(ok, summary)
+        self.assertNotIn("not recorded", summary)
+        self.assertIn("reused the pass", self.check())
+
+    def test_the_key_from_a_subdir_is_the_roots(self):
+        """git status's paths are the top level's, whatever the cwd: the stub must look where the path really is."""
+        self.placeholders()
+        root = jobs.tree_key(self.p, self.s.root)
+        self.assertIsNotNone(root)
+        self.assertEqual(jobs.tree_key(self.p, Path(self.s.root) / "src"), root)
+
+    def test_a_real_change_still_blocks_from_a_subdir_and_is_named_from_the_root(self):
+        self.s.write("src/x.py", "changed")
+        ok, summary, _ = jobs.check(self.p, Path(self.s.root) / "src")
+        self.assertIn("not recorded: src/x.py)", summary)
+
+    def test_outside_a_checkout_the_check_runs_in_the_cwd(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": d}):  # git looks no further up
+            (Path(d) / "here").mkdir()
+            (Path(d) / "here" / "marker").write_text("")
+            self.p.cfg["check"] = "test -f marker"
+            ok, summary, _ = jobs.check(self.p, Path(d) / "here")
+            self.assertTrue(ok, summary)
 
 if __name__ == "__main__":
     unittest.main()

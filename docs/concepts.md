@@ -82,7 +82,8 @@ the order), and **open** otherwise. `windvane queue` shows all three.
 3. **Check.** The driver runs the project's `check` on the exact pushed head. A passing result is recorded per git
    tree, so the worker's own passing check is reused rather than run twice.
    The placeholders Claude Code's Bash sandbox binds over paths it guards (character devices git can't track) don't
-   count as changes, so a pass recorded inside the sandbox is reused outside it.
+   count as changes, so a pass recorded inside the sandbox is reused outside it. `windvane check` runs at the
+   worktree's top level, as the driver's gate does, from whatever directory it's called in.
    The check is the gate, on your machine, so hosted CI isn't needed: a workflow on `push` or `pull_request` runs
    twice per ticket (its PR, its merge) and can use up a month's Actions minutes in days. Test other versions in the
    check (windvane's own runs every Python 3.11 to 3.14 installed, `tools/check_pythons.sh`), keep workflows

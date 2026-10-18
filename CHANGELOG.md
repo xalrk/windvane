@@ -58,6 +58,9 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- `windvane check` called from a subdirectory runs at the worktree's top level, like the driver's gate, and inside
+  Claude Code's Bash sandbox still records its pass instead of counting the sandbox's placeholders as uncommitted
+  changes, so the driver no longer runs the same check again.
 - An approved ticket whose PR was opened as a draft is marked ready and merged instead of failing after three
   refused tries; one a person turned into a draft is set aside with a push saying `gh pr ready <n>` lets it go, and
   a refused merge now says why (a draft, a required check or review), failing at once when no retry can clear it.
