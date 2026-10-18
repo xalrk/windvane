@@ -84,9 +84,9 @@ release on the same day adds a number (`2026.10.9.1`).
   the reinstall step; it doesn't crash. `windvane doctor` names a running driver's interpreter or install that has
   gone.
 - New windvane code that the run can't take up now sends one push a run, naming the file and the reinstall
-  command. A restart whose exec fails (a noexec mount, a bad `#!` line, the install removed at that moment) is no
-  longer a crash: the run goes on on its old code and tries again after a reinstall or
-  windvane's next update.
+  command. A restart whose exec fails is no longer a crash. That can happen on a noexec mount, with a bad `#!` line,
+  or when the install is removed at that moment. The run goes on on its old code. It tries again after a reinstall
+  or at windvane's next update.
 - A Ctrl-C while a run winds down no longer skips its save, teardown and unlock: it kills the sessions still running
   and the wind-down finishes (a third Ctrl-C quits at once). A failed teardown stays in the next "started" push until
   that push really goes out. Git steps the driver guards from Ctrl-C fail at once on a password or passphrase prompt
