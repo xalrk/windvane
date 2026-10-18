@@ -56,14 +56,18 @@ def waited(summary):
     return f"not run, {summary.removeprefix(NOT_RUN).removesuffix(AGAIN).removesuffix(STOPPING)}"
 
 
-def placeholder(path):
+def placeholder(path, rel=""):
     """Whether an untracked path is a sandbox's placeholder: a character device (/dev/null bound over a path the
     sandbox guards). Git can't track one, so it was never part of the tree; the sandbox picks the paths, so they're
-    told apart by what they are, not by name."""
+    told apart by what they are, not by name. Outside the sandbox (a check run while a sandboxed command lives) the
+    bind is in another namespace and the host sees only the mount point made for it: an empty regular file. All the
+    guarded paths are dotfiles at the top or under a dot dir, so an empty file whose first component `rel` (relative
+    to the top level) starts with "." counts too; an empty `src/x.py` or a dotfile with content still doesn't."""
     try:
-        return stat.S_ISCHR(os.lstat(path).st_mode)
+        st = os.lstat(path)
     except OSError:
         return False
+    return stat.S_ISCHR(st.st_mode) or (stat.S_ISREG(st.st_mode) and not st.st_size and rel.startswith("."))
 
 
 def top(cwd):
@@ -75,8 +79,8 @@ def top(cwd):
 
 def blockers(cwd):
     """The paths that keep a checkout's tree from being clean: every change to a tracked file, every untracked file
-    but placeholders. Untracked dirs are listed file by file (`all`), so a dir holding only placeholders is clean;
-    -z: no quoting. None when git fails."""
+    but placeholders, seen from inside a sandbox or out. Untracked dirs are listed file by file (`all`), so a dir
+    holding only placeholders is clean; -z: no quoting. None when git fails."""
     cwd = top(cwd)
     r = util.git(cwd, "status", "--porcelain", "-z", "--untracked-files=all")
     if r.returncode:
@@ -84,7 +88,7 @@ def blockers(cwd):
     out, paths, i = r.stdout.split("\0"), [], 0
     while i < len(out):
         entry = out[i]
-        if len(entry) > 3 and not (entry[:2] == "??" and placeholder(Path(cwd) / entry[3:])):
+        if len(entry) > 3 and not (entry[:2] == "??" and placeholder(Path(cwd) / entry[3:], entry[3:])):
             paths.append(entry[3:])
         i += 1 + (entry[:1] in ("R", "C"))  # a rename's source follows as its own field
     return paths
