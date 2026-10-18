@@ -100,13 +100,14 @@ class MergeBlocked(unittest.TestCase):
         self.pushes = []
         orig, driver.push = driver.push, lambda title, msg, *a, **k: self.pushes.append((title, msg))
         self.addCleanup(setattr, driver, "push", orig)
-        self.addCleanup(setattr, driver, "CHECKS_EVERY", driver.CHECKS_EVERY)
+        for name in ("CHECKS_EVERY", "CHECKS_MOST"):
+            self.addCleanup(setattr, driver, name, getattr(driver, name))
         driver.CHECKS_EVERY = 0  # a test can't wait minutes between tries
 
-    def run_pilot(self, **files):
+    def run_pilot(self, replan=0, goal="", **files):
         for name, text in files.items():
             (self.state / name).write_text(text)
-        pilot = driver.Pilot(self.p, args())
+        pilot = driver.Pilot(self.p, args(replan=replan, goal=goal))
         pilot.sleep = lambda s: None
         pilot.pause = lambda seconds=30: time.sleep(0.05)
         pilot.run(now() + timedelta(hours=1))
@@ -123,6 +124,10 @@ class MergeBlocked(unittest.TestCase):
         calls = [json.loads(line) for line in (self.s.tmp / "calls.jsonl").read_text().splitlines()]
         return tuple(sum(c["system"].startswith(f"# windvane {role}") for c in calls)
                      for role in ("worker", "critic", "review"))
+
+    def planners(self):
+        calls = [json.loads(line) for line in (self.s.tmp / "calls.jsonl").read_text().splitlines()]
+        return sum(c["system"].startswith("# windvane planner") for c in calls)
 
     def landing(self):
         return json.loads((self.p.state / "state.json").read_text())["landing"]
@@ -153,6 +158,21 @@ class MergeBlocked(unittest.TestCase):
         self.assertEqual(pilot.merged, ["T-001"])
         self.assertEqual(self.sessions(), (1, 0, 1))
         self.assertIn("straight to the merge", self.log())
+
+    def test_a_check_that_never_ends_fails_it_after_the_most_wait_while_the_run_goes_on_planning(self):
+        driver.CHECKS_EVERY, driver.CHECKS_MOST = 0.002, 0.005  # tries 0.12 s apart for 0.3 s: a plan between them
+        started = time.monotonic()
+        pilot = self.run_pilot(replan=1, goal="more", checks=json.dumps([{"__typename": "StatusContext", "context": "ci/build",
+                                                             "state": "EXPECTED"}]))
+        self.assertLess(time.monotonic() - started, 60)  # not the hour to its deadline
+        self.assertEqual((pilot.merged, pilot.failed), ([], ["T-001"]))
+        self.assertGreaterEqual(self.merges(), 2)
+        self.assertEqual(self.sessions(), (1, 0, 1))
+        self.assertEqual(self.planners(), 1)  # the replan ran while the merge waited
+        self.assertIn("T-001: merge waits: PR #7's required checks are still running (ci/build)", self.log())
+        self.assertIn("T-001: FAILED: the merge was refused: required checks are still running after 0.005 min; see "
+                      "`gh pr checks 7`; once they pass, `windvane retry T-001` merges the kept approval", self.log())
+        self.assertIn("T-001", self.landing())
 
     def test_a_failed_check_fails_it_at_once_naming_gh_pr_checks(self):
         pilot = self.run_pilot(checks=FAILED)

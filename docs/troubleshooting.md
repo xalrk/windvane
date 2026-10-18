@@ -53,13 +53,15 @@ that failed at the merge after its review approved is merged without a worker or
 that head. With no run going, the next `windvane run` takes it up anyway.
 
 **"the merge was refused: ..." after the review approved.**
-The approval is kept either way, so the merge needs no new worker or review. "Required checks are still running":
-windvane waited, trying the merge every 2 minutes, and the run ended first; `windvane retry T-007` or the next run
-merges it. "A check failed; see `gh pr checks 7`": look there, fix it on the branch (the worker takes a new head up
-again) or re-run the check yourself, then retry. "A required review hasn't approved it": once the review is given,
-`windvane retry T-007` merges the kept approval. "It is a draft": `gh pr ready 7`. "GitHub refused to mark it ready:
-the gh login lacks write access to pull requests": give the account `gh` is logged in with write access to the
-repository (`gh auth status` shows which), then retry.
+The approval is kept: while the branch still has the approved head, `windvane retry T-007` (or the next run) merges
+it with no new worker or review. "Required checks are still running": windvane tried the merge every 2 minutes, for
+up to an hour, and the run ended or the hour ran out first; a required check that never starts (its workflow didn't
+trigger) looks like this too, so look at `gh pr checks 7`. "A check failed; see `gh pr checks 7`": re-run a flaky
+check yourself and retry once it passes; if the code is at fault, push a fix to the branch, and the new head goes
+through the worker and review again. "A required review hasn't approved it": once the review is given, `windvane
+retry T-007` merges the kept approval. "It is a draft": `gh pr ready 7`, then retry. "GitHub refused to mark it ready:
+the gh login lacks write access to pull requests": give the account `gh` is logged in with (`gh auth status`) write
+access to the repository, then retry.
 
 **The run paused (`paused ... Resuming at 14:00`).**
 Claude's 5-hour usage reached `cap`. It resumes by itself when the window resets. Raise `cap` (or `run --cap`) to

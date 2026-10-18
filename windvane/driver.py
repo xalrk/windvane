@@ -193,6 +193,7 @@ def pr_lookup(p, branch):
 # A refused merge's states no retry clears: the third try would be refused as the first was.
 STUCK = (MERGE_STATES["DRAFT"], MERGE_STATES["BLOCKED"])
 CHECKS_EVERY = 2  # minutes between merge tries on a PR whose required checks are still running
+CHECKS_MOST = 60  # minutes a run waits for them: a required check whose workflow never started stays pending
 
 
 def pr_state(p, pr):
@@ -254,7 +255,7 @@ class Pilot(Desk, Periodic):
         self.secrets = s.get("secrets", {})  # ticket -> {"branch", "sha"}: a head set aside for a secret (secret_aside)
         self.landing = s.get("landing", {})  # ticket -> {"branch", "sha"}: an approved head whose merge failed
         # ticket -> when to try its merge again: kept in `landing` while its PR's required checks still run
-        self.checking, self.check_said = {}, set()
+        self.checking, self.check_since = {}, {}  # and ticket -> when this run's wait for them began
         self.skip, self.merged, self.failed = set(), [], []
         self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
         self.fixes = {}  # ticket set aside -> what keeps it from being set aside again, for `windvane queue`'s hint
@@ -1170,13 +1171,19 @@ class Pilot(Desk, Periodic):
     def wait_checks(self, tid, pr, head, state):
         """A merge held only by required checks still running: the approved head is kept (`landing`) and the loop
         merges it again every CHECKS_EVERY minutes, with no worker, critic or review, until the checks end. Logged
-        once; the run's end fails it (`checks_unfinished`), the one push."""
+        once; CHECKS_MOST minutes on, or at the run's end (`checks_unfinished`), it fails: the one push."""
+        first = tid not in self.check_since
+        since = self.check_since.setdefault(tid, time.time())
+        if time.time() - since >= CHECKS_MOST * 60:
+            self.log(f"{tid}: merge refused ({MERGE_STATES['PENDING']} after {CHECKS_MOST:g} min)")
+            return self.fail(tid, f"the merge was refused: {MERGE_STATES['PENDING']} after {CHECKS_MOST:g} min; see "
+                             f"`gh pr checks {pr}`; once they pass, `windvane retry {tid}` merges the kept approval",
+                             head)
         with self.lock:
             self.landing[tid] = dict(zip(("branch", "sha"), head))
             self.checking[tid] = time.time() + CHECKS_EVERY * 60
         self.save()
-        if tid not in self.check_said:
-            self.check_said.add(tid)
+        if first:
             names = [c.get("name") or c.get("context") or "?" for c in state.get("statusCheckRollup") or []
                      if c.get("status", "COMPLETED") != "COMPLETED" or c.get("state") in ("PENDING", "EXPECTED")]
             self.log(f"{tid}: merge waits: PR #{pr}'s required checks are still running ({', '.join(names)}); "
@@ -2054,8 +2061,7 @@ class Pilot(Desk, Periodic):
                 self.pause()
                 continue
             if tid is None:
-                # a kept job's ticket resumes when it ends, a merge held by its checks at its next try
-                if busy or self.running or jobs.running_kept(p) or self.checking:
+                if busy or self.running or jobs.running_kept(p):  # a kept job's ticket resumes when it ends
                     self.idle_note(self.waits)
                     self.pause()
                     continue
@@ -2072,6 +2078,10 @@ class Pilot(Desk, Periodic):
                                  self.stopper(now() + timedelta(minutes=40)), merge=True)
                     if n:
                         continue
+                if self.checking:  # a merge held by its checks: tried again when its wait is up
+                    self.idle_note(self.waits)
+                    self.pause()
+                    continue
                 self.stop_reason = kind
                 return
             self.idle, self.said = False, set()

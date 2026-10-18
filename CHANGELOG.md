@@ -46,8 +46,9 @@ release on the same day adds a number (`2026.10.9.1`).
   main class, `GradleDaemon`, not `java`).
 
 ### Changed
-- A merge GitHub holds only for required checks still running is tried again every 2 minutes, with no new worker or
-  review, instead of failing the ticket; if the run ends first, it fails saying so, its approval kept. A failed check
+- A merge GitHub holds only for required checks still running is tried again every 2 minutes for up to an hour, with
+  no new worker or review, instead of failing the ticket; if they're still running then, or the run ends first, it
+  fails saying so, its approval kept. A failed check
   names `gh pr checks <n>`, a required review says `windvane retry <ID>` merges the kept approval once it's given,
   and a `gh pr ready` refused with HTTP 403 says the gh login lacks write access to pull requests. A draft hold you
   let go with `gh pr ready <n>` merges at the next run without a new worker.
