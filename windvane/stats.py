@@ -28,6 +28,12 @@ def weighted(r):
 LOST_KILLS = ("time",)
 
 
+# A worker launch that ended PARTIAL or BLOCKED within this many turns did nothing: a start-up check that stops it
+# (past its wrap-up, a ticket that waits) takes 3 to 5, while the shortest worker runs on record, reruns with little
+# left to do, take 8.
+IDLE_TURNS = 6
+
+
 def plural(n, word):
     return f"{n} {word}{'s' * (n != 1)}"
 
@@ -198,6 +204,7 @@ def session_stats(a, p, rows, swept=0, checks=(), refusals=(), awaits=()):
         lost, total = sum(g["lost_w"] for g in agg.values()), sum(g["w"] for g in agg.values())
         print(f"died or killed: {plural(died + killed, 'run')} ({lost_parts(died, killed)}), "
               f"{k(lost)} weighted tokens, {100 * lost / max(1, total):.0f}% of all")
+    idle_stats(rows)
     orphans(swept)
     guard_stats(refusals, a.by)
     est = sum(g["no_usd"] for g in agg.values())
@@ -212,6 +219,19 @@ def session_stats(a, p, rows, swept=0, checks=(), refusals=(), awaits=()):
     else:
         note(f"(--wide, {len(stats_header(a.by, outcome, True, name_width(a.by, agg, outcome)))} columns, adds base and cached/turn: what a run "
              "starts with and each turn re-reads.)")
+
+
+def idle_stats(rows):
+    """Worker launches that ended at once, PARTIAL or BLOCKED within IDLE_TURNS: each paid a worker's start-up
+    tokens for no work. Rows from before the ledger kept `result` don't count. No line when there were none."""
+    workers = [r for r in rows if r.get("role") == "worker"]
+    idle = [r for r in workers if r.get("result") in ("PARTIAL", "BLOCKED") and (r.get("turns") or 0) <= IDLE_TURNS]
+    if not idle:
+        return
+    fresh = sum((r.get("input") or 0) + (r.get("cache_write") or 0) for r in idle)
+    share = 100 * sum(map(weighted, idle)) / max(1, sum(map(weighted, workers)))
+    print(f"idle worker launches: {len(idle)} (PARTIAL or BLOCKED within {IDLE_TURNS} turns), {k(fresh)} fresh in, "
+          f"{k(sum(r.get('output') or 0 for r in idle))} out, {share:.0f}% of worker weighted tokens")
 
 
 def lost_parts(died, killed):
