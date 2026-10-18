@@ -28,10 +28,9 @@ def weighted(r):
 LOST_KILLS = ("time",)
 
 
-# A worker launch that ended PARTIAL or BLOCKED within this many turns did nothing: a start-up check that stops it
-# (past its wrap-up, a ticket that waits) takes 3 to 5, while the shortest worker runs on record, reruns with little
-# left to do, take 8.
-IDLE_TURNS = 6
+# A worker launch that ended PARTIAL or BLOCKED within this many turns did nothing: launches that found themselves
+# past their wrap-up and stopped took 3 to 8 turns, while PARTIAL runs that built something took 10 or more.
+IDLE_TURNS = 8
 
 
 def plural(n, word):
