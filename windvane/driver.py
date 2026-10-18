@@ -227,6 +227,7 @@ class Pilot(Desk, Periodic):
         self.sleep = time.sleep  # the retry backoff's; tests make it instant
         self.stop_reason = "unknown"
         self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
+        self.kept_given = 0  # the latest stop this run has given its kept jobs (`keep_until`), a Unix time
         self.signalled, self.ending = None, False  # the SIGTERM or SIGHUP that ended the run; past its `finally`
         self.presses = 0  # the run's Ctrl-Cs from the one that ended it: the third ends its wind-down at once
         self.guarded = 0  # how deep the main thread is in `critical` steps: a signal waits for them to end
@@ -311,6 +312,22 @@ class Pilot(Desk, Periodic):
                 self.deadline = t
                 self.log(f"deadline moved to {hhmm(t)}")
         return t
+
+    def keep_until(self, given=False):
+        """When a kept job (`bg --keep`) is told to stop: the deadline as it now is plus `heavy_keep_hours`, from the
+        start, since its watch would kill it while the run winds down, before `kept_at_end` could move it on. A stop
+        the user asks for still kills it at once (`kept_at_end`). A Unix time with `given`, remembered for
+        `follow_kept`."""
+        t = self.end() + timedelta(hours=self.p.cfg["heavy_keep_hours"])
+        if not given:
+            return t
+        self.kept_given = max(self.kept_given, t.timestamp())
+        return t.timestamp()
+
+    def follow_kept(self):
+        """Keep the kept jobs' stop on `keep_until` as the deadline moves: later, every job's; earlier, those this run
+        told a later one (not a desk job's, nor one an earlier run let go on longer)."""
+        jobs.follow(self.p, self.keep_until(True), self.kept_given)
 
     def stopping_now(self):
         """`windvane stop --now`: every session of the run is killed at its next poll."""
@@ -554,7 +571,7 @@ class Pilot(Desk, Periodic):
         known = self.answered(tid, ref)
         push_env = guard_pushes(p, wd)  # first: worker_git's hooks, when it sets any, link from its folder
         git_env, skip_line = actions.worker_git(p, wd)
-        session_env = {**push_env, **git_env, **actions.gh_guard(p, wd), jobs.RUN_STOP: str(self.end().timestamp())}
+        session_env = {**push_env, **git_env, **actions.gh_guard(p, wd), jobs.RUN_STOP: str(self.keep_until(True))}
         kept = jobs.ended_kept(p, tid)
         prompt = "\n\n".join(filter(None, [
             f"Ticket {tid}. Follow the worker rules in your system prompt and end with the RESULT line.",
@@ -1784,7 +1801,7 @@ class Pilot(Desk, Periodic):
         while True:
             self.quiet_check()
             self.poll_questions()  # every pass, busy slots or not: a question's wait runs out on time
-            jobs.follow(p, self.end())  # a deadline moved later keeps the kept jobs going as long
+            self.follow_kept()
             if login.waiting():  # its wait ends on a stop or the deadline too; then the checks below say why
                 self.pause()
                 continue
