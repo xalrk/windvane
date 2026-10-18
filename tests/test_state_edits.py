@@ -41,7 +41,7 @@ while not go.exists():
     time.sleep(0.001)
 for i in range(1, %d + 1):
     if who == "settle":
-        questions.drop_answers(p, ["T-999"])
+        questions.drop_answers(p, {"T-999": {"option": "A"}})
     elif who == "note":
         questions.note(p, lambda s: s["ids"].update({f"{arg[0]}-{i}": i}))
     elif who == "cli":
@@ -92,7 +92,7 @@ class Writers(unittest.TestCase):
     def test_settling_drops_only_the_settled(self):
         for t in ("T-001", "T-002"):
             questions.give_answer(self.p, t, "B")
-        questions.drop_answers(self.p, ["T-001", "T-003"])
+        questions.drop_answers(self.p, {"T-001": questions.desk_answers(self.p)["T-001"], "T-003": None})
         self.assertEqual(list(questions.desk_answers(self.p)), ["T-002"])
 
     def test_two_shown_writers_keep_every_id(self):

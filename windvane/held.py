@@ -9,7 +9,7 @@ import time
 from . import actions, net, privacy
 from .config import DIR, author
 from .phone import cut, whole
-from .util import git, gout, load_json, log, push, save_json
+from .util import git, gout, load_json, locked, log, push, save_json
 from .worktree import clean_detach, ensure_worktree
 
 
@@ -39,11 +39,12 @@ def hold(p, branch, how, why=""):
     Only branches noted here are ever pushed again, so a user's own copy of a closed plan never comes back. The
     refusal's reason goes beside it (held_why.json, the newest wins) with when it was first held, for `status` to show
     while it waits."""
-    held = load_json(p.state / "held.json", {})
-    if held.get(branch) != "land":
-        held = {**held, branch: how}
-    old = held_note(load_json(p.state / "held_why.json", {}).get(branch))
-    save_held(p, held, {branch: {"why": why or old.get("why", ""), "at": old.get("at") or int(time.time())}})
+    def edit(held, reasons):
+        if held.get(branch) != "land":
+            held[branch] = how
+        old = held_note(reasons.get(branch))
+        reasons[branch] = {"why": why or old.get("why", ""), "at": old.get("at") or int(time.time())}
+    edit_held(p, edit)
 
 
 def held_note(note):
@@ -51,12 +52,21 @@ def held_note(note):
     return note if isinstance(note, dict) else {"why": note or ""}
 
 
-def save_held(p, held, notes=None):
-    """Write held.json and, in the same step, drop the reasons of branches no longer in it (adding `notes`), so no
-    stale reason outlives its branch."""
-    save_json(p.state / "held.json", held)
-    reasons = {**load_json(p.state / "held_why.json", {}), **(notes or {})}
-    save_json(p.state / "held_why.json", {b: w for b, w in reasons.items() if b in held})
+def unhold(p, branches):
+    """Forget `branches` (pushed, landed, or no longer waiting) and their reasons, keeping any held meanwhile."""
+    edit_held(p, lambda held, _: [held.pop(b, None) for b in branches])
+
+
+def edit_held(p, change):
+    """Let `change(held, reasons)` edit held.json and held_why.json as they are now, under one lock for the pair: the
+    driver, `windvane plan` and `windvane held` all write them, and saving a copy loaded earlier would save over
+    another's hold (that branch never pushed again, nor listed by `status`). In the same step the reasons of branches
+    no longer held go, so none outlives its branch."""
+    with locked(p.state / "held.json"):
+        held, reasons = load_json(p.state / "held.json", {}), load_json(p.state / "held_why.json", {})
+        change(held, reasons)
+        save_json(p.state / "held.json", held)
+        save_json(p.state / "held_why.json", {b: w for b, w in reasons.items() if b in held})
 
 
 # What a refused push's stderr says, first match wins, with its next step: a secret by taking it out of the commit
@@ -266,8 +276,8 @@ def held_branches(p):
             p, "--head", on.removeprefix(f"{p.remote}/") if on else b, "--state", "all") or []}
         if not states or (on and "OPEN" in states):
             tracked[b] = how
-    if tracked != held or set(load_json(p.state / "held_why.json", {})) - set(tracked):
-        save_held(p, tracked)
+    if tracked != held or set(load_json(p.state / "held_why.json", {})) - set(held):
+        unhold(p, set(held) - set(tracked))  # what `gh` was asked about: one held meanwhile stays
     return {b: how for b, how in tracked.items() if not here[b][1]}
 
 
@@ -443,7 +453,7 @@ def push_one_held(p, cd, branch, how):
         return ""
     if not to_land or landed:  # one whose PR can't merge stays held (`land` noted it), for `status` to list
         git(p.main_root(), "branch", "-D", branch)
-        save_held(p, {b: h for b, h in load_json(p.state / "held.json", {}).items() if b != branch})
+        unhold(p, [branch])
     no_pr = not to_land and p.cfg["forge"] == "github" and where == branch
     how = (("merged" if landed else "not merged; merge it by hand") if to_land
            else "pushed; no PR opened, open one by hand" if no_pr else "pushed")

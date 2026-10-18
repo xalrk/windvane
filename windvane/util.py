@@ -1,5 +1,6 @@
 """Small shared helpers: git, the log, phone pushes, JSON state files."""
 import calendar
+import contextlib
 import fcntl
 import json
 import os
@@ -157,14 +158,22 @@ def edit_json(path, change, default):
     writers (the driver and `windvane answer`, two `windvane answer`s) can't each save over the other's edit: save_json
     alone is atomic but last-writer-wins. The lock goes with its process, so a crash leaves none behind. A reader that
     only reads needs no lock. Returns what `change` returned."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path.with_name(f"{path.name}.lock"), "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with locked(path):
         data = load_json(path, default)
         out = change(data)
         save_json(path, data)
     return out
+
+
+@contextlib.contextmanager
+def locked(path):
+    """`edit_json`'s lock on `path` alone, for an edit of more than one file under one lock (held.json and its
+    reasons)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(f"{path.name}.lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 def append_jsonl(path, entry):
