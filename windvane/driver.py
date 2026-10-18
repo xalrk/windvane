@@ -547,6 +547,8 @@ class Pilot(Desk, Periodic):
         here = gout(wd, "rev-parse", "--abbrev-ref", "HEAD")
         fb = self.feedback.get(tid)
         pr = pr_for(p, branches[0]) if branches else ""
+        root = p.main_root().resolve()
+        theirs = [b for b in branches if wd.resolve() != root and root in self.trees_on(b)]
         if pr and fb and fb.startswith(NO_PR):  # stale: the PR is open now
             fb = None
         known = self.answered(tid, ref)
@@ -563,6 +565,8 @@ class Pilot(Desk, Periodic):
             + "\n\n".join(known) if known else "",
             (f"In progress on branch(es) {', '.join(branches)}" + (f", PR #{pr}" if pr else "") + ". Resume it.")
             if branches else "A new ticket: branch it off " + p.upstream + ".",
+            "".join(f"`{b}` is checked out in the user's checkout, so you can't switch to it here: work detached from "
+                    f"`{p.remote}/{b}` and push with `git push {p.remote} HEAD:{b}`. " for b in theirs).strip(),
             f"The worktree is on `{here}` with uncommitted changes from an earlier run:\n{dirty[:1500]}" if dirty else
             f"The worktree is on `{here}`, left by an earlier run." if here not in ("HEAD", *branches) else "",
             (f"The critic is on: your evidence pack goes in {critic.pack_dir(p, tid)}/ (pass mark "
@@ -676,8 +680,10 @@ class Pilot(Desk, Periodic):
         branch", its READY would bounce for a missing PR. "" when HEAD is on none of them."""
         self.fetch()
         head = gout(self.wd, "rev-parse", "HEAD")
+        if not head or git(self.wd, "merge-base", "--is-ancestor", head, self.p.upstream).returncode == 0:
+            return ""  # on main, or behind it: every branch reaches that, so it says nothing of which it is on
         for b in branches:
-            if head and git(self.wd, "merge-base", "--is-ancestor", head, f"{self.p.remote}/{b}").returncode == 0:
+            if git(self.wd, "merge-base", "--is-ancestor", head, f"{self.p.remote}/{b}").returncode == 0:
                 self.log(f"{tid}: the tree was detached at {head[:7]}, on {b}'s pushed head: landing it as {b}")
                 return b
         return ""
@@ -1053,13 +1059,17 @@ class Pilot(Desk, Periodic):
         """The branch's open PR, or "" when it has none. A failing gh (an API hiccup, a rate limit) isn't a missing PR:
         that would spend a bounce and a full review on a ticket whose PR is open. It asks again after 1, 2, 4, then
         every 5 minutes, as net.wait does for the network; None when a stop or the deadline ends the wait."""
-        k = 0
+        k = waited = 0
         while (pr := pr_lookup(self.p, branch)) is None:
+            if not k:  # one line for the whole wait, and one when it ends
+                self.log(f"{tid}: gh couldn't list {branch}'s PRs; asking again after 1, 2, 4, then every 5 min")
             wait = min(5, 2 ** k)
-            self.log(f"{tid}: gh couldn't list {branch}'s PRs; asking again in {wait} min")
             if not self.backoff(wait):
+                self.log(f"{tid}: gh still failing after {waited} min; stopped waiting; the next run resumes the ticket")
                 return None
-            k += 1
+            k, waited = k + 1, waited + wait
+        if k:
+            self.log(f"{tid}: gh answered again after {waited} min; landing goes on")
         return pr
 
     def secret_bounce(self, tid, sha, found):
@@ -1123,7 +1133,10 @@ class Pilot(Desk, Periodic):
         state, mine = self.p.state.resolve(), self.slot_dirs(slot)[0].resolve()
         for b in branches:
             for path in self.trees_on(b):
-                if path == mine or path == self.p.main_root().resolve() or not path.is_relative_to(state):
+                if path == self.p.main_root().resolve() and path != mine:
+                    self.log(f"{tid}: {b} is checked out in your checkout: left there; its worker pushes to it detached")
+                    continue
+                if path == mine or not path.is_relative_to(state):
                     continue
                 clear_scrub_stubs(self.p, path)  # stubs alone aren't leftovers, as at a slot's end
                 if not gout(path, "status", "--porcelain"):

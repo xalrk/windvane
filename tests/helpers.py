@@ -124,7 +124,10 @@ if system.startswith("# windvane worker run"):
                        capture_output=True)
         subprocess.run(["windvane", "await", "job"], capture_output=True)
     branch = tid.lower() + "-work"
-    if "In progress on branch" in prompt:
+    theirs = f"`{branch}` is checked out in the user's checkout" in prompt  # detached, pushed to it, as it says
+    if theirs:
+        sh("git", "switch", "--detach", "origin/" + branch)
+    elif "In progress on branch" in prompt:
         sh("git", "switch", branch)
     else:
         sh("git", "switch", "-c", branch, "origin/main")
@@ -183,7 +186,8 @@ if system.startswith("# windvane worker run"):
             sh("git", "add", "-A"); sh("git", "commit", "-qm", f"{tid}: build")
         past = os.environ.get("FAKE_NO_VERIFY")  # "first": only its first run's push gets past the pre-push hook
         past = past and (past != "first" or "## Act on this first" not in prompt)
-        r = subprocess.run(["git", "push", "-q", *["--no-verify"] * bool(past), "-u", "origin", "HEAD"],
+        r = subprocess.run(["git", "push", "-q", *["--no-verify"] * bool(past),
+                            *(["origin", f"HEAD:{branch}"] if theirs else ["-u", "origin", "HEAD"])],
                            capture_output=True, text=True)
         if r.returncode and log:
             open(log + ".refused", "a").write(r.stderr)
