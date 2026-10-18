@@ -78,11 +78,14 @@ release on the same day adds a number (`2026.10.9.1`).
 - `windvane await` no longer reports a running job as `DONE ... exit 1`. Inside Claude Code's Bash sandbox it can't
   see the job's process, so it now refuses there as `bg` does, instead of writing a false exit that let a second copy
   start under the same name; outside it, a pid owned by another user (EPERM) counts as alive, not as a death.
-- An install that moves from under a run (a reinstall, a Python upgrade that removes the old interpreter) no longer
-  ends it: a self-update whose restart command is gone keeps the run going on its old code and says once how to
-  reinstall (it restarts on the new code at the next pull after that), and a `run --detach` that can't start its
-  driver tears down and pushes the reinstall step instead of crashing. `windvane doctor` names a running driver's
-  interpreter or install that has gone.
+- A run no longer ends when its install moves from under it, as a reinstall or a Python upgrade can do. If the
+  restart command is gone, the self-update keeps the run on its old code. It says once how to reinstall, and the
+  next pull after that takes the new code up. A `run --detach` that can't start its driver tears down and pushes
+  the reinstall step; it doesn't crash. `windvane doctor` names a running driver's interpreter or install that has
+  gone.
+- New windvane code that the run can't take up now sends one push a run, naming the file and the reinstall
+  command. A restart whose exec fails (a noexec mount, a bad `#!` line, the install removed at that moment) is no
+  longer a crash: the run goes on on its old code and tries again at windvane's next update.
 - A Ctrl-C while a run winds down no longer skips its save, teardown and unlock: it kills the sessions still running
   and the wind-down finishes (a third Ctrl-C quits at once). A failed teardown stays in the next "started" push until
   that push really goes out. Git steps the driver guards from Ctrl-C fail at once on a password or passphrase prompt

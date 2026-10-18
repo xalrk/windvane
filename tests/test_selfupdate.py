@@ -188,9 +188,9 @@ class Driver(unittest.TestCase):
         self.assertIn("windvane restarting with its new code", self.log())
         self.assertNotIn("T-001", self.pilot.running)  # restarted between tickets, none was running
 
-    def test_a_failed_restart_ends_the_run_with_its_own_error(self):
-        """An exec that fails (a moved or broken interpreter) ends the run with that error in the log and the last
-        push, and the teardown still runs under the lock it kept."""
+    def test_a_failed_restart_goes_on_and_the_run_still_ends_cleanly(self):
+        """An exec that fails (a moved or broken interpreter) keeps the run on its old code (test_restart_push has
+        the rest); the run's own end still tears down under the lock it kept."""
         pushes = []
         orig, driver.push = driver.push, lambda title, msg, *a, **k: pushes.append((title, msg))
         self.addCleanup(setattr, driver, "push", orig)
@@ -200,15 +200,14 @@ class Driver(unittest.TestCase):
             raise FileNotFoundError(2, "No such file or directory")  # as a real exec's: no file named
         self.pilot.execv = execv
         self.i.commit("windvane/driver.py", "v2\n")
-        with redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError):
+        with redirect_stdout(io.StringIO()):
             self.pilot.run(now() + timedelta(hours=2))
-        why = (f"driver error: windvane couldn't restart on its new code ({self.calls[0][0]}: no such file or "
-               "directory); reinstall windvane (pipx reinstall windvane, or sh install.sh in its clone), then start "
-               "the run again")
-        self.assertIn(why, self.log())
+        self.assertEqual(self.pilot.merged, ["T-001", "T-002"])
+        self.assertEqual(len(self.calls), 1)  # the same install code isn't tried again
+        self.assertIn(f"new windvane code not taken up: {self.calls[0][0]} can't be run (no such file or "
+                      "directory)", self.log())
         self.assertNotIn("closed file", self.log())
-        [msg] = [m for t, m in pushes if t == "windvane stopped"]
-        self.assertIn(why, msg)
+        self.assertNotIn("crashed", " ".join(t + m for t, m in pushes))
         self.assertEqual((self.p.state / "lock").read_text(), "")  # torn down: emptied, then let go
         self.assertNotIn("WINDVANE_RESTARTED", driver.os.environ)
         again = driver.Pilot(self.p, args(parallel=1))
