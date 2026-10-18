@@ -33,6 +33,27 @@ SHARED = """# What a 10 means
 - 8 quiet: output cut to what's needed.
 """
 
+BEYOND_SCALE = """# Scale
+## works
+- 2 shown: shown.
+- 8 safe: safe.
+## script
+- 2 beyond: stays within the script?
+- 5 lines: lines match.
+- 8 retime: retime moves the cues.
+"""
+BEYOND_REPLY = """Checks:
+- shown: yes, shown
+- safe: yes, safe
+{beyond}
+- lines: yes, matches
+- retime: yes, shift moves cues
+
+Fix in this ticket: (none)
+{heading}
+- later idea
+CRITIC: T-003 fixes=0 good"""
+
 
 class Answers(unittest.TestCase):
     """T-055: the driver scores the critic's answers, so only its Checks block may answer a check."""
@@ -46,6 +67,34 @@ class Answers(unittest.TestCase):
                 self.assertNotIn("class", ans)
                 self.assertEqual(ans["shown"][0], "yes")
                 self.assertEqual(ans["failures"], ("no", "the timeout path has no test"))
+
+    def test_a_check_named_beyond_is_an_answer_not_the_beyond_list(self):
+        lad = critic.ladder(BEYOND_SCALE)
+        for line in ("- beyond: no, nothing beyond the script", "- **beyond**: no, nothing beyond the script",
+                     "- `beyond`: no, nothing beyond", "* beyond: no. nothing", "1. beyond: no, nothing",
+                     "- beyond:** no**, nothing", "- script.beyond: no, nothing"):
+            for heading in ("Beyond this ticket:", "Beyond:", "**Beyond:**", "- Beyond:"):
+                with self.subTest(line=line, heading=heading):
+                    reply = BEYOND_REPLY.format(beyond=line, heading=heading)
+                    ans = critic.answers(reply, lad)
+                    self.assertEqual(ans["beyond"][0], "no")
+                    self.assertEqual(ans["lines"][0], "yes")
+                    self.assertEqual(ans["retime"][0], "yes")
+                    self.assertNotIn("later", str(ans))
+                    self.assertEqual(critic.climb(lad, ans, 8)[4], [])  # nothing unanswered
+                    head = reply.rpartition("CRITIC:")[0]
+                    self.assertEqual(critic.LISTS_RE.search(head).start(), head.index("Fix in this ticket"))
+
+    def test_only_a_list_heading_ends_the_checks_block_whatever_the_ids(self):
+        lad = critic.ladder("# Scale\n## works\n- 2 fix: fixed?\n- 8 safe: safe?\n## beyond\n- 5 far: far?\n")
+        reply = ("Checks:\n- fix: yes, fixed\n- beyond: -\n- safe: yes, safe\n"
+                 "Beyond:\n- works.safe: no, a follow-up\nCRITIC: T-003 fixes=0 good")
+        ans = critic.answers(reply, lad)
+        self.assertEqual(ans["fix"][0], "yes")
+        self.assertEqual(ans["beyond"][0], "-")
+        self.assertEqual(ans["safe"], ("yes", "safe"))
+        dims, _, _, _, missing = critic.climb(lad, ans, 8)
+        self.assertEqual((dims, missing), ({"works": 8}, []))
 
     def test_without_the_lists_every_answer_still_counts(self):
         ans = critic.answers(CRITIQUE.format(heading="Also:"))
