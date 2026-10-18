@@ -2029,10 +2029,18 @@ class Pilot(Desk, Periodic):
         f = self.p.state / RETRY
         taking = f.with_name(RETRY + ".taking")  # renamed first: a request written while this one is read waits
         try:
+            left = taking.read_text()  # a driver that died reading it: those still count
+        except OSError:
+            left = ""
+        try:
             f.rename(taking)
         except OSError:
-            if not taking.exists():
+            if not left:
                 return
+        else:
+            if left:
+                with open(taking, "a") as h:
+                    h.write(left)
         for tid in dict.fromkeys(filter(None, map(self.p.norm, taking.read_text().split()))):
             if tid not in self.failed:
                 self.log(f"{tid}: asked to retry it, but it hasn't failed in this run")

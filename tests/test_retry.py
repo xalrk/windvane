@@ -95,6 +95,16 @@ class RetryInRun(Base):
         self.assertFalse((self.p.state / driver.RETRY).exists())
 
 
+    def test_a_request_left_by_a_driver_that_died_reading_it_still_counts_beside_a_new_one(self):
+        (self.p.state / (driver.RETRY + ".taking")).write_text("T-001\n")
+        (self.p.state / driver.RETRY).write_text("T-002\n")
+        pilot = driver.Pilot(self.p, args())
+        pilot.failed, pilot.skip = ["T-001", "T-002"], {"T-001", "T-002"}
+        pilot.take_retries()
+        self.assertEqual((pilot.failed, pilot.skip), ([], set()))
+        self.assertEqual(list(self.p.state.glob(driver.RETRY + "*")), [])
+
+
 class RetryMerge(Base):
     github = True
 
