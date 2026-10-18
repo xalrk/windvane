@@ -472,8 +472,8 @@ def cmd_queue(a, p):
     q = Queue(p)
     for w in q.warnings():
         print(f"warning: {w}")
-    aside = st.get("aside", {}) if running(p) else {}  # a finished run's set-asides start afresh in the next one
-    print(q.listing(questions.tickets(st.get("questions", {})), hints=True, aside=aside)
+    run = st if running(p) else {"questions": st.get("questions", {})}  # a finished run's set-asides and failures
+    print(q.listing(questions.tickets(st.get("questions", {})), hints=True, run=run)  # start afresh in the next one
           or f"no tickets on {p.upstream} yet")
     local = sorted(t for t in (p.norm(f.stem) for f in (p.root / p.tickets_rel).glob("*.md")) if t and t not in q.files)
     if local:

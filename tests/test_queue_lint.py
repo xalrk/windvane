@@ -35,17 +35,18 @@ class Hints(unittest.TestCase):
         self.s.publish()
 
     def queue_cli(self):
-        return subprocess.run([str(self.s.bin / "windvane"), "queue"], cwd=self.s.root, capture_output=True,
-                              text=True).stdout
+        r = subprocess.run([str(self.s.bin / "windvane"), "queue"], cwd=self.s.root, capture_output=True, text=True)
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        return r.stdout
 
     def test_an_outside_item_gets_the_exact_done_line_to_add(self):
         self.s.ticket("T-002", "the parser rewrite")
         self.publish()
         out = self.queue_cli()
         self.assertIn("(waiting on: the parser rewrite)", out)
-        self.assertIn("hint: `the parser rewrite` isn't a ticket: once it's done, add `- done: the parser rewrite "
-                      "(why)` to .windvane/QUEUE.md, or take it out of `Depends on:` in .windvane/tickets/T-002.md",
-                      out)
+        self.assertIn("hint: `the parser rewrite` isn't a ticket: T-002 waits; once it's done, add `- done: the parser "
+                      "rewrite (why)` to .windvane/QUEUE.md, or take it out of `Depends on:` in "
+                      ".windvane/tickets/T-002.md", out)
         self.publish("- done: the parser rewrite (merged upstream)\n")
         self.assertNotIn("hint:", self.queue_cli())
 
@@ -53,8 +54,9 @@ class Hints(unittest.TestCase):
         self.s.ticket("T-002", "T-001")
         self.publish("- parked: T-001 (needs a design call)\n")
         out = self.queue_cli()
-        self.assertRegex(out, r"T-002 +waiting .*\(waiting on: T-001\)\n +hint: T-001 is parked: to unpark it, take "
-                              r"`- parked: T-001 \(needs a design call\)` out of \.windvane/QUEUE\.md\n")
+        self.assertRegex(out, r"T-002 +waiting .*\(waiting on: T-001\)\n +hint: T-001 is parked: T-002 waits; "
+                              r"to unpark it, take `- parked: T-001 \(needs a design call\)` out of "
+                              r"\.windvane/QUEUE\.md\n")
 
     def test_a_dependency_set_aside_by_the_running_driver_says_so(self):
         self.s.ticket("T-002", "T-001")
@@ -66,9 +68,10 @@ class Hints(unittest.TestCase):
         with open(p.state / "lock", "a+") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
             out = self.queue_cli()
-        self.assertIn("hint: T-001 was set aside this run (hit its max turns): T-002 waits until it merges, and the next run "
-                      "takes T-001 up again", out)
-        self.assertEqual(Queue(p).hints("T-003", {"T-001": "x"}), [])  # a ticket that doesn't wait gets none
+        self.assertIn("hint: T-001 was set aside this run (hit its max turns): T-002 waits until it merges; the next "
+                      "run takes it up again", out)
+        hints = Queue(p).hints(run={"aside": {"T-001": "x"}})
+        self.assertEqual(list(hints), ["T-002"])  # a ticket that doesn't wait gets none
 
     def test_an_unclosed_backtick_and_an_indented_key_are_warned_of_above_the_list(self):
         self.s.write(".windvane/tickets/T-001.md", "# T-001: x\nMilestone: `M9 · Depends on: T-003\nTouches: a.py.\n")
