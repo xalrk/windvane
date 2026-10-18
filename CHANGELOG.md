@@ -55,6 +55,12 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- A ticket whose branch a killed run left checked out in another slot's tree lands again. Its next worker couldn't
+  switch to the branch, and every READY bounced with "No open PR" while the PR was open, until `review_rounds` failed
+  it. The driver now detaches such a tree before the worker starts (one with uncommitted changes keeps the ticket, so
+  its worker finds them). When your own checkout has the branch, it is left alone and the worker is told to push to
+  the branch from a detached head. A detached READY lands as the branch it stands on, a READY on no branch is told to
+  switch to its branch, and a failing `gh` at landing is waited out instead of taken for a missing PR.
 - A change the driver lands through a PR (desk answers, a `--merge` plan, a held change) no longer gives up when
   its first `gh pr merge` fails. While GitHub is still working out whether the new PR can merge it waits and tries
   again (half a minute at most), and when main moved under it the change is replayed onto main, pushed again and

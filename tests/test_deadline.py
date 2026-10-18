@@ -160,14 +160,14 @@ class StoppedThenMovedLater(Base):
 
         self.after_cut = None
 
-        def cut_once(me, tid, text, killed):
+        def cut_once(me, tid, text, killed, *more):
             if self.after_cut is None:  # the first worker run only
                 deadline.write_text((now() + timedelta(minutes=2)).isoformat())
                 handle(me, tid, "", "time")  # what the stop rule's kill at the deadline hands over
                 self.after_cut = list(me.stopped)
                 deadline.write_text((now() + timedelta(hours=2)).isoformat())  # `windvane deadline` moves it later
                 return
-            handle(me, tid, text, killed)
+            handle(me, tid, text, killed, *more)
 
         pilot.handle = cut_once.__get__(pilot)
         pilot.run(now() + timedelta(hours=2))
