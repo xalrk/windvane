@@ -285,9 +285,16 @@ def tmp_full(p, patch, s):
     return {"Temp dir nearly full": ("93% full of inodes", "isn't windvane's")}
 
 
+def not_taken_up(p, patch, s):
+    patch(driver, "exe", lambda: [str(s.tmp / "venv/bin/windvane")])
+    pilot(p).can_restart()
+    return {"windvane update not taken up": ("venv/bin/windvane is gone", "Reinstall windvane")}
+
+
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
-         held, secret_aside, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full]
+         held, secret_aside, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full,
+         not_taken_up]
 
 
 def drive(site):

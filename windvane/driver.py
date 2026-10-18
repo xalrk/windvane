@@ -49,7 +49,8 @@ from .worktree import (TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, cl
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
-           "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes", "opened", "heavy_waits")  # the run's own memory, handed to the driver a restart starts
+           "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes", "opened", "heavy_waits",
+           "stuck_pushed")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
@@ -262,6 +263,9 @@ class Pilot(Desk, Periodic):
         # ticket runs), and the drain once that is DRAIN_AFTER old: [since, last pass, idle slots then, slot-seconds].
         self.loaded = selfupdate.loaded(self.home) if self.home else None
         self.behind, self.drain = None, None
+        # The install whose restart exec failed (`install_mark`: no retry until it changes), and whether the phone
+        # has been told this run that new code can't be taken up.
+        self.exec_failed, self.stuck_pushed = None, False
         self.stash_failed = set()  # what waited, or was skipped, on a failed stash of the checkout: pushed once a run
         self.periodic_at, self.held = {}, []  # [[periodic]] (periodic.py): name -> merges when it last ran; tickets held
         self.groups_seen, self.groups_read = {}, (None, None)  # name -> groups finished then; (main's sha, its queue)
@@ -1911,20 +1915,39 @@ class Pilot(Desk, Periodic):
             if line not in self.update_said:
                 self.log(line)
                 self.update_said.append(line)
-        if again and not self.behind and self.can_restart():
+        if again and not self.behind and self.exec_failed != self.install_mark() and self.can_restart():
             self.behind = time.time()
+
+    def install_mark(self):
+        """The install's HEAD and its command's file: an exec that failed is tried again once either changes (new
+        code, or a reinstall that wrote the command anew), not at every pull."""
+        try:
+            st = os.stat(exe()[0])
+            return gout(self.home, "rev-parse", "HEAD"), st.st_ino, st.st_mtime_ns
+        except OSError:
+            return gout(self.home, "rev-parse", "HEAD"), None, None
 
     def can_restart(self):
         """Whether the command a restart execs is there: a reinstall or a Python upgrade may have taken it, and a
-        driver that hands over to nothing ends the run. Said once; the run goes on on its old code, and a pull after
-        windvane is reinstalled takes the new code up."""
+        driver that hands over to nothing ends the run. The run goes on on its old code (`not_taken_up` says so), and a
+        pull after windvane is reinstalled takes the new code up."""
         missing = selfupdate.gone(exe())
-        line = (f"new windvane code not taken up: {missing} is gone; reinstall windvane ({selfupdate.REINSTALL}) "
-                "and the run restarts on it")
-        if missing and line not in self.update_said:
+        if missing:
+            self.not_taken_up(f"{missing} is gone", "and the run restarts on it")
+        return not missing
+
+    def not_taken_up(self, why, then, check=""):
+        """Logs why new code can't be taken up (each reason once) and tells the phone once a run, since the run
+        otherwise goes on on its old code with nothing to see but autopilot.log."""
+        line = f"new windvane code not taken up: {why}; reinstall windvane ({selfupdate.REINSTALL}) {then}"
+        if line not in self.update_said:
             self.log(line)
             self.update_said.append(line)
-        return not missing
+        if not self.stuck_pushed:
+            self.stuck_pushed = True
+            fix = f"{check}reinstall windvane ({selfupdate.REINSTALL})"
+            push("windvane update not taken up", whole("", why[0].upper() + why[1:], f". {fix[0].upper()}{fix[1:]}. "
+                 "Until then the run goes on on its current code.", log=self.log), 3, "warning")
 
     def draining(self):
         """True while new code waits for the running tickets: once the driver has been behind its install for
@@ -1943,7 +1966,8 @@ class Pilot(Desk, Periodic):
         return True
 
     def restart(self):
-        """Restarts the driver in place on the install's new code, with the deadline as it now is."""
+        """Restarts the driver in place on the install's new code, with the deadline as it now is. An exec that fails
+        leaves this driver running the run on its old code, until the install changes."""
         if not self.can_restart():  # gone since the pull: no more draining for a restart that can't happen
             self.behind = self.drain = None
             return
@@ -1957,15 +1981,19 @@ class Pilot(Desk, Periodic):
                  f"failed: {names(self.failed)})")
         self.hand_over()
         # The lock stays open: its fd closes on exec (Python's are non-inheritable), so the restarted driver takes
-        # it again, and an exec that fails leaves the lock held for this run's own teardown.
+        # it again, and an exec that fails leaves the lock held for this run.
         os.environ["WINDVANE_RESTARTED"] = "1"  # no second "windvane started" push; it reads restart.json
         cmd = [*exe(), *selfupdate.restart_args(self.argv, self.end())]
         try:
             self.execv(cmd[0], cmd)
-        except OSError as e:  # a moved or broken interpreter: the run ends with why (exec's own error names no file)
-            os.environ.pop("WINDVANE_RESTARTED", None)  # the teardown's helpers aren't a restarted driver's
-            raise RuntimeError(f"windvane couldn't restart on its new code ({cmd[0]}: {e.strerror.lower()}); "
-                               f"reinstall windvane ({selfupdate.REINSTALL}), then start the run again") from e
+        except OSError as e:  # a noexec mount, a bad #! line, the install removed since the check: not a crash
+            os.environ.pop("WINDVANE_RESTARTED", None)  # nothing took over: this driver goes on with the run
+            (self.p.state / "restart.json").unlink(missing_ok=True)
+            self.behind = self.drain = None
+            self.exec_failed = self.install_mark() if self.home else None
+            self.not_taken_up(f"{cmd[0]} can't be run ({(e.strerror or str(e)).lower()})",
+                              "and the run restarts on it",
+                              "Check it can run there (a noexec mount or a bad #! line stops it), or ")
 
     def hand_over(self):
         """Leaves the run's memory for the driver that replaces this one (`carry_over`)."""
