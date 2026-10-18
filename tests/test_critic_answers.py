@@ -33,6 +33,27 @@ SHARED = """# What a 10 means
 - 8 quiet: output cut to what's needed.
 """
 
+BEYOND_SCALE = """# Scale
+## works
+- 2 shown: shown.
+- 8 safe: safe.
+## script
+- 2 beyond: stays within the script?
+- 5 lines: lines match.
+- 8 retime: retime moves the cues.
+"""
+BEYOND_REPLY = """Checks:
+- shown: yes, shown
+- safe: yes, safe
+{beyond}
+- lines: yes, matches
+- retime: yes, shift moves cues
+
+Fix in this ticket: (none)
+{heading}
+- later idea
+CRITIC: T-003 fixes=0 good"""
+
 
 class Answers(unittest.TestCase):
     """T-055: the driver scores the critic's answers, so only its Checks block may answer a check."""
@@ -46,6 +67,46 @@ class Answers(unittest.TestCase):
                 self.assertNotIn("class", ans)
                 self.assertEqual(ans["shown"][0], "yes")
                 self.assertEqual(ans["failures"], ("no", "the timeout path has no test"))
+
+    def test_a_check_named_beyond_is_an_answer_not_the_beyond_list(self):
+        lad = critic.ladder(BEYOND_SCALE)
+        for line in ("- beyond: no, nothing beyond the script", "- **beyond**: no, nothing beyond the script",
+                     "- `beyond`: no, nothing beyond", "* beyond: no. nothing", "1. beyond: no, nothing",
+                     "- beyond:** no**, nothing", "- script.beyond: no, nothing"):
+            for heading in ("Beyond this ticket:", "Beyond:", "**Beyond:**", "- Beyond:"):
+                with self.subTest(line=line, heading=heading):
+                    reply = BEYOND_REPLY.format(beyond=line, heading=heading)
+                    ans = critic.answers(reply, lad)
+                    self.assertEqual(ans["beyond"][0], "no")
+                    self.assertEqual(ans["lines"][0], "yes")
+                    self.assertEqual(ans["retime"][0], "yes")
+                    self.assertNotIn("later", str(ans))
+                    self.assertEqual(critic.climb(lad, ans, 8)[4], [])  # nothing unanswered
+                    head = reply.rpartition("CRITIC:")[0]
+                    self.assertEqual(critic.LISTS_RE.search(head).start(), head.index("Fix in this ticket"))
+
+    def test_only_a_list_heading_ends_the_checks_block_whatever_the_ids(self):
+        lad = critic.ladder("# Scale\n## works\n- 2 fix: fixed?\n- 8 safe: safe?\n## beyond\n- 5 far: far?\n")
+        reply = ("Checks:\n- fix: yes, fixed\n- beyond: -\n- safe: yes, safe\n"
+                 "Beyond:\n- works.safe: no, a follow-up\nCRITIC: T-003 fixes=0 good")
+        ans = critic.answers(reply, lad)
+        self.assertEqual(ans["fix"][0], "yes")
+        self.assertEqual(ans["beyond"][0], "-")
+        self.assertEqual(ans["safe"], ("yes", "safe"))
+        dims, _, _, _, missing = critic.climb(lad, ans, 8)
+        self.assertEqual((dims, missing), ({"works": 8}, []))
+
+    def test_an_empty_beyond_list_written_as_an_answer_costs_nothing(self):
+        # `- Beyond: -` reads as an answer line, but an empty list has nothing after it to leak into the block, and
+        # a scale without a `beyond` id ignores the label
+        lad = critic.ladder(SHARED)
+        reply = ("Checks:\n- shown: yes, shown\n- safe: yes, safe\n- failures: yes, tested\n- class: no, one bug\n"
+                 "- quiet: yes, cut\nFix in this ticket: (none)\n- Beyond: -\nCRITIC: T-003 fixes=0 good")
+        ans = critic.answers(reply, lad)
+        self.assertEqual(set(ans), {"shown", "failures", "class", "quiet", ("works", "safe"), ("lean", "safe")})
+        self.assertEqual(critic.climb(lad, ans, 8)[4], [])
+        self.assertEqual(critic.labels(reply.replace("Fix in this ticket: (none)\n", "")),
+                         ["shown", "safe", "failures", "class", "quiet", "Beyond"])
 
     def test_without_the_lists_every_answer_still_counts(self):
         ans = critic.answers(CRITIQUE.format(heading="Also:"))
@@ -93,6 +154,36 @@ class Gate(unittest.TestCase):
         log = (p.state / "autopilot.log").read_text()
         self.assertIn("T-001: critic 2/10 (works=2) (revise)", log)
         self.assertIn("T-001: the critic left safe unanswered (counted as no)", log)
+
+
+    def test_a_clean_review_of_a_check_named_beyond_passes(self):
+        """T-194 end to end: a clean review whose scale has a `beyond` check used to come back as "revise", with
+        `beyond` and every check after it unanswered."""
+        s = Sandbox()
+        self.addCleanup(s.close)
+        s.write(".windvane/config.toml", s.root.joinpath(".windvane/config.toml").read_text()
+                .replace("enabled = false", "enabled = true"))
+        s.write(".windvane/CRITIC.md", BEYOND_SCALE)
+        s.publish("critic on, a beyond check")
+        s.git("switch", "-q", "-c", "t-001-x")
+        p = Project(s.root)
+        notes = p.state / "critic" / "T-001" / "notes.md"
+        notes.parent.mkdir(parents=True)
+        notes.write_text("User-facing: yes\nfaster\n")
+        os.environ["FAKE_CRITIC_TEXT"] = BEYOND_REPLY.format(
+            beyond="- beyond: yes, nothing beyond the script", heading="Beyond this ticket:").replace("T-003", "{tid}")
+        pilot = driver.Pilot(p, argparse.Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0, answer_wait=10,
+                                                   replan=0, goal="", parallel=1))
+        pilot.tl.wd, pilot.deadline = s.root, driver.now() + driver.timedelta(hours=1)
+        with redirect_stdout(io.StringIO()):
+            self.assertTrue(pilot.critic_gate("T-001", s.git("rev-parse", "HEAD"), branch="t-001-x"))
+        last = read_jsonl(p.state / "critic.jsonl")[-1]
+        self.assertEqual((last["score"], last["step"], last["unanswered"]), (8, "pass", []))
+        self.assertNotIn("Unanswered", last["critique"])
+        self.assertIn("CRITIC: T-001 works=8 script=8 fixes=0", last["critique"])
+        log = (p.state / "autopilot.log").read_text()
+        self.assertIn("T-001: critic 8/10", log)
+        self.assertNotIn("unanswered", log)
 
 
 class Advice(unittest.TestCase):

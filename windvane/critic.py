@@ -50,7 +50,10 @@ LABEL = (r"([^:\n]+?)[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
          r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$")
 LABEL_RE = re.compile(BULLET + LABEL, re.I)
 SAID_RE = re.compile(r"^[ \t]*(?:(?:[-*]|\d+\.)[ \t]*)?" + LABEL, re.I)  # bulleted or not: what `labels()` shows
-LISTS_RE = re.compile(r"^[ \t#*_-]*(?:(?:fix in|beyond) this ticket\b|beyond[*_]*:)", re.I | re.M)
+# A follow-up list's heading ends the Checks block; a bare `Beyond:` is one too, unless it's a bulleted answer to a
+# check or dimension named `beyond` (`- beyond: no, ...`), which would cut off every answer after it (T-194)
+LISTS_RE = re.compile(r"^(?![ \t]*(?:[-*]|\d+\.)[ \t]+[*_`]*beyond[*_`]*:[ \t*_]*(?:yes|no|-)(?![\w-]))"
+                      r"[ \t#*_-]*(?:(?:fix in|beyond) this ticket\b|beyond[*_]*:)", re.I | re.M)
 CHECKS_RE = re.compile(r"^[ \t#*_]*Checks[*_]*:[*_]*[ \t]*\n?", re.I | re.M)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
