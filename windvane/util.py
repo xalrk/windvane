@@ -152,6 +152,21 @@ def save_json(path, data):
     tmp.replace(path)
 
 
+def edit_json(path, change, default):
+    """Load, let `change` edit the data in place, save, all under an exclusive flock on a sibling `.lock` file, so two
+    writers (the driver and `windvane answer`, two `windvane answer`s) can't each save over the other's edit: save_json
+    alone is atomic but last-writer-wins. The lock goes with its process, so a crash leaves none behind. A reader that
+    only reads needs no lock. Returns what `change` returned."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(f"{path.name}.lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = load_json(path, default)
+        out = change(data)
+        save_json(path, data)
+    return out
+
+
 def append_jsonl(path, entry):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
