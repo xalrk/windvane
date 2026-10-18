@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import actions, scratch
 from .config import HOME, author, github_token
-from .util import append_jsonl, load_json, recorded_stamp, same_process, save_json, stamp, started_at
+from .util import append_jsonl, last_match, load_json, recorded_stamp, same_process, save_json, stamp, started_at
 
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
@@ -542,9 +542,19 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         "role": role, "label": label, "ticket": ticket, "model": model, "effort": effort,
         "minutes": round((time.time() - started) / 60, 1), **spent(final, seen),
         "base": first_turn(seen), "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error,
-        "exit": code, "stream": raw.name})
+        "result": result_word(result), "exit": code, "stream": raw.name})
     actions.refresh(p)  # the next worker start reads a fresh total from the cache, never waits on a count
     return result, killed, error
+
+
+# The word a worker's RESULT line starts with, kept on its ledger row so `stats` can tell a launch that stopped at
+# once from a short one that finished; sessions with no RESULT line (critic, reviewer, planner) get None.
+RESULT_WORD = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED)\b")
+
+
+def result_word(text):
+    m = last_match(RESULT_WORD, text)
+    return m[1] if m else None
 
 
 def rules(p, name):
