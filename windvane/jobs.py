@@ -10,6 +10,7 @@ import itertools
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -55,9 +56,36 @@ def waited(summary):
     return f"not run, {summary.removeprefix(NOT_RUN).removesuffix(AGAIN).removesuffix(STOPPING)}"
 
 
+def placeholder(path):
+    """Whether an untracked path is a sandbox's placeholder: a character device (/dev/null bound over a path the
+    sandbox guards). Git can't track one, so it was never part of the tree; the sandbox picks the paths, so they're
+    told apart by what they are, not by name."""
+    try:
+        return stat.S_ISCHR(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def blockers(cwd):
+    """The paths that keep a checkout's tree from being clean: every change to a tracked file, every untracked file
+    but placeholders. Untracked dirs are listed file by file (`all`), so a dir holding only placeholders is clean;
+    -z: no quoting. None when git fails."""
+    r = util.git(cwd, "status", "--porcelain", "-z", "--untracked-files=all")
+    if r.returncode:
+        return None
+    out, paths, i = r.stdout.split("\0"), [], 0
+    while i < len(out):
+        entry = out[i]
+        if len(entry) > 3 and not (entry[:2] == "??" and placeholder(Path(cwd) / entry[3:])):
+            paths.append(entry[3:])
+        i += 1 + (entry[:1] in ("R", "C"))  # a rename's source follows as its own field
+    return paths
+
+
 def tree_key(p, cwd):
-    """The key of a clean checkout's tree for the configured check, or None if it has uncommitted changes."""
-    if gout(cwd, "status", "--porcelain", "--untracked-files=normal"):
+    """The key of a clean checkout's tree (`blockers`) for the configured check, or None if it has uncommitted
+    changes. Only HEAD's tree and the command: a pass recorded in a sandbox is reused outside it, and back."""
+    if blockers(cwd) != []:
         return None
     tree = gout(cwd, "rev-parse", "HEAD^{tree}")
     return hashlib.sha1(f"{tree}\n{p.cfg['check']}".encode()).hexdigest() if tree else None
@@ -104,8 +132,16 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=Fal
         if key and tree_key(p, cwd) == key:
             passes.mkdir(parents=True, exist_ok=True)
             (passes / key).write_text(f"{now():%Y-%m-%d %H:%M} ({gout(cwd, 'rev-parse', '--short', 'HEAD')})")
-        return True, f"CHECK PASSED in {mins:.1f} min" + ("" if key else " (uncommitted changes: not recorded)"), log
+        return True, f"CHECK PASSED in {mins:.1f} min" + ("" if key else unrecorded(cwd)), log
     return False, f"CHECK FAILED (exit {code}) in {mins:.1f} min; log {log}", log
+
+
+def unrecorded(cwd):
+    """Why a pass wasn't recorded, naming the first paths in the way, so a worker tells its own leftovers from
+    something else's."""
+    paths = blockers(cwd) or []
+    named = ", ".join(paths[:2]) + (", …" if len(paths) > 2 else "")
+    return f" (uncommitted changes: not recorded{': ' + named if named else ''})"
 
 
 def log_name():

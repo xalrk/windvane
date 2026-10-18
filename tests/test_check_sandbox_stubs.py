@@ -1,0 +1,94 @@
+"""A check run inside a sandbox records its pass: the sandbox's placeholders (character devices bound over paths it
+guards, never tracked by git) don't count as changes, while any real untracked file or change to a tracked one
+still keeps the pass unrecorded, and the summary names it."""
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from windvane import jobs  # noqa: E402
+from windvane.config import Project  # noqa: E402
+from helpers import Sandbox  # noqa: E402
+
+STUBS = {".bashrc", "settings.json", ".mcp.json"}  # made as plain files; mknod for a real device needs root
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.s = Sandbox()
+        self.addCleanup(self.s.close)
+        self.p = Project(self.s.root)
+        stub = mock.patch.object(jobs, "placeholder", lambda path: Path(path).name in STUBS)
+        stub.start()
+        self.addCleanup(stub.stop)
+
+    def check(self):
+        ok, summary, _ = jobs.check(self.p, self.s.root)
+        self.assertTrue(ok, summary)
+        return summary
+
+    def placeholders(self):
+        self.s.write(".bashrc", "")
+        self.s.write(".claude/settings.json", "")  # a dir `normal` would list whole, as `.claude/`
+        self.s.write(".mcp.json", "")
+
+
+class Placeholders(Base):
+    def test_a_clean_tree_with_placeholders_records_its_pass_and_the_next_check_reuses_it(self):
+        self.placeholders()
+        first = self.check()
+        self.assertIn(" min", first)
+        self.assertNotIn("not recorded", first)
+        self.assertIn("reused the pass", self.check())
+
+    def test_the_key_is_the_same_with_and_without_placeholders(self):
+        """A pass recorded inside the sandbox is reused outside it, and the other way round."""
+        bare = jobs.tree_key(self.p, self.s.root)
+        self.placeholders()
+        self.assertEqual(jobs.tree_key(self.p, self.s.root), bare)
+        self.assertIsNotNone(bare)
+
+
+class RealChanges(Base):
+    def assert_unrecorded(self, *named):
+        summary = self.check()
+        self.assertIn("not recorded: " + ", ".join(named), summary)
+        self.assertNotIn("reused", self.check())
+
+    def test_a_real_untracked_file_among_placeholders_blocks_recording_and_is_named(self):
+        self.placeholders()
+        self.s.write(".claude/notes.md", "mine")
+        self.assert_unrecorded(".claude/notes.md")
+
+    def test_a_modified_tracked_file_blocks_recording_and_is_named(self):
+        self.s.write("README", "changed\n")
+        self.assert_unrecorded("README")
+
+    def test_more_than_two_paths_name_the_first_two(self):
+        for name in ("a", "b", "c"):
+            self.s.write(f"src/{name}.py", "")
+        summary = self.check()
+        self.assertIn("not recorded: src/a.py, src/b.py, …)", summary)
+
+    def test_a_rename_names_its_new_path_not_its_source_as_a_second(self):
+        self.s.git("mv", "README", "README.md")
+        self.s.write("README", "hi\n")  # the check needs it; untracked now
+        self.assertIn("not recorded: README.md, README)", self.check())
+
+
+class Real(unittest.TestCase):
+    def test_placeholder_is_a_character_device_never_followed(self):
+        self.assertTrue(jobs.placeholder("/dev/null"))
+        self.assertFalse(jobs.placeholder(__file__))
+        self.assertFalse(jobs.placeholder("/no/such/path"))
+        with tempfile.TemporaryDirectory() as tmp:  # a link to a device is a file someone made: it counts
+            link = Path(tmp) / "null"
+            link.symlink_to("/dev/null")
+            self.assertFalse(jobs.placeholder(link))
+
+
+if __name__ == "__main__":
+    unittest.main()
