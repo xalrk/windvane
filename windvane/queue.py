@@ -246,16 +246,18 @@ class Queue:
             return f"{d} is parked: {who}; to unpark it, take `{self.parked_lines[d]}` out of {rel}"
         if d in aside:
             fix = fixes.get(d, "").rstrip(".")
-            then = f"so it isn't set aside again, {fix[:1].lower()}{fix[1:]}" if fix else "the next run takes it up again"
+            then = (f"so it isn't set aside again, {fix[:1].lower()}{fix[1:]}" if fix
+                    else "the next run takes it up again")
             return f"{d} was set aside this run ({aside[d]}): {who} until it merges; {then}"
         if d in run.get("failed", []):
             return (f"{d} failed this run (its `FAILED` line in {self.p.state / 'autopilot.log'} says why): {who} "
                     "until it merges; this run won't retry it, the next `windvane run` will")
         if d in self.files and (d in blocked or d in self.asked):
-            ids = asks.get(d) or self.asked_ids.get(d)  # none: answered, it waits only for its ticket's next run
+            ids = asks.get(d) or self.asked_ids.get(d)
+            if not ids:  # answered: it waits only for its ticket's next run
+                return ""
             named = f" ({', '.join(ids)})" if ids != [d] else ""
-            return "" if not ids else (f"{d} has an open question{named}: {who} until it's answered: `windvane answer "
-                                       f"{ids[0]} <letter>`")
+            return f"{d} has an open question{named}: {who} until it's answered: `windvane answer {ids[0]} <letter>`"
         if self.known(d):
             return ""
         done = f"add `- done: {d} (why)` to {rel}"

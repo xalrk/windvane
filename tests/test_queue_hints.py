@@ -33,8 +33,10 @@ class Base(unittest.TestCase):
 
     def queue_cli(self, state=None):
         """`windvane queue`, with `state` as a running driver's state.json (it holds the lock meanwhile)."""
-        cmd = lambda: subprocess.run([str(self.s.bin / "windvane"), "queue"], cwd=self.s.root,  # noqa: E731
-                                     capture_output=True, text=True).stdout
+        def cmd():
+            r = subprocess.run([str(self.s.bin / "windvane"), "queue"], cwd=self.s.root, capture_output=True, text=True)
+            self.assertEqual((r.returncode, r.stderr), (0, ""))
+            return r.stdout
         if state is None:
             return cmd()
         self.p.state.mkdir(parents=True, exist_ok=True)
@@ -95,7 +97,10 @@ class RunCauses(Base):
             "hint: T-001 has an open question (T-001.2): T-002, T-003 wait until it's answered: `windvane answer "
             "T-001.2 <letter>`"])
         state["questions"]["T-001.2"]["result"] = "A"  # settled: no longer waiting for anyone
-        self.assertEqual(self.hints(self.queue_cli(state)), [])
+        out = self.queue_cli(state)
+        self.assertEqual(self.hints(out), [])
+        self.assertRegex(out, r"T-002 +waiting")
+        self.assertRegex(out, r"T-003 +waiting")
 
     def test_a_dependency_blocked_on_an_open_question_in_the_file_names_it(self):
         self.s.write(".windvane/QUESTIONS.md", "# Questions\n\n## Open\n\n### T-001: Which?\n- **A**: a\n- **B**: b\n"

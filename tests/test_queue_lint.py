@@ -35,8 +35,9 @@ class Hints(unittest.TestCase):
         self.s.publish()
 
     def queue_cli(self):
-        return subprocess.run([str(self.s.bin / "windvane"), "queue"], cwd=self.s.root, capture_output=True,
-                              text=True).stdout
+        r = subprocess.run([str(self.s.bin / "windvane"), "queue"], cwd=self.s.root, capture_output=True, text=True)
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        return r.stdout
 
     def test_an_outside_item_gets_the_exact_done_line_to_add(self):
         self.s.ticket("T-002", "the parser rewrite")
@@ -44,9 +45,8 @@ class Hints(unittest.TestCase):
         out = self.queue_cli()
         self.assertIn("(waiting on: the parser rewrite)", out)
         self.assertIn("hint: `the parser rewrite` isn't a ticket: T-002 waits; once it's done, add `- done: the parser "
-                      "rewrite "
-                      "(why)` to .windvane/QUEUE.md, or take it out of `Depends on:` in .windvane/tickets/T-002.md",
-                      out)
+                      "rewrite (why)` to .windvane/QUEUE.md, or take it out of `Depends on:` in "
+                      ".windvane/tickets/T-002.md", out)
         self.publish("- done: the parser rewrite (merged upstream)\n")
         self.assertNotIn("hint:", self.queue_cli())
 
@@ -54,8 +54,9 @@ class Hints(unittest.TestCase):
         self.s.ticket("T-002", "T-001")
         self.publish("- parked: T-001 (needs a design call)\n")
         out = self.queue_cli()
-        self.assertRegex(out, r"T-002 +waiting .*\(waiting on: T-001\)\n +hint: T-001 is parked: T-002 waits; to unpark it, take "
-                              r"`- parked: T-001 \(needs a design call\)` out of \.windvane/QUEUE\.md\n")
+        self.assertRegex(out, r"T-002 +waiting .*\(waiting on: T-001\)\n +hint: T-001 is parked: T-002 waits; "
+                              r"to unpark it, take `- parked: T-001 \(needs a design call\)` out of "
+                              r"\.windvane/QUEUE\.md\n")
 
     def test_a_dependency_set_aside_by_the_running_driver_says_so(self):
         self.s.ticket("T-002", "T-001")
