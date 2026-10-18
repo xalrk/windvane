@@ -66,10 +66,18 @@ def placeholder(path):
         return False
 
 
+def top(cwd):
+    """The top level of the checkout `cwd` is in (`cwd` itself outside one). Git status's paths are relative to it
+    whatever the cwd, and the check runs there as the driver's gate does, so a pass from any subdirectory is the
+    gate's."""
+    return gout(cwd, "rev-parse", "--show-toplevel") or str(cwd)
+
+
 def blockers(cwd):
     """The paths that keep a checkout's tree from being clean: every change to a tracked file, every untracked file
     but placeholders. Untracked dirs are listed file by file (`all`), so a dir holding only placeholders is clean;
     -z: no quoting. None when git fails."""
+    cwd = top(cwd)
     r = util.git(cwd, "status", "--porcelain", "-z", "--untracked-files=all")
     if r.returncode:
         return None
@@ -102,8 +110,8 @@ def ledger(p, ticket, row, event="check"):
 
 
 def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=False):
-    """Run the project's check in `cwd`. Returns (passed, summary line, log path); passed is None when a heavy check
-    never ran: its wait for the machine timed out, which says nothing about the tree, so callers try it again.
+    """Run the project's check at the top level of `cwd`'s checkout (`top`). Returns (passed, summary line, log
+    path); passed is None when a heavy check never ran: its wait for the machine timed out, which says nothing about the tree, so callers try it again.
     `stop_at` (a datetime): when a heavy check stops waiting for the machine, or earlier if the run's deadline is
     moved meanwhile (the driver's); a session's check has its own stop in the environment already. `mem` (GB): the
     free memory a heavy check waits for, this once, instead of `heavy_mem`. `announce`: say the log first (in a
@@ -111,6 +119,7 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=Fal
     cmd = p.cfg["check"]
     if not cmd:
         return True, "CHECK PASSED (no check configured)", None
+    cwd = top(cwd)
     passes = p.state / "passes"
     key = tree_key(p, cwd)
     if key and (passes / key).exists():
@@ -661,6 +670,7 @@ def session_check(p, cwd, mem=None, lines=60):
     it runs as the session's bg job `check` (the running one when there is one, never a second in line) and is
     awaited as `await` does. Its exit code: the check's own once it ended, else TIMED_OUT, `await check` going on."""
     outside_sandbox("a heavy check")  # the lock's folder is read-only there, and the job would die with the call
+    cwd = top(cwd)  # the job runs where the gate does
     base, head = find_job(p, SESSION_CHECK)[0], gout(cwd, "rev-parse", "--short", "HEAD")
     if not alive(base):
         key = tree_key(p, cwd)

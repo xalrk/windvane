@@ -56,11 +56,12 @@ class SessionHeavyCheck(unittest.TestCase):
                         if Path(f"{jobs.job_base(self.p, 'check')}.start").exists() else None)
         return release
 
-    def windvane(self, *args):
-        """`windvane <args>` in the project, in this process (so the patched limit holds): (exit code, output)."""
+    def windvane(self, *args, where=None):
+        """`windvane <args>` in the project (or `where` in it), in this process (so the patched limit holds):
+        (exit code, output)."""
         out = io.StringIO()
         with redirect_stdout(out), self.assertRaises(SystemExit) as e:
-            cli.main(["-C", str(self.s.root), *args])
+            cli.main(["-C", str(where or self.s.root), *args])
             raise SystemExit(0)
         code = e.exception.code
         return (code if isinstance(code, int) else 0 if code is None else 1), out.getvalue()
@@ -120,17 +121,30 @@ class SessionHeavyCheck(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("CHECK PASSED (reused the pass", out)
 
-    def session_check(self):
+    def session_check(self, where=None):
         """`windvane check` once the machine is free: its own result, from `await` on a machine too slow for it."""
-        code, out = self.windvane("check")
+        code, out = self.windvane("check", where=where)
         if code == heavy.TIMED_OUT:
-            code, out = self.windvane("await", "check")
+            code, out = self.windvane("await", "check", where=where)
         return code, out
 
     def test_a_check_that_gets_the_machine_in_time_ends_with_its_own_result(self):
         code, out = self.session_check()
         self.assertEqual(code, 0, out)
         self.assertRegex(out.splitlines()[-1], r"^CHECK PASSED in ")
+
+    def test_from_a_subdirectory_its_job_runs_at_the_top_level_and_its_pass_is_reused(self):
+        """A worker's shell keeps its cwd: after a `cd src` the job still runs where the gate does (the check,
+        `test -f README`, needs the top level) and records its pass for the tree."""
+        self.s.write("src/x.py", "")
+        self.s.publish("src")
+        code, out = self.session_check(where=self.s.root / "src")
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out.splitlines()[-1], r"^CHECK PASSED in ")
+        self.assertEqual(Path(jobs.job_cwd(jobs.job_base(self.p, "check"))).resolve(), self.s.root.resolve())
+        code, out = self.windvane("check", where=self.s.root / "src")
+        self.assertEqual(code, 0, out)
+        self.assertIn("CHECK PASSED (reused the pass", out)
 
     def test_a_failing_check_exits_1_with_its_log_tail(self):
         self.s.write(".windvane/config.toml", self.plain.replace('check = "test -f README"',
