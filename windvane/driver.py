@@ -52,10 +52,12 @@ CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "stopped", "me
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
+           "branch": ("a READY on no branch", "autopilot", "review_rounds", 0, ""),
            "critic": ("the critic", "critic", "revisions", 1, "one more for a READY without the evidence pack"),
            "check": ("the check", "autopilot", "check_retries", 0, ""),
            "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0, ""),
            "secret": ("the scan for secrets", "autopilot", "check_retries", 0, "")}
+NO_PR = "No open PR for"  # how a bounce for a missing PR starts: a later prompt that finds the PR drops it
 DIGEST_RETRY = 600  # seconds between tries to push provisional answers the phone missed, outside a quiet time
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
 DRAIN_AFTER = 3 * 3600  # seconds a driver may run behind its install's code before it stops refilling slots for it
@@ -172,10 +174,15 @@ def nth(n):
 
 def pr_for(p, branch):
     """The open PR of `branch` in this repo, never a fork's of the same name (net.own_prs), or ""."""
+    return pr_lookup(p, branch) or ""
+
+
+def pr_lookup(p, branch):
+    """As pr_for, but None when gh fails: a gh that can't answer isn't a branch without a PR."""
     if p.cfg["forge"] != "github" or not branch:
         return ""
     prs = net.own_prs(p, "--head", branch, "--state", "open")
-    return str(prs[0]["number"]) if prs else ""
+    return None if prs is None else str(prs[0]["number"]) if prs else ""
 
 
 def also(tickets, most=NTFY):
@@ -234,6 +241,7 @@ class Pilot(Desk, Periodic):
         self.lock, self.merge_lock, self.git_lock = threading.RLock(), threading.Lock(), threading.Lock()
         self.running = {}  # ticket -> slot
         self.owner = {i: None for i in range(self.n)}  # slot -> the ticket whose uncommitted work its tree holds
+        self.claimed = False  # whether `claim_slots` gave a killed run's leftovers in a slot tree to their ticket
         self.threads, self.wake = [], threading.Event()
         self.waits, self.said = [], set()  # why ready tickets can't start beside the running ones; what the log has
         # Side by side only while it pays: `limit` drops a slot for every 2 conflict bounces between tickets that ran
@@ -539,6 +547,8 @@ class Pilot(Desk, Periodic):
         here = gout(wd, "rev-parse", "--abbrev-ref", "HEAD")
         fb = self.feedback.get(tid)
         pr = pr_for(p, branches[0]) if branches else ""
+        if pr and fb and fb.startswith(NO_PR):  # stale: the PR is open now
+            fb = None
         known = self.answered(tid, ref)
         push_env = guard_pushes(p, wd)  # first: worker_git's hooks, when it sets any, link from its folder
         git_env, skip_line = actions.worker_git(p, wd)
@@ -573,7 +583,7 @@ class Pilot(Desk, Periodic):
         if error:
             self.crashed(tid, error, tid)  # the loop picks the ticket again, with its branch as it now is
         else:
-            self.handle(tid, text, killed)
+            self.handle(tid, text, killed, branches)
         if start_five is not None and self.usage.five is not None and self.usage.five >= start_five:
             self.costs.append(round(self.usage.five - start_five, 1))
         self.save()
@@ -607,7 +617,7 @@ class Pilot(Desk, Periodic):
                     out.append(b)
         return out[:10]
 
-    def handle(self, tid, text, killed):
+    def handle(self, tid, text, killed, branches=()):
         if killed:
             if killed == "time" and now() < self.end() - timedelta(minutes=5):
                 self.set_aside_limit(tid, f"the {self.a.ticket_hours:g}-hour limit for one run",
@@ -623,6 +633,8 @@ class Pilot(Desk, Periodic):
         m = last_match(RESULT_RE, text)
         branch = gout(self.wd, "rev-parse", "--abbrev-ref", "HEAD")
         branch = "" if branch == "HEAD" else branch
+        if not branch and branches:  # a tree left detached: a worker that couldn't switch to its branch
+            branch = self.detached_on(tid, branches)
         if not m or self.p.norm(m.group(2)) != tid:
             return self.unfinished_run(tid, branch)
         self.unfinished.discard(tid)
@@ -649,8 +661,26 @@ class Pilot(Desk, Periodic):
         if status == "BLOCKED":
             return self.ask(tid, branch, rest)
         sha = next(iter(re.findall(r"\b[0-9a-f]{40}\b", rest)), "") or gout(self.wd, "rev-parse", "HEAD")
+        if not branch:
+            name = f"`{branches[0]}`" if branches else f"your ticket's branch (`{tid.lower()}-<short-name>`)"
+            self.feedback[tid] = (f"Your tree was detached, on no branch: switch to {name} or push HEAD to it, "
+                                  "then finish READY.")
+            self.log(f"{tid}: READY on no branch; back to the worker")
+            return self.bounce(tid, "branch")
         self.feedback.pop(tid, None)
         self.after(tid, branch, sha)
+
+    def detached_on(self, tid, branches):
+        """The ticket's branch a detached tree stands on: its HEAD is the branch's head on the remote, or reached from
+        it. A worker that couldn't switch to its branch (checked out in another tree) is left there; landed as "no
+        branch", its READY would bounce for a missing PR. "" when HEAD is on none of them."""
+        self.fetch()
+        head = gout(self.wd, "rev-parse", "HEAD")
+        for b in branches:
+            if head and git(self.wd, "merge-base", "--is-ancestor", head, f"{self.p.remote}/{b}").returncode == 0:
+                self.log(f"{tid}: the tree was detached at {head[:7]}, on {b}'s pushed head: landing it as {b}")
+                return b
+        return ""
 
     def waits_on_merge(self, tid, branch):
         """The unmerged tickets the `Depends on:` line on the ticket's pushed branch names: a worker that can't go on
@@ -990,9 +1020,11 @@ class Pilot(Desk, Periodic):
                 self.approve_bounce(tid, sha, "red")
                 return self.bounce(tid, "check")
             if p.cfg["forge"] == "github":
-                pr = pr_for(p, branch)
+                pr = self.find_pr(tid, branch)
+                if pr is None:  # a stop or the deadline while gh failed: the next run's worker finishes READY again
+                    return None
                 if not pr:
-                    self.feedback[tid] = "No open PR for your branch: open it (`gh pr create`) and finish READY."
+                    self.feedback[tid] = f"{NO_PR} `{branch}`: open it (`gh pr create`) and finish READY."
                     return self.bounce(tid)
                 if renumbered is not None:  # GitHub merges the branch: it has to hold the resolution
                     if net.git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{sha}", p.remote,
@@ -1016,6 +1048,19 @@ class Pilot(Desk, Periodic):
                 return None
             self.log(f"{tid}: merge refused ({cut(' '.join((res.stderr or res.stdout).split()))}); trying again")
         self.fail(tid, "the merge was refused three times")
+
+    def find_pr(self, tid, branch):
+        """The branch's open PR, or "" when it has none. A failing gh (an API hiccup, a rate limit) isn't a missing PR:
+        that would spend a bounce and a full review on a ticket whose PR is open. It asks again after 1, 2, 4, then
+        every 5 minutes, as net.wait does for the network; None when a stop or the deadline ends the wait."""
+        k = 0
+        while (pr := pr_lookup(self.p, branch)) is None:
+            wait = min(5, 2 ** k)
+            self.log(f"{tid}: gh couldn't list {branch}'s PRs; asking again in {wait} min")
+            if not self.backoff(wait):
+                return None
+            k += 1
+        return pr
 
     def secret_bounce(self, tid, sha, found):
         """A branch whose commits add a secret outside `.windvane/` (pushed past the pre-push hook, or from outside
@@ -1055,15 +1100,61 @@ class Pilot(Desk, Periodic):
         windvane's own that has it checked out, with nothing uncommitted, is detached first; the user's checkout,
         or a tree with changes, is left as it is."""
         root = self.p.main_root()
-        for block in gout(root, "worktree", "list", "--porcelain").split("\n\n"):
-            fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
-            if fields.get("branch") != f"refs/heads/{branch}":
-                continue
-            path = Path(fields["worktree"])
-            if path.resolve() == root.resolve() or gout(path, "status", "--porcelain"):
+        for path in self.trees_on(branch):
+            if path == root.resolve() or gout(path, "status", "--porcelain"):
                 return self.log(f"{tid}: {branch} is checked out with changes in {path}: left at its old head")
             git(path, "switch", "-q", "--detach")
         git(root, "branch", "-f", branch, new)
+
+    def trees_on(self, branch):
+        """The worktrees that have `branch` checked out (resolved paths): git lets only one have it."""
+        out = []
+        for block in gout(self.p.main_root(), "worktree", "list", "--porcelain").split("\n\n"):
+            fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+            if fields.get("branch") == f"refs/heads/{branch}":
+                out.append(Path(fields["worktree"]).resolve())
+        return out
+
+    def free_branches(self, tid, branches, slot):
+        """Before a worker resumes `branches` in `slot`: another of windvane's own trees that has one checked out (a
+        run killed before its slot let go of it) would leave the worker unable to switch to it. A clean tree is
+        detached. One with changes holds the ticket's leftovers: returns its slot, which becomes the ticket's owner,
+        so the ticket runs there. The user's checkout, and trees outside the state dir, are left as they are."""
+        state, mine = self.p.state.resolve(), self.slot_dirs(slot)[0].resolve()
+        for b in branches:
+            for path in self.trees_on(b):
+                if path == mine or path == self.p.main_root().resolve() or not path.is_relative_to(state):
+                    continue
+                clear_scrub_stubs(self.p, path)  # stubs alone aren't leftovers, as at a slot's end
+                if not gout(path, "status", "--porcelain"):
+                    git(path, "switch", "-q", "--detach")
+                    self.log(f"{tid}: {b} was left checked out in {path.name}: detached it")
+                    continue
+                other = next((i for i in range(self.n) if self.slot_dirs(i)[0].resolve() == path), None)
+                if other is None:
+                    self.log(f"{tid}: {b} is checked out with changes in {path}, outside this run's slots: left there")
+                    continue
+                self.owner[other] = tid
+                return other
+        return None
+
+    def claim_slots(self):
+        """At a run's start: a slot tree a killed run left on a ticket's branch with uncommitted changes holds that
+        ticket's leftovers. `owner` starts empty after a restart, and only a slot's own end sets it, so without this
+        another slot would take the ticket and the tree's work would sit there unseen."""
+        self.claimed = True
+        for i in range(self.n):
+            wd = self.slot_dirs(i)[0]
+            if self.owner[i] is not None or not (wd / ".git").exists() or wd.resolve() == self.p.main_root().resolve():
+                continue
+            here = gout(wd, "rev-parse", "--abbrev-ref", "HEAD")
+            tid = next((t for t, bs in self.queue.wip.items() if here in bs), None)
+            if tid is None:
+                continue
+            clear_scrub_stubs(self.p, wd)
+            if gout(wd, "status", "--porcelain"):
+                self.owner[i] = tid
+                self.log(f"{tid}: a killed run left its uncommitted work in {wd.name}, on {here}: it resumes there")
 
     def merge_main(self, rev, msg):
         """Merge `rev` into main in the ci worktree (left on the merge). A conflict only in appended entries of
@@ -1480,6 +1571,8 @@ class Pilot(Desk, Periodic):
         `waits` why each ready ticket must wait for the running ones. A last ticket also waits while a ticket not
         marked last could still start, even one held only by a clash: last means once the rest has run out."""
         q = self.queue
+        if not self.claimed:
+            self.claim_slots()
         busy = sorted(self.running)
         # merged this run: a slot can merge and free itself after this pass's fetch, so the queue may not show it yet
         self.secrets_unchanged()
@@ -1585,6 +1678,9 @@ class Pilot(Desk, Periodic):
     def start(self, slot, tid, kind, branches):
         if not self.prepare(slot):
             return
+        other = self.free_branches(tid, branches or (), slot)
+        if other is not None:  # the loop's next pick gives it that slot
+            return self.log(f"{tid}: its branch has uncommitted changes in slot {other}'s tree: it runs there")
         with self.lock:
             if self.running:
                 self.beside |= {tid, *self.running}
