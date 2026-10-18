@@ -19,8 +19,8 @@ from helpers import Sandbox  # noqa: E402
 
 # A fake `gh` over the sandbox's bare remote: every branch on it has PR #7 open. The state dir's files set the PR up:
 # `draft` (removed by `pr ready` unless `stuck`), `timeline` (its events, one a line; `fail` for one GitHub won't
-# show), `refuse` (the mergeStateStatus a refused merge reports) and `blip` (`ready` or `api`: that call fails once
-# with a 502). `pr merge` merges --match-head-commit into main.
+# show), `refuse` (the mergeStateStatus a refused merge reports) and `blip` (words of a call: the first call holding
+# them fails with a 502). `pr merge` merges --match-head-commit into main.
 GH = """#!{python}
 import json, subprocess, sys
 from pathlib import Path
@@ -30,7 +30,7 @@ with open(st / "log", "a") as f:
 def git(*a):
     return subprocess.run(["git", "--git-dir", "{remote}", *a], capture_output=True, text=True)
 draft, refuse = (st / "draft").exists(), (st / "refuse").exists() and (st / "refuse").read_text()
-if (st / "blip").exists() and (st / "blip").read_text() == args[1 - (args[0] == "api")]:
+if (st / "blip").exists() and (st / "blip").read_text() in " ".join(args):
     (st / "blip").unlink()
     sys.exit("HTTP 502: Bad Gateway")
 if args[:2] == ["pr", "list"]:
@@ -143,10 +143,12 @@ class MergeDraft(unittest.TestCase):
         self.assertNotIn("by hand", msg)
 
     def test_a_gh_hiccup_while_undrafting_is_waited_out_and_the_ticket_merges(self):
-        for call in ("api", "ready"):
+        for call, what in (("--json isDraft", "read PR #7"), ("timeline", "read PR #7's timeline"),
+                           ("pr ready", "mark PR #7 ready")):
             with self.subTest(call):
                 self.setUp()
                 pilot = self.run_pilot(draft="", blip=call)
+                self.assertIn(f"T-001: gh couldn't {what}; asking again after 1, 2, 4, then every 5 min", self.log())
                 self.assertEqual((pilot.merged, pilot.failed), (["T-001"], []))
                 self.assertIn("T-001: gh answered again after 1 min; landing goes on", self.log())
                 self.assertIn("T-001: PR #7 was a draft; marked ready", self.log())

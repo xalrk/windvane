@@ -271,8 +271,7 @@ def secret_aside(p, patch, s):
 
 
 def draft_held(p, patch, s):
-    patch(net, "sh", lambda *a: "true")
-    patch(driver, "gh_answer", lambda cmd, cwd: subprocess.CompletedProcess(cmd, 1, "", LONG))
+    patch(driver, "gh_answer", lambda cmd, cwd: subprocess.CompletedProcess(cmd, int("view" not in cmd), "true", LONG))
     pilot(p).undraft("T-001", "7")
     return {"Held": ("Approved, but PR #7 is a draft and gh couldn't tell who made it one", "so it isn't merged.")}
 

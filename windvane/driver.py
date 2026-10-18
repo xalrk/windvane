@@ -1160,7 +1160,11 @@ class Pilot(Desk, Periodic):
         the ticket is set aside, not failed, and the push says how to let it go. A gh hiccup is waited out
         (`gh_wait`); a timeline GitHub won't show is taken for a hold. False when it isn't merged now."""
         root = self.p.main_root()
-        if net.sh(root, "gh", "pr", "view", pr, "--json", "isDraft", "-q", ".isDraft") != "true":
+        draft = self.gh_wait(tid, f"read PR #{pr}", lambda: gh_answer(
+            ["gh", "pr", "view", pr, "--json", "isDraft", "-q", ".isDraft"], root))
+        if draft is None:
+            return False
+        if draft.stdout.strip() != "true":  # or GitHub won't say: a refused merge then reads why
             return True
         events = self.gh_wait(tid, f"read PR #{pr}'s timeline", lambda: gh_answer(
             ["gh", "api", "--paginate", f"repos/{{owner}}/{{repo}}/issues/{pr}/timeline", "--jq", ".[].event"], root))
