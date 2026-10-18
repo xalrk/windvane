@@ -263,7 +263,7 @@ class Pilot(Desk, Periodic):
         # ticket runs), and the drain once that is DRAIN_AFTER old: [since, last pass, idle slots then, slot-seconds].
         self.loaded = selfupdate.loaded(self.home) if self.home else None
         self.behind, self.drain = None, None
-        # The install HEAD whose restart exec failed (no retry until the install moves on), and whether the phone
+        # The install whose restart exec failed (`install_mark`: no retry until it changes), and whether the phone
         # has been told this run that new code can't be taken up.
         self.exec_failed, self.stuck_pushed = None, False
         self.stash_failed = set()  # what waited, or was skipped, on a failed stash of the checkout: pushed once a run
@@ -1915,9 +1915,17 @@ class Pilot(Desk, Periodic):
             if line not in self.update_said:
                 self.log(line)
                 self.update_said.append(line)
-        failed = self.exec_failed and self.exec_failed == gout(self.home, "rev-parse", "HEAD")  # tried this code
-        if again and not self.behind and not failed and self.can_restart():
+        if again and not self.behind and self.exec_failed != self.install_mark() and self.can_restart():
             self.behind = time.time()
+
+    def install_mark(self):
+        """The install's HEAD and its command's file: an exec that failed is tried again once either changes (new
+        code, or a reinstall that wrote the command anew), not at every pull."""
+        try:
+            st = os.stat(exe()[0])
+            return gout(self.home, "rev-parse", "HEAD"), st.st_ino, st.st_mtime_ns
+        except OSError:
+            return gout(self.home, "rev-parse", "HEAD"), None, None
 
     def can_restart(self):
         """Whether the command a restart execs is there: a reinstall or a Python upgrade may have taken it, and a
@@ -1959,7 +1967,7 @@ class Pilot(Desk, Periodic):
 
     def restart(self):
         """Restarts the driver in place on the install's new code, with the deadline as it now is. An exec that fails
-        leaves this driver running the run on its old code, until the install moves on again."""
+        leaves this driver running the run on its old code, until the install changes."""
         if not self.can_restart():  # gone since the pull: no more draining for a restart that can't happen
             self.behind = self.drain = None
             return
@@ -1982,9 +1990,9 @@ class Pilot(Desk, Periodic):
             os.environ.pop("WINDVANE_RESTARTED", None)  # nothing took over: this driver goes on with the run
             (self.p.state / "restart.json").unlink(missing_ok=True)
             self.behind = self.drain = None
-            self.exec_failed = gout(self.home, "rev-parse", "HEAD") if self.home else None
+            self.exec_failed = self.install_mark() if self.home else None
             self.not_taken_up(f"{cmd[0]} can't be run ({(e.strerror or str(e)).lower()})",
-                              "and the run restarts at windvane's next update")
+                              "and the run restarts on it")
 
     def hand_over(self):
         """Leaves the run's memory for the driver that replaces this one (`carry_over`)."""

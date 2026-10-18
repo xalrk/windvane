@@ -24,9 +24,8 @@ to your shell's startup file.
 **`new windvane code not taken up: ...`, or `windvane couldn't start its driver`.**
 windvane was reinstalled or upgraded under a running autopilot, or a Python upgrade removed the interpreter it was
 installed with. Reinstall it: `pipx reinstall windvane`, or `sh install.sh` in the clone you installed from. A run that
-logged the first line (the phone hears it once a run) goes on with its old code. If the line says `is gone`, it
-restarts on the new code at its next update check. If it says `can't be run`, it restarts at windvane's next update.
-After the second line, start the run again. `windvane doctor` warns while a running driver's interpreter or install
+logged the first line (the phone hears it once a run) goes on with its old code and restarts on the new one at its
+next update check after the reinstall; after the second, start the run again. `windvane doctor` warns while a running driver's interpreter or install
 is gone.
 
 **A ticket never starts beside the others (`T-024 waits: no Touches line, so it runs alone`).**

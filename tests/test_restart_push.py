@@ -98,7 +98,7 @@ class RestartPush(unittest.TestCase):
         self.assertEqual(self.mine(), [f"{self.exe} can't be run (no such file or directory). {REINSTALL} Until "
                                        "then the run goes on on its current code."])
 
-    def test_newer_code_after_a_failed_exec_is_tried_again_without_a_second_push(self):
+    def test_new_code_or_a_reinstall_after_a_failed_exec_is_tried_again_without_a_second_push(self):
         self.exe.parent.mkdir(parents=True)
         script(self.exe, "/bin/sh")
 
@@ -115,7 +115,14 @@ class RestartPush(unittest.TestCase):
         self.pilot.pull()
         self.assertTrue(self.pilot.behind)
         self.pilot.restart()
-        self.assertEqual((len(self.calls), len(self.mine())), (2, 1))
+        self.pilot.pull()
+        self.assertIsNone(self.pilot.behind)
+        self.exe.unlink()  # reinstalled: the command written anew, the same install code
+        script(self.exe, "/bin/sh")
+        self.pilot.pull()
+        self.assertTrue(self.pilot.behind)
+        self.pilot.restart()
+        self.assertEqual((len(self.calls), len(self.mine())), (3, 1))
 
 
 if __name__ == "__main__":
