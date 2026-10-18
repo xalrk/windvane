@@ -85,7 +85,7 @@ class Signalled(BaseException):
 SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it reads."),
                   ("context limit", "Split the ticket, or trim what it reads."),
                   ("request too large", "Split the ticket, or trim what it reads."))
-REWRITE = "Rewrite its branch without the secret, as its push says."  # a secret's set-aside fix, for the queue hint
+REWRITE = "Rewrite its branch without the secret, as its push says: runs leave it be until then."  # a secret's set-aside fix, for the queue hint
 
 
 

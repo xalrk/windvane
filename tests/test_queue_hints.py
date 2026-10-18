@@ -85,8 +85,7 @@ class RunCauses(Base):
     def test_a_dependency_that_failed_this_run_says_how_to_retry_it(self):
         self.publish()
         out = self.queue_cli({"failed": ["T-001"]})
-        self.assertEqual(self.hints(out), ["hint: T-001 failed this run (the log says why): T-002, T-003 wait until it "
-                                           "merges; this run won't retry it, the next `windvane run` will"])
+        self.assertEqual(self.hints(out), [f"hint: {self.failed}"])
         self.assertEqual(self.hints(self.queue_cli()), [])  # no run on: the next one tries it as usual
 
     def test_a_dependency_held_for_a_phone_question_names_its_id_and_the_answer_command(self):
@@ -102,7 +101,7 @@ class RunCauses(Base):
         self.s.write(".windvane/QUESTIONS.md", "# Questions\n\n## Open\n\n### T-001: Which?\n- **A**: a\n- **B**: b\n"
                      "Recommendation: A, because.\n\n## Provisional\n\n## Answered\n")
         self.publish()
-        self.assertIn("hint: T-001 has an open question (T-001): T-002, T-003 wait until it's answered: "
+        self.assertIn("hint: T-001 has an open question: T-002, T-003 wait until it's answered: "
                       "`windvane answer T-001 <letter>`", self.queue_cli())
 
     def test_a_set_aside_hint_carries_its_own_fix(self):
@@ -110,14 +109,30 @@ class RunCauses(Base):
         out = self.queue_cli({"aside": {"T-001": "hit its max turns"},
                               "fixes": {"T-001": "Raise max turns in .claude/ settings or split it."}})
         self.assertEqual(self.hints(out), [
-            "hint: T-001 was set aside this run (hit its max turns): T-002, T-003 wait until it merges; before the "
-            "next run takes it up again, raise max turns in .claude/ settings or split it"])
+            "hint: T-001 was set aside this run (hit its max turns): T-002, T-003 wait until it merges; so it isn't "
+            "set aside again, raise max turns in .claude/ settings or split it"])
+
+    def test_a_secret_set_aside_says_runs_leave_it_be_until_its_branch_is_rewritten(self):
+        self.publish()
+        out = self.queue_cli({"aside": {"T-001": "its .windvane/ lines hold a token"}, "fixes": {"T-001": driver.REWRITE}})
+        self.assertIn("wait until it merges; so it isn't set aside again, rewrite its branch without the secret, as "
+                      "its push says: runs leave it be until then\n", out)
+
+    def test_a_set_aside_without_a_fix_says_the_next_run_takes_it_up(self):
+        self.publish()
+        out = self.queue_cli({"aside": {"T-001": "its sessions kept dying: API Error: 500"}, "fixes": {"T-001": ""}})
+        self.assertIn("hint: T-001 was set aside this run (its sessions kept dying: API Error: 500): T-002, T-003 wait "
+                      "until it merges; the next run takes it up again\n", out)
 
     def test_hints_returns_one_entry_per_first_waiting_ticket(self):
         self.publish()
         self.assertEqual(Queue(self.p).hints(run={"failed": ["T-001"]}),
-                         {"T-002": ["T-001 failed this run (the log says why): T-002, T-003 wait until it merges; "
-                                    "this run won't retry it, the next `windvane run` will"]})
+                         {"T-002": [self.failed]})
+
+    @property
+    def failed(self):
+        return (f"T-001 failed this run (its `FAILED` line in {self.p.state / 'autopilot.log'} says why): T-002, T-003 "
+                "wait until it merges; this run won't retry it, the next `windvane run` will")
 
 
 class SetAsidePush(Base):
@@ -143,6 +158,16 @@ class SetAsidePush(Base):
         self.assertEqual(rest, "T-002 waits on it.")
         self.assertEqual(json.loads((self.p.state / "state.json").read_text())["fixes"],
                          {"T-001": "Raise max turns in .claude/ settings or split it."})
+
+    def test_a_set_aside_fix_survives_a_restart(self):
+        pilot = driver.Pilot(self.p, args())
+        pilot.set_aside_limit("T-001", "its max turns", "Split it.")
+        pilot.hand_over()
+        again = driver.Pilot(self.p, args())
+        again.carry_over(True)
+        self.assertEqual(again.fixes, {"T-001": "Split it."})
+        again.save()
+        self.assertEqual(json.loads((self.p.state / "state.json").read_text())["fixes"], {"T-001": "Split it."})
 
     def test_a_long_list_of_waiting_tickets_is_counted_past_four(self):
         pilot = driver.Pilot(self.p, args())
