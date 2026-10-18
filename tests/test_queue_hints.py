@@ -137,7 +137,8 @@ class RunCauses(Base):
     @property
     def failed(self):
         return (f"T-001 failed this run (its `FAILED` line in {self.p.state / 'autopilot.log'} says why): T-002, T-003 "
-                "wait until it merges; this run won't retry it, the next `windvane run` will")
+                "wait until it merges; `windvane retry T-001` puts it back in this run, or the next `windvane run` "
+                "takes it up")
 
 
 class SetAsidePush(Base):

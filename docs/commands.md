@@ -40,6 +40,7 @@ options. Commands that read state (`status`, `queue`, `watch`, `stats` and so on
 | `windvane run --daily HH:MM-HH:MM --detach` | Run in this window every day (it may cross midnight), each window a run of its own with its own pushes; typed inside a window, the first runs from now. Between windows it waits without starting sessions. `stop` ends the schedule, `deadline` moves the end of the current or next window, `status` shows `waiting: starts 12:00 (daily 12:00-20:00)`. A reboot ends it. |
 | `windvane stop [--now] [--if-running]` | Stop after the current ticket. `--now` kills every session of the run; their worktrees keep the work for the next run. `--if-running` (for scripts and phone hooks) does nothing more when no run is going. Either way it kills the project's [kept jobs](safety.md#kept-heavy-jobs) at once. |
 | `windvane deadline <when>` | Move a running autopilot's deadline: `14:00`, `"2026-10-02 09:30"`, or from now, `+90m`, `+2h`. |
+| `windvane retry <ID>` | Put a failed ticket back in a running autopilot's queue once you've fixed the cause; it starts again between tickets. One that failed at the merge with its approved head unchanged is merged without a worker or review. Refuses a ticket held for another reason, saying what lets it go. |
 
 Options of `windvane run`:
 

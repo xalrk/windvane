@@ -66,6 +66,7 @@ PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket m
 DRAIN_AFTER = 3 * 3600  # seconds a driver may run behind its install's code before it stops refilling slots for it
 WRAP_UP = 20  # minutes before its stop a worker is told to wrap up
 WRAP_LEAD = 5  # minutes a worker's wrap-up must still be ahead for it to start: less, and it ends PARTIAL at once
+RETRY = "RETRY"  # in the state dir: the failed tickets `windvane retry` puts back in the running autopilot's queue
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
@@ -244,6 +245,7 @@ class Pilot(Desk, Periodic):
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.secrets = s.get("secrets", {})  # ticket -> {"branch", "sha"}: a head set aside for a secret (secret_aside)
+        self.landing = s.get("landing", {})  # ticket -> {"branch", "sha"}: an approved head whose merge failed
         self.skip, self.merged, self.failed = set(), [], []
         self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
         self.fixes = {}  # ticket set aside -> what keeps it from being set aside again, for `windvane queue`'s hint
@@ -324,7 +326,8 @@ class Pilot(Desk, Periodic):
         with self.lock:
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
-                                        "secrets": dict(self.secrets), "aside": dict(self.aside),
+                                        "secrets": dict(self.secrets), "landing": dict(self.landing),
+                                        "aside": dict(self.aside),
                                         "fixes": dict(self.fixes), "failed": list(self.failed),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
                                         "running": dict(self.running)})
@@ -605,6 +608,8 @@ class Pilot(Desk, Periodic):
 
     def work(self, tid, kind, branches):
         p, wd = self.p, self.wd
+        if self.land_again(tid):
+            return
         start_five = self.usage.five
         limit, kill_at, wrap = self.worker_times()
         ref = f"{p.remote}/{branches[0]}" if branches else p.upstream
@@ -657,6 +662,22 @@ class Pilot(Desk, Periodic):
         if start_five is not None and self.usage.five is not None and self.usage.five >= start_five:
             self.costs.append(round(self.usage.five - start_five, 1))
         self.save()
+
+    def land_again(self, tid):
+        """A ticket that failed after its review approved (the merge was refused, or didn't land): while its branch
+        still has that head, it goes straight to the merge, with no worker, critic or review paid for it again. True
+        when it went there."""
+        p, land = self.p, self.landing.pop(tid, None)
+        if not land:
+            return False
+        self.save()
+        branch, sha = land["branch"], land["sha"]
+        if gout(p.main_root(), "rev-parse", "-q", "--verify", f"{p.remote}/{branch}") != sha:
+            self.log(f"{tid}: {branch} moved off its approved head {sha[:7]}: the worker takes it up again")
+            return False
+        self.log(f"{tid}: {branch} is still at its approved head {sha[:7]}: straight to the merge")
+        self.integrate(tid, branch, sha)
+        return True
 
     def worker_times(self):
         """A worker starting now: (its own time limit, when it's stopped, its wrap-up time)."""
@@ -1109,7 +1130,7 @@ class Pilot(Desk, Periodic):
                            f"**windvane: resolved the conflict with {p.main}** in appended entries: {said(renumbered)}."
                            + old_numbers(renumbered))
                 if not undrafted:
-                    if not self.undraft(tid, pr):
+                    if not self.undraft(tid, pr, (branch, sha)):
                         return None
                     undrafted = True
                 res = net.call(["gh", "pr", "merge", pr, "--merge", "--match-head-commit", sha, "--subject", msg],
@@ -1120,7 +1141,7 @@ class Pilot(Desk, Periodic):
                     why = merge_state(state, res.stderr or res.stdout)
                     if why in STUCK:  # no retry clears it: fail now, saying why
                         self.log(f"{tid}: merge refused ({why})")
-                        return self.fail(tid, f"the merge was refused: {why}")
+                        return self.fail(tid, f"the merge was refused: {why}", (branch, sha))
             else:  # by sha, so nothing that moves the ci worktree's HEAD meanwhile can turn it into a no-op
                 res = net.git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
@@ -1130,7 +1151,7 @@ class Pilot(Desk, Periodic):
                 return None
             why = why or gh_error(res)
             self.log(f"{tid}: merge refused ({why}); trying again")
-        self.fail(tid, f"the merge was refused three times ({why})")
+        self.fail(tid, f"the merge was refused three times ({why})", (branch, sha))
 
     def find_pr(self, tid, branch):
         """The branch's open PR, or "" when it has none. A failing gh (an API hiccup, a rate limit) isn't a missing PR:
@@ -1154,7 +1175,7 @@ class Pilot(Desk, Periodic):
             self.log(f"{tid}: gh answered again after {waited} min; landing goes on")
         return got
 
-    def undraft(self, tid, pr):
+    def undraft(self, tid, pr, head=None):
         """A PR opened as a draft (`gh pr create --draft`, a project's own rules) is marked ready: the review is the
         gate, and a draft can't merge on any try. One a person turned into a draft after opening it is their hold:
         the ticket is set aside, not failed, and the push says how to let it go. A gh hiccup is waited out
@@ -1188,7 +1209,7 @@ class Pilot(Desk, Periodic):
         if res is None:
             return False
         if res.returncode:
-            self.fail(tid, f"PR #{pr} is a draft and GitHub refused to mark it ready ({gh_error(res)})")
+            self.fail(tid, f"PR #{pr} is a draft and GitHub refused to mark it ready ({gh_error(res)})", head)
             return False
         self.log(f"{tid}: PR #{pr} was a draft; marked ready")
         return True
@@ -1325,7 +1346,7 @@ class Pilot(Desk, Periodic):
             return True
         why = f"{p.upstream} doesn't contain {sha[:12]}" if fetched else f"couldn't fetch {p.remote} to confirm it"
         self.fail(tid, f"the merge was reported done but {why}; the work is kept on branch {branch or '(none)'} "
-                       f"at {sha[:12]}")
+                       f"at {sha[:12]}", (branch, sha) if branch else None)
         return False
 
     def off_touches(self, tid):
@@ -1360,6 +1381,7 @@ class Pilot(Desk, Periodic):
         self.fail_streak = 0
         self.feedback.pop(tid, None)
         self.approved.pop(tid, None)
+        self.landing.pop(tid, None)
         self.save()
         score, first = self.scores.get(tid), critic.first_score(p, tid)
         self.log(f"{tid}: merged {sha[:7]} · {self.usage.text()}")
@@ -1395,8 +1417,12 @@ class Pilot(Desk, Periodic):
         return "".join(f"\n{q['question']} Built {q['built']} without asking you: {q['option']}; {how(q)}" if q in new
                        else f"\nBuilt {q['built']} for {tid}: {q['option']}; {how(q)}" for q in picks), picks
 
-    def fail(self, tid, why):
+    def fail(self, tid, why, head=None):
+        """`head`: the approved (branch, sha) a failed merge leaves, for a retry to merge without a worker run
+        (`land_again`)."""
         self.skip.add(tid)
+        if head:
+            self.landing[tid] = dict(zip(("branch", "sha"), head))
         jobs.end_kept(self.p, tid, "its ticket failed")
         self.note_heavy(tid)
         scratch.drop(self.p, tid)
@@ -1944,6 +1970,7 @@ class Pilot(Desk, Periodic):
             if desk:
                 self.desk_one(desk[0])
                 continue
+            self.take_retries()
             self.fetch()
             self.queue = Queue(p)
             busy = bool(self.running)  # a slot that ends during the pick still had its ticket held back: pick again
@@ -1995,6 +2022,41 @@ class Pilot(Desk, Periodic):
             while self.n == 1 and self.threads[-1].is_alive():
                 self.threads[-1].join(NAP)
                 self.poll_questions()
+
+    def take_retries(self):
+        """Between tickets: the failed tickets `windvane retry` asked for go back in the queue, each counting its
+        rounds afresh. The request stays in the state dir until read, so a restart (a self-update) reads it too."""
+        f = self.p.state / RETRY
+        taking = f.with_name(RETRY + ".taking")  # renamed first: a request written while this one is read waits
+        try:
+            left = taking.read_text()  # a driver that died reading it: those still count
+        except OSError:
+            left = ""
+        try:
+            f.rename(taking)
+        except OSError:
+            if not left:
+                return
+        else:
+            if left:
+                with open(taking, "a") as h:
+                    h.write(left)
+        for tid in dict.fromkeys(filter(None, map(self.p.norm, taking.read_text().split()))):
+            if tid not in self.failed:
+                self.log(f"{tid}: asked to retry it, but it hasn't failed in this run")
+                continue
+            self.failed = [t for t in self.failed if t != tid]
+            self.skip.discard(tid)
+            self.unfinished.discard(tid)
+            for counts in (self.reviews, self.bounces, self.partials, self.ticket_crashes):
+                counts.pop(tid, None)
+            append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "retried"})
+            land = self.landing.get(tid)
+            self.log(f"{tid}: back in the queue (windvane retry)"
+                     + (f"; its approved head {land['sha'][:7]} merges without a worker if its branch still has it"
+                        if land else ""))
+        self.save()
+        taking.unlink(missing_ok=True)
 
     def self_update(self):
         """Pulls the windvane install after each merge (or every PULL_EVERY seconds), tickets running or not, and
@@ -2149,6 +2211,8 @@ class Pilot(Desk, Periodic):
         if not (restarted or schedule.called_off(p)):  # a stop asked for while it restarted, or started, holds
             (p.state / "STOP").unlink(missing_ok=True)
         (p.state / "DEADLINE").unlink(missing_ok=True)  # an earlier run's
+        for f in (RETRY, RETRY + ".taking") if not restarted else ():  # an earlier run's: this one fails none yet
+            (p.state / f).unlink(missing_ok=True)
         self.deadline = deadline
         # Network calls wait out an outage (net.py) with this run's stop rule; the probe tries the remote's host too.
         net.hosts = list(filter(None, [net.remote_host(gout(p.main_root(), "remote", "get-url", p.remote))]))
