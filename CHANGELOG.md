@@ -7,11 +7,9 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
-- `windvane retry <ID>`: a failed ticket goes back in a running autopilot's queue once you've fixed the cause,
-  without stopping the run; the request outlasts a self-update restart. A ticket that failed at the merge after its
-  review approved goes straight to the merge while its branch still has that head, with no worker, critic or review
-  run again. `windvane status` lists each failed ticket with its `retry` command, and `windvane queue`'s hint for a
-  failed dependency names it too.
+- `windvane retry <ID>` puts a failed ticket back in a running autopilot's queue once you've fixed the cause. One
+  that failed at the merge after its review approved is merged without a worker or review while its branch still has
+  that head. `windvane status` lists each failed ticket with the command.
 - `windvane bg --cancel <name>`: end your own background job, waiting for the machine or running. Its whole
   process group goes, its place in the heavy queue frees for the jobs behind it, and its log ends with
   `windvane: cancelled`. `windvane await` now says `WAITING` for a `--heavy` job still in the queue.
