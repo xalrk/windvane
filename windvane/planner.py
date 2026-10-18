@@ -9,7 +9,7 @@ from .held import author_ident, is_local, land, local_push, n_tickets, push_bran
 from .phone import whole
 from .queue import Queue
 from .runner import NO_REQUEST, rules, run_claude
-from .util import git, gout, last_match, load_json, log, now, push, save_json
+from .util import edit_json, git, gout, last_match, load_json, log, now, push
 from .worktree import clean_detach, ensure_worktree
 
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
@@ -108,8 +108,12 @@ def closed_prs(p, branches):
         except OSError as e:
             keep = closed | (reopened & known)
             log(p, f"requests on reopened plans not held again yet ({e}): tried again next time")
-    if keep != known:  # a deleted branch's line goes too
-        save_json(f, sorted(keep))
+    if keep != known:  # a deleted branch's line goes too; `windvane plan` and the driver's replan both write it
+        gone, new = known - keep, keep - known
+
+        def change(lines):
+            lines[:] = sorted((set(lines) - gone) | new)
+        edit_json(f, change, [])
     return closed
 
 

@@ -249,10 +249,13 @@ def give_answer(p, tid, option=None, text=None):
 
 
 def drop_answers(p, settled):
-    """Forget the answers to the questions in `settled`, keeping any a `windvane answer` gives meanwhile."""
+    """Forget the answers the pass read, `settled` being {question: its answer as read, or None}: an entry goes only
+    while it's still the one read, so an answer given after the pass read the file (to a question it then settled on a
+    timeout) stays for the next pass to see, as do answers to other questions."""
     def drop(a):
-        for k in settled:
-            a.pop(k, None)
+        for k, read in settled.items():
+            if read is not None and a.get(k) == read:
+                del a[k]
     edit_json(p.state / "answers.json", drop, {})
 
 

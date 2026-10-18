@@ -1489,7 +1489,7 @@ class Pilot(Desk, Periodic):
         all night; one that must wait for the user, or was put off with "later", still waits."""
         p = self.p
         phone.pump(late=False)  # this pass's budget goes to the open questions first, late answers after them
-        desk, settled = desk_answers(p), []
+        desk, settled = desk_answers(p), {}
         quiet = quiet_now(p)[0]
         for key, q in list(self.questions.items()):
             if "result" in q or (q["asked"] is None and not quiet):
@@ -1524,7 +1524,7 @@ class Pilot(Desk, Periodic):
                                  f"no answer in {wait} min", "No answer")
             else:
                 continue
-            settled.append(key)
+            settled[key] = desk.get(key)
         for tid in tickets(self.questions):
             mine = {k: q for k, q in self.questions.items() if ticket_of(k, q) == tid}
             if all("result" in q for q in mine.values()):
@@ -1532,10 +1532,22 @@ class Pilot(Desk, Periodic):
                 for k in mine:
                     del self.questions[k]
                 self.skip.discard(tid)
+        for key, got in desk.items():  # given after an earlier pass read the file, to a question it then settled
+            if key not in settled and "result" in self.questions.get(key, {"result": ""}):
+                self.late_answer(key)
+                settled[key] = got
         if settled:
             drop_answers(p, settled)
         self.save()
         phone.late_pass()
+
+    def late_answer(self, key):
+        """A `windvane answer` that came too late to be taken is told once, as a late phone answer is, then dropped,
+        so it can't answer a later question of the same id."""
+        msg = (f"{key}: your answer came after it was settled, so it wasn't taken; once its ticket merges, change it "
+               f"with `windvane answer {key} <letter>`.")
+        self.log(msg)
+        push("Answer not taken", msg)
 
     def go_with_rec(self, key, q, why, said, title):
         """Settle question `key` with its recommendation: the worker's feedback, the record `windvane answer` needs
