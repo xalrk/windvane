@@ -23,7 +23,7 @@ class Base(unittest.TestCase):
         self.addCleanup(self.s.close)
         self.p = Project(self.s.root)
         # by name, made as files, but only where the path really is: a lookup in the wrong dir finds nothing
-        stub = mock.patch.object(jobs, "placeholder", lambda path: Path(path).name in STUBS and Path(path).exists())
+        stub = mock.patch.object(jobs, "placeholder", lambda path, rel="": Path(path).name in STUBS and Path(path).exists())
         stub.start()
         self.addCleanup(stub.stop)
 
@@ -90,6 +90,11 @@ class Real(unittest.TestCase):
             link = Path(tmp) / "null"
             link.symlink_to("/dev/null")
             self.assertFalse(jobs.placeholder(link))
+            dot = Path(tmp) / ".bashrc"  # nor a link to an empty dotfile
+            dot.write_text("")
+            (Path(tmp) / ".link").symlink_to(dot)
+            self.assertFalse(jobs.placeholder(Path(tmp) / ".link", ".link"))
+            self.assertTrue(jobs.placeholder(dot, ".bashrc"))
 
 
 
@@ -128,6 +133,43 @@ class FromASubdir(Base):
             self.p.cfg["check"] = "test -f marker"
             ok, summary, _ = jobs.check(self.p, Path(d) / "here")
             self.assertTrue(ok, summary)
+
+class OutsideTheSandbox(unittest.TestCase):
+    """Seen from outside, a live sandbox's mount points are empty regular files: no character devices to skip."""
+    def setUp(self):
+        self.s = Sandbox()
+        self.addCleanup(self.s.close)
+        self.p = Project(self.s.root)
+
+    def mount_points(self):
+        for name in (".bashrc", ".gitconfig", ".vscode", ".claude/settings.json", ".claude/agents"):
+            self.s.write(name, "")
+
+    def test_empty_mount_points_dont_block_recording(self):
+        bare = jobs.tree_key(self.p, self.s.root)
+        self.mount_points()
+        self.assertEqual(jobs.blockers(self.s.root), [])
+        self.assertEqual(jobs.tree_key(self.p, self.s.root), bare)
+
+    def test_a_real_empty_file_still_blocks(self):
+        self.s.write("tests/__init__.py", "")
+        self.assertEqual(jobs.blockers(self.s.root), ["tests/__init__.py"])
+
+    def test_a_dotfile_with_content_still_blocks(self):
+        self.s.write(".bashrc", "alias x=y\n")
+        self.assertEqual(jobs.blockers(self.s.root), [".bashrc"])
+
+    def test_a_real_file_beside_the_mount_points_is_the_only_one_named(self):
+        self.mount_points()
+        self.s.write("src/x.py", "")
+        ok, summary, _ = jobs.check(self.p, self.s.root)
+        self.assertTrue(ok, summary)
+        self.assertIn("not recorded: src/x.py)", summary)
+        self.mount_points()  # the pass now recorded for the clean tree is reused with them there
+        (Path(self.s.root) / "src/x.py").unlink()
+        self.assertNotIn("not recorded", jobs.check(self.p, self.s.root)[1])
+        self.assertIn("reused the pass", jobs.check(self.p, self.s.root)[1])
+
 
 if __name__ == "__main__":
     unittest.main()
