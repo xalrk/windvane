@@ -803,7 +803,7 @@ def main(argv=None):
     s.add_argument("--heavy", action="store_true", help="run it under the machine-wide heavy lock")
     s.add_argument("--mem", type=gb, help="with --heavy: GB of free memory it needs (default: as `heavy`)")
     s.add_argument("--keep", action="store_true", help="with --heavy: it outlives the session (until the run's "
-                                                       "stop); the ticket resumes when it ends")
+                                                       "stop, plus heavy_keep_hours); the ticket resumes when it ends")
     s.add_argument("--expect", type=expected, metavar="MIN", help="with --heavy: minutes it likely runs (as `heavy --expect`)")
     s.add_argument("--cancel", action="store_true", help="end your own job of that name instead, waiting or running")
     s.add_argument("name")

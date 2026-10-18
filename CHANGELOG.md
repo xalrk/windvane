@@ -55,7 +55,7 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
-- `heavy_keep_hours` keeps a kept job (`bg --heavy --keep`) running past the run's stop again. The job was told only
+- `heavy_keep_hours` keeps a kept job (`bg --heavy --keep`) running past the run's stop. The job was told only
   the stop, and its own watch killed it while the run wound down, before the hours were added. It is now told the
   stop plus the hours from the start; `windvane stop` still kills it at once, and a deadline moved earlier brings its
   stop earlier too.
