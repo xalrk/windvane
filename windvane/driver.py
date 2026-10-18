@@ -2049,7 +2049,8 @@ class Pilot(Desk, Periodic):
             if late:
                 self.stop_reason = late
                 return
-            if tid is not None and over and tid not in self.checking:  # no more slots until the window allows; the running ones go on
+            # no more slots until the window allows; the running ones go on, as does a merge held by its checks
+            if tid is not None and over and tid not in self.checking:
                 why = "usage limit reached" if self.usage.rejected else (
                     f"usage estimate ({self.usage.five:g}% + {k} x {self.est():.0f}% > cap {self.a.cap:g}%)")
                 self.idle_note([f"no {nth(k)} slot: {why}"])

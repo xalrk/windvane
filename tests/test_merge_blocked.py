@@ -162,8 +162,8 @@ class MergeBlocked(unittest.TestCase):
     def test_a_check_that_never_ends_fails_it_after_the_most_wait_while_the_run_goes_on_planning(self):
         driver.CHECKS_EVERY, driver.CHECKS_MOST = 0.002, 0.005  # tries 0.12 s apart for 0.3 s: a plan between them
         started = time.monotonic()
-        pilot = self.run_pilot(replan=1, goal="more", checks=json.dumps([{"__typename": "StatusContext", "context": "ci/build",
-                                                             "state": "EXPECTED"}]))
+        never = json.dumps([{"__typename": "StatusContext", "context": "ci/build", "state": "EXPECTED"}])
+        pilot = self.run_pilot(replan=1, goal="more", checks=never)
         self.assertLess(time.monotonic() - started, 60)  # not the hour to its deadline
         self.assertEqual((pilot.merged, pilot.failed), ([], ["T-001"]))
         self.assertGreaterEqual(self.merges(), 2)
@@ -183,7 +183,8 @@ class MergeBlocked(unittest.TestCase):
     def test_a_required_review_fails_it_at_once_saying_retry_merges_the_kept_approval(self):
         pilot = self.run_pilot(review="REVIEW_REQUIRED", checks=RUNNING)
         self.assertEqual((pilot.failed, self.merges()), (["T-001"], 1))
-        self.assertIn("T-001: FAILED: the merge was refused: a required review hasn't approved it; once it's given, `windvane retry T-001` merges the kept approval", self.log())
+        self.assertIn("T-001: FAILED: the merge was refused: a required review hasn't approved it; once it's given, "
+                      "`windvane retry T-001` merges the kept approval", self.log())
         self.assertNotIn("merge waits", self.log())
 
     def test_a_draft_hold_let_go_between_runs_merges_the_kept_approval_with_no_session(self):
