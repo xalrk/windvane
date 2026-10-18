@@ -46,6 +46,15 @@ The push and the log say why: reviews kept asking for changes (`review_rounds`),
 (`partials`), one run hit `ticket_hours`, its max turns (set by the Claude CLI or the project's `.claude/` settings, not windvane) or its dollar budget, or its sessions kept dying. The work so far is on the ticket's branch. Usually the ticket is too big or too vague:
 split it or sharpen "Done when", then run again; the next worker resumes the branch.
 
+**A ticket failed.**
+The `Failed` push and the log's `FAILED` line say why; its branch is kept, and the run goes on without it. Once you
+have fixed the cause (a draft PR, a refused merge, a missing tool), `windvane retry T-007` puts it back in the running
+autopilot's queue: it starts again between tickets, with its review rounds counted afresh, and `windvane status` lists
+every failed ticket with that command. One that failed only at the merge, after its review approved, goes straight to
+the merge while its branch still has the approved head: no worker, critic or review is paid for again. With no run
+going there's nothing to do: the next `windvane run` takes it up anyway. A ticket set aside for another reason (an
+open question, a secret on its branch, a hold) isn't retried; `retry` says what lets it go.
+
 **The run paused (`paused ... Resuming at 14:00`).**
 Claude's 5-hour usage reached `cap`. It resumes by itself when the window resets. Raise `cap` (or `run --cap`) to
 let it spend more of your window.

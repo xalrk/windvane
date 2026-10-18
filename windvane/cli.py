@@ -28,7 +28,7 @@ from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 
 
 # commands the phone and the desk use to look and stop: a token file that can't be read mustn't block them
-LOCAL = {"stop", "status", "overview", "stats", "watch", "deadline", "quiet", "mode", "await"}
+LOCAL = {"stop", "status", "overview", "stats", "watch", "deadline", "retry", "quiet", "mode", "await"}
 STOP_WAIT = 90  # seconds `stop --now` waits for the run to end: a 5 s poll, then up to 60 s for SIGTERM to work
 
 
@@ -275,6 +275,23 @@ def cmd_deadline(a, p):
           "sessions are stopped by then")
 
 
+def cmd_retry(a, p):
+    """A failed ticket back in the running autopilot's queue, once the cause is fixed by hand: the driver reads the
+    request between tickets (`Pilot.take_retries`). A ticket held for another reason is refused with what lets it go,
+    as `windvane queue` says it."""
+    tid = p.norm(a.ticket) or sys.exit(f"windvane retry: {a.ticket} isn't a ticket id")
+    if not driver.locked(p):
+        return print(f"{p.display}: autopilot isn't running; the next `windvane run` takes {tid} up anyway")
+    st = load_json(p.state / "state.json", {})
+    if tid not in st.get("failed", []):
+        why = Queue(p).release(tid, questions.tickets(st.get("questions", {})), st)
+        sys.exit(f"{p.display}: {tid} isn't retried: " + (f"only a failed ticket is. {why}" if why else
+                                                         "it hasn't failed in this run"))
+    with open(p.state / driver.RETRY, "a") as f:
+        f.write(tid + "\n")
+    print(f"{p.display}: {tid} goes back in the queue; the autopilot takes it up between tickets")
+
+
 def parallel_arg(v):
     if v.lower() == "auto":
         return "auto"
@@ -298,6 +315,8 @@ def cmd_status(a, p):
     st = load_json(p.state / "state.json", {})
     for tid, slot in sorted(st.get("running", {}).items(), key=lambda kv: kv[1]) if on else ():
         print(f"slot {slot}: {tid}")
+    for tid in dict.fromkeys(st.get("failed", [])) if on else ():
+        print(f"failed: {tid}; once its cause is fixed: windvane retry {tid}")
     for key, q in questions.waiting_on(st.get("questions", {})).items():
         print(f"waiting on you: {key}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
     for q in questions.with_ids(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"), p):
@@ -768,6 +787,8 @@ def main(argv=None):
     s.add_argument("--now", action="store_true", help="kill the running sessions now; their worktrees keep the work")
     s = sub.add_parser("deadline", help="move a running autopilot's deadline")
     s.add_argument("when", nargs="+", help="HH:MM, 'YYYY-MM-DD HH:MM', or from now: +90m, +2h")
+    s = sub.add_parser("retry", help="put a failed ticket back in a running autopilot's queue")
+    s.add_argument("ticket")
     s = sub.add_parser("status", help="running or not, open questions, the log's tail")
     s.add_argument("--line", action="store_true", help="one line (for the phone)")
     s.add_argument("--running", action="store_true",

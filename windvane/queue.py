@@ -24,6 +24,7 @@ from pathlib import Path
 from .questions import blocks, part, ticket_of, waiting_on
 from .util import gout
 
+ANSWERED = "it's answered"  # (a quote can't go in an f-string's braces before Python 3.12)
 PEOPLE = ("the user", "user", "you")  # outside items that stand for someone's answer, not a milestone
 
 
@@ -228,9 +229,7 @@ class Queue:
             if self.status(t, blocked) == "waiting":
                 for d in self.waits_on(t):
                     causes.setdefault(d, []).append(t)
-        asks = {}
-        for k, q in waiting_on(run.get("questions", {})).items():
-            asks.setdefault(self.p.norm(ticket_of(k, q)), []).append(k)
+        asks = self.asks(run)
         out = {}
         for d, waiters in causes.items():
             line = self.hint(d, waiters, blocked, asks, run)
@@ -238,26 +237,41 @@ class Queue:
                 out.setdefault(waiters[0], []).append(line)
         return out
 
+    def asks(self, run):
+        """{ticket: the ids of its questions still waiting for the user}, from the driver's state.json."""
+        asks = {}
+        for k, q in waiting_on(run.get("questions", {})).items():
+            asks.setdefault(self.p.norm(ticket_of(k, q)), []).append(k)
+        return asks
+
+    def release(self, d, blocked, run):
+        """What lets `d` go, in the words `hints` gives the tickets waiting on it, or "" when nothing holds it."""
+        return self.hint(d, [], blocked, self.asks(run), run)
+
     def hint(self, d, waiters, blocked, asks, run):
-        """The line for one cause `d`, or "" when it ends by itself (a ticket that's just not merged yet)."""
+        """The line for one cause `d`, or "" when it ends by itself (a ticket that's just not merged yet). With no
+        `waiters`, only what holds `d` and what lets it go."""
         rel, aside, fixes = self.p.queue_rel, run.get("aside", {}), run.get("fixes", {})
         who = f"{', '.join(waiters)} wait{'s' * (len(waiters) == 1)}"
+        until = lambda end: f": {who} until {end}" if waiters else ""  # noqa: E731
         if d in self.parked:
-            return f"{d} is parked: {who}; to unpark it, take `{self.parked_lines[d]}` out of {rel}"
+            return (f"{d} is parked{': ' + who if waiters else ''}; to unpark it, take `{self.parked_lines[d]}` out "
+                    f"of {rel}")
         if d in aside:
             fix = fixes.get(d, "").rstrip(".")
             then = (f"so it isn't set aside again, {fix[:1].lower()}{fix[1:]}" if fix
                     else "the next run takes it up again")
-            return f"{d} was set aside this run ({aside[d]}): {who} until it merges; {then}"
+            return f"{d} was set aside this run ({aside[d]}){until('it merges')}; {then}"
         if d in run.get("failed", []):
-            return (f"{d} failed this run (its `FAILED` line in {self.p.state / 'autopilot.log'} says why): {who} "
-                    "until it merges; this run won't retry it, the next `windvane run` will")
+            return (f"{d} failed this run (its `FAILED` line in {self.p.state / 'autopilot.log'} says why)"
+                    f"{until('it merges')}; `windvane retry {d}` puts it back in this run, or the next `windvane run` "
+                    "takes it up")
         if d in self.files and (d in blocked or d in self.asked):
             ids = asks.get(d) or self.asked_ids.get(d)
             if not ids:  # answered: it waits only for its ticket's next run
                 return ""
             named = f" ({', '.join(ids)})" if ids != [d] else ""
-            return f"{d} has an open question{named}: {who} until it's answered: `windvane answer {ids[0]} <letter>`"
+            return f"{d} has an open question{named}{until(ANSWERED)}: `windvane answer {ids[0]} <letter>`"
         if self.known(d):
             return ""
         done = f"add `- done: {d} (why)` to {rel}"
