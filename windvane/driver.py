@@ -1184,11 +1184,12 @@ class Pilot(Desk, Periodic):
 
     def checks_unfinished(self):
         """At the run's end, the tickets still waiting on their checks fail as any refused merge does, approval kept:
-        `windvane retry` or the next run merges it without a worker."""
+        the next run merges it without a worker."""
         for tid in list(self.checking):
             self.checking.pop(tid)
             land = self.landing.get(tid, {})
-            self.fail(tid, f"the merge was refused: {MERGE_STATES['PENDING']} when the run ended",
+            self.fail(tid, f"the merge was refused: {MERGE_STATES['PENDING']} when the run ended; the next run "
+                      "merges the kept approval",
                       (land["branch"], land["sha"]) if land else None)
 
     def find_pr(self, tid, branch):
@@ -1477,7 +1478,8 @@ class Pilot(Desk, Periodic):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
-        push(f"Failed: {self.name(tid)}", whole("", plain_error(why), ". Branch kept, run goes on.", log=self.log), 4,
+        goes_on = ", run goes on" * (not self.ending)  # not once the run winds down
+        push(f"Failed: {self.name(tid)}", whole("", plain_error(why), f". Branch kept{goes_on}.", log=self.log), 4,
              "x")
 
     # ---------- questions

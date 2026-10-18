@@ -141,11 +141,12 @@ class MergeBlocked(unittest.TestCase):
         pilot = self.run_pilot(checks=RUNNING, stop="2")
         self.assertEqual((pilot.merged, pilot.failed), ([], ["T-001"]))
         self.assertEqual(self.merges(), 2)
-        self.assertIn("T-001: FAILED: the merge was refused: required checks are still running when the run ended",
+        self.assertIn("T-001: FAILED: the merge was refused: required checks are still running when the run ended; "
+                      "the next run merges the kept approval",
                       self.log())
         [msg] = [m for t, m in self.pushes if t.startswith("Failed")]
         self.assertEqual([t for t, _ in self.pushes if not t.startswith("windvane ")], ["Failed: do T-001 (T-001)"])
-        self.assertIn("required checks are still running when the run ended", msg)
+        self.assertTrue(msg.endswith("the next run merges the kept approval. Branch kept."), msg)
         self.assertIn("T-001", self.landing())
         (self.state / "checks").write_text("[]")  # they ended while no run was going
         pilot = self.run_pilot()
