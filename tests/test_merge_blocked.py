@@ -183,8 +183,7 @@ class MergeBlocked(unittest.TestCase):
     def test_a_required_review_fails_it_at_once_saying_retry_merges_the_kept_approval(self):
         pilot = self.run_pilot(review="REVIEW_REQUIRED", checks=RUNNING)
         self.assertEqual((pilot.failed, self.merges()), (["T-001"], 1))
-        self.assertIn("T-001: FAILED: the merge was refused: a required review hasn't approved it and required checks "
-                      "are still running; once it's given, `windvane retry T-001` merges the kept approval", self.log())
+        self.assertIn("T-001: FAILED: the merge was refused: a required review hasn't approved it; once it's given, `windvane retry T-001` merges the kept approval", self.log())
         self.assertNotIn("merge waits", self.log())
 
     def test_a_draft_hold_let_go_between_runs_merges_the_kept_approval_with_no_session(self):

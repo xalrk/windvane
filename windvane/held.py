@@ -257,8 +257,8 @@ def merge_state(pr, stderr):
     if pr.get("isDraft"):  # its state can still read CLEAN
         status = "DRAFT"
     by = blocked_by(pr)
-    if by:
-        return " and ".join(MERGE_STATES[k] for k in by)
+    if by:  # running checks matter only once nothing else blocks it
+        return " and ".join(MERGE_STATES[k] for k in by if k != "PENDING" or by == ["PENDING"])
     return MERGE_STATES.get(status) or cut(" ".join(stderr.split())) or MERGE_STATES["UNKNOWN"]
 
 
