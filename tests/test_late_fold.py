@@ -24,7 +24,8 @@ from test_phone_late import Late, driver_args  # noqa: E402
 from test_state_edits import waiting  # noqa: E402
 
 
-class OnePush(Late):
+class Folded(Late):
+    """What a test of late answers in one push looks at, without OnePush's tests (for other files' tests to reuse)."""
     def not_taken(self):
         return [s["args"] for s in self.sent() if s["tool"] == "notify" and "not taken" in " ".join(s["args"])]
 
@@ -37,6 +38,8 @@ class OnePush(Late):
         for tid in tids:
             self.assertIn("build your recommendation (A)", pl.feedback[tid])
 
+
+class OnePush(Folded):
     def test_three_late_answers_in_one_pass_make_one_push_naming_each(self):
         pl, qid = self.timed_out_pilot()
         self.settled(pl, "T-002", "T-003")
@@ -57,13 +60,16 @@ class OnePush(Late):
         self.assertEqual(self.not_taken()[before + 1:], [], "each is told once")
         self.assertEqual(questions.desk_answers(self.p), {})
 
-    def test_after_a_restart_the_line_says_only_that_it_was_settled(self):
+    def test_once_what_was_built_is_forgotten_the_line_says_only_that_it_was_settled(self):
         pl, _ = self.timed_out_pilot()
         self.settled(pl, "T-002")
+        for k in pl.settled_as:  # settled over a day ago: no longer kept
+            pl.settled_as[k][1] -= phone.LATE_FOR + 1
+        pl.save()
         before = len(self.not_taken())
         questions.give_answer(self.p, "T-001", "B")
         questions.give_answer(self.p, "T-002", "B")
-        driver.Pilot(self.p, driver_args(answer_wait=0)).poll_questions()  # a new run: what was built is its workers'
+        driver.Pilot(self.p, driver_args(answer_wait=0)).poll_questions()
         self.assertEqual(self.not_taken()[before:][0][-1].split("\n")[1:], [
             "T-001: settled before your answer came", "T-002: settled before your answer came"])
 

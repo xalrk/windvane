@@ -70,7 +70,9 @@ refusal after the review approved), its last line is the command that merges the
 A **question** push carries buttons for options A and B and **Answer on computer**. Tap a letter to answer; options
 C to E are typed as the letter. "Answer on computer" tells the run to leave the question for `windvane answer`
 without waiting for it. With no answer in `answer_wait` minutes (default 10), the run builds the recommended option
-and marks it provisional, so you can change it later.
+and marks it provisional, so you can change it later. An answer that comes after its question was settled isn't taken,
+and an **Answer not taken** push says so; when that push fails, the next pass tries it again (after a restart too)
+until it goes out.
 
 ## Commands from the phone
 

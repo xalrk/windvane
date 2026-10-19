@@ -375,7 +375,8 @@ def late_answers(desk=()):
     """Each timed-out question's phone answer, looked at once a pass for a day on what the pass's budget has left
     after the open questions: one that isn't what is being built gets told so, sent on that budget too, or on a later
     pass once it's spent (the answer is kept, not looked at again). After it, or the day, the question is dropped.
-    `desk`: the pass's `windvane answer`s that came too late, as (line, push alone): all of them go in one push."""
+    `desk`: the pass's `windvane answer`s that came too late, as (line, push alone): all of them go in one push.
+    True when that push went out."""
     told = {}
     with late_lock() as late:
         for qid, e in list((late or {}).items()):
@@ -396,9 +397,11 @@ def late_answers(desk=()):
             told[qid] = (late_line(qid, e), e["told"])
         if told and pass_left() <= 0:  # left for a later pass's budget
             told = {}
-        if not_taken([*desk, *told.values()], wait=pass_left() if told else SEND_WAIT):
+        sent = not_taken([*desk, *told.values()], wait=pass_left() if told else SEND_WAIT)
+        if sent:
             for qid in told:
                 late.pop(qid)
+    return sent
 
 
 def late_line(qid, e):
@@ -667,16 +670,15 @@ def pump(late=True):
 
 def late_pass(desk=()):
     """The late answers of the pass pump started (once a pass), on what its budget has left, with `desk`, the pass's
-    own late `windvane answer`s (see late_answers), which go out even when no pass is due."""
+    own late `windvane answer`s (see late_answers), which go out even when no pass is due. True when `desk` is done
+    with: told, or there's no phone to tell; False keeps them for the next pass, as an unsent question is kept."""
     global _late_due
     due, _late_due = _late_due, False
     try:
-        if due:
-            late_answers(desk)
-        else:
-            not_taken(desk)
+        sent = late_answers(desk) if due else not_taken(desk)
+        return sent or not desk or not (shutil.which("notify") or on(conf()))
     except Exception:  # the phone must never stop a run
-        pass
+        return not desk
 
 
 # ---------- `windvane phone ...` at the desk
