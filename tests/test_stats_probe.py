@@ -78,8 +78,8 @@ class Probe(unittest.TestCase):
             u.probe(self.p)
         lines = self.stats().splitlines()
         [probe] = [ln for ln in lines if ln.startswith("probe ")]
-        # 3 runs, 3 turns, 28.8k fresh in (the cache writes), 0k cached, 0k out, 36k weighted, $0.04
-        self.assertRegex(probe, r"^probe\s+3\s+·\s+3\s+29k\s+0k\s+0k\s+36k\s+0\.04\s+0$")
+        # 3 runs, 3 turns, 28.8k fresh in (the cache writes), none cached, <1k out, 36k weighted, $0.04
+        self.assertRegex(probe, r"^probe\s+3\s+·\s+3\s+29k\s+0\s+<1k\s+36k\s+0\.04\s+0$")
         self.assertEqual(sum(ln.startswith("probe") for ln in lines), 1)
         by_ticket = self.stats("--by", "ticket")
         self.assertRegex(by_ticket, r"\nprobe\s+3 ")  # no ticket: grouped under its role there too
@@ -94,7 +94,7 @@ class Probe(unittest.TestCase):
         self.assertEqual((row["role"], row["end"], row["killed"], row["exit"]), ("probe", "killed", "time", None))
         self.assertEqual((row["estimated"], row["turns"], row["cache_write"], row["usd"]), (True, 1, 9600, None))
         [probe] = [ln for ln in self.stats().splitlines() if ln.startswith("probe ")]
-        self.assertRegex(probe, r"^probe\s+1\s+1\s+1\s+10k\s+0k\s+0k\s+12k\s+\?\s+0$")  # lost; no $ known
+        self.assertRegex(probe, r"^probe\s+1\s+1\s+1\s+10k\s+0\s+<1k\s+12k\s+\?\s+0$")  # lost; no $ known
 
     def test_a_probe_the_api_failed_says_so(self):
         os.environ["PROBE_MODE"] = "error"
