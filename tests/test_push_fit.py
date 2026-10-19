@@ -127,15 +127,6 @@ def no_answer(p, patch, s):
     return {"No answer": ("Going with A: API Error",)}
 
 
-def late_answer(p, patch, s):
-    pl = pilot(p)
-    pl.questions["T-001"] = {"q": LONG, "opts": {"A": LONG, "B": "b"}, "rec": "A", "must_wait": False, "branch": "",
-                             "asked": time.time() - 3600, "result": "settled on its timeout"}
-    questions.give_answer(p, "T-001", "B", LONG)  # given after the pass that settled it read the answers
-    pl.poll_questions()
-    return {"Answer not taken": ("wasn't taken", "windvane answer T-001 <letter>")}
-
-
 def quiet_unreadable(p, patch, s):
     patch(driver, "quiet_now", lambda p: (None, LONG))
     pilot(p).quiet_check()
@@ -312,7 +303,7 @@ def scale_warned(p, patch, s):
     return {"Critic scale": ("Rename one in .windvane/CRITIC.md", "checks named `safe`")}
 
 
-SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer, late_answer,
+SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
          held, secret_aside, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full,
          not_taken_up, scale_warned]

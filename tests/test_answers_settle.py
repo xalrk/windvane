@@ -27,7 +27,7 @@ class Settle(unittest.TestCase):
         self.p.state.mkdir(parents=True, exist_ok=True)
         self.pushes = []
         sent = lambda *a, **k: self.pushes.append(a[:2]) or True  # noqa: E731
-        for target, name in ((driver, "push"), (phone, "ask"), (driver, "quiet_now")):
+        for target, name in ((driver, "push"), (phone, "push"), (phone, "ask"), (driver, "quiet_now")):
             patch = mock.patch.object(target, name, (lambda p: (None, "")) if name == "quiet_now" else sent)
             patch.start()
             self.addCleanup(patch.stop)

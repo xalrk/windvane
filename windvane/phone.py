@@ -371,11 +371,12 @@ class late_lock:
                 self.lock.close()
 
 
-def late_answers():
+def late_answers(desk=()):
     """Each timed-out question's phone answer, looked at once a pass for a day on what the pass's budget has left
-    after the open questions: one that isn't what is being built gets one push saying so, sent on that budget too, or
-    on a later pass once it's spent (the answer is kept, not looked at again). After it, or the day, the question is
-    dropped."""
+    after the open questions: one that isn't what is being built gets told so, sent on that budget too, or on a later
+    pass once it's spent (the answer is kept, not looked at again). After it, or the day, the question is dropped.
+    `desk`: the pass's `windvane answer`s that came too late, as (line, push alone): all of them go in one push."""
+    told = {}
     with late_lock() as late:
         for qid, e in list((late or {}).items()):
             if isinstance(e, list):  # written by an older version: [key, rec, when]
@@ -384,7 +385,7 @@ def late_answers():
                 late.pop(qid)
                 continue
             if pass_left() <= 0:
-                return
+                break
             if not e.get("told"):
                 got = answer(qid, in_pass=True)
                 if not got or got.split()[1:2] == [e["rec"]]:
@@ -392,8 +393,32 @@ def late_answers():
                         late.pop(qid)
                     continue
                 e["told"] = building(qid, e["key"], e["rec"], e.get("text", ""))
-            if pass_left() > 0 and push("Answer not taken", e["told"], wait=pass_left()):
+            told[qid] = (late_line(qid, e), e["told"])
+        if told and pass_left() <= 0:  # left for a later pass's budget
+            told = {}
+        if not_taken([*desk, *told.values()], wait=pass_left() if told else SEND_WAIT):
+            for qid in told:
                 late.pop(qid)
+
+
+def late_line(qid, e):
+    """A timed-out question's line in a push of several late answers: its `windvane answer` id when it's this
+    project's, and what is being built."""
+    what = whole(f"{e['rec']} (", e.get("text", ""), ")", log=whole_to_log) if e.get("text") else e["rec"]
+    return f"{e['key'] if _p and _p.qid(e['key']) == qid else qid}: building {what}"
+
+
+def not_taken(answers, wait=SEND_WAIT):
+    """One "Answer not taken" push for a pass's late answers, each (its line, its push alone): one keeps its own
+    words, several share a line on how to change one, so answering three settled questions after a night is one push,
+    not three saying the same thing. True when it went out."""
+    if not answers:
+        return False
+    if len(answers) == 1:
+        return push("Answer not taken", answers[0][1], wait=wait)
+    head = (f"{len(answers)} answers came after their questions were settled, so they weren't taken; once a ticket "
+            "merges, change one with `windvane answer <id> <letter>`:")
+    return push("Answers not taken", "\n".join([head, *(line for line, _ in answers)]), wait=wait)
 
 
 # ---------- projects the phone's commands reach
@@ -640,14 +665,16 @@ def pump(late=True):
         return 0
 
 
-def late_pass():
-    """The late answers of the pass pump started (once a pass), on what its budget has left."""
+def late_pass(desk=()):
+    """The late answers of the pass pump started (once a pass), on what its budget has left, with `desk`, the pass's
+    own late `windvane answer`s (see late_answers), which go out even when no pass is due."""
     global _late_due
-    if not _late_due:
-        return
-    _late_due = False
+    due, _late_due = _late_due, False
     try:
-        late_answers()
+        if due:
+            late_answers(desk)
+        else:
+            not_taken(desk)
     except Exception:  # the phone must never stop a run
         pass
 
