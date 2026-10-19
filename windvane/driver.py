@@ -1485,7 +1485,7 @@ class Pilot(Desk, Periodic):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
-        goes_on = ", run goes on" * (not self.ending)  # not once the run winds down
+        goes_on = ", run goes on" * (not getattr(self, "ending", False))  # not once the run winds down
         push(f"Failed: {self.name(tid)}", whole("", plain_error(why), f". Branch kept{goes_on}.", log=self.log), 4,
              "x")
 
