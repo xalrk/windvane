@@ -437,11 +437,32 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
     run's stop, so a heavy job that can't both queue and run in one session still runs: the driver holds its ticket
     until it ends."""
     outside_sandbox("a background job")  # it would end with the sandboxed call that started it
-    if alive(find_job(p, name)[0]):
-        sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
     tmp = scratch.job_env(cmd, "bg")  # before anything is written: a refused job leaves no trace
+    if alive(find_job(p, name)[0]):  # refused before writing anything; the check under the lock catches a racer
+        sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
     base = job_base(p, name)
     base.parent.mkdir(parents=True, exist_ok=True)
+    with open(f"{base}.lock", "a") as lock:  # a session's parallel calls for one name: the second waits, then sees it
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if alive(find_job(p, name)[0]):
+            sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
+        proc, who = start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect)
+    session = os.environ.get(NEST)
+    if session and not keep:  # killed with the session that started it (runner.kill_nested), not left by a stop
+        mark = p.state / "nested" / session / str(proc.pid)
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.write_text(who or "")
+    if quiet:
+        pass
+    elif keep:
+        print(f"started '{name}', kept past this session (log {base}.log): commit, push and end your run "
+              f"PARTIAL naming it; the ticket resumes when it ends")
+    else:
+        print(f"started '{name}' (log {base}.log); wait with: windvane await {name}")
+
+
+def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect):
+    """`bg`'s start, under its lock: the job's files and process. (the process, its `util.stamp` or None)."""
     pid = Path(f"{base}.pid")
     for end in ("exit", "keep", "child", "stamp"):
         Path(f"{base}.{end}").unlink(missing_ok=True)
@@ -461,18 +482,7 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
     pid.write_text(str(proc.pid))
     if who := util.stamp(proc.pid):  # after the pid, which `pid_lives` checks it against; gone already: none
         Path(f"{base}.stamp").write_text(who)
-    session = os.environ.get(NEST)
-    if session and not keep:  # killed with the session that started it (runner.kill_nested), not left by a stop
-        mark = p.state / "nested" / session / str(proc.pid)
-        mark.parent.mkdir(parents=True, exist_ok=True)
-        mark.write_text(who or "")
-    if quiet:
-        pass
-    elif keep:
-        print(f"started '{name}', kept past this session (log {base}.log): commit, push and end your run "
-              f"PARTIAL naming it; the ticket resumes when it ends")
-    else:
-        print(f"started '{name}' (log {base}.log); wait with: windvane await {name}")
+    return proc, who
 
 
 def watch(base, cmd):

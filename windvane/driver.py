@@ -73,6 +73,7 @@ RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; th
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
 # The environment variable set for a driver under `supervise`: it hands a crash over instead of pushing it
 SUPERVISED = "WINDVANE_SUPERVISED"
+BEGAN = "WINDVANE_BEGAN"  # when the supervisor started the run, for `run_began`
 SIGNALLED = {signal.SIGTERM: "the driver got SIGTERM (a kill or a shutdown)",
              signal.SIGHUP: "the driver's terminal or tmux session closed (SIGHUP)",
              signal.SIGINT: "Ctrl-C during a merge, a push or a pull"}  # outside such a step it's KeyboardInterrupt
@@ -2270,7 +2271,7 @@ class Pilot(Desk, Periodic):
     def run(self, deadline):
         """Works tickets until a stop; False when it couldn't start (a failed setup)."""
         p = self.p
-        began = util.clock()  # with isolate off, a process in the checkout older than this is the user's
+        began = run_began()  # with isolate off, a process in the checkout older than this is the user's
         self.take_lock()
         phone.start_run(p)
         try:  # an older install's per-project `status` hooks, a deleted repo's, and this one's back if they went
@@ -2554,8 +2555,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
     as they end the driver. A driver killed by the system (OOM) is only pushed: its sessions, in process groups of
     their own, may still be at work in the worktrees a restart would resume. Returns the driver's last exit code."""
     start = start or (lambda args, env: subprocess.run([*runnable(exe()), *args], env=env).returncode)
-    began = util.clock()
-    env = {**os.environ, SUPERVISED: "1"}
+    began = util.clock()  # now, not this process's start: a schedule's process supervises each window in turn
+    env = {**os.environ, SUPERVISED: "1", **({BEGAN: repr(began)} if began is not None else {})}
     env.pop("WINDVANE_RESTARTED", None)
     crashes, args = [], list(argv)
     while True:
@@ -2648,10 +2649,21 @@ def tear_down(p, lock=False, tell=False):
             save_json(p.state / TEARDOWN_FAILED, {**f, "told": True})  # the next "started" push needn't say it again
 
 
+def run_began():
+    """When this run began, on `util.boot_started`'s clock (None when it can't say): when the supervisor started it,
+    so a restarted driver still counts what the crashed one's tools left, else now (`util.clock`)."""
+    if os.environ.get(SUPERVISED) and BEGAN in os.environ:
+        try:
+            return float(os.environ[BEGAN])
+        except ValueError:
+            return None
+    return util.clock()
+
+
 def leftover_helpers(p, since):
     """[(pid, command)] of the processes still at work in the autopilot's trees once a run is over: the helpers its
     tools started (an emulator, a dev server, a container) that its `teardown` doesn't stop. With isolate off the tree
-    is the checkout, where the user works too: only what started after `since` (a `util.clock`, None when it had
+    is the checkout, where the user works too: only what started after `since` (a `run_began`, None when it had
     none: then nothing) with no terminal counts, so their editor and shells never do."""
     if p.cfg["isolate"]:
         roots = [os.path.realpath(p.state / d) for d in util._listdir(p.state) if re.fullmatch(r"(work|ci)(-\d+)?", d)]
