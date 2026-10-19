@@ -64,6 +64,9 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- `windvane await` reports a job whose start was killed before its command ran as `NEVER STARTED <name>` (exit 3),
+  not as `DONE <name> exit 1` with an empty log, which read as the command failing. `bg` removes its `<name>.lock`
+  as each start finishes, and `windvane doctor` names `windvane doctor --clean` whenever some of the state dir can go.
 - `windvane new` no longer overwrites a ticket. It takes the id after every ticket in the checkout it writes to (its
   own HEAD, uncommitted ticket files, and the upstream), not the main checkout's HEAD, which a worktree's branch can
   be ahead of; and it refuses, naming the file, if the file already exists.
