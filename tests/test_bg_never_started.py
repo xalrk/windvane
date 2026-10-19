@@ -66,10 +66,10 @@ class NeverStarted(CutCaller):
         self.base.parent.mkdir(parents=True, exist_ok=True)
         self.assertIn("start it again with windvane bg j <its command>", jobs.never_line("j", self.base))
         with redirect_stdout(io.StringIO()):
-            jobs.bg(self.p, "j", ["sh", "-c", "echo it's done"], str(self.s.root))
+            jobs.bg(self.p, "j", ["sh", "-c", "echo it's\ndone"], str(self.s.root))
         self.await_j(20)
         self.assertTrue(jobs.never_line("j", self.base).endswith(
-            "start it again with windvane bg j sh -c 'echo it'\"'\"'s done'"))
+            "start it again with windvane bg j sh -c 'echo it'\"'\"'s\ndone'"))
 
 
 class TwoStarts(InProject):

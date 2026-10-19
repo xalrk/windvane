@@ -695,7 +695,11 @@ def never_started(base):
 def never_line(name, base):
     """What `await` says of a job that never started, and the command that starts it again (a starter killed before
     it wrote that can't say)."""
-    again = "windvane check" if name == SESSION_CHECK else tail(f"{base}.cmd", 1) or f"windvane bg {name} <its command>"
+    try:
+        again = Path(f"{base}.cmd").read_text().strip()  # whole: a quoted argument may hold a newline
+    except OSError:
+        again = ""
+    again = "windvane check" if name == SESSION_CHECK else again or f"windvane bg {name} <its command>"
     return f"NEVER STARTED {name}: its start was killed before the command ran; start it again with {again}"
 
 
