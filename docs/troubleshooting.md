@@ -45,7 +45,7 @@ Make it work from a clean clone, or prepare what it needs in `setup`.
 The push and the log say why: reviews kept asking for changes (`review_rounds`), runs kept running out of time
 (`partials`), one run hit `ticket_hours`, its max turns or its dollar budget, or its sessions kept dying. Max turns
 come from `CLAUDE_CODE_MAX_TURNS` in the environment you start windvane from: windvane passes no `--max-turns`, and
-the Claude CLI has no turn limit without one, so raise or unset it. The work so far is on the ticket's branch.
+the Claude CLI has no turn limit without one, so raise or unset it, then start `windvane run` again once the current run ends: a run keeps the value it started with. The work so far is on the ticket's branch.
 Usually the ticket is too big or too vague: split it or sharpen "Done when", then run again; the next worker resumes
 the branch.
 

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
-from windvane.util import now  # noqa: E402
+from windvane.util import now, shell_path  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_merge_blocked import FAILED, GH, RUNNING, args  # noqa: E402
 
@@ -115,16 +115,16 @@ class Hints(Base):
         os.environ["FAKE_MAX_TURNS"] = "# windvane worker"
         self.run_pilot()
         self.assertEqual(self.pushed("Set aside"), "Hit its max turns. Split it, or raise CLAUDE_CODE_MAX_TURNS. "
-                                                   "Branch kept.")
+                                                   f"Branch kept.\n{driver.NEW_MAX_TURNS}")
         docs = Path(__file__).resolve().parents[1] / "docs"
         for page in ("troubleshooting.md", "phone.md"):
             self.assertIn("`CLAUDE_CODE_MAX_TURNS`", (docs / page).read_text(), page)
 
-    def test_the_queues_failed_hint_names_the_log_line_not_its_path(self):
+    def test_the_queues_failed_hint_names_the_log_line_and_the_log(self):
         hint = Queue(self.p).release("T-001", [], {"failed": ["T-001"]})
-        self.assertEqual(hint, "T-001 failed this run (the log's `T-001: FAILED` line says why); `windvane retry "
+        log = shell_path(self.p.state / "autopilot.log")
+        self.assertEqual(hint, f"T-001 failed this run (the `T-001: FAILED` line in {log} says why); `windvane retry "
                                "T-001` puts it back in this run, or the next `windvane run` takes it up")
-        self.assertNotIn(str(self.p.state), hint)
 
 
 class Restart(Base):

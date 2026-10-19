@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
-from windvane.util import now  # noqa: E402
+from windvane.util import now, shell_path  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_set_aside import args  # noqa: E402
 
@@ -136,7 +136,8 @@ class RunCauses(Base):
 
     @property
     def failed(self):
-        return ("T-001 failed this run (the log's `T-001: FAILED` line says why): T-002, T-003 "
+        return (f"T-001 failed this run (the `T-001: FAILED` line in {shell_path(self.p.state / 'autopilot.log')} "
+                "says why): T-002, T-003 "
                 "wait until it merges; `windvane retry T-001` puts it back in this run, or the next `windvane run` "
                 "takes it up")
 
@@ -161,7 +162,7 @@ class SetAsidePush(Base):
         first, rest = msg.split("\n", 1)
         self.assertEqual(first, f"Hit its max turns. Split it, or raise {driver.MAX_TURNS}. Branch kept.")
         self.assertLessEqual(len(first), 90)  # a lock screen's two lines, as T-079's limit pushes
-        self.assertEqual(rest, "T-002 waits on it.")
+        self.assertEqual(rest, f"{driver.NEW_MAX_TURNS}\nT-002 waits on it.")
         self.assertEqual(json.loads((self.p.state / "state.json").read_text())["fixes"],
                          {"T-001": f"Split it, or raise {driver.MAX_TURNS}."})
 
