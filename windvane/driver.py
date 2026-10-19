@@ -1657,7 +1657,9 @@ class Pilot(Desk, Periodic):
             q = self.questions.get(key)
             if key not in settled and (q is None or "result" in q):
                 if q is None or q["result"] != taken(q, got.get("option"), got.get("text")):  # else: read pre-restart
-                    self.late.append(list(self.late_answer(key)))
+                    told = list(self.late_answer(key))
+                    if told not in self.late:  # else kept by a pass killed before it dropped the answer
+                        self.late.append(told)
                 settled[key] = got
         if settled:  # saved before its answers go: a restart in between finds them settled or kept, never lost
             self.save()

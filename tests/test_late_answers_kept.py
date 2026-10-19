@@ -65,6 +65,19 @@ class Kept(Folded):
         self.assertEqual(len(told), 1, told)
         self.assertEqual(told[0][-1].split("\n")[1:], ["T-001: building A (New)", "T-002: building A (New)"])
 
+    def test_a_pass_killed_before_it_dropped_the_answer_still_tells_it_once(self):
+        pl, _ = self.timed_out_pilot()
+        before = len(self.not_taken())
+        questions.give_answer(self.p, "T-001", "B")
+        with mock.patch.dict(os.environ, FAKE_EXIT="1"), mock.patch.object(driver, "drop_answers"):
+            pl.poll_questions()  # saved with the answer kept, but answers.json still holds it
+        self.assertEqual(len(questions.desk_answers(self.p)), 1)
+        driver.Pilot(self.p, driver_args(answer_wait=0)).poll_questions()
+        told = self.not_taken()[before + 1:]
+        self.assertEqual(len(told), 1, told)
+        self.assertTrue(told[0][told[0].index("-t") + 1].endswith("Answer not taken"), "one answer, not two")
+        self.assertEqual(questions.desk_answers(self.p), {})
+
     def test_a_failed_push_is_logged_once(self):
         pl, _ = self.failed_late_answer()
         with mock.patch.dict(os.environ, FAKE_EXIT="1"):
