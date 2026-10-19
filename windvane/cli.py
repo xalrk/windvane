@@ -553,7 +553,7 @@ def cmd_check(a, p):
     if ok is False and log:
         print(jobs.tail(log, a.lines))
     print(summary)
-    sys.exit(0 if ok else 1 if ok is False else heavy.TIMED_OUT)  # not run: not a failure
+    sys.exit(jobs.check_exit(ok))
 
 
 CRITIC_WAIT = 8  # minutes of retry pauses `windvane critic` may spend: the worker's Bash call stops at 10

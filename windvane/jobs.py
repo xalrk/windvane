@@ -46,6 +46,10 @@ WATCH_S = 2  # seconds between a kept job's looks at its end time
 AWAIT_S = 570  # how long `await` blocks: under one tool call's 10 minutes
 SESSION_CHECK = "check"  # the bg job a session's heavy check runs as
 CHECK_LOG = "check: log "  # a check job's first line names the check's log, where its wait for the machine is said
+# A bg job's shell: it links its own pid in first, should `bg` be killed before writing it (a link: never half-written,
+# and never over the one `bg` wrote, which its stamp must not predate), then runs the command and writes its exit.
+JOB = ('echo $$ > "$0.pid.$$"; ln "$0.pid.$$" "$0.pid" 2>/dev/null; rm -f "$0.pid.$$"; '
+       '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"')
 # A kept job's group leader: `watch` from this same windvane (its package dir is the first argument), outside PATH.
 WATCH = ("import sys; sys.path.insert(0, sys.argv[1]); from windvane.jobs import watch; "
          "sys.exit(watch(sys.argv[2], sys.argv[3:]))")
@@ -464,7 +468,7 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
 def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect):
     """`bg`'s start, under its lock: the job's files and process. (the process, its `util.stamp` or None)."""
     pid = Path(f"{base}.pid")
-    for end in ("exit", "keep", "child", "stamp"):
+    for end in ("pid", "exit", "keep", "child", "stamp"):
         Path(f"{base}.{end}").unlink(missing_ok=True)
     Path(f"{base}.start").write_text(str(int(time.time())))
     Path(f"{base}.cwd").write_text(str(Path(cwd).resolve()))  # ties it to its worktree, should job_base move again
@@ -476,10 +480,9 @@ def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect):
         Path(f"{base}.keep").write_text(os.environ.get(RUN_STOP, ""))
         cmd = [sys.executable, "-c", WATCH, str(Path(__file__).parents[1]), str(base), *cmd]
         env = {**{k: v for k, v in env.items() if k != NEST}, STOP_AT: "inf"}
-    proc = subprocess.Popen(["bash", "-c", '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"', str(base), *cmd],
-                            cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, start_new_session=True, env=env)
-    pid.write_text(str(proc.pid))
+    proc = subprocess.Popen(["bash", "-c", JOB, str(base), *cmd], cwd=cwd, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+    util.replace_text(pid, str(proc.pid))  # the job writes it too: a caller killed before this leaves no lost job
     if who := util.stamp(proc.pid):  # after the pid, which `pid_lives` checks it against; gone already: none
         Path(f"{base}.stamp").write_text(who)
     return proc, who
@@ -657,8 +660,9 @@ def await_(p, name, lines=40, limit=None):
     while not exit_f.exists() and time.time() < end:
         if not pid_lives(base):
             time.sleep(1)
-            if not exit_f.exists():
-                exit_f.write_text("1")
+            if exit_f.exists() or pid_lives(base):  # it wrote its exit as it died, or its pid was being written
+                continue
+            exit_f.write_text("1")
             break
         time.sleep(3)
     if (blocked := round(time.time() - t0)) >= 1:
@@ -678,6 +682,11 @@ def await_(p, name, lines=40, limit=None):
     return None
 
 
+def check_exit(ok):
+    """`windvane check`'s exit for `check`'s `passed`: a check that never ran (None) isn't a failure."""
+    return 0 if ok else 1 if ok is False else heavy.TIMED_OUT
+
+
 def session_check(p, cwd, mem=None, lines=60):
     """A session's check (`windvane check` with `STOP_AT` set). A check can outlast one tool call's 10 minutes (a
     heavy one's wait for the machine lasts until the session's stop), and a killed call loses the run and its pass:
@@ -686,9 +695,11 @@ def session_check(p, cwd, mem=None, lines=60):
     cwd = top(cwd)  # the job runs where the gate does
     key = tree_key(p, cwd)
     if not p.cfg["check"] or key and (p.state / "passes" / key).exists():  # nothing to wait for, piped or not
-        ok, summary, _ = check(p, cwd)
+        ok, summary, log = check(p, cwd)  # a pass pruned since the look above runs the check here, and may fail
+        if ok is False and log:
+            print(tail(log, lines))
         print(summary)
-        return 0
+        return check_exit(ok)
     outside_sandbox("a session's check")  # the job would die with the call (and the heavy lock's folder is read-only)
     base, head = find_job(p, SESSION_CHECK)[0], gout(cwd, "rev-parse", "--short", "HEAD")
     if not alive(base):

@@ -241,7 +241,7 @@ def actions_budget(c):
 
 # `[state]`: what of a project's state dir may go (statedir.py). In the machine settings file for every project,
 # overridable in a project's config.toml; not in DEFAULTS, so a project's table holds only what it sets.
-STATE = {"keep_days": 14,  # session transcripts and merged tickets' critic packs older than this go
+STATE = {"keep_days": 14,  # transcripts, merged tickets' critic packs and bg logs older than this go
          "keep_runs": 3,  # but an unmerged ticket's newest transcripts stay, however old
          "trim_build": False}  # idle slot 0 and plan worktrees lose their ignored build output (a rebuild may be slow)
 
