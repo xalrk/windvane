@@ -169,8 +169,9 @@ that stops at 8 holds every ticket at 8 or under (`overview` and `stats --critic
 summary show a ticket's first score beside its final one (`2→8`): with the pass mark at 8, the final one alone says
 little. A check left unanswered counts as `no`, and the log names it. An id is read by its words, so don't name a
 check or dimension `checks`, `fix`, `beyond`, `for`, `critic` or `fixes`, the words that start the parts of the
-critic's reply, nor give two checks of one dimension the same id: `doctor` and the run's start warn of each. (A
-scale without rungs still works the old way, the critic writing the numbers; `overview` says how to convert it.)
+critic's reply, nor give two checks of one dimension, or two dimensions, the same id: `doctor` and the run's start
+warn of each. (A scale without rungs still works the old way, the critic writing the numbers; `overview` says how
+to convert it.)
 
 **The verdict** splits its points into "Fix in this ticket" and "Beyond this ticket". The critic never sees the pass
 mark; the driver turns the score into the worker's next step. A plain `no` on a rung up to the first one at or over

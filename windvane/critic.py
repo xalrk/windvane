@@ -240,7 +240,7 @@ def misread(text, rel):
             if x in reserved:
                 where = "" if kind == "dimension" else f" (in {d})"
                 out.append((f"critic scale: the {kind} id `{x}`{where} is a word of the critic's reply format "
-                            f"(`{reserved[x]}`), so an answer to it can read as that part of the reply",
+                            f"(`{reserved[x]}`), so its answer can read as that part of the reply and leave checks unanswered",
                             f"rename it in {rel}"))
         for cid in [c for c in dict.fromkeys(ids) if ids.count(c) > 1]:
             out.append((f"critic scale: dimension {d} has {ids.count(cid)} checks named `{cid}`, so one answer "
