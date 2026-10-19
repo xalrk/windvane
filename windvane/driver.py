@@ -93,7 +93,7 @@ SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it read
                   ("request too large", "Split the ticket, or trim what it reads."))
 # What caps a session's turns: windvane passes no --max-turns, and the Claude CLI has no limit of its own without one
 MAX_TURNS = "CLAUDE_CODE_MAX_TURNS"  # an environment variable: windvane's own reaches every session
-NEW_MAX_TURNS = f"A running windvane keeps its {MAX_TURNS}: set the new one, then start `windvane run` again."
+NEW_MAX_TURNS = f"This run keeps its {MAX_TURNS}: set the new one, then start `windvane run` again once it ends."
 REWRITE = "Rewrite its branch without the secret, as its push says: runs leave it be until then."  # a secret's set-aside fix, for the queue hint
 
 
