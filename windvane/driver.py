@@ -1666,7 +1666,7 @@ class Pilot(Desk, Periodic):
                  f"it with `windvane answer {key} <letter>`.")
         self.log(alone)
         was = self.settled_as.get(key)
-        return f"{key}: " + (f"building {was}" if was else "settled before it came"), alone
+        return f"{key}: " + (f"building {was}" if was else "settled before your answer came"), alone
 
     def built(self, q, letter):
         """Option `letter` as a late answer's push names it: its letter and text."""

@@ -57,6 +57,16 @@ class OnePush(Late):
         self.assertEqual(self.not_taken()[before + 1:], [], "each is told once")
         self.assertEqual(questions.desk_answers(self.p), {})
 
+    def test_after_a_restart_the_line_says_only_that_it_was_settled(self):
+        pl, _ = self.timed_out_pilot()
+        self.settled(pl, "T-002")
+        before = len(self.not_taken())
+        questions.give_answer(self.p, "T-001", "B")
+        questions.give_answer(self.p, "T-002", "B")
+        driver.Pilot(self.p, driver_args(answer_wait=0)).poll_questions()  # a new run: what was built is its workers'
+        self.assertEqual(self.not_taken()[before:][0][-1].split("\n")[1:], [
+            "T-001: settled before your answer came", "T-002: settled before your answer came"])
+
     def test_one_late_answer_keeps_its_own_words(self):
         pl, _ = self.timed_out_pilot()
         before = len(self.not_taken())

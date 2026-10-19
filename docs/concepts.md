@@ -217,9 +217,9 @@ What happens next depends on the time:
   answer in `answer_wait` minutes, the next run builds the recommendation and marks it provisional. Each question
   reaches the phone once: when the ticket merges, its Done push names the answer built in one line. A ticket with
   several questions at once asks each on its own as `T-007.q1`, `T-007.q2` (answer them by those ids) and waits
-  until every one is answered or timed out. An answer that comes after its question was settled isn't taken: one
-  "Answer not taken" push per pass lists each such answer and what is being built instead, and once the ticket
-  merges you can change it with `windvane answer T-007 B`.
+  until every one is answered or timed out. An answer that comes after its question was settled isn't taken. The
+  phone says so in one push per pass however many came: "Answer not taken" for one, or "Answers not taken" listing
+  each id and the option being built. Once the ticket merges, change it with `windvane answer T-007 B`.
 - **In a quiet time** (see [configuration](configuration.md#quiet-times); yours in `~/.config/windvane/quiet.txt`
   covers every project) nobody is asked. The worker builds its recommendation at once, records it under
   `## Provisional` with what to change to pick another option, and lists it in the pull request; its Done push spells
