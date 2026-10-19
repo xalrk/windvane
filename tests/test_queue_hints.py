@@ -112,10 +112,10 @@ class RunCauses(Base):
     def test_a_set_aside_hint_carries_its_own_fix(self):
         self.publish()
         out = self.queue_cli({"aside": {"T-001": "hit its max turns"},
-                              "fixes": {"T-001": "Raise max turns in .claude/ settings or split it."}})
+                              "fixes": {"T-001": f"Split it, or raise {driver.MAX_TURNS}."}})
         self.assertEqual(self.hints(out), [
             "hint: T-001 was set aside this run (hit its max turns): T-002, T-003 wait until it merges; so it isn't "
-            "set aside again, raise max turns in .claude/ settings or split it"])
+            "set aside again, split it, or raise CLAUDE_CODE_MAX_TURNS"])
 
     def test_a_secret_set_aside_says_runs_leave_it_be_until_its_branch_is_rewritten(self):
         self.publish()
@@ -136,7 +136,7 @@ class RunCauses(Base):
 
     @property
     def failed(self):
-        return (f"T-001 failed this run (its `FAILED` line in {self.p.state / 'autopilot.log'} says why): T-002, T-003 "
+        return ("T-001 failed this run (the log's `T-001: FAILED` line says why): T-002, T-003 "
                 "wait until it merges; `windvane retry T-001` puts it back in this run, or the next `windvane run` "
                 "takes it up")
 
@@ -159,11 +159,11 @@ class SetAsidePush(Base):
         pilot.run(now() + timedelta(hours=2))
         [msg] = [m for t, m in self.pushes if t.startswith("Set aside")]
         first, rest = msg.split("\n", 1)
-        self.assertEqual(first, "Hit its max turns. Raise max turns in .claude/ settings or split it. Branch kept.")
+        self.assertEqual(first, f"Hit its max turns. Split it, or raise {driver.MAX_TURNS}. Branch kept.")
         self.assertLessEqual(len(first), 90)  # a lock screen's two lines, as T-079's limit pushes
         self.assertEqual(rest, "T-002 waits on it.")
         self.assertEqual(json.loads((self.p.state / "state.json").read_text())["fixes"],
-                         {"T-001": "Raise max turns in .claude/ settings or split it."})
+                         {"T-001": f"Split it, or raise {driver.MAX_TURNS}."})
 
     def test_a_set_aside_fix_survives_a_restart(self):
         pilot = driver.Pilot(self.p, args())

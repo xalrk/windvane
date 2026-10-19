@@ -263,7 +263,7 @@ class Queue:
                     else "the next run takes it up again")
             return f"{d} was set aside this run ({aside[d]}){until('it merges')}; {then}"
         if d in run.get("failed", []):
-            return (f"{d} failed this run (its `FAILED` line in {self.p.state / 'autopilot.log'} says why)"
+            return (f"{d} failed this run (the log's `{d}: FAILED` line says why)"
                     f"{until('it merges')}; `windvane retry {d}` puts it back in this run, or the next `windvane run` "
                     "takes it up")
         if d in self.files and (d in blocked or d in self.asked):

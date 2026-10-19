@@ -58,10 +58,14 @@ reading order: an error or other free text goes in whole, as a sentence, and ntf
 characters is cut, at a sentence or line end, and the project log keeps all of it.
 
 A **Set aside** push says which limit a ticket's run hit and where to change it: the `ticket_hours` time box, its
-max turns (windvane sets none, so it's the Claude CLI's default or the project's Claude settings in `.claude/`), or its
-dollar budget (windvane sets none either and has no setting for one, so that push only says to split the ticket). The summary lists every set-aside ticket with why, and on its own line the tickets stopped at the
+max turns (`CLAUDE_CODE_MAX_TURNS` in windvane's environment: windvane passes no `--max-turns`, and the Claude CLI
+has no limit without one), or its dollar budget (windvane sets none either and has no setting for one, so that push only says to split the ticket). The summary lists every set-aside ticket with why, and on its own line the tickets stopped at the
 deadline mid-run, which the next run resumes. A `setup` that fails is quoted up to 60 characters; a deadline reached during setup reads
 "deadline reached during setup; nothing ran".
+
+A **Failed** push says why and that the branch is kept. When the cause is yours to fix (a refused merge, a gh or push
+refusal after the review approved), its last line is the command that merges the kept approval once it's fixed:
+`windvane retry T-007`. A failure in the work itself, such as the worker's own `FAILED`, has no such line.
 
 A **question** push carries buttons for options A and B and **Answer on computer**. Tap a letter to answer; options
 C to E are typed as the letter. "Answer on computer" tells the run to leave the question for `windvane answer`
