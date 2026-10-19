@@ -89,6 +89,24 @@ class SessionCheck(unittest.TestCase):
         self.assertIn("CHECK PASSED (reused the pass", out)
         self.assertEqual(len(self.starts()), 1)
 
+    def test_in_the_sandbox_a_reused_pass_answers_and_a_new_check_is_refused(self):
+        """Piped (`windvane check | tail`), the call runs in the sandbox, where a job would die with it: a pass
+        already recorded for the tree still answers, a check that would have to run says how to start it."""
+        with mock.patch.dict(os.environ, {IN_SANDBOX: "1"}), self.assertRaises(SystemExit) as e:
+            cli.main(["-C", str(self.s.root), "check"])
+        self.assertEqual(str(e.exception), "windvane: a session's check can't run inside the Bash sandbox: run the "
+                         "`windvane` command on its own (no pipe, redirect, `cd` or `&&`), so it runs outside it")
+        self.assertEqual(self.starts(), [])
+        self.release.touch()
+        code, out = self.windvane("check")
+        if code == heavy.TIMED_OUT:
+            code, out = self.windvane("await", "check")
+        self.assertEqual(code, 0, out)
+        with mock.patch.dict(os.environ, {IN_SANDBOX: "1"}):
+            code, out = self.windvane("check")
+        self.assertEqual(code, 0, out)
+        self.assertIn("CHECK PASSED (reused the pass", out)
+
     def test_with_no_check_configured_it_answers_at_once(self):
         conf = self.s.root / ".windvane/config.toml"
         self.s.write(".windvane/config.toml", "\n".join(ln for ln in conf.read_text().splitlines()
