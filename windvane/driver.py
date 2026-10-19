@@ -250,6 +250,15 @@ def also(tickets, most=NTFY):
     return f"\nAlso {len(ids)} more{end}"
 
 
+def taken(q, letter, text):
+    """A worker's feedback for question `q` answered with option `letter` and/or typed `text`: also how a pass tells,
+    after a restart, an answer it already took from one that came too late."""
+    opt = q["opts"].get(letter or "", "")
+    return (f"The user answered your question \"{q['q']}\": " + (f"option {letter} ({opt})" if letter else "")
+            + (f" They added: {text}" if text else "")
+            + ". Build that, and move the question to ## Answered with the answer.")
+
+
 class Pilot(Desk, Periodic):
     def __init__(self, p, a):
         self.p, self.a = p, a
@@ -260,6 +269,7 @@ class Pilot(Desk, Periodic):
         s = load_json(self.state_file, {})
         self.feedback = s.get("feedback", {})  # ticket -> what its next worker run must act on
         self.questions = s.get("questions", {})  # question id (questions.keys) -> a question for the user
+        self.settled_as = {}  # question id -> what this run built for it ("A (5 tries)"), for a late answer's push
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.secrets = s.get("secrets", {})  # ticket -> {"branch", "sha"}: a head set aside for a secret (secret_aside)
@@ -1611,11 +1621,8 @@ class Pilot(Desk, Periodic):
                 elif ph == "LATER":
                     q["later"] = True
             if letter or text:
-                opt = q["opts"].get(letter or "", "")
-                q["result"] = (f"The user answered your question \"{q['q']}\": "
-                               + (f"option {letter} ({opt})" if letter else "")
-                               + (f" They added: {text}" if text else "")
-                               + ". Build that, and move the question to ## Answered with the answer.")
+                q["result"] = taken(q, letter, text)
+                self.settled_as[key] = self.built(q, letter) if letter else "your typed answer"
                 self.log(f"{key}: answered {letter or ''} {text or ''}".rstrip())
                 with self.lock:  # answered, so never mistaken for a reworded copy of a later provisional answer
                     note(p, lambda s: s["asked"].update({tid: [a for a in s["asked"].get(tid, []) if a != q["q"]]}))
@@ -1631,6 +1638,16 @@ class Pilot(Desk, Periodic):
             else:
                 continue
             settled[key] = desk.get(key)
+        late = []
+        for key, got in desk.items():  # given after an earlier pass read the file, to a question it then settled
+            q = self.questions.get(key)
+            if key not in settled and (q is None or "result" in q):
+                if q is None or q["result"] != taken(q, got.get("option"), got.get("text")):  # else: read pre-restart
+                    late.append(self.late_answer(key))
+                settled[key] = got
+        if settled:  # saved before its answers go: a restart in between finds them settled, neither lost nor late
+            self.save()
+            drop_answers(p, settled)
         for tid in tickets(self.questions):
             mine = {k: q for k, q in self.questions.items() if ticket_of(k, q) == tid}
             if all("result" in q for q in mine.values()):
@@ -1638,22 +1655,23 @@ class Pilot(Desk, Periodic):
                 for k in mine:
                     del self.questions[k]
                 self.skip.discard(tid)
-        for key, got in desk.items():  # given after an earlier pass read the file, to a question it then settled
-            if key not in settled and "result" in self.questions.get(key, {"result": ""}):
-                self.late_answer(key)
-                settled[key] = got
-        if settled:
-            drop_answers(p, settled)
         self.save()
-        phone.late_pass()
+        phone.late_pass(late)
 
     def late_answer(self, key):
         """A `windvane answer` that came too late to be taken is told once, as a late phone answer is, then dropped,
-        so it can't answer a later question of the same id."""
-        msg = (f"{key}: your answer came after it was settled, so it wasn't taken; once its ticket merges, change it "
-               f"with `windvane answer {key} <letter>`.")
-        self.log(msg)
-        push("Answer not taken", msg)
+        so it can't answer a later question of the same id: (its line among the pass's late answers, its push alone).
+        The line names what is built when this run settled it (a restart forgets)."""
+        alone = (f"{key}: your answer came after it was settled, so it wasn't taken; once its ticket merges, change "
+                 f"it with `windvane answer {key} <letter>`.")
+        self.log(alone)
+        was = self.settled_as.get(key)
+        return f"{key}: " + (f"building {was}" if was else "settled before your answer came"), alone
+
+    def built(self, q, letter):
+        """Option `letter` as a late answer's push names it: its letter and text."""
+        opt = q["opts"].get(letter, "")
+        return whole(f"{letter} (", opt, ")", log=self.log) if opt else letter
 
     def go_with_rec(self, key, q, why, said, title):
         """Settle question `key` with its recommendation: the worker's feedback, the record `windvane answer` needs
@@ -1663,6 +1681,7 @@ class Pilot(Desk, Periodic):
         q["result"] = (f"{why}: build your recommendation ({q['rec']}), and move the question to ## Provisional with "
                        "its `Built:` line.")
         self.log(f"{key}: {said}; building {q['rec']}")
+        self.settled_as[key] = self.built(q, q["rec"])
         if key != tid:  # one of several: `windvane answer <key>` finds its provisional answer once merged
             with self.lock:
                 note(p, lambda s: s["built"].update({key: q["q"]}))
