@@ -60,8 +60,8 @@ trigger) looks like this too, so look at `gh pr checks 7`. "A check failed; see 
 check yourself and retry once it passes; if the code is at fault, push a fix to the branch, and the new head goes
 through the worker and review again. "A required review hasn't approved it": once the review is given, `windvane
 retry T-007` merges the kept approval. "It is a draft": `gh pr ready 7`, then retry. "GitHub refused to mark it ready:
-the gh login lacks write access to pull requests": give the account `gh` is logged in with (`gh auth status`) write
-access to the repository, then retry.
+the gh login lacks write access to pull requests (see `gh auth status`)": give the account `gh` is logged in with
+write access to the repository, then retry.
 
 **The run paused (`paused ... Resuming at 14:00`).**
 Claude's 5-hour usage reached `cap`. It resumes by itself when the window resets. Raise `cap` (or `run --cap`) to

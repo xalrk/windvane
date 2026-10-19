@@ -1257,7 +1257,7 @@ class Pilot(Desk, Periodic):
         if res is None:
             return False
         if res.returncode:
-            lacks = ": the gh login lacks write access to pull requests" * ("HTTP 403" in (res.stderr or ""))
+            lacks = ": the gh login lacks write access to pull requests (see `gh auth status`)" * ("HTTP 403" in (res.stderr or ""))
             self.fail(tid, f"PR #{pr} is a draft and GitHub refused to mark it ready{lacks} ({gh_error(res)})", head)
             return False
         self.log(f"{tid}: PR #{pr} was a draft; marked ready")

@@ -178,7 +178,7 @@ class MergeBlocked(unittest.TestCase):
         driver.CHECKS_EVERY, driver.CHECKS_MOST = 0.002, 0.005
         orig, fails = driver.Pilot.fail, []
 
-        def fail(pilot, tid, why, head=None):  # the user asks `windvane retry` after the first fail, checks still running
+        def fail(pilot, tid, why, head=None):  # `windvane retry` after the first fail, its checks still running
             fails.append(self.merges())
             if len(fails) == 1:
                 (self.p.state / driver.RETRY).write_text(tid + "\n")
@@ -219,7 +219,8 @@ class MergeBlocked(unittest.TestCase):
         pilot = self.run_pilot(draft="", stuck="gh: Resource not accessible by integration (HTTP 403)")
         self.assertEqual(pilot.failed, ["T-001"])
         self.assertIn("T-001: FAILED: PR #7 is a draft and GitHub refused to mark it ready: the gh login lacks write "
-                      "access to pull requests (gh: Resource not accessible by integration (HTTP 403))", self.log())
+                      "access to pull requests (see `gh auth status`) (gh: Resource not accessible by integration "
+                      "(HTTP 403))", self.log())
 
 
 class BlockedBy(unittest.TestCase):
