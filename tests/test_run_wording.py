@@ -45,7 +45,7 @@ class SetAsidePushes(Base):
 
     def test_each_limit_push_fits_a_lock_screen_and_names_the_limit_the_fix_and_the_branch(self):
         """A lock-screen preview shows about two lines: past 90 characters the branch, said last, is cut off."""
-        cases = {"time": ("1.5-hour limit", "ticket_hours"), "max turns": ("max turns", ".claude/ settings"),
+        cases = {"time": ("1.5-hour limit", "ticket_hours"), "max turns": ("max turns", "CLAUDE_CODE_MAX_TURNS"),
                  "dollar budget": ("dollar budget", "Split the ticket")}
         for killed, (limit, fix) in cases.items():
             with self.subTest(killed):

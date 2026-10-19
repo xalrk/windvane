@@ -178,11 +178,11 @@ class MergeBlocked(unittest.TestCase):
         driver.CHECKS_EVERY, driver.CHECKS_MOST = 0.002, 0.005
         orig, fails = driver.Pilot.fail, []
 
-        def fail(pilot, tid, why, head=None):  # `windvane retry` after the first fail, its checks still running
+        def fail(pilot, tid, why, *rest):  # `windvane retry` after the first fail, its checks still running
             fails.append(self.merges())
             if len(fails) == 1:
                 (self.p.state / driver.RETRY).write_text(tid + "\n")
-            return orig(pilot, tid, why, head)
+            return orig(pilot, tid, why, *rest)
         driver.Pilot.fail = fail
         self.addCleanup(setattr, driver.Pilot, "fail", orig)
         pilot = self.run_pilot(checks=RUNNING)

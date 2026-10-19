@@ -51,7 +51,7 @@ RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)"
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "fixes", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes", "opened", "heavy_waits",
-           "stuck_pushed")  # the run's own memory, handed to the driver a restart starts
+           "stuck_pushed", "retried")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
@@ -88,6 +88,8 @@ class Signalled(BaseException):
 SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it reads."),
                   ("context limit", "Split the ticket, or trim what it reads."),
                   ("request too large", "Split the ticket, or trim what it reads."))
+# What caps a session's turns: windvane passes no --max-turns, and the Claude CLI has no limit of its own without one
+MAX_TURNS = "CLAUDE_CODE_MAX_TURNS"  # an environment variable: windvane's own reaches every session
 REWRITE = "Rewrite its branch without the secret, as its push says: runs leave it be until then."  # a secret's set-aside fix, for the queue hint
 
 
@@ -210,10 +212,10 @@ def pr_state(p, pr):
 DEFINITE = re.compile(r"HTTP 4\d\d|GraphQL:")
 
 
-def refused_hint(tid, pr, by):
-    """What a merge blocked by a failed check or a missing review (`blocked_by`) asks of the user, for its fail text."""
-    return (f"; see `gh pr checks {pr}`" * ("FAILED" in by)
-            + f"; once it's given, `windvane retry {tid}` merges the kept approval" * ("REVIEW" in by))
+def refused_hint(pr, by):
+    """What a merge blocked by a failed check or a missing review (`blocked_by`) asks of the user: the fail text's
+    pointer, and when `windvane retry` merges it (`fail`'s `once`)."""
+    return f"; see `gh pr checks {pr}`" * ("FAILED" in by), "it's given" if "REVIEW" in by else None
 
 
 def gh_answer(cmd, cwd):
@@ -258,6 +260,7 @@ class Pilot(Desk, Periodic):
         # ticket -> when to try its merge again: kept in `landing` while its PR's required checks still run
         self.checking, self.check_since = {}, {}  # and ticket -> when this run's wait for them began
         self.skip, self.merged, self.failed = set(), [], []
+        self.retried = []  # failed tickets `windvane retry` put back in this run's queue (take_retries)
         self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
         self.fixes = {}  # ticket set aside -> what keeps it from being set aside again, for `windvane queue`'s hint
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
@@ -731,7 +734,7 @@ class Pilot(Desk, Periodic):
                 self.stopped += [tid] * (tid not in self.stopped)
                 self.log(f"{tid}: the worker run was stopped at the deadline")
             elif killed == "max turns":  # out of its own turns or budget: the ticket's doing, like the time box
-                self.set_aside_limit(tid, "its max turns", "Raise max turns in .claude/ settings or split it.")
+                self.set_aside_limit(tid, "its max turns", f"Split it, or raise {MAX_TURNS}.")
             elif killed.startswith("max ") or killed == "dollar budget":  # windvane sets no --max-budget-usd: only
                 self.set_aside_limit(tid, f"its {killed}", "Split the ticket.")  # splitting is left to the user
             return
@@ -1157,8 +1160,8 @@ class Pilot(Desk, Periodic):
                         return self.wait_checks(tid, pr, (branch, sha), state)
                     if why in STUCK or by:  # no retry clears it: fail now, saying why and what to look at
                         self.log(f"{tid}: merge refused ({why})")
-                        return self.fail(tid, f"the merge was refused: {why}" + refused_hint(tid, pr, by),
-                                         (branch, sha))
+                        see, once = refused_hint(pr, by)
+                        return self.fail(tid, f"the merge was refused: {why}{see}", (branch, sha), once)
             else:  # by sha, so nothing that moves the ci worktree's HEAD meanwhile can turn it into a no-op
                 res = net.git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
@@ -1179,8 +1182,7 @@ class Pilot(Desk, Periodic):
         if time.time() - since >= CHECKS_MOST * 60:
             self.log(f"{tid}: merge refused ({MERGE_STATES['PENDING']} after {CHECKS_MOST:g} min)")
             return self.fail(tid, f"the merge was refused: {MERGE_STATES['PENDING']} after {CHECKS_MOST:g} min; see "
-                             f"`gh pr checks {pr}`; once they pass, `windvane retry {tid}` merges the kept approval",
-                             head)
+                             f"`gh pr checks {pr}`", head, "they pass")
         with self.lock:
             self.landing[tid] = dict(zip(("branch", "sha"), head))
             self.checking[tid] = time.time() + CHECKS_EVERY * 60
@@ -1467,9 +1469,11 @@ class Pilot(Desk, Periodic):
         return "".join(f"\n{q['question']} Built {q['built']} without asking you: {q['option']}; {how(q)}" if q in new
                        else f"\nBuilt {q['built']} for {tid}: {q['option']}; {how(q)}" for q in picks), picks
 
-    def fail(self, tid, why, head=None):
+    def fail(self, tid, why, head=None, once=None):
         """`head`: the approved (branch, sha) a failed merge leaves, for a retry to merge without a worker run
-        (`land_again`)."""
+        (`land_again`). A failure that keeps one is the user's to clear by hand (a refused merge, a gh or push
+        refusal), so its push ends with the retry, and `once` says when it's due; any other failure is the work's
+        own, which a retry would only repeat."""
         self.skip.add(tid)
         if head:
             self.landing[tid] = dict(zip(("branch", "sha"), head))
@@ -1478,7 +1482,8 @@ class Pilot(Desk, Periodic):
         scratch.drop(self.p, tid)
         self.failed.append(tid)
         self.approved.pop(tid, None)
-        self.log(f"{tid}: FAILED: {why}")
+        self.log(f"{tid}: FAILED: {why}" + (f"; once {once}, `windvane retry {tid}` merges the kept approval" if once
+                                            else ""))
         self.save()  # `windvane queue` hints how to retry it to the tickets waiting on it
         # what `windvane stats` reads as the ticket's outcome, so a reworded log line can't hide a failure
         append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "failed"})
@@ -1486,9 +1491,11 @@ class Pilot(Desk, Periodic):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
-        goes_on = ", run goes on" * (not getattr(self, "ending", False))  # not once the run winds down
-        push(f"Failed: {self.name(tid)}", whole("", plain_error(why), f". Branch kept{goes_on}.", log=self.log), 4,
-             "x")
+        ending = getattr(self, "ending", False)  # the run winds down: it neither goes on nor takes a retry
+        retry = (f"\nOnce {once or 'fixed'}, it merges the kept approval: `windvane retry {tid}`"
+                 if head and not ending else "")
+        push(f"Failed: {self.name(tid)}", whole("", plain_error(why), f". Branch kept{', run goes on' * (not ending)}.",
+                                                log=self.log) + retry, 4, "x")
 
     # ---------- questions
 
@@ -2103,7 +2110,9 @@ class Pilot(Desk, Periodic):
 
     def take_retries(self):
         """Between tickets: the failed tickets `windvane retry` asked for go back in the queue, each counting its
-        rounds afresh. The request stays in the state dir until read, so a restart (a self-update) reads it too."""
+        rounds afresh. The request stays in the state dir until the run's state saying it was taken is saved, so a
+        restart (a self-update, a crash) reads it again if it came first; `retried` tells a ticket taken then, now
+        back in the queue, from one that never failed."""
         f = self.p.state / RETRY
         taking = f.with_name(RETRY + ".taking")  # renamed first: a request written while this one is read waits
         try:
@@ -2121,9 +2130,11 @@ class Pilot(Desk, Periodic):
                     h.write(left)
         for tid in dict.fromkeys(filter(None, map(self.p.norm, taking.read_text().split()))):
             if tid not in self.failed:
-                self.log(f"{tid}: asked to retry it, but it hasn't failed in this run")
+                if tid not in self.retried:
+                    self.log(f"{tid}: asked to retry it, but it hasn't failed in this run")
                 continue
             self.failed = [t for t in self.failed if t != tid]
+            self.retried += [tid] * (tid not in self.retried)
             self.skip.discard(tid)
             self.unfinished.discard(tid)
             for counts in (self.reviews, self.bounces, self.partials, self.ticket_crashes):
