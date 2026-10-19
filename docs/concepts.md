@@ -42,10 +42,10 @@ backticks is quoted, not read, so an unclosed backtick hides every key after it 
 of both above its list.
 
 `windvane new "<title>"` writes a ticket from the template with the next free id: after every ticket on this
-checkout's branch, in its tickets folder, on the upstream and in an open plan. It never overwrites a ticket file; if
-another `new` took the id at the same moment, it takes the next one, and should that be taken too it refuses: run it
-again. `windvane plan "<goal>"` has a planner session write several, from a goal and the critic's follow-up notes; it
-opens a pull request with them for you to look at (`--merge` merges them at once).
+checkout's branch, in its tickets folder, on the upstream and on an unmerged plan branch. It never overwrites a ticket
+file; if another `new` took the id at the same moment, it takes the next one, and should that be taken too it refuses:
+run it again. `windvane plan "<goal>"` has a planner session write several, from a goal and the critic's follow-up
+notes; it opens a pull request with them for you to look at (`--merge` merges them at once).
 
 ### The queue and ticket status
 
