@@ -271,7 +271,11 @@ class Pilot(Desk, Periodic):
         s = load_json(self.state_file, {})
         self.feedback = s.get("feedback", {})  # ticket -> what its next worker run must act on
         self.questions = s.get("questions", {})  # question id (questions.keys) -> a question for the user
-        self.settled_as = {}  # question id -> what this run built for it ("A (5 tries)"), for a late answer's push
+        # question id -> [what was built for it ("A (5 tries)"), when]: a late answer's push names it, after a restart
+        # too, for as long as a late answer is still told (phone.LATE_FOR)
+        self.settled_as = s.get("settled_as", {})
+        self.late = s.get("late", [])  # late `windvane answer`s, [line, push alone], kept until their push goes out
+        self.late_failed = False  # that their push failed: logged once until one goes out
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.secrets = s.get("secrets", {})  # ticket -> {"branch", "sha"}: a head set aside for a secret (secret_aside)
@@ -363,14 +367,21 @@ class Pilot(Desk, Periodic):
 
     def save(self):
         with self.lock:
+                self.settled_as = self.settled_kept()
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
                                         "checks": dict(self.check_wait), "scale_told": self.scale_told,
+                                        "settled_as": dict(self.settled_as), "late": list(self.late),
                                         "aside": dict(self.aside),
                                         "fixes": dict(self.fixes), "failed": list(self.failed),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
                                         "running": dict(self.running)})
+
+    def settled_kept(self):
+        """`settled_as` without what no late answer can come for any more: settled over a day ago, question gone."""
+        old = time.time() - phone.LATE_FOR
+        return {k: v for k, v in self.settled_as.items() if v[1] > old or k in self.questions}
 
     def log(self, msg):
         log(self.p, msg)
@@ -1625,7 +1636,7 @@ class Pilot(Desk, Periodic):
                     q["later"] = True
             if letter or text:
                 q["result"] = taken(q, letter, text)
-                self.settled_as[key] = self.built(q, letter) if letter else "your typed answer"
+                self.settled_as[key] = [self.built(q, letter) if letter else "your typed answer", time.time()]
                 self.log(f"{key}: answered {letter or ''} {text or ''}".rstrip())
                 with self.lock:  # answered, so never mistaken for a reworded copy of a later provisional answer
                     note(p, lambda s: s["asked"].update({tid: [a for a in s["asked"].get(tid, []) if a != q["q"]]}))
@@ -1646,9 +1657,11 @@ class Pilot(Desk, Periodic):
             q = self.questions.get(key)
             if key not in settled and (q is None or "result" in q):
                 if q is None or q["result"] != taken(q, got.get("option"), got.get("text")):  # else: read pre-restart
-                    late.append(self.late_answer(key))
+                    told = list(self.late_answer(key))
+                    if told not in self.late:  # else kept by a pass killed before it dropped the answer
+                        self.late.append(told)
                 settled[key] = got
-        if settled:  # saved before its answers go: a restart in between finds them settled, neither lost nor late
+        if settled:  # saved before its answers go: a restart in between finds them settled or kept, never lost
             self.save()
             drop_answers(p, settled)
         for tid in tickets(self.questions):
@@ -1659,16 +1672,27 @@ class Pilot(Desk, Periodic):
                     del self.questions[k]
                 self.skip.discard(tid)
         self.save()
-        phone.late_pass(late)
+        self.tell_late()
+
+    def tell_late(self):
+        """The pass's late answers, with those whose push failed before (kept in state.json, so a restart sends them
+        too): one push, and they're dropped only once it went out."""
+        if phone.late_pass(self.late):
+            if self.late:
+                self.late, self.late_failed = [], False
+                self.save()
+        elif not self.late_failed:
+            self.log(f"the push of {len(self.late)} late answer(s) failed; trying again on the next pass")
+            self.late_failed = True
 
     def late_answer(self, key):
         """A `windvane answer` that came too late to be taken is told once, as a late phone answer is, then dropped,
         so it can't answer a later question of the same id: (its line among the pass's late answers, its push alone).
-        The line names what is built when this run settled it (a restart forgets)."""
+        The line names what is built when it was settled (kept in state.json for phone.LATE_FOR)."""
         alone = (f"{key}: your answer came after it was settled, so it wasn't taken; once its ticket merges, change "
                  f"it with `windvane answer {key} <letter>`.")
         self.log(alone)
-        was = self.settled_as.get(key)
+        was = self.settled_as.get(key, [None])[0]
         return f"{key}: " + (f"building {was}" if was else "settled before your answer came"), alone
 
     def built(self, q, letter):
@@ -1684,7 +1708,7 @@ class Pilot(Desk, Periodic):
         q["result"] = (f"{why}: build your recommendation ({q['rec']}), and move the question to ## Provisional with "
                        "its `Built:` line.")
         self.log(f"{key}: {said}; building {q['rec']}")
-        self.settled_as[key] = self.built(q, q["rec"])
+        self.settled_as[key] = [self.built(q, q["rec"]), time.time()]
         if key != tid:  # one of several: `windvane answer <key>` finds its provisional answer once merged
             with self.lock:
                 note(p, lambda s: s["built"].update({key: q["q"]}))
