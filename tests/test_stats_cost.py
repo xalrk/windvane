@@ -5,6 +5,7 @@ import io
 import os
 import subprocess
 import sys
+import threading
 import unittest
 from contextlib import redirect_stdout
 from types import SimpleNamespace
@@ -153,7 +154,8 @@ class StatsCost(unittest.TestCase):
 
     def test_runner_fail_writes_the_outcome_row(self):
         pilot = SimpleNamespace(p=self.p, skip=set(), failed=[], approved={}, fail_streak=0, log=lambda m: None,
-                                name=lambda t: t, note_heavy=lambda tid=None: None, save=lambda: None)
+                                name=lambda t: t, note_heavy=lambda tid=None: None, save=lambda: None,
+                                lock=threading.Lock(), check_wait={}, checking={})
         with mock.patch.object(driver, "push"), mock.patch.object(driver.net, "online", return_value=True):
             driver.Pilot.fail(pilot, "T-004", "tests fail")
         row = [r for r in read_jsonl(self.p.state / "ledger.jsonl") if r.get("event")][-1]
