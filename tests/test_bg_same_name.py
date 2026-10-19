@@ -3,6 +3,7 @@ beside the job's files from its "still running" check through writing the pid, s
 first and then refuses, instead of starting a second job whose pid hides the first's."""
 import io
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -15,6 +16,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import jobs  # noqa: E402
+from windvane.config import Project  # noqa: E402
 from windvane.runner import IN_SANDBOX, NEST, TICKET  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
@@ -73,6 +75,29 @@ class BgSameName(unittest.TestCase):
                 self.assertFalse(Path(f"{base}.pid").exists())
             t.join(30)
         self.assertEqual((out.getvalue().count("started 'j'"), errors), (1, []))
+
+
+class TwoCommands(unittest.TestCase):
+    """The same through the `windvane bg` command, as a session's two parallel tool calls run it."""
+
+    def setUp(self):
+        self.s = Sandbox()
+        self.addCleanup(self.s.close)
+        for k in (NEST, IN_SANDBOX, TICKET):
+            os.environ.pop(k, None)
+        self.p = Project(self.s.root)
+        self.addCleanup(BgSameName.end_all, self)
+
+    def test_two_commands_started_together_start_one_job(self):
+        for name in ("a", "b", "c", "d", "e"):
+            calls = [subprocess.Popen(["windvane", "bg", name, "sleep", "20"], cwd=self.s.root, text=True,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(2)]
+            outs = [c.communicate(timeout=60) for c in calls]
+            started = [o for o, _ in outs if f"started '{name}'" in o]
+            refused = [e.strip() for _, e in outs if e.strip()]
+            self.assertEqual((len(started), refused),
+                             (1, [f"bg: '{name}' is still running; wait with: windvane await {name}"]), outs)
+            self.assertTrue(jobs.alive(self.p.state / "bg" / name))
 
 
 if __name__ == "__main__":
