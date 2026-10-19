@@ -50,6 +50,7 @@ CHECK_LOG = "check: log "  # a check job's first line names the check's log, whe
 # and never over the one `bg` wrote, which its stamp must not predate), then runs the command and writes its exit.
 JOB = ('echo $$ > "$0.pid.$$"; ln "$0.pid.$$" "$0.pid" 2>/dev/null; rm -f "$0.pid.$$"; '
        '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"')
+FILES = ("start", "cwd", "pid", "stamp", "lock", "log", "exit", "head", "keep", "child")  # a job's, after its base
 # A kept job's group leader: `watch` from this same windvane (its package dir is the first argument), outside PATH.
 WATCH = ("import sys; sys.path.insert(0, sys.argv[1]); from windvane.jobs import watch; "
          "sys.exit(watch(sys.argv[2], sys.argv[3:]))")

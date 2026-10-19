@@ -176,10 +176,32 @@ def bg_items(p, done, keep_days, now):
     return [Item(f"bg/ ({whose} job logs)", size, dirs, "files")]
 
 
+def desk_job_items(p, keep_days, now):
+    """The files of jobs right under bg/ (the desk's, and tickets' from before they had a dir of their own) that ended
+    and were untouched for the window: no ticket's merge drops them."""
+    since = now - max(keep_days * DAY, scratch.AGE)
+    paths = []
+    for start in sorted((p.state / "bg").glob("*.start")):
+        base = start.with_suffix("")
+        files = [f for f in (Path(f"{base}.{end}") for end in jobs.FILES) if f.exists()]
+        if not any(f.stat().st_mtime >= since for f in files) and not job_live(base, now):
+            paths += files
+    if not paths:
+        return []
+    n = sum(f.suffix == ".start" for f in paths)
+    return [Item(f"bg/ ({n} desk job{'s' * (n > 1)} ended over {keep_days:g} days ago)",
+                 sum(f.stat().st_size for f in paths), paths, "files")]
+
+
 def jobs_live(d, now):
     """Whether a job in bg dir `d` runs, or is kept until a time still ahead."""
     bases = {f.with_suffix("") for f in d.glob("*.start")} | {f.with_suffix("") for f in d.glob("*.keep")}
-    return any(jobs.alive(b) or (Path(f"{b}.keep").exists() and (jobs.kept_until(b) or 0) > now) for b in bases)
+    return any(job_live(b, now) for b in bases)
+
+
+def job_live(base, now):
+    """Whether the bg job at `base` runs, or is kept until a time still ahead."""
+    return jobs.alive(base) or Path(f"{base}.keep").exists() and (jobs.kept_until(base) or 0) > now
 
 
 def survey(p, busy=None, keep_slots=0, trim=None, procs=None, now=None):
@@ -199,6 +221,8 @@ def survey(p, busy=None, keep_slots=0, trim=None, procs=None, now=None):
     items += run_items(p, done, s["keep_days"], s["keep_runs"], now)
     items += critic_items(p, done, s["keep_days"], now)
     items += bg_items(p, done, s["keep_days"], now)
+    if (p.state / "bg").is_dir():
+        items += desk_job_items(p, s["keep_days"], now)
     return sorted(items, key=lambda i: -i.size), kept
 
 

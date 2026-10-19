@@ -251,12 +251,12 @@ class PruneBg(Base):
             if jobs.alive(start.with_suffix("")):
                 jobs.end_job(start.with_suffix(""), "the test's end")
 
-    def job(self, ticket, cmd=("true",)):
-        with mock.patch.dict(os.environ, {TICKET: ticket}), redirect_stdout(io.StringIO()):
-            jobs.bg(self.p, "check", list(cmd), str(self.s.root))
-            base = jobs.job_base(self.p, "check")
+    def job(self, ticket, cmd=("true",), name="check"):
+        with mock.patch.dict(os.environ, {TICKET: ticket} if ticket else {}), redirect_stdout(io.StringIO()):
+            jobs.bg(self.p, name, list(cmd), str(self.s.root))
+            base = jobs.job_base(self.p, name)
             if cmd == ("true",):
-                jobs.await_(self.p, "check", limit=20)
+                jobs.await_(self.p, name, limit=20)
         return base
 
     def listed(self):
@@ -282,6 +282,16 @@ class PruneBg(Base):
         Path(f"{base}.keep").write_text(str(time.time() - 60))  # its time is up
         age(self.p.state / "bg", OLD)
         self.assertEqual(self.listed(), ["bg/ (1 merged ticket's job logs)"])
+
+    def test_the_desks_old_ended_jobs_go_a_running_one_stays(self):
+        ended, running = self.job(None, name="build"), self.job(None, ("sleep", "30"), name="serve")
+        self.assertEqual(self.listed(), [])
+        age(self.p.state / "bg", OLD)
+        self.assertEqual(self.listed(), ["bg/ (1 desk job ended over 14 days ago)"])
+        statedir.clean(self.p, procs=set())
+        self.assertEqual({f.name.split(".")[0] for f in (self.p.state / "bg").iterdir() if f.is_file()}, {"serve"})
+        self.assertTrue(jobs.alive(running))
+        self.assertFalse(Path(f"{ended}.log").exists())
 
 
 @unittest.skipUnless(shutil.which("ps"), "no ps on this system")
