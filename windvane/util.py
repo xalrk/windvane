@@ -148,8 +148,14 @@ def save_json(path, data):
     save usage.json from their own streams (a shared one was renamed away by the first, failing the second)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    replace_text(path, json.dumps(data, indent=1))
+
+
+def replace_text(path, text):
+    """Write `path` whole in one rename, so a reader never sees it empty or half-written."""
+    path = Path(path)
     tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.{threading.get_ident()}.tmp")
-    tmp.write_text(json.dumps(data, indent=1))
+    tmp.write_text(text)
     tmp.replace(path)
 
 
@@ -208,6 +214,7 @@ def last_match(regex, text):
 # dir, so the tests point it at a path that isn't there to run that branch on Linux (test_no_proc).
 PROC = Path("/proc")
 PS_WAIT = 10  # seconds a `ps` may take: a hung one counts as no answer
+PS_GRAIN = 1  # seconds `ps lstart` (macOS's start times) rounds down to: within one, it can't say which came first
 
 
 def cwds(pid=None):
@@ -365,6 +372,13 @@ def boot_started(pid):
         return int((PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[19]) / os.sysconf("SC_CLK_TCK")
     except (OSError, ValueError, IndexError):
         return None
+
+
+def started_after(pid, since):
+    """Whether process `pid` started after `since` (on `boot_started`'s clock), False when it's gone. `ps` gives whole
+    seconds, so there it must have started a whole PS_GRAIN later: one started in `since`'s own second may be older."""
+    t = boot_started(pid)
+    return t is not None and t >= since + (0 if PROC.is_dir() else PS_GRAIN)
 
 
 def command(pid):

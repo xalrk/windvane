@@ -1,7 +1,7 @@
 """A project's state dir, kept lean. What runs leave there and nothing reads again grows until the disk is full (gigabytes
 within days of steady runs): slot worktrees past their run, each with its own build output; session
-transcripts (`runs/*.jsonl`: `stats` reads the ledger, `watch` only the newest stream); critic packs of merged tickets.
-`reclaimable` lists what may go, with sizes, as `scratch.leftovers` does for temp dirs, and `clean` removes it.
+transcripts (`runs/*.jsonl`: `stats` reads the ledger, `watch` only the newest stream); critic packs and `bg` job
+logs of merged tickets. `reclaimable` lists what may go, with sizes, as `scratch.leftovers` does for temp dirs, and `clean` removes it.
 
 Work is never lost: a worktree with a commit not on main, uncommitted changes, or a running session (the driver's
 `running` slots, a process inside it) stays, and so does anything touched in the last hour (`scratch.AGE`). Slot 0's
@@ -15,7 +15,7 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import heavy, scratch
+from . import heavy, jobs, scratch
 from .config import state_settings
 from .util import git, gout, load_json
 
@@ -160,6 +160,50 @@ def critic_items(p, done, keep_days, now):
     return [Item(f"critic/ ({whose} packs: {span})", size, dirs, "files")]
 
 
+def bg_items(p, done, keep_days, now):
+    """Merged tickets' `windvane bg` job dirs (logs, pids, locks), untouched for the window. The driver drops a
+    ticket's as it merges; one merged elsewhere, or by a driver that died first, would stay for good. A dir with a job
+    still running, or kept (`bg --keep`) with time still to run, stays."""
+    if not done or not (p.state / "bg").is_dir():
+        return []
+    since = now - max(keep_days * DAY, scratch.AGE)
+    dirs = [d for d in sorted((p.state / "bg").iterdir())
+            if d.is_dir() and p.norm(d.name) in done and not scratch._recent(d, since) and not jobs_live(d, now)]
+    if not dirs:
+        return []
+    size = sum(scratch.size(d)[1] for d in dirs)
+    whose = f"{len(dirs)} merged " + ("tickets'" if len(dirs) > 1 else "ticket's")
+    return [Item(f"bg/ ({whose} job logs)", size, dirs, "files")]
+
+
+def desk_job_items(p, keep_days, now):
+    """The files of jobs right under bg/ (the desk's, and tickets' from before they had a dir of their own) that ended
+    and were untouched for the window: no ticket's merge drops them."""
+    since = now - max(keep_days * DAY, scratch.AGE)
+    paths = []
+    for start in sorted((p.state / "bg").glob("*.start")):
+        base = start.with_suffix("")
+        files = jobs.job_files(base)
+        if not any(f.stat().st_mtime >= since for f in files) and not job_live(base, now):
+            paths += files
+    if not paths:
+        return []
+    n = sum(f.suffix == ".start" for f in paths)
+    return [Item(f"bg/ ({n} desk job{'s' * (n > 1)} ended over {keep_days:g} days ago)",
+                 sum(f.stat().st_size for f in paths), paths, "files")]
+
+
+def jobs_live(d, now):
+    """Whether a job in bg dir `d` runs, or is kept until a time still ahead."""
+    bases = {f.with_suffix("") for f in d.glob("*.start")} | {f.with_suffix("") for f in d.glob("*.keep")}
+    return any(job_live(b, now) for b in bases)
+
+
+def job_live(base, now):
+    """Whether the bg job at `base` runs, or is kept until a time still ahead."""
+    return jobs.alive(base) or Path(f"{base}.keep").exists() and (jobs.kept_until(base) or 0) > now
+
+
 def survey(p, busy=None, keep_slots=0, trim=None, procs=None, now=None):
     """(items biggest first, kept worktrees as (name, why)). `busy`: the slots running sessions use (default: the
     driver's saved `running`); `keep_slots`: slots below it stay whatever their state (a run that may use them again);
@@ -176,6 +220,9 @@ def survey(p, busy=None, keep_slots=0, trim=None, procs=None, now=None):
     done = merged_tickets(p)
     items += run_items(p, done, s["keep_days"], s["keep_runs"], now)
     items += critic_items(p, done, s["keep_days"], now)
+    items += bg_items(p, done, s["keep_days"], now)
+    if (p.state / "bg").is_dir():
+        items += desk_job_items(p, s["keep_days"], now)
     return sorted(items, key=lambda i: -i.size), kept
 
 

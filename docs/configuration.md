@@ -231,7 +231,7 @@ reuses them.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `keep_days` | `14` | Session transcripts (`runs/*.jsonl`) and merged tickets' critic packs (`critic/<ID>/`) older than this go. `windvane stats` reads the token ledger, not the transcripts, so its numbers don't change. |
+| `keep_days` | `14` | Session transcripts (`runs/*.jsonl`), merged tickets' critic packs (`critic/<ID>/`) and `bg` job files (a merged ticket's `bg/<ID>/`, the desk's ended jobs in `bg/`; never a job still running or kept) older than this go. `windvane stats` reads the token ledger, not the transcripts, so its numbers don't change. |
 | `keep_runs` | `3` | An unmerged ticket's newest transcripts that stay however old, for a look at what its last runs did. |
 | `trim_build` | `false` | Also remove the ignored files (build output, `node_modules`) of slot 0's and the planner's worktrees while they're idle. Off by default: the next run rebuilds them, which can take long (an engine, a Rust project). |
 

@@ -2757,7 +2757,7 @@ def leftover_helpers(p, since):
             continue
         if not (info := util.command(pid)):
             continue
-        if not p.cfg["isolate"] and (info[1] or since is None or (util.boot_started(pid) or 0) < since):
+        if not p.cfg["isolate"] and (info[1] or since is None or not util.started_after(pid, since)):
             continue
         out.append((pid, info[0]))
     return out
