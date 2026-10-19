@@ -129,7 +129,7 @@ class MergeDraft(unittest.TestCase):
         self.assertNotIn("failed", self.outcomes())
         self.assertIn("T-001", pilot.skip)
         [(title, msg)] = [(t, m) for t, m in self.pushes if t.startswith("Held")]
-        self.assertIn("`gh pr ready 7`; the next run takes it up again", msg)
+        self.assertIn("`gh pr ready 7`; the next run merges the kept approval", msg)
         self.assertIn("T-001: PR #7 was made a draft after it was opened; left as it is, set aside", self.log())
 
     def test_a_timeline_github_wont_show_is_taken_for_a_hold_saying_so(self):
