@@ -64,6 +64,9 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- `windvane new` no longer overwrites a ticket. It takes the id after every ticket in the checkout it writes to (its
+  own HEAD, uncommitted ticket files, and the upstream), not the main checkout's HEAD, which a worktree's branch can
+  be ahead of; and it refuses, naming the file, if the file already exists.
 - `windvane check` in a session runs as the session's bg job `check` for every check, not only a heavy one,
   so a check longer than a tool call's 10 minutes is no longer killed with the call and its pass lost:
   past ~9.5 min it exits 75 and `windvane await check` gives its result.

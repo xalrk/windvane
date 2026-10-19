@@ -632,11 +632,21 @@ def cmd_plan(a, p):
 
 
 def cmd_new(a, p):
-    q = Queue(p, "HEAD")
-    tid = q.next_id()
-    f = p.root / p.tickets_rel / f"{tid}.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text((HOME / "templates/ticket.md").read_text().replace("<ID>", tid).replace("<title>", " ".join(a.title)))
+    """A ticket file with the id after every ticket this checkout knows: its own HEAD (a worktree's branch can be
+    ahead of the main checkout, where `Queue` runs git), its uncommitted files, and the upstream (merged there but not
+    pulled yet). Created exclusively, so an existing ticket is never overwritten."""
+    folder = p.root / p.tickets_rel
+    on_disk = [t for f in folder.glob("*.md") if (t := p.norm(f.stem))]
+    head = gout(p.root, "rev-parse", "--verify", "-q", "HEAD")
+    tid = Queue(p, head or p.upstream).next_id([*on_disk, *Queue(p).files])
+    f = folder / f"{tid}.md"
+    text = (HOME / "templates/ticket.md").read_text().replace("<ID>", tid).replace("<title>", " ".join(a.title))
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(f, "x") as out:
+            out.write(text)
+    except FileExistsError:
+        sys.exit(f"{f} already exists: not overwritten")
     print(f)
 
 
