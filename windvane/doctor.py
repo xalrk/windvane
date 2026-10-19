@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import actions, heavy, install, phone, runner, scratch, selfupdate, statedir, util
+from . import actions, critic, heavy, install, phone, runner, scratch, selfupdate, statedir, util
 from .config import CHECKOUT, DIR, HOME, TOKEN_FIX, Project, author, github_token
 from .util import gout, load_json
 
@@ -221,7 +221,7 @@ def checks(p=None):
         add(not bad, True, "[permissions] rules in config.toml" + (f": {'; '.join(bad)}" if bad else ""),
             "fix them: Tool or Tool(specifier), in lists under <role>_allow / <role>_deny")
     if p and getattr(p, "root", None):
-        out += [("warn", what, fix) for what, fix in ci_warnings(p.root, p)]
+        out += [("warn", what, fix) for what, fix in ci_warnings(p.root, p) + critic.scale_warnings(p, p.root)]
     github = bool(p and p.exists and p.cfg["forge"] == "github")
     why = "this project's forge is github" if github else "for projects with forge = github"
     has_gh = bool(shutil.which("gh"))

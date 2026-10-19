@@ -1896,6 +1896,12 @@ class Pilot(Desk, Periodic):
             self.log(self.halt)
         return not bad
 
+    def scale_note(self):
+        """Log each critic scale id the critic's answers will be misread on, once, at the run's start: a check
+        named `beyond` read as the "Beyond this ticket" list cost three review rounds before anyone saw why."""
+        for what, fix in critic.scale_warnings(self.p, self.p.root):
+            self.log(f"{what}: {fix}")
+
     def idle_note(self, notes):
         """Log why a slot sits idle, once per change rather than every pass of the loop."""
         for n in notes:
@@ -2304,6 +2310,7 @@ class Pilot(Desk, Periodic):
         ready, crashed = False, None
         handlers, streams = self.catch_signals(), (sys.stdout, sys.stderr)
         try:
+            self.scale_note()
             ready = self.rules_ok() and self.prepare(0)  # before any session or push: a bad rule or a failed setup
             # ends the run with a single push
             self.carry_over(restarted)

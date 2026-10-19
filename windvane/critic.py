@@ -211,6 +211,59 @@ def shared(lad):
     return {cid: ds for cid, ds in dims.items() if len(ds) > 1}
 
 
+def reply_words():
+    """{word: the reply part it starts} for each word the critic's reply format gives a meaning of its own: the
+    first word of each heading in the reply shape `prompts/CRITIC.md` asks for (`Checks:`, `Fix in this ticket:`,
+    `Beyond this ticket:`, `CRITIC:`, ...) and each key its CRITIC line writes (`fixes=`). Read from the prompt, so a
+    heading added there is covered too. An id that is one of them can read as that part of the reply: a check named
+    `beyond` cut off every answer after it for three review rounds (T-194)."""
+    text = (HOME / "prompts/CRITIC.md").read_text()
+    shape = re.search(r"^## Your reply\n.*?^```\n(.*?)^```", text, re.M | re.S)
+    out = {}
+    for line in shape.group(1).splitlines() if shape else []:
+        if m := re.match(r"([A-Za-z][\w-]*)[A-Za-z \t]*:", line):
+            out.setdefault(m.group(1).lower(), line.split(":", 1)[0] + ":")
+            for key in re.findall(r"([A-Za-z][\w-]*)=", line):
+                out.setdefault(key.lower(), f"{key}=")
+    return out
+
+
+def misread(text, rel):
+    """[(what, fix)] for each id in a ladder scale that parses but will be misread: an id that is a word of the reply
+    format (`reply_words`), two checks of one dimension with one id (the first answer scores both), and two headings
+    with one id (their checks merge into one ladder). Warned at doctor and the run's start, never refused: an id that
+    reads right today keeps working. `rel` is the scale's path, for the fix."""
+    lad, reserved, out = ladder(text), reply_words(), []
+    for d, cs in lad.items():
+        ids = [cid for _, cid, _ in cs]
+        for kind, x in [("dimension", d)] + [("check", cid) for cid in dict.fromkeys(ids)]:
+            if x in reserved:
+                where = "" if kind == "dimension" else f" (in {d})"
+                out.append((f"critic scale: the {kind} id `{x}`{where} is a word of the critic's reply format "
+                            f"(`{reserved[x]}`), so its answer can read as that part of the reply and leave checks unanswered",
+                            f"rename it in {rel}"))
+        for cid in [c for c in dict.fromkeys(ids) if ids.count(c) > 1]:
+            out.append((f"critic scale: dimension {d} has {ids.count(cid)} checks named `{cid}`, so one answer "
+                        "scores them all", f"rename one in {rel}"))
+    heads, n = {}, 0  # {heading's place: its id}, for the headings with rungs under them
+    for line in (text or "").splitlines():
+        if m := HEAD_RE.match(line):
+            n, d = n + 1, m.group(1).lower()
+        elif n and RUNG_RE.match(line):
+            heads[n] = d
+    heads = list(heads.values())
+    for d in [d for d in dict.fromkeys(heads) if heads.count(d) > 1]:
+        out.append((f"critic scale: {heads.count(d)} headings read as dimension `{d}` (its first word), so their "
+                    "checks merge into one ladder", f"give each its own first word in {rel}"))
+    return out
+
+
+def scale_warnings(p, cwd):
+    """`misread()` on the project's scale in `cwd`, or [] when it has none."""
+    f = Path(cwd) / p.rubric_rel
+    return misread(f.read_text(), p.rubric_rel) if f.is_file() else []
+
+
 def clip(text, n=200):
     """`text` cut to at most `n` characters at a word boundary, with "…" when cut: a cut mid-word read as a typo in
     the log ("Nothing shows the \"a few )")."""
