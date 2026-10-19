@@ -256,13 +256,15 @@ def running_checks(pr, required=None):
 
 
 def required_checks(p, pr_n):
-    """The names of the checks PR `pr_n` needs to pass, from `gh pr checks --required`: a set (empty when its base
-    requires none), or None when gh can't say (an older gh without the flag, an API error)."""
+    """The names of the checks PR `pr_n` needs to pass, from `gh pr checks --required`, and whether that answer holds
+    for the run: a set (empty when its base requires none), or None when gh can't say, for good on a gh without the
+    flag, for now on an API error."""
     res = net.call(["gh", "pr", "checks", pr_n, "--required", "--json", "name"], p.main_root())
     try:  # gh exits non-zero while checks run or after one failed, with the JSON still out
-        return {c["name"] for c in json.loads(res.stdout)}
+        return {c["name"] for c in json.loads(res.stdout)}, True
     except (ValueError, TypeError, KeyError):
-        return set() if "no required checks" in (res.stderr or "") else None
+        err = res.stderr or ""
+        return (set(), True) if "no required checks" in err else (None, "unknown flag" in err)
 
 
 def blocked_by(pr, required=None):

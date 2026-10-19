@@ -3,6 +3,7 @@ mid-wait and restarted merges the kept approval with no new session, and fails C
 refusal, not the restart's; a new run starts the clock over. Only the checks the base requires hold the merge, a
 wait shows in `windvane status`, and a `gh pr ready` refused with a 403 names the fix."""
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -26,9 +27,12 @@ from test_merge_blocked import GH, RUNNING, args  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
 # test_merge_blocked's fake gh, with `gh pr checks --required`: the state dir's `required` (a JSON list of names)
-# answers it; with no such file it fails as a gh without the flag does. `held` blocks the PR by a rule its checks and
-# review don't show (a required signature).
+# answers it; with no such file it fails as a gh without the flag does, and `required_fails` (a count) fails that many
+# calls first as an API hiccup does. `held` blocks the PR by a rule its checks and review don't show (a signature).
 GH = GH.replace("""elif args[:2] == ["pr", "view"] and""", """elif args[:2] == ["pr", "checks"]:
+    if int(read("required_fails", "0")) > 0:
+        (st / "required_fails").write_text(str(int(read("required_fails")) - 1))
+        sys.exit("HTTP 502: Bad Gateway (https://api.github.com/graphql)")
     if not (st / "required").exists():
         sys.exit("unknown flag: --required")
     names = json.loads(read("required"))
@@ -171,12 +175,15 @@ class MergeWaitRestart(unittest.TestCase):
     def test_status_shows_the_waiting_ticket_its_minutes_and_its_required_checks_only(self):
         checks = json.dumps(json.loads(RUNNING) + [PREVIEW])
         child = self.start_child(checks=checks, required='["build"]')
-        st = self.saved()
-        st["checks"]["T-001"]["since"] -= 12 * 60  # a wait that began 12 minutes ago
-        (self.p.state / "state.json").write_text(json.dumps(st))
-        self.assertIn("merge waits: T-001 on PR #7's required checks (build), 12 min of 60", self.status())
+        self.assertIn("merge waits: T-001 on PR #7's required checks (build), 0 min of 60", self.status())
         self.kill(child)
         self.assertNotIn("merge waits: T-001 on", self.status())  # no run going: nothing waits
+        st = self.saved()
+        st["checks"]["T-001"]["since"] -= 12 * 60  # a wait that began 12 minutes ago, its run still going
+        (self.p.state / "state.json").write_text(json.dumps(st))
+        with open(self.p.state / "lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.assertIn("merge waits: T-001 on PR #7's required checks (build), 12 min of 60", self.status())
         self.assertIn("T-001: merge waits: PR #7's required checks are still running (build); trying again every 1 "
                       "min", self.log())
 
@@ -201,6 +208,19 @@ class MergeWaitRestart(unittest.TestCase):
         self.assertGreaterEqual(self.merges(), 2)
         self.assertEqual(self.log().count("gh couldn't say which of PR #7's checks are required"), 1)
         self.assertIn("required checks are still running after 0.005 min", self.log())
+
+    def test_a_gh_hiccup_on_the_required_checks_is_asked_again_at_the_next_refusal(self):
+        checks = json.dumps(json.loads(RUNNING) + [PREVIEW])
+        pilot = self.run_pilot(checks=checks, required='["build"]', required_fails="1", clear="3")
+        self.assertEqual(pilot.merged, ["T-001"])
+        asked = [c for c in (self.state / "log").read_text().splitlines() if c.startswith("pr checks 7")]
+        self.assertEqual(len(asked), 2)  # the hiccup, then the answer; not again once it's known
+        self.assertEqual(self.log().count("gh couldn't say which of PR #7's checks are required"), 1)
+
+    def test_status_says_checks_not_required_ones_when_gh_couldnt_say(self):
+        child = self.start_child(checks=json.dumps([PREVIEW]), held="")
+        self.assertIn("merge waits: T-001 on PR #7's checks (preview), 0 min of 60", self.status())
+        self.kill(child)
 
     def test_a_ready_refused_with_a_403_names_gh_auth_refresh(self):
         pilot = self.run_pilot(draft="", stuck="gh: Resource not accessible by integration (HTTP 403)")

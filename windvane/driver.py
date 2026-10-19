@@ -1165,7 +1165,7 @@ class Pilot(Desk, Periodic):
                     need = self.required_of(tid, pr, state)
                     why, by = merge_state(state, res.stderr or res.stdout, need), blocked_by(state, need)
                     if by == ["PENDING"]:  # clears by itself: tried again on a later pass, with no session
-                        return self.wait_checks(tid, pr, (branch, sha), running_checks(state, need))
+                        return self.wait_checks(tid, pr, (branch, sha), running_checks(state, need), need is not None)
                     if why in STUCK or by:  # no retry clears it: fail now, saying why and what to look at
                         self.log(f"{tid}: merge refused ({why})")
                         see, once = refused_hint(pr, by)
@@ -1185,32 +1185,33 @@ class Pilot(Desk, Periodic):
 
     def required_of(self, tid, pr, state):
         """The names of the checks that can hold PR `pr`'s merge (`required_checks`), learned once a run for its base
-        and asked again only when a check shows on it that the base's answer didn't cover (a workflow added since).
-        None when gh can't say: any running check then counts, as `blocked_by` says, and the log says so once."""
+        and asked again only when a check shows on it that the base's answer didn't cover (a workflow added since), or
+        gh failed. None when gh can't say: any running check then counts, as `blocked_by` says, and the log says so
+        once."""
         names = {check_name(c) for c in state.get("statusCheckRollup") or []}
         if not names:
             return None
         known = self.required.setdefault(state.get("baseRefName", ""), [None, set()])
         if names - known[1]:
-            got = required_checks(self.p, pr)
+            got, holds = required_checks(self.p, pr)
             known[0] = known[0] if got is None else got | (known[0] or set())
-            known[1] |= names
+            known[1] |= names if holds else set()  # an API error: asked again at the next refusal
             if got is None and not self.required_said:
                 self.required_said = True
                 self.log(f"{tid}: gh couldn't say which of PR #{pr}'s checks are required (`gh pr checks --required`); "
                          "any check still running counts as one")
         return known[0]
 
-    def wait_checks(self, tid, pr, head, names):
-        """A merge held only by required checks still running (`names`): the approved head is kept (`landing`) and the
-        loop merges it again every CHECKS_EVERY minutes, with no worker, critic or review, until the checks end. Logged
-        once; CHECKS_MOST minutes on, or at the run's end (`checks_unfinished`), it fails: the one push. The clock is
-        saved with `landing`: a restart of the same run (a crash, a self-update) goes on counting from the first
-        refusal; a new run starts it over."""
+    def wait_checks(self, tid, pr, head, names, required=True):
+        """A merge held only by required checks still running (`names`; any running check when gh couldn't say which
+        are `required`): the approved head is kept (`landing`) and the loop merges it again every CHECKS_EVERY
+        minutes, with no worker, critic or review, until the checks end. Logged once; CHECKS_MOST minutes on, or at
+        the run's end (`checks_unfinished`), it fails: the one push. The clock is saved with `landing`: a restart of
+        the same run (a crash, a self-update) goes on counting from the first refusal; a new run starts it over."""
         with self.lock:
             first = tid not in self.check_wait
             wait = self.check_wait.setdefault(tid, {"since": time.time()})
-            wait.update(pr=pr, names=names)
+            wait.update(pr=pr, names=names, required=required)
         if time.time() - wait["since"] >= CHECKS_MOST * 60:
             with self.lock:
                 self.check_wait.pop(tid, None)
