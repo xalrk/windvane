@@ -646,7 +646,7 @@ def cmd_new(a, p):
         with open(f, "x") as out:
             out.write(text)
     except FileExistsError:
-        sys.exit(f"{f} already exists: not overwritten")
+        sys.exit(f"{f} already exists: not overwritten. Run `windvane new` again for the next free id.")
     print(f)
 
 

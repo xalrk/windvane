@@ -53,6 +53,15 @@ class NewTicket(unittest.TestCase):
         self.s.git("fetch", "-q")
         self.assertTrue(self.new(self.s.root, "next").endswith("T-003.md"))
 
+    def test_a_repo_with_no_commit_and_no_remote(self):
+        bare = self.s.tmp / "fresh"
+        bare.mkdir()
+        self.s.git("init", "-q", "-b", "main", cwd=bare)
+        (bare / ".windvane").mkdir()
+        (bare / ".windvane/config.toml").write_text('name = "fresh"\nforge = "git"\n')
+        self.assertTrue(self.new(bare, "one").endswith("T-001.md"))
+        self.assertTrue(self.new(bare, "two").endswith("T-002.md"))
+
     def test_an_existing_file_is_refused(self):
         self.s.ticket("T-001")
         target = self.s.root / ".windvane/tickets/T-001.md"
@@ -60,7 +69,8 @@ class NewTicket(unittest.TestCase):
         with mock.patch.object(Queue, "next_id", return_value="T-001"), \
                 self.assertRaises(SystemExit) as e, contextlib.redirect_stdout(io.StringIO()) as out:
             cli.main(["-C", str(self.s.root), "new", "clash"])
-        self.assertEqual(str(e.exception), f"{target} already exists: not overwritten")
+        self.assertEqual(str(e.exception),
+                         f"{target} already exists: not overwritten. Run `windvane new` again for the next free id.")
         self.assertEqual(target.read_text(), before)
         self.assertEqual(out.getvalue(), "")
 
