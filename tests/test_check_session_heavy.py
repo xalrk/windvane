@@ -199,7 +199,7 @@ class SessionHeavyCheck(unittest.TestCase):
         r = subprocess.run(["windvane", "check"], cwd=self.s.root, capture_output=True, text=True, timeout=60,
                            env={**os.environ, IN_SANDBOX: "1"})
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("windvane: a heavy check can't run inside the Bash sandbox", r.stderr)
+        self.assertIn("windvane: a session's check can't run inside the Bash sandbox", r.stderr)
         self.assertFalse((self.run_dir / "windvane-heavy.lock").exists())
         self.assertEqual(self.queue(), [])
         self.assertFalse((self.p.state / "ledger.jsonl").exists())

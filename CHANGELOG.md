@@ -64,6 +64,9 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- `windvane check` in a session runs as the session's bg job `check` for every check, not only a heavy one,
+  so a check longer than a tool call's 10 minutes is no longer killed with the call and its pass lost:
+  past ~9.5 min it exits 75 and `windvane await check` gives its result.
 - `windvane check` called from a subdirectory runs at the worktree's top level, like the driver's gate, and inside
   Claude Code's Bash sandbox still records its pass instead of counting the sandbox's placeholders as uncommitted
   changes, so the driver no longer runs the same check again.
