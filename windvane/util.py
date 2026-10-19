@@ -333,6 +333,28 @@ def recorded_stamp(mark):
     return field[0] if field[0].startswith(("boot:", "wall:")) else None
 
 
+def clock():
+    """Now, on `boot_started`'s clock, or None when /proc can't say: on Linux the start ticks of a thread started for
+    the reading, the clock every process's start is on (/proc/uptime isn't: a container's lxcfs fakes it while the
+    ticks stay the host's); elsewhere (macOS) the wall clock, as `ps` gives no other."""
+    if not PROC.is_dir():
+        return time.time()
+    out = []
+    t = threading.Thread(target=lambda: out.append(task_started(os.getpid(), threading.get_native_id())))
+    t.start()
+    t.join()
+    return out[0] if out else None
+
+
+def task_started(pid, tid):
+    """When thread `tid` of process `pid` started, in seconds of start ticks since boot, or None when it's gone."""
+    try:
+        stat = (PROC / str(pid) / "task" / str(tid) / "stat").read_text()
+        return int(stat.rsplit(")", 1)[1].split()[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def boot_started(pid):
     """When process `pid` started, or None when it's gone: on Linux its start ticks since boot (/proc/<pid>/stat field
     22), in seconds, which a step of the wall clock (NTP, a clock set after resume) doesn't move, as it moves /proc's

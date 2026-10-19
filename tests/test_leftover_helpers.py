@@ -103,16 +103,29 @@ class LeftoverHelpers(unittest.TestCase):
         self.assertIn(f"sleep 122 (pid {self.helper()})", msg)
         self.assertTrue(alive(self.helper()))
 
+    def test_a_schedules_window_names_only_what_it_started(self):
+        """The schedule's process, here the test's, began before the user's process; its window began after it."""
+        self.config("isolate = false\n")
+        users = subprocess.Popen(["sleep", "121"], cwd=self.s.root, start_new_session=True)
+        self.addCleanup(kill, users.pid)
+        time.sleep(0.1)
+        self.crash_under_supervise(self.s.root)
+        [msg] = [m for t, m in self.pushes if t == TITLE]
+        self.assertIn(f"Still running in the checkout, started by the run: sleep 122 (pid {self.helper()}).", msg)
+        self.assertNotIn("sleep 121", msg)
+
     def test_not_while_a_new_run_holds_the_lock(self):
         """What runs in the trees then is the new run's own work."""
         with mock.patch.object(driver, "locked", lambda p: True):
             self.crash_under_supervise()
         self.assertEqual([m for t, m in self.pushes if t == TITLE], [])
 
-    def crash_under_supervise(self):
-        self.config()
-        work = self.p.state / "work"
-        work.mkdir(parents=True)
+    def crash_under_supervise(self, work=None):
+        if not work:
+            self.config()
+            work = self.p.state / "work"
+        work.mkdir(parents=True, exist_ok=True)
+        self.p.state.mkdir(parents=True, exist_ok=True)
 
         def start(a, env):  # the driver: its tools start a helper, then it crashes and isn't restarted
             h = subprocess.Popen(["sleep", "122"], cwd=work, start_new_session=True)

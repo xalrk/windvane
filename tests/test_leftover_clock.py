@@ -31,6 +31,7 @@ class LeftoverClock(unittest.TestCase):
         self.root = Path(os.path.realpath(tmp.name)) / "checkout"
         self.root.mkdir()
         self.p = SimpleNamespace(cfg={"isolate": False}, main_root=lambda: self.root)
+        self.now = util.clock()  # the host's clock, which the run reads off a thread of its own (the real one's ticks)
         patch = mock.patch.object(util, "PROC", self.proc)
         patch.start()
         self.addCleanup(patch.stop)
@@ -39,12 +40,13 @@ class LeftoverClock(unittest.TestCase):
         self.addCleanup(env.stop)
         for k in (driver.SUPERVISED, driver.BEGAN):
             os.environ.pop(k, None)
-        # the host's clock: booted 10 000 s ago; the container's uptime says 50 s
+        # the container's uptime says 50 s, far below every process's start ticks, the host's
         self.proc.mkdir()
         (self.proc / "uptime").write_text("50.00 40.00\n")
-        self.fake(os.getpid(), 9000, None)  # the driver, started at 9000 s
-        self.fake(USERS, 8000, self.root, "vim notes")  # the user's, older than the run
-        self.fake(HELPER, 9500, self.root, "sleep 120")  # what the run's tools started
+        (self.proc / str(os.getpid())).mkdir()
+        os.symlink(f"/proc/{os.getpid()}/task", self.proc / str(os.getpid()) / "task")
+        self.fake(USERS, self.now / 2, self.root, "vim notes")  # the user's, older than the run
+        self.fake(HELPER, self.now + 1000, self.root, "sleep 120")  # what the run's tools started
 
     def fake(self, pid, started, cwd, cmd="windvane run", tty=0):
         d = self.proc / str(pid)
@@ -65,19 +67,19 @@ class LeftoverClock(unittest.TestCase):
         (self.proc / "uptime").unlink()
         self.assertEqual(self.left(), [(HELPER, "sleep 120")])
 
-    def test_no_start_of_its_own_reports_nothing_rather_than_everything(self):
-        (self.proc / str(os.getpid()) / "stat").unlink()
+    def test_no_clock_reports_nothing_rather_than_everything(self):
+        (self.proc / str(os.getpid()) / "task").unlink()
         self.assertIsNone(driver.run_began())
         self.assertEqual(self.left(), [])
 
     def test_a_restarted_driver_goes_by_the_supervisors_start(self):
-        """Its own start is after the crashed driver's helpers: the supervisor's, before them, still counts them."""
-        os.environ.update({driver.SUPERVISED: "1", driver.BEGAN: "8500.0"})
-        self.fake(HELPER + 1, 8700, self.root, "sleep 121")  # the crashed driver's tools' helper
+        """It began after the crashed driver's helpers: the supervisor's start, before them, still counts them."""
+        os.environ.update({driver.SUPERVISED: "1", driver.BEGAN: repr(self.now - 50)})
+        self.fake(HELPER + 1, self.now - 30, self.root, "sleep 121")  # the crashed driver's tools' helper
         self.assertEqual(self.left(), [(HELPER, "sleep 120"), (HELPER + 1, "sleep 121")])
 
     def test_a_process_with_a_terminal_is_never_named(self):
-        self.fake(HELPER + 1, 9600, self.root, "bash", tty=34816)
+        self.fake(HELPER + 1, self.now + 1100, self.root, "bash", tty=34816)
         self.assertEqual(self.left(), [(HELPER, "sleep 120")])
 
 
@@ -153,16 +155,19 @@ class ThroughARun(unittest.TestCase):
 
 
 class SupervisorPassesItsStart(unittest.TestCase):
-    def test_the_driver_it_starts_gets_its_start(self):
+    def test_the_driver_gets_when_the_supervisor_started_it_not_when_its_process_did(self):
+        """A schedule's long-lived process supervises each window in turn: the run's start is the window's."""
         seen = {}
 
         def start(args, env):
             seen.update(env)
             raise SystemExit  # one look is enough
+        before = util.clock()
         with mock.patch.dict(os.environ), self.assertRaises(SystemExit):
             driver.supervise(SimpleNamespace(state=Path("/nonexistent")), ["run"], None, start=start)
-        self.assertEqual(float(seen[driver.BEGAN]), util.boot_started(os.getpid()))
-
+        self.assertGreater(before, util.boot_started(os.getpid()))
+        self.assertLessEqual(before, float(seen[driver.BEGAN]))
+        self.assertLessEqual(float(seen[driver.BEGAN]), util.clock())
 
 if __name__ == "__main__":
     unittest.main()

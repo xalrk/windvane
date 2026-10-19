@@ -73,7 +73,7 @@ RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; th
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
 # The environment variable set for a driver under `supervise`: it hands a crash over instead of pushing it
 SUPERVISED = "WINDVANE_SUPERVISED"
-BEGAN = "WINDVANE_BEGAN"  # the supervisor's start, for `run_began`
+BEGAN = "WINDVANE_BEGAN"  # when the supervisor started the run, for `run_began`
 SIGNALLED = {signal.SIGTERM: "the driver got SIGTERM (a kill or a shutdown)",
              signal.SIGHUP: "the driver's terminal or tmux session closed (SIGHUP)",
              signal.SIGINT: "Ctrl-C during a merge, a push or a pull"}  # outside such a step it's KeyboardInterrupt
@@ -2555,7 +2555,7 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
     as they end the driver. A driver killed by the system (OOM) is only pushed: its sessions, in process groups of
     their own, may still be at work in the worktrees a restart would resume. Returns the driver's last exit code."""
     start = start or (lambda args, env: subprocess.run([*runnable(exe()), *args], env=env).returncode)
-    began = util.boot_started(os.getpid())
+    began = util.clock()  # now, not this process's start: a schedule's process supervises each window in turn
     env = {**os.environ, SUPERVISED: "1", **({BEGAN: repr(began)} if began is not None else {})}
     env.pop("WINDVANE_RESTARTED", None)
     crashes, args = [], list(argv)
@@ -2650,16 +2650,14 @@ def tear_down(p, lock=False, tell=False):
 
 
 def run_began():
-    """When this run began, on `util.boot_started`'s clock (None when it can't say): the supervisor's start when it
-    passed one, so a restarted driver still counts what the crashed one's tools left, else this process's own. Read
-    from the processes' own start, not /proc/uptime: a container (lxcfs) may fake that while their ticks stay the
-    host's, and every process there would look started by the run."""
+    """When this run began, on `util.boot_started`'s clock (None when it can't say): when the supervisor started it,
+    so a restarted driver still counts what the crashed one's tools left, else now (`util.clock`)."""
     if os.environ.get(SUPERVISED) and BEGAN in os.environ:
         try:
             return float(os.environ[BEGAN])
         except ValueError:
             return None
-    return util.boot_started(os.getpid())
+    return util.clock()
 
 
 def leftover_helpers(p, since):

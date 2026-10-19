@@ -124,8 +124,7 @@ class Leftovers(Proc, unittest.TestCase):
         return c.pid
 
     def began(self):
-        """A run's start as `driver.run_began` reads it: the driver's start ticks (here a stand-in's, outside the
-        checkout)."""
+        """A run's start on the processes' own clock: here a stand-in process's start ticks, outside the checkout."""
         c = subprocess.Popen(["sleep", "30"], start_new_session=True, stdin=subprocess.DEVNULL)
         self.addCleanup(lambda: (c.kill(), c.wait()))
         self.sync(c.pid)
