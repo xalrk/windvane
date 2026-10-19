@@ -82,11 +82,32 @@ class FailedPush(Base):
         self.assertTrue(msg.endswith(f"\nOnce it's given, it merges the kept approval: {RETRY}"), msg)
         self.assertEqual(msg.count("windvane retry"), 1, msg)
 
+    def test_a_ready_refused_by_github_ends_with_the_retry(self):
+        self.run_pilot(draft="", stuck="gh: Resource not accessible by integration (HTTP 403)")
+        msg = self.pushed("Failed")
+        self.assertTrue(msg.startswith("PR #7 is a draft and GitHub refused to mark it ready: the gh login lacks write "
+                                       "access to pull requests"), msg)
+        self.assertTrue(msg.endswith(f". Branch kept, run goes on.\nOnce fixed, it merges the kept approval: {RETRY}"),
+                        msg)
+
     def test_the_workers_own_failed_has_no_retry(self):
         os.environ["FAKE_WORKER"] = "failed"
         pilot = self.run_pilot()
         self.assertEqual(pilot.failed, ["T-001"])
         self.assertEqual(self.pushed("Failed"), "the API it needs is gone. Branch kept, run goes on.")
+
+
+class PushRefused(Base):
+    def test_a_push_to_main_refused_three_times_ends_with_the_retry(self):
+        hook = self.s.remote / "hooks" / "pre-receive"
+        hook.write_text("#!/bin/sh\nif grep -q ' refs/heads/main$'; then echo 'main is protected' >&2; exit 1; fi\n")
+        hook.chmod(0o755)
+        pilot = self.run_pilot()
+        self.assertEqual(pilot.failed, ["T-001"])
+        first, last = self.pushed("Failed").splitlines()
+        self.assertTrue(first.startswith("the merge was refused three times ("), first)
+        self.assertTrue(first.endswith(". Branch kept, run goes on."), first)
+        self.assertEqual(last, f"Once fixed, it merges the kept approval: {RETRY}")
 
 
 class Hints(Base):

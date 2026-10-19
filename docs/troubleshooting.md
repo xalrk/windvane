@@ -45,14 +45,16 @@ Make it work from a clean clone, or prepare what it needs in `setup`.
 The push and the log say why: reviews kept asking for changes (`review_rounds`), runs kept running out of time
 (`partials`), one run hit `ticket_hours`, its max turns or its dollar budget, or its sessions kept dying. Max turns
 come from `CLAUDE_CODE_MAX_TURNS` in the environment you start windvane from: windvane passes no `--max-turns`, and
-the Claude CLI has no turn limit without one, so raise or unset it. The work so far is on the ticket's branch. Usually the ticket is too big or too vague:
-split it or sharpen "Done when", then run again; the next worker resumes the branch.
+the Claude CLI has no turn limit without one, so raise or unset it. The work so far is on the ticket's branch.
+Usually the ticket is too big or too vague: split it or sharpen "Done when", then run again; the next worker resumes
+the branch.
 
 **A ticket failed.**
-The `Failed` push and the log's `T-007: FAILED` line say why; its branch is kept. Once you've fixed the cause, `windvane
-retry T-007` puts it back in the running autopilot's queue (`windvane status` lists each failed ticket with it). One
-that failed at the merge after its review approved is merged without a worker or review while its branch still has
-that head, so its push ends with that command. With no run going, the next `windvane run` takes it up anyway.
+The `Failed` push and the log's `T-007: FAILED` line say why; its branch is kept. Once you've fixed the cause,
+`windvane retry T-007` puts it back in the running autopilot's queue (`windvane status` lists each failed ticket with
+it). One that failed at the merge after its review approved is merged without a worker or review while its branch
+still has that head, so its push ends with that command. With no run going, the next `windvane run` takes it up
+anyway.
 
 **"the merge was refused: ..." after the review approved.**
 The approval is kept: while the branch still has the approved head, `windvane retry T-007` (or the next run) merges
