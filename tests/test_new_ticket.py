@@ -6,8 +6,7 @@ import unittest
 from unittest import mock
 
 from helpers import Sandbox
-from windvane import cli
-from windvane.queue import Queue
+from windvane import cli, planner
 
 
 class NewTicket(unittest.TestCase):
@@ -68,7 +67,7 @@ class NewTicket(unittest.TestCase):
         self.s.ticket("T-001")
         target = self.s.root / ".windvane/tickets/T-001.md"
         before = target.read_text()
-        with mock.patch.object(Queue, "next_id", return_value="T-001"), \
+        with mock.patch.object(planner, "free_id", return_value="T-001"), \
                 self.assertRaises(SystemExit) as e, contextlib.redirect_stdout(io.StringIO()) as out:
             cli.main(["-C", str(self.s.root), "new", "clash"])
         self.assertEqual(str(e.exception),

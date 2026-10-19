@@ -311,6 +311,24 @@ class Queue:
         return "\n".join(rows)
 
     def next_id(self, taken=()):
-        """The id after every ticket on the ref and every id in `taken` (claimed elsewhere, e.g. an open plan)."""
-        nums = [int(re.search(r"\d+", t).group()) for t in [*self.files, *taken]]
-        return f"{self.p.prefix}-{max(nums, default=0) + 1:03d}"
+        """The id after every ticket on the ref and every id in `taken`. A path that writes a ticket calls
+        `planner.free_id` instead, which counts every place an id can be claimed."""
+        return id_after(self.p, [*self.files, *taken])
+
+
+def id_after(p, ids):
+    """The id after the highest of `ids` (the first one when there are none)."""
+    nums = [int(re.search(r"\d+", t).group()) for t in ids]
+    return f"{p.prefix}-{max(nums, default=0) + 1:03d}"
+
+
+def ref_ids(p, ref):
+    """The ticket ids with a file on `ref` (none when it doesn't resolve)."""
+    names = gout(p.main_root(), "ls-tree", "--name-only", ref, p.tickets_rel + "/").split("\n")
+    return {t for n in names if n.endswith(".md") for t in [p.norm(Path(n).stem)] if t}
+
+
+def folder_ids(p, cd):
+    """The ticket ids with a file in checkout `cd`'s tickets folder, committed or not."""
+    here = cd / p.tickets_rel
+    return {t for f in here.glob("*.md") if (t := p.norm(f.stem))} if here.is_dir() else set()
