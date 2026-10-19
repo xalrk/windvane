@@ -5,6 +5,7 @@ import sys
 import textwrap
 from collections import Counter
 from datetime import timedelta
+from pathlib import Path
 
 from . import critic as critic_mod
 from . import jobs
@@ -203,7 +204,7 @@ def session_stats(a, p, rows, swept=0, checks=(), refusals=(), awaits=()):
         lost, total = sum(g["lost_w"] for g in agg.values()), sum(g["w"] for g in agg.values())
         print(f"died or killed: {plural(died + killed, 'run')} ({lost_parts(died, killed)}), "
               f"{k(lost)} weighted tokens, {100 * lost / max(1, total):.0f}% of all")
-    idle_stats(rows)
+    idle_stats(rows, p.state / "autopilot.log")
     orphans(swept)
     guard_stats(refusals, a.by)
     est = sum(g["no_usd"] for g in agg.values())
@@ -220,22 +221,28 @@ def session_stats(a, p, rows, swept=0, checks=(), refusals=(), awaits=()):
              "starts with and each turn re-reads.)")
 
 
-def idle_stats(rows):
-    """Worker launches that ended at once, PARTIAL or BLOCKED within IDLE_TURNS: each paid a worker's start-up
-    tokens for no work. The tickets with the most say where to look. Rows from before the ledger kept `result`
-    don't count. No line when there were none."""
+def idle_stats(rows, logf):
+    """Worker launches that ended PARTIAL within IDLE_TURNS: each paid a worker's start-up tokens for no work. A
+    quick BLOCKED is a worker asking a product question, its job, so it's only counted apart. The ticket with the
+    most gets the grep that finds its partials in `logf`, on its own line so the command never wraps. Rows from
+    before the ledger kept `result` don't count. No line when there were none."""
     workers = [r for r in rows if r.get("role") == "worker"]
-    idle = [r for r in workers if r.get("result") in ("PARTIAL", "BLOCKED") and (r.get("turns") or 0) <= IDLE_TURNS]
+    quick = [r for r in workers if (r.get("turns") or 0) <= IDLE_TURNS]
+    idle = [r for r in quick if r.get("result") == "PARTIAL"]
     if not idle:
         return
+    asked = sum(r.get("result") == "BLOCKED" for r in quick)
     fresh = sum((r.get("input") or 0) + (r.get("cache_write") or 0) for r in idle)
     share = 100 * sum(map(weighted, idle)) / max(1, sum(map(weighted, workers)))
     top = Counter(r.get("ticket") or "no ticket" for r in idle).most_common()
     names = ", ".join(f"{t} ×{n}" if n > 1 else t for t, n in top[:3])
     names += f" and {len(top) - 3} more" if len(top) > 3 else ""
-    note(f"idle worker launches: {len(idle)} (PARTIAL or BLOCKED within {IDLE_TURNS} turns), {k(fresh)} fresh in, "
-         f"{k(sum(r.get('output') or 0 for r in idle))} out, {share:.0f}% of worker weighted tokens; most: {names} "
-         "(autopilot.log says why)")
+    names += f"; {plural(asked, 'quick question')} (BLOCKED, not counted)" if asked else ""
+    note(f"idle worker launches: {len(idle)} (PARTIAL within {IDLE_TURNS} turns), {k(fresh)} fresh in, "
+         f"{k(sum(r.get('output') or 0 for r in idle))} out, {share:.0f}% of worker weighted tokens; most: {names}")
+    home = str(Path.home())
+    path = "~" + str(logf)[len(home):] if str(logf).startswith(home + "/") else str(logf)
+    print(f' why: grep "{top[0][0]}: partial" {path}')
 
 
 def lost_parts(died, killed):

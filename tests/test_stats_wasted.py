@@ -1,5 +1,5 @@
-"""`windvane stats` counts worker launches that stopped at once (PARTIAL or BLOCKED within a few turns) and what they
-cost, from the `result` each session's ledger row now keeps."""
+"""`windvane stats` counts worker launches that stopped at once (PARTIAL within a few turns) and what they cost, the
+quick questions (BLOCKED) apart, from the `result` each session's ledger row now keeps."""
 import io
 import os
 import sys
@@ -16,7 +16,7 @@ from windvane.config import Project  # noqa: E402
 from windvane.util import append_jsonl, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
-# Three launches that stopped at once (one on the cut's edge, two for one ticket) and three that worked: a READY, a
+# Two launches that stopped at once (both for one ticket), a quick question on the cut's edge, and three that worked: a READY, a
 # PARTIAL one turn past the cut, a short READY. Weighted = input + 1.25 cache_write + 5 output
 IDLE = [dict(ticket="T-007", turns=3, input=8000, cache_write=4000, output=400, result="PARTIAL"),  # 15k
         dict(ticket="T-009", turns=stats.IDLE_TURNS, input=9000, output=200, result="BLOCKED"),  # 10k
@@ -47,10 +47,41 @@ class Wasted(unittest.TestCase):
     def test_idle_launches_are_counted_with_their_tokens_and_share(self):
         self.ledger(IDLE + WORKED)
         out = " ".join(self.stats().split())  # the line wraps at 100 columns
-        # 30k of the workers' 200k weighted; fresh in 8k + 4k + 9k + 5k, out 400 + 200
-        self.assertIn(f"idle worker launches: 3 (PARTIAL or BLOCKED within {stats.IDLE_TURNS} turns), 26k fresh in, "
-                      "1k out, 15% of worker weighted tokens; most: T-007 ×2, T-009 (autopilot.log says why)", out)
+        # 20k of the workers' 200k weighted; fresh in 8k + 4k + 5k, out 400; the BLOCKED only counted apart
+        self.assertIn(f"idle worker launches: 2 (PARTIAL within {stats.IDLE_TURNS} turns), 17k fresh in, 0k out, "
+                      "10% of worker weighted tokens; most: T-007 ×2; 1 quick question (BLOCKED, not counted)", out)
         self.assertEqual(out.count("idle worker launches"), 1)
+
+    def test_the_line_names_the_grep_that_finds_the_top_tickets_partials(self):
+        self.ledger(IDLE + WORKED)
+        why = [ln for ln in self.stats().splitlines() if ln.startswith(" why: ")]
+        log = self.p.state / "autopilot.log"
+        home = str(Path.home())
+        shown = "~" + str(log)[len(home):] if str(log).startswith(home + "/") else str(log)
+        self.assertEqual(why, [f' why: grep "T-007: partial" {shown}'])
+        self.assertEqual(os.path.expanduser(shown), str(log))
+
+    def test_the_grep_matches_the_drivers_partial_line(self):
+        """The command finds a line shaped like the one the driver logs when a worker ends PARTIAL."""
+        from windvane.util import log
+        log(self.p, "T-007: partial (1): started past its wrap-up", echo=False)
+        self.ledger(IDLE)
+        cmd = next(ln for ln in self.stats().splitlines() if ln.startswith(" why: "))
+        pattern = cmd.split('"')[1]
+        self.assertTrue(any(pattern in ln for ln in (self.p.state / "autopilot.log").read_text().splitlines()))
+
+    def test_a_quick_blocked_alone_is_no_idle_launch(self):
+        self.ledger([IDLE[1]] + WORKED)
+        out = self.stats()
+        self.assertNotIn("idle worker launches", out)
+        self.assertNotIn(" why: grep", out)
+
+    def test_a_quick_partial_alone_counts_with_no_questions_count(self):
+        self.ledger([IDLE[2]] + WORKED)
+        out = " ".join(self.stats().split())
+        self.assertIn(f"idle worker launches: 1 (PARTIAL within {stats.IDLE_TURNS} turns), 5k fresh in", out)
+        self.assertIn("most: T-007 ", out)
+        self.assertNotIn("quick question", out)
 
     def test_no_line_without_idle_launches(self):
         self.ledger(WORKED)
