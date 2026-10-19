@@ -153,6 +153,13 @@ or a bounce. A check's wait also ends as soon as the run is stopped (`windvane s
 says `CHECK NOT RUN: stopped waiting for the machine lock (held by ...) after N min; the run is stopping, so don't run
 it again now`, and the next run's gate checks it; a check that finds the machine free still runs.
 
+### Background jobs
+
+Two `windvane bg` calls for one name at once start one job; the second says it's still running. The lock that makes
+them take turns (`<name>.lock` beside the job's files) goes as each start finishes. A `bg` killed before its job's
+command ran leaves a job that `windvane await` reports as `NEVER STARTED` (exit 3), with the command that starts it
+again, not as a command that failed.
+
 ### Kept heavy jobs
 
 A session's jobs die with it, so a heavy job that can't both wait its turn and run inside one session would never run,

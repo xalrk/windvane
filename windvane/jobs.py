@@ -4,12 +4,14 @@ A pass is recorded under the git tree it ran on (plus the check command), only w
 and after, so the driver and the reviewer reuse a worker's green check instead of running it again. Failures are
 never recorded.
 """
+import contextlib
 import fcntl
 import glob
 import hashlib
 import itertools
 import json
 import os
+import shlex
 import signal
 import stat
 import subprocess
@@ -43,6 +45,8 @@ STOPPING = "; the run is stopping, so don't run it again now"  # ...because a st
 RUN_STOP = "WINDVANE_RUN_STOP"
 KILLED = 143  # a kept job's exit when the run's stop or a kill ended it (as SIGTERM's)
 CANCELLED = "windvane: cancelled"  # a job's last log line after `bg --cancel`
+NEVER = "never started"  # `await_`'s answer for a job whose start was killed before its command ran
+NEVER_STARTED = 3  # `windvane await`'s exit then: it exits 0 for any job that ran, whatever the job's own code
 WATCH_S = 2  # seconds between a kept job's looks at its end time
 AWAIT_S = 570  # how long `await` blocks: under one tool call's 10 minutes
 SESSION_CHECK = "check"  # the bg job a session's heavy check runs as
@@ -51,7 +55,7 @@ CHECK_LOG = "check: log "  # a check job's first line names the check's log, whe
 # and never over the one `bg` wrote, which its stamp must not predate), then runs the command and writes its exit.
 JOB = ('echo $$ > "$0.pid.$$"; ln "$0.pid.$$" "$0.pid" 2>/dev/null; rm -f "$0.pid.$$"; '
        '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"')
-FILES = ("start", "cwd", "pid", "stamp", "lock", "log", "exit", "head", "keep", "child")  # a job's, after its base
+FILES = ("start", "cwd", "cmd", "pid", "stamp", "lock", "log", "exit", "head", "keep", "child")  # a job's, after its base
 # A kept job's group leader: `watch` from this same windvane (its package dir is the first argument), outside PATH.
 WATCH = ("import sys; sys.path.insert(0, sys.argv[1]); from windvane.jobs import watch; "
          "sys.exit(watch(sys.argv[2], sys.argv[3:]))")
@@ -448,8 +452,7 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
         sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
     base = job_base(p, name)
     base.parent.mkdir(parents=True, exist_ok=True)
-    with open(f"{base}.lock", "a") as lock:  # a session's parallel calls for one name: the second waits, then sees it
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with name_lock(Path(f"{base}.lock")):  # a session's parallel calls for one name: the second waits, then sees it
         if alive(find_job(p, name)[0]):
             sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
         proc, who = start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect)
@@ -467,6 +470,39 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
         print(f"started '{name}' (log {base}.log); wait with: windvane await {name}")
 
 
+@contextlib.contextmanager
+def name_lock(path):
+    """Hold `path`'s flock, and remove the file as it is let go, so a name's lock doesn't outlive its start. A caller
+    that opened the file before the holder removed it gets the lock on a file no longer at `path`: it opens `path`
+    again, so two callers never each hold a different file for one name. Only a holder removes it, and only while it
+    is still the file it holds; one a killed caller left stays until the name's next start."""
+    while True:
+        f = open(path, "a")
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            if same_file(f, path):
+                break
+        except BaseException:
+            f.close()
+            raise
+        f.close()
+    try:
+        yield f
+    finally:
+        if same_file(f, path):
+            path.unlink(missing_ok=True)
+        f.close()
+
+
+def same_file(f, path):
+    """Whether the open file `f` is still the one at `path`."""
+    try:
+        a, b = os.fstat(f.fileno()), os.stat(path)
+    except OSError:
+        return False
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+
+
 def job_files(base):
     """The files of the job at `base` that exist: FILES, and a pid's temp file its shell left as it was killed."""
     return [*(f for f in (Path(f"{base}.{end}") for end in FILES) if f.exists()),
@@ -476,12 +512,15 @@ def job_files(base):
 def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect):
     """`bg`'s start, under its lock: the job's files and process. (the process, its `util.stamp` or None)."""
     pid = Path(f"{base}.pid")
-    for end in ("pid", "exit", "keep", "child", "stamp"):
+    for end in ("pid", "exit", "keep", "child", "stamp", "cmd", "log"):  # no log: its command never ran (`never_started`)
         Path(f"{base}.{end}").unlink(missing_ok=True)
     for f in base.parent.glob(f"{glob.escape(base.name)}.pid.*"):  # left by an earlier shell killed linking its pid
         f.unlink(missing_ok=True)
     Path(f"{base}.start").write_text(str(int(time.time())))
     Path(f"{base}.cwd").write_text(str(Path(cwd).resolve()))  # ties it to its worktree, should job_base move again
+    Path(f"{base}.cmd").write_text(shlex.join([  # how to start it again, should it never start (`never_line`)
+        "windvane", "bg", *(["--heavy"] if heavy else []), *(["--mem", f"{mem:g}"] if mem is not None else []),
+        *(["--expect", f"{expect:g}"] if expect is not None else []), *(["--keep"] if keep else []), name, *cmd]))
     if heavy:
         cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []),
                *(["--expect", f"{expect:.10g}"] if expect is not None else []), "--", *cmd]
@@ -619,7 +658,8 @@ def ended_kept(p, ticket):
             continue
         exit_f = Path(f"{b}.exit")
         code = exit_code(exit_f, 0) if exit_f.exists() else "? (it died without one)"
-        how = "cancelled (`bg --cancel`)" if tail(f"{b}.log", 1) == CANCELLED else f"exit {code}"
+        how = ("never started (killed before its command ran)" if never_started(b) else
+               "cancelled (`bg --cancel`)" if tail(f"{b}.log", 1) == CANCELLED else f"exit {code}")
         try:
             mins = f" after {(exit_f.stat().st_mtime - int(Path(f'{b}.start').read_text())) / 60:.0f} min"
         except (OSError, ValueError):
@@ -646,6 +686,23 @@ def first_line(path):
         return ""
 
 
+def never_started(base):
+    """Whether a job that isn't running never ran its command: no exit, and no log, which its shell creates just as
+    the command starts (`start_job` removes the last run's). Its starter was killed before the shell got that far."""
+    return not Path(f"{base}.exit").exists() and not Path(f"{base}.log").exists()
+
+
+def never_line(name, base):
+    """What `await` says of a job that never started, and the command that starts it again (a starter killed before
+    it wrote that can't say)."""
+    try:
+        again = Path(f"{base}.cmd").read_text().strip()  # whole: a quoted argument may hold a newline
+    except OSError:
+        again = ""
+    again = "windvane check" if name == SESSION_CHECK else again or f"windvane bg {name} <its command>"
+    return f"NEVER STARTED {name}: its start was killed before the command ran; start it again with {again}"
+
+
 def exit_code(exit_f, patience=2.0):
     """A job's exit code from its exit file. The shell creates the file before it writes the code into it, so a
     file seen the moment it appears can still be empty: wait a moment for the code rather than print none."""
@@ -658,7 +715,7 @@ def exit_code(exit_f, patience=2.0):
 def await_(p, name, lines=40, limit=None):
     """Block until a bg job ends, at most `limit` seconds (default AWAIT_S). The seconds it blocked go to the ledger
     as an `await` row (a ticket's only), so `stats` shows the time each role spends waiting. Its exit code (a
-    string), or None while it still waits or runs."""
+    string), NEVER for a job whose command never ran, or None while it still waits or runs."""
     outside_sandbox("waiting for a background job")  # its own pid namespace hides the job: it would look dead
     (base, stray), ticket = find_job(p, name), os.environ.get(TICKET)
     if not Path(f"{base}.start").exists():
@@ -672,12 +729,17 @@ def await_(p, name, lines=40, limit=None):
             time.sleep(1)
             if exit_f.exists() or pid_lives(base):  # it wrote its exit as it died, or its pid was being written
                 continue
+            if never_started(base):  # no exit of its own to make up: its command didn't fail, it never ran
+                break
             exit_f.write_text("1")
             break
         time.sleep(3)
     if (blocked := round(time.time() - t0)) >= 1:
         ledger(p, None, {"name": name, "seconds": blocked}, event="await")
     mins = (time.time() - int(Path(f"{base}.start").read_text())) / 60
+    if not exit_f.exists() and not pid_lives(base) and never_started(base):
+        print(never_line(name, base))
+        return NEVER
     if exit_f.exists():
         code = exit_code(exit_f)
         print(f"DONE {name} exit {code} after {mins:.0f} min")
@@ -723,6 +785,6 @@ def session_check(p, cwd, mem=None, lines=60):
         if was and was != head:  # a check passed on another head records no pass for this one
             print(f"check: the running check started on {was}, not {head}: once it ends, run `windvane check` again")
     code = await_(p, SESSION_CHECK, lines + 1)
-    if code is None:  # await's line said to call it again: the job keeps its place in line meanwhile
+    if code is None or code == NEVER:  # await's line said to call it again: the job keeps its place in line meanwhile
         return heavy.TIMED_OUT
     return int(code) if code.isdigit() else 1

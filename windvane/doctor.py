@@ -370,7 +370,7 @@ def state_warnings(p=None):
         return [("ok", f"state dir {p.state}: nothing to reclaim", "")]
     total, big = sum(i.size for i in items), items[0]
     what = f"{statedir.human(total)} of {p.state} can go (biggest: {big.what}, {statedir.human(big.size)})"
-    return [("warn" if total >= BIG else "ok", what, "windvane doctor --clean" if total >= BIG else "")]
+    return [("warn" if total >= BIG else "ok", what, "windvane doctor --clean")]
 
 
 BIG = 100 * 2 ** 20  # reclaimable state worth a warning

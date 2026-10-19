@@ -161,7 +161,7 @@ class CutCaller(InProject):
         t = time.time()
         code, out = self.await_j(20)
         self.assertLess(time.time() - t, 5)
-        self.assertEqual(code, "1", out)  # died without an exit: told at once, not RUNNING till the limit
+        self.assertEqual(code, jobs.NEVER, out)  # its command never ran: told at once, not RUNNING till the limit
         with redirect_stdout(io.StringIO()):
             jobs.bg(self.p, "j", ["true"], str(self.s.root))
         self.assertEqual(self.await_j(20)[0], "0")

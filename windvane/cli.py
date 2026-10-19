@@ -938,7 +938,8 @@ def main(argv=None):
             return sys.exit("bg --cancel: give only the job's name") if cmd or a.heavy else jobs.cancel(p, a.name)
         return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy, a.mem, a.keep, a.expect) if cmd else sys.exit("bg: give a command")
     if a.cmd == "await":
-        jobs.await_(p, a.name, a.lines)  # exits 0 whatever the job's code: it prints it
+        if jobs.await_(p, a.name, a.lines) == jobs.NEVER:  # else 0 whatever the job's code: it prints it
+            sys.exit(jobs.NEVER_STARTED)
         return
     if a.cmd == "watch":
         return watch.main(p, a.n, a.o)
