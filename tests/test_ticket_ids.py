@@ -51,6 +51,19 @@ class TicketIds(unittest.TestCase):
         self.assertEqual(out.getvalue().strip(), str(self.s.root / ".windvane/tickets/T-003.md"))
         self.assertFalse((self.s.root / ".windvane/tickets/T-002.md").exists())
 
+    def test_new_asks_no_forge(self):
+        """On github, `new` doesn't look up the open plan's PR (each lookup is a network call): it keeps its ids."""
+        (self.s.bin / "gh").write_text(f"#!/bin/sh\necho \"$*\" >> {self.s.tmp}/gh.log\necho '[]'\n")
+        (self.s.bin / "gh").chmod(0o755)
+        cfg = self.s.root / ".windvane/config.toml"
+        cfg.write_text(cfg.read_text().replace('forge = "git"', 'forge = "github"'))
+        self.s.publish("forge")
+        self.open_plan("T-002")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            cli.main(["-C", str(self.s.root), "new", "next"])
+        self.assertTrue(out.getvalue().strip().endswith("T-003.md"))
+        self.assertFalse((self.s.tmp / "gh.log").exists())
+
     def test_new_that_loses_a_race_takes_the_id_after_the_winners(self):
         (self.s.root / ".windvane/tickets/T-002.md").write_text("# T-002: the winner\n")  # made after it looked
         out = io.StringIO()

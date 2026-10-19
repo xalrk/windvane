@@ -637,13 +637,14 @@ def cmd_plan(a, p):
 
 def cmd_new(a, p):
     """A ticket file with the next free id (`planner.free_id`: this checkout's HEAD and files, the upstream, open
-    plans). Created exclusively, so an existing ticket is never overwritten: a `new` that loses a race to another
+    plans). No PR is looked up: a desk command answers at once, and a closed plan's ids are only skipped. Created
+    exclusively, so an existing ticket is never overwritten: a `new` that loses a race to another
     takes the id after the winner's file, and refuses only if that one is taken too."""
     folder = p.root / p.tickets_rel
     folder.mkdir(parents=True, exist_ok=True)
     tried = None
     for _ in range(2):
-        tid = planner.free_id(p, p.root)
+        tid = planner.free_id(p, p.root, ask_forge=False)
         if tid == tried:
             break
         f, tried = folder / f"{tid}.md", tid
