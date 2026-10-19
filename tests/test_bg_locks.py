@@ -154,8 +154,9 @@ class CutCaller(InProject):
         with redirect_stdout(io.StringIO()):  # an earlier job of the name, ended: its pid file stays behind
             jobs.bg(self.p, "j", ["true"], str(self.s.root))
         self.assertEqual(self.await_j(20)[0], "0")
+        Path(f"{self.base}.pid.4242").write_text("4242\n")  # and an older shell, killed linking its pid in, left this
         self.cut("before", "sleep", "30")
-        self.assertFalse(Path(f"{self.base}.pid").exists())
+        self.assertEqual(list(self.base.parent.glob("j.pid*")), [])
         self.assertFalse(jobs.alive(self.base))
         t = time.time()
         code, out = self.await_j(20)
@@ -285,6 +286,7 @@ class PruneBg(Base):
 
     def test_the_desks_old_ended_jobs_go_a_running_one_stays(self):
         ended, running = self.job(None, name="build"), self.job(None, ("sleep", "30"), name="serve")
+        Path(f"{ended}.pid.4242").write_text("4242\n")  # its shell was killed linking its pid in
         self.assertEqual(self.listed(), [])
         age(self.p.state / "bg", OLD)
         self.assertEqual(self.listed(), ["bg/ (1 desk job ended over 14 days ago)"])
@@ -292,6 +294,7 @@ class PruneBg(Base):
         self.assertEqual({f.name.split(".")[0] for f in (self.p.state / "bg").iterdir() if f.is_file()}, {"serve"})
         self.assertTrue(jobs.alive(running))
         self.assertFalse(Path(f"{ended}.log").exists())
+        self.assertFalse(Path(f"{ended}.pid.4242").exists())
 
 
 @unittest.skipUnless(shutil.which("ps"), "no ps on this system")

@@ -5,6 +5,7 @@ and after, so the driver and the reviewer reuse a worker's green check instead o
 never recorded.
 """
 import fcntl
+import glob
 import hashlib
 import itertools
 import json
@@ -466,11 +467,19 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
         print(f"started '{name}' (log {base}.log); wait with: windvane await {name}")
 
 
+def job_files(base):
+    """The files of the job at `base` that exist: FILES, and a pid's temp file its shell left as it was killed."""
+    return [*(f for f in (Path(f"{base}.{end}") for end in FILES) if f.exists()),
+            *base.parent.glob(f"{glob.escape(base.name)}.pid.*")]
+
+
 def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect):
     """`bg`'s start, under its lock: the job's files and process. (the process, its `util.stamp` or None)."""
     pid = Path(f"{base}.pid")
     for end in ("pid", "exit", "keep", "child", "stamp"):
         Path(f"{base}.{end}").unlink(missing_ok=True)
+    for f in base.parent.glob(f"{glob.escape(base.name)}.pid.*"):  # left by an earlier shell killed linking its pid
+        f.unlink(missing_ok=True)
     Path(f"{base}.start").write_text(str(int(time.time())))
     Path(f"{base}.cwd").write_text(str(Path(cwd).resolve()))  # ties it to its worktree, should job_base move again
     if heavy:

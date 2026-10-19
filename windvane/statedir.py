@@ -183,7 +183,7 @@ def desk_job_items(p, keep_days, now):
     paths = []
     for start in sorted((p.state / "bg").glob("*.start")):
         base = start.with_suffix("")
-        files = [f for f in (Path(f"{base}.{end}") for end in jobs.FILES) if f.exists()]
+        files = jobs.job_files(base)
         if not any(f.stat().st_mtime >= since for f in files) and not job_live(base, now):
             paths += files
     if not paths:
