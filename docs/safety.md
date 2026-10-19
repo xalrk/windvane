@@ -155,12 +155,10 @@ it again now`, and the next run's gate checks it; a check that finds the machine
 
 ### Background jobs
 
-`windvane bg` holds a lock on the job's name (`<name>.lock` beside its files) from its "still running" look through
-starting the job, so two calls for one name at once start one job, and the second says it's still running. The lock
-file goes as the start finishes; one left by a caller killed while holding it goes at the name's next start. A call that
-was waiting on a file the holder just removed takes the new one instead, so two calls never hold the name at once. A
-caller killed before the job's command ran leaves a job `windvane await` reports as `NEVER STARTED`, with its own exit
-code, not as a command that failed.
+Two `windvane bg` calls for one name at once start one job; the second says it's still running. The lock that makes
+them take turns (`<name>.lock` beside the job's files) goes as each start finishes. A `bg` killed before its job's
+command ran leaves a job that `windvane await` reports as `NEVER STARTED` (exit 3), with the command that starts it
+again, not as a command that failed.
 
 ### Kept heavy jobs
 

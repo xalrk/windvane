@@ -31,7 +31,7 @@ class NeverStarted(CutCaller):
         code, out = self.await_j(20)
         self.assertEqual(code, jobs.NEVER, out)
         self.assertEqual(out.strip(), "NEVER STARTED j: its start was killed before the command ran; start it again "
-                                      "with windvane bg j <its command>")
+                                      "with windvane bg j sleep 30")
         self.assertNotIn("exit 1", out)
         self.assertFalse(Path(f"{self.base}.exit").exists(), "await made up an exit for it")
         self.assertEqual(self.windvane("await", "j")[0], jobs.NEVER_STARTED)  # asked again: the same answer
@@ -60,7 +60,16 @@ class NeverStarted(CutCaller):
         self.assertTrue(out.startswith("DONE j exit 1"), out)
 
     def test_a_never_started_check_says_to_run_the_check_again(self):
-        self.assertIn("start it again with windvane check", jobs.never_line(jobs.SESSION_CHECK))
+        self.assertIn("start it again with windvane check", jobs.never_line(jobs.SESSION_CHECK, self.base))
+
+    def test_the_line_names_the_command_with_its_flags_or_says_it_cant(self):
+        self.base.parent.mkdir(parents=True, exist_ok=True)
+        self.assertIn("start it again with windvane bg j <its command>", jobs.never_line("j", self.base))
+        with redirect_stdout(io.StringIO()):
+            jobs.bg(self.p, "j", ["sh", "-c", "echo it's done"], str(self.s.root))
+        self.await_j(20)
+        self.assertTrue(jobs.never_line("j", self.base).endswith(
+            "start it again with windvane bg j sh -c 'echo it'\"'\"'s done'"))
 
 
 class TwoStarts(InProject):

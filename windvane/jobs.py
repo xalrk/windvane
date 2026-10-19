@@ -11,6 +11,7 @@ import hashlib
 import itertools
 import json
 import os
+import shlex
 import signal
 import stat
 import subprocess
@@ -54,7 +55,7 @@ CHECK_LOG = "check: log "  # a check job's first line names the check's log, whe
 # and never over the one `bg` wrote, which its stamp must not predate), then runs the command and writes its exit.
 JOB = ('echo $$ > "$0.pid.$$"; ln "$0.pid.$$" "$0.pid" 2>/dev/null; rm -f "$0.pid.$$"; '
        '"$@" > "$0.log" 2>&1; echo $? > "$0.exit"')
-FILES = ("start", "cwd", "pid", "stamp", "lock", "log", "exit", "head", "keep", "child")  # a job's, after its base
+FILES = ("start", "cwd", "cmd", "pid", "stamp", "lock", "log", "exit", "head", "keep", "child")  # a job's, after its base
 # A kept job's group leader: `watch` from this same windvane (its package dir is the first argument), outside PATH.
 WATCH = ("import sys; sys.path.insert(0, sys.argv[1]); from windvane.jobs import watch; "
          "sys.exit(watch(sys.argv[2], sys.argv[3:]))")
@@ -511,12 +512,15 @@ def job_files(base):
 def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect):
     """`bg`'s start, under its lock: the job's files and process. (the process, its `util.stamp` or None)."""
     pid = Path(f"{base}.pid")
-    for end in ("pid", "exit", "keep", "child", "stamp", "log"):  # no log: its command never ran (`never_started`)
+    for end in ("pid", "exit", "keep", "child", "stamp", "cmd", "log"):  # no log: its command never ran (`never_started`)
         Path(f"{base}.{end}").unlink(missing_ok=True)
     for f in base.parent.glob(f"{glob.escape(base.name)}.pid.*"):  # left by an earlier shell killed linking its pid
         f.unlink(missing_ok=True)
     Path(f"{base}.start").write_text(str(int(time.time())))
     Path(f"{base}.cwd").write_text(str(Path(cwd).resolve()))  # ties it to its worktree, should job_base move again
+    Path(f"{base}.cmd").write_text(shlex.join([  # how to start it again, should it never start (`never_line`)
+        "windvane", "bg", *(["--heavy"] if heavy else []), *(["--mem", f"{mem:g}"] if mem is not None else []),
+        *(["--expect", f"{expect:g}"] if expect is not None else []), *(["--keep"] if keep else []), name, *cmd]))
     if heavy:
         cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []),
                *(["--expect", f"{expect:.10g}"] if expect is not None else []), "--", *cmd]
@@ -688,9 +692,10 @@ def never_started(base):
     return not Path(f"{base}.exit").exists() and not Path(f"{base}.log").exists()
 
 
-def never_line(name):
-    """What `await` says of a job that never started, and how to start it again."""
-    again = "windvane check" if name == SESSION_CHECK else f"windvane bg {name} <its command>"
+def never_line(name, base):
+    """What `await` says of a job that never started, and the command that starts it again (a starter killed before
+    it wrote that can't say)."""
+    again = "windvane check" if name == SESSION_CHECK else tail(f"{base}.cmd", 1) or f"windvane bg {name} <its command>"
     return f"NEVER STARTED {name}: its start was killed before the command ran; start it again with {again}"
 
 
@@ -729,7 +734,7 @@ def await_(p, name, lines=40, limit=None):
         ledger(p, None, {"name": name, "seconds": blocked}, event="await")
     mins = (time.time() - int(Path(f"{base}.start").read_text())) / 60
     if not exit_f.exists() and not pid_lives(base) and never_started(base):
-        print(never_line(name))
+        print(never_line(name, base))
         return NEVER
     if exit_f.exists():
         code = exit_code(exit_f)
