@@ -87,6 +87,7 @@ class Periodic:
     def periodic(self, e):
         """Run `e` and the entries its `then` chains to, one after another in the ci tree on current main, then
         land the tickets they wrote. Whatever else they changed is discarded with the tree."""
+        from .planner import release_ids
         from .worktree import clean_detach
         p, cd, done, prev = self.p, self.p.ci_dir, set(), None
         if cd == p.work_dir and any(self.owner.values()):
@@ -102,30 +103,33 @@ class Periodic:
         land, last = "", e["name"]  # `land` is inherited along the chain: an entry's own setting wins
         self.handed = set()  # the ticket ids the chain's sessions were given: only those land
         self.triaged = []  # (the requests a session was given, its final reply, its name): verdicts after the land
-        while e and e["name"] not in done and not (p.state / "STOP").exists():
-            done.add(e["name"])
-            finished = self.groups_finished(e) if e["after_group"] else {}
-            seen = list(self.groups_seen.get(e["name"], []))
-            self.periodic_ran(e)
-            land = e["land"] or land
-            got = self.periodic_session(e, cd, prev, finished)
-            if got is False:  # skipped before it started (a failed setup): its groups stay owed
-                self.groups_seen[e["name"]] = seen
-                self.periodic_ran(e, skipped=True)
-            if not got:
-                break
-            reply, prev = got
-            kept, last = self.periodic_keep(cd, e["name"]), e["name"]
-            e = p.periodic.get(e["then"])
-        self.save()
-        try:
-            landed, held = [], {}
-            if kept and (kept[0] or kept[3] or kept[2][0] != kept[2][1]):
-                landed, held = self.land_periodic(cd, *kept, land or "near", last, reply)
-            for reqs, text, name in self.triaged:
-                self.verdicts(reqs, text, landed, held, name)
+        try:  # the ids its sessions were handed stay claimed until they've landed or been dropped
+            while e and e["name"] not in done and not (p.state / "STOP").exists():
+                done.add(e["name"])
+                finished = self.groups_finished(e) if e["after_group"] else {}
+                seen = list(self.groups_seen.get(e["name"], []))
+                self.periodic_ran(e)
+                land = e["land"] or land
+                got = self.periodic_session(e, cd, prev, finished)
+                if got is False:  # skipped before it started (a failed setup): its groups stay owed
+                    self.groups_seen[e["name"]] = seen
+                    self.periodic_ran(e, skipped=True)
+                if not got:
+                    break
+                reply, prev = got
+                kept, last = self.periodic_keep(cd, e["name"]), e["name"]
+                e = p.periodic.get(e["then"])
+            self.save()
+            try:
+                landed, held = [], {}
+                if kept and (kept[0] or kept[3] or kept[2][0] != kept[2][1]):
+                    landed, held = self.land_periodic(cd, *kept, land or "near", last, reply)
+                for reqs, text, name in self.triaged:
+                    self.verdicts(reqs, text, landed, held, name)
+            finally:
+                clean_detach(p, cd, p.upstream)
         finally:
-            clean_detach(p, cd, p.upstream)
+            release_ids(p, "periodic")
 
     def periodic_fits(self, e):
         left = self.end() - now()
@@ -147,7 +151,7 @@ class Periodic:
         """One periodic session: (its final reply, that plus the files it names), False when it was skipped before it
         started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
         it due, {group: its tickets}, named in its prompt."""
-        from .planner import free_id
+        from .planner import claim_ids, free_id
         from .runner import rules
         name, p = e["name"], self.p
         if not self.periodic_fits(e):
@@ -176,9 +180,10 @@ class Periodic:
             self.log(f"{name}: skipped: its prompt {e['prompt']} isn't on {p.upstream}")
             self.periodic_failed(name, f"its prompt {e['prompt']} isn't on {p.upstream}.")
             return False
-        first = int(re.search(r"\d+", free_id(p, cd)).group())
+        first = int(re.search(r"\d+", free_id(p, cd, own="periodic")).group())  # the chain's earlier ones: in cd
         ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + 6)]
         self.handed |= set(ids)
+        claim_ids(p, "periodic", self.handed)
         triage = any(x["then"] == name for x in p.periodic.values())
         notes = critic.followups(p) if triage else []
         limit = now() + timedelta(minutes=e["minutes"])

@@ -244,6 +244,8 @@ elif system.startswith("# windvane critic"):
         text = os.environ["FAKE_CRITIC_REASK"].replace("{tid}", tid)
 elif system.startswith("# windvane planner run"):
     ids = re.search(r"## Ids for new tickets.*\n(.*)", prompt).group(1).split(", ")
+    if os.environ.get("FAKE_SESSION_RUN"):  # something run elsewhere while the session works
+        os.system(os.environ["FAKE_SESSION_RUN"])
     os.makedirs(".windvane/tickets", exist_ok=True)
     open(f".windvane/tickets/{ids[0]}.md", "w").write(f"# {ids[0]}: planned\nDepends on: nothing.\n")
     with open(".windvane/QUEUE.md", "a") as f:  # a tracked file, modified: its status line starts with a space
@@ -256,6 +258,8 @@ elif system.startswith("# windvane planner run"):
     text = "PLAN: new=1 noted=0 one ticket"
 elif system.startswith("# windvane periodic run"):  # the project's rules file says what to do
     ids = re.search(r"## Ids for new tickets.*\n(.*)", prompt).group(1).split(", ")
+    if os.environ.get("FAKE_SESSION_RUN"):
+        os.system(os.environ["FAKE_SESSION_RUN"])
     if "WRITE_TICKET" in system:
         open(f".windvane/tickets/{ids[0]}.md", "w").write(f"# {ids[0]}: found\nDepends on: nothing.\n")
         q = open(".windvane/QUEUE.md").read()

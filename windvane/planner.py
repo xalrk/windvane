@@ -1,6 +1,7 @@
 """The plan run: a planner session writes tickets for a goal (and the critic's follow-ups) on a branch the driver
 commits, then pushes or lands it."""
 import fcntl
+import os
 import re
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from .held import author_ident, is_local, land, local_push, n_tickets, push_bran
 from .phone import whole
 from .queue import Queue, folder_ids, id_after, ref_ids
 from .runner import NO_REQUEST, rules, run_claude
-from .util import edit_json, git, gout, last_match, load_json, log, now, push
+from .util import edit_json, git, gout, last_match, load_json, log, now, push, same_process, save_json, stamp
 from .worktree import clean_detach, ensure_worktree
 
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
@@ -47,23 +48,27 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
             if busy_raises:
                 raise PlanBusy("another plan is running")
             return 0
-        return _plan(p, goal, use_followups, usage, stop_if, merge, max_new)
+        try:
+            return _plan(p, goal, use_followups, usage, stop_if, merge, max_new)
+        finally:  # pushed or given up: its ids are on a branch now, or free
+            release_ids(p, "plan")
 
 
 def pending_ids(p, ask_forge=True):
     """Ticket ids on unmerged remote `plan-*` and `periodic-*` branches: tickets whose PR is still open have claimed
     them, and so do local ones (a plan whose push was refused, waiting to be pushed by hand). A branch whose PR was
-    closed unmerged frees its ids (its branch is left alone); without `ask_forge`, no PR is looked up and every such
-    branch keeps its ids (a skipped id costs nothing, a reused one collides)."""
+    closed unmerged frees its ids (its branch is left alone); without `ask_forge`, no PR is looked up: a branch
+    closed_plans.json already lists frees its ids, every other keeps them (a skipped id costs nothing, a reused one
+    collides)."""
     return set(pending_branches(p, ask_forge))
 
 
-def free_id(p, checkout=None, taken=(), ask_forge=True):
+def free_id(p, checkout=None, taken=(), ask_forge=True, own=None):
     """The id after every one claimed anywhere, so no two paths that write tickets hand out the same id: the
     upstream's tickets (merged there, maybe not pulled), `checkout`'s HEAD (a branch ahead of main) and its files (not
-    committed yet), the open plan and periodic branches (`pending_ids`, with `ask_forge`), and `taken` (ids the caller
-    just handed out)."""
-    ids = ref_ids(p, p.upstream) | pending_ids(p, ask_forge) | set(taken)
+    committed yet), the unmerged plan and periodic branches (`pending_ids`), the ids a running plan or periodic
+    session was handed (`claimed_ids`, but `own`'s), and `taken` (ids the caller just handed out)."""
+    ids = ref_ids(p, p.upstream) | pending_ids(p, ask_forge) | claimed_ids(p, own) | set(taken)
     if checkout:
         head = gout(checkout, "rev-parse", "--verify", "-q", "HEAD")
         ids |= folder_ids(p, checkout) | (ref_ids(p, head) if head else set())
@@ -77,11 +82,36 @@ def pending_branches(p, ask_forge=True):
     local = gout(p.main_root(), "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split()
     heads = {b: b.removeprefix(f"{p.remote}/") if b in remote else b for b in remote + local}
     heads = {b: name for b, name in heads.items() if name.startswith(("plan-", "periodic-"))}
-    closed = closed_prs(p, set(heads.values())) if ask_forge else set()
+    closed = closed_prs(p, set(heads.values())) if ask_forge else set(load_json(p.state / "closed_plans.json", []))
     for b, name in heads.items():
         if name not in closed:
             names = gout(p.main_root(), "ls-tree", "--name-only", b, p.tickets_rel + "/").split()
             ids.update((t, name) for n in names if n.endswith(".md") for t in [p.norm(Path(n).stem)] if t)
+    return ids
+
+
+def claim_ids(p, name, ids):
+    """Reserve `ids` for session `name` (a plan, a periodic chain): it writes their tickets uncommitted in its own
+    worktree for minutes, where no other picker sees them, and a `windvane new` meanwhile would take the same id.
+    Held while this process lives, until `release_ids`."""
+    pid = os.getpid()
+    save_json(p.state / "id_claims" / f"{name}.json", {"ids": sorted(ids), "pid": pid, "stamp": stamp(pid)})
+
+
+def release_ids(p, name):
+    (p.state / "id_claims" / f"{name}.json").unlink(missing_ok=True)
+
+
+def claimed_ids(p, own=None):
+    """The ids every claim but `own` holds whose process still runs; a dead one's claim (a crash, a kill) is removed.
+    `own`: a periodic chain picks again after each session, whose tickets its tree already shows."""
+    ids = set()
+    for f in sorted((p.state / "id_claims").glob("*.json")):
+        c = load_json(f, {})
+        if not isinstance(c, dict) or not isinstance(c.get("pid"), int) or not same_process(c["pid"], c.get("stamp")):
+            f.unlink(missing_ok=True)
+        elif f.stem != own:
+            ids |= {t for t in c.get("ids", []) if isinstance(t, str)}
     return ids
 
 
@@ -164,6 +194,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
     q = Queue(p)
     first = int(re.search(r"\d+", free_id(p, cd)).group())
     ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + max_new)]
+    claim_ids(p, "plan", ids)
     notes = critic.followups(p) if use_followups else []
     if not goal and not notes:
         log(p, "plan: no goal and no critic follow-ups")

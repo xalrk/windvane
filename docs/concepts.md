@@ -42,10 +42,11 @@ backticks is quoted, not read, so an unclosed backtick hides every key after it 
 of both above its list.
 
 `windvane new "<title>"` writes a ticket from the template with the next free id: after every ticket on this
-checkout's branch, in its tickets folder, on the upstream and on an unmerged plan branch. It never overwrites a ticket
-file; if another `new` took the id at the same moment, it takes the next one, and should that be taken too it refuses:
-run it again. `windvane plan "<goal>"` has a planner session write several, from a goal and the critic's follow-up
-notes; it opens a pull request with them for you to look at (`--merge` merges them at once).
+checkout's branch, in its tickets folder, on the upstream, on an unmerged plan or periodic branch whose pull request
+isn't known to be closed, and among the ids a running plan or periodic session is writing tickets with. It never
+overwrites a ticket file; if another `new` took the id at the same moment, it takes the next one, and should that be
+taken too it refuses: run it again. `windvane plan "<goal>"` has a planner session write several, from a goal and the
+critic's follow-up notes; it opens a pull request with them for you to look at (`--merge` merges them at once).
 
 ### The queue and ticket status
 
@@ -252,4 +253,5 @@ On this machine only, under `~/.local/state/windvane/<name>/`:
 | `quiet.txt` | quiet times |
 | `held.json`, `held_why.json`, `closed_plans.json` | changes kept on a local branch to land when pushed again, and why their push was refused; plan branches whose PRs were closed |
 | `tmp/<ID>/` | the `TMPDIR` of a ticket's sessions and checks, removed when it merges or fails; the driver also removes `windvane-*` dirs over an hour old that nothing uses from the machine's temp dir, at the start and between tickets |
+| `id_claims/` | the ticket ids a running plan or periodic session was handed, so `windvane new` skips them until its branch is pushed; a claim whose process is gone is removed |
 | `work/`, `ci/`, `plan/` | worktrees: the sessions', the driver's checks and merges, the planner's (`work-1/`, `ci-1/` and so on for extra slots) |

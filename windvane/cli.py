@@ -636,8 +636,9 @@ def cmd_plan(a, p):
 
 
 def cmd_new(a, p):
-    """A ticket file with the next free id (`planner.free_id`: this checkout's HEAD and files, the upstream, open
-    plans). No PR is looked up: a desk command answers at once, and a closed plan's ids are only skipped. Created
+    """A ticket file with the next free id (`planner.free_id`: this checkout's HEAD and files, the upstream, unmerged
+    plan branches, the ids a running plan holds). No PR is looked up: a desk command answers at once, so a plan closed
+    since the last lookup still keeps its ids (only skipped), while one closed_plans.json lists frees them. Created
     exclusively, so an existing ticket is never overwritten: a `new` that loses a race to another
     takes the id after the winner's file, and refuses only if that one is taken too."""
     folder = p.root / p.tickets_rel

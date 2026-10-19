@@ -1,5 +1,5 @@
 """Every path that writes a ticket (`windvane new`, a plan, a periodic session, a desk answer's follow-up) takes its id
-from one picker, so none can hand out an id an open plan or a checkout's own files already hold."""
+from one picker, so none can hand out an id an unmerged plan or a checkout's own files already hold."""
 import contextlib
 import io
 import os
