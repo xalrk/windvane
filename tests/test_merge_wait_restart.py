@@ -29,6 +29,7 @@ from helpers import Sandbox  # noqa: E402
 # test_merge_blocked's fake gh, with `gh pr checks --required`: the state dir's `required` (a JSON list of names)
 # answers it; with no such file it fails as a gh without the flag does, and `required_fails` (a count) fails that many
 # calls first as an API hiccup does. `held` blocks the PR by a rule its checks and review don't show (a signature).
+# `break` (a count of refused merges) makes the checks fail after that many, as `clear` makes them pass.
 GH = GH.replace("""elif args[:2] == ["pr", "view"] and""", """elif args[:2] == ["pr", "checks"]:
     if int(read("required_fails", "0")) > 0:
         (st / "required_fails").write_text(str(int(read("required_fails")) - 1))
@@ -39,7 +40,10 @@ GH = GH.replace("""elif args[:2] == ["pr", "view"] and""", """elif args[:2] == [
     if not names:
         sys.exit("no required checks reported on the 'main' branch")
     print(json.dumps([{{"name": n}} for n in names]))
-elif args[:2] == ["pr", "view"] and""").replace("blocked = review", "blocked = (st / 'held').exists() or review")
+elif args[:2] == ["pr", "view"] and""").replace("blocked = review", "blocked = (st / 'held').exists() or review").replace(
+    """                           ("stop",""", """                           ("break", lambda: (st / "checks").write_text(json.dumps(
+                [dict(c, status="COMPLETED", conclusion="FAILURE") for c in checks]))),
+                           ("stop",""")
 
 # A driver in a process of its own, killed by the test: it tries the merge again only after a minute, so the kill
 # comes in the wait between tries, with its state saved.
@@ -207,7 +211,9 @@ class MergeWaitRestart(unittest.TestCase):
         self.assertEqual(pilot.failed, ["T-001"])
         self.assertGreaterEqual(self.merges(), 2)
         self.assertEqual(self.log().count("gh couldn't say which of PR #7's checks are required"), 1)
-        self.assertIn("required checks are still running after 0.005 min", self.log())
+        self.assertIn("T-001: merge waits: PR #7's checks are still running (preview)", self.log())
+        self.assertIn("T-001: FAILED: the merge was refused: checks are still running after 0.005 min", self.log())
+        self.assertIn("a newer gh, with `--required`, tells them apart", self.log())
 
     def test_a_gh_hiccup_on_the_required_checks_is_asked_again_at_the_next_refusal(self):
         checks = json.dumps(json.loads(RUNNING) + [PREVIEW])
@@ -221,6 +227,25 @@ class MergeWaitRestart(unittest.TestCase):
         child = self.start_child(checks=json.dumps([PREVIEW]), held="")
         self.assertIn("merge waits: T-001 on PR #7's checks (preview), 0 min of 60", self.status())
         self.kill(child)
+
+    def test_a_wait_that_ends_in_a_failed_check_leaves_no_wait_for_status_or_a_restart(self):
+        pilot = self.run_pilot(checks=RUNNING, required='["build"]', **{"break": "2"})
+        self.assertEqual((pilot.failed, self.merges()), (["T-001"], 2))  # waited once, then the check failed
+        self.assertIn("T-001: FAILED: the merge was refused: a check failed", self.log())
+        self.assertEqual(self.saved()["checks"], {})
+        self.assertIn("T-001", self.saved()["landing"])  # the approval stays, for `windvane retry`
+        with open(self.p.state / "lock", "a") as lock:  # as if the run were still going
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.assertNotIn("merge waits: T-001 on", self.status())
+        pilot.hand_over()  # a self-update: the same run goes on
+        os.environ["WINDVANE_RESTARTED"] = "1"
+        again = driver.Pilot(self.p, args())
+        again.sleep, pauses = (lambda s: None), []
+        # idling on a wait that ended would last until the deadline: a stop after a few pauses ends the test instead
+        again.pause = lambda seconds=30: pauses.append(1) or len(pauses) < 5 or (self.p.state / "STOP").write_text("")
+        again.run(now() + timedelta(hours=1))
+        self.assertEqual((pauses, self.merges()), ([], 2))
+        self.assertEqual(self.log().count("T-001: FAILED"), 1)
 
     def test_a_ready_refused_with_a_403_names_gh_auth_refresh(self):
         pilot = self.run_pilot(draft="", stuck="gh: Resource not accessible by integration (HTTP 403)")

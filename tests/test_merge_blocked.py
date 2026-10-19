@@ -137,7 +137,7 @@ class MergeBlocked(unittest.TestCase):
         self.assertEqual((pilot.merged, pilot.failed), (["T-001"], []))
         self.assertEqual(self.merges(), 3)
         self.assertEqual(self.sessions(), (1, 0, 1))
-        self.assertEqual(self.log().count("T-001: merge waits: PR #7's required checks are still running (build); "
+        self.assertEqual(self.log().count("T-001: merge waits: PR #7's checks are still running (build); "
                                           "trying again every 0 min"), 1)
         self.assertNotIn("FAILED", self.log())
         self.assertEqual([t for t, _ in self.pushes if not t.startswith(("Done", "windvane "))], [])
@@ -146,7 +146,7 @@ class MergeBlocked(unittest.TestCase):
         pilot = self.run_pilot(checks=RUNNING, stop="2")
         self.assertEqual((pilot.merged, pilot.failed), ([], ["T-001"]))
         self.assertEqual(self.merges(), 2)
-        self.assertIn("T-001: FAILED: the merge was refused: required checks are still running when the run ended; "
+        self.assertIn("T-001: FAILED: the merge was refused: checks are still running when the run ended; "
                       "the next run merges the kept approval",
                       self.log())
         [msg] = [m for t, m in self.pushes if t.startswith("Failed")]
@@ -169,8 +169,8 @@ class MergeBlocked(unittest.TestCase):
         self.assertGreaterEqual(self.merges(), 2)
         self.assertEqual(self.sessions(), (1, 0, 1))
         self.assertEqual(self.planners(), 1)  # the replan ran while the merge waited
-        self.assertIn("T-001: merge waits: PR #7's required checks are still running (ci/build)", self.log())
-        self.assertIn("T-001: FAILED: the merge was refused: required checks are still running after 0.005 min; see "
+        self.assertIn("T-001: merge waits: PR #7's checks are still running (ci/build)", self.log())
+        self.assertIn("T-001: FAILED: the merge was refused: checks are still running after 0.005 min; see "
                       "`gh pr checks 7`; once they pass, `windvane retry T-001` merges the kept approval", self.log())
         self.assertIn("T-001", self.landing())
 
@@ -189,7 +189,7 @@ class MergeBlocked(unittest.TestCase):
         self.assertEqual((pilot.merged, pilot.failed), ([], ["T-001"]))
         self.assertEqual(len(fails), 2)
         self.assertGreaterEqual(fails[1] - fails[0], 2)  # tried again, not failed at its first refusal on the old clock
-        self.assertEqual(self.log().count("T-001: merge waits: PR #7's required checks are still running"), 2)
+        self.assertEqual(self.log().count("T-001: merge waits: PR #7's checks are still running"), 2)
         self.assertEqual(self.sessions(), (1, 0, 1))
 
     def test_a_failed_check_fails_it_at_once_naming_gh_pr_checks(self):

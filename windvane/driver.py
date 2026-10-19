@@ -200,6 +200,11 @@ CHECKS_EVERY = 2  # minutes between merge tries on a PR whose required checks ar
 CHECKS_MOST = 60  # minutes a run waits for them: a required check whose workflow never started stays pending
 
 
+def waited_on(required):
+    """What a merge wait waits on: its required checks, or any check when gh couldn't say which are required."""
+    return MERGE_STATES["PENDING"] if required else "checks are still running"
+
+
 def pr_state(p, pr):
     """What GitHub says of a PR whose merge was refused, read once: {} when gh can't say."""
     try:
@@ -690,18 +695,23 @@ class Pilot(Desk, Periodic):
     def land_again(self, tid):
         """A ticket that failed after its review approved (the merge was refused, or didn't land): while its branch
         still has that head, it goes straight to the merge, with no worker, critic or review paid for it again. True
-        when it went there."""
+        when it went there. A merge wait's retry that ends any way but waiting again (merged, failed, bounced, set
+        aside, or a worker's to redo) drops its clock, so `status` and a restart don't bring back a wait that ended."""
         p, land = self.p, self.landing.pop(tid, None)
-        if not land:
-            return False
-        self.save()
-        branch, sha = land["branch"], land["sha"]
-        if gout(p.main_root(), "rev-parse", "-q", "--verify", f"{p.remote}/{branch}") != sha:
-            self.log(f"{tid}: {branch} moved off its approved head {sha[:7]}: the worker takes it up again")
-            return False
-        self.log(f"{tid}: {branch} is still at its approved head {sha[:7]}: straight to the merge")
-        self.integrate(tid, branch, sha)
-        return True
+        went = bool(land)
+        if land:
+            self.save()
+            branch, sha = land["branch"], land["sha"]
+            if gout(p.main_root(), "rev-parse", "-q", "--verify", f"{p.remote}/{branch}") != sha:
+                self.log(f"{tid}: {branch} moved off its approved head {sha[:7]}: the worker takes it up again")
+                went = False
+            else:
+                self.log(f"{tid}: {branch} is still at its approved head {sha[:7]}: straight to the merge")
+                self.integrate(tid, branch, sha)
+        with self.lock:
+            if tid not in self.checking and self.check_wait.pop(tid, None) is not None:
+                self.save()
+        return went
 
     def worker_times(self):
         """A worker starting now: (its own time limit, when it's stopped, its wrap-up time)."""
@@ -1199,7 +1209,7 @@ class Pilot(Desk, Periodic):
             if got is None and not self.required_said:
                 self.required_said = True
                 self.log(f"{tid}: gh couldn't say which of PR #{pr}'s checks are required (`gh pr checks --required`); "
-                         "any check still running counts as one")
+                         "any check still running counts as one; a newer gh, with `--required`, tells them apart")
         return known[0]
 
     def wait_checks(self, tid, pr, head, names, required=True):
@@ -1213,27 +1223,24 @@ class Pilot(Desk, Periodic):
             wait = self.check_wait.setdefault(tid, {"since": time.time()})
             wait.update(pr=pr, names=names, required=required)
         if time.time() - wait["since"] >= CHECKS_MOST * 60:
-            with self.lock:
-                self.check_wait.pop(tid, None)
-            self.log(f"{tid}: merge refused ({MERGE_STATES['PENDING']} after {CHECKS_MOST:g} min)")
-            return self.fail(tid, f"the merge was refused: {MERGE_STATES['PENDING']} after {CHECKS_MOST:g} min; see "
+            self.log(f"{tid}: merge refused ({waited_on(required)} after {CHECKS_MOST:g} min)")
+            return self.fail(tid, f"the merge was refused: {waited_on(required)} after {CHECKS_MOST:g} min; see "
                              f"`gh pr checks {pr}`", head, "they pass")
         with self.lock:
             self.landing[tid] = dict(zip(("branch", "sha"), head))
             self.checking[tid] = time.time() + CHECKS_EVERY * 60
         self.save()
         if first:
-            self.log(f"{tid}: merge waits: PR #{pr}'s required checks are still running ({', '.join(names)}); "
+            self.log(f"{tid}: merge waits: PR #{pr}'s {waited_on(required)} ({', '.join(names)}); "
                      f"trying again every {CHECKS_EVERY} min")
 
     def checks_unfinished(self):
         """At the run's end, the tickets still waiting on their checks fail as any refused merge does, approval kept:
         the next run merges it without a worker."""
         for tid in list(self.checking):
-            self.checking.pop(tid)
-            self.check_wait.pop(tid, None)
+            required = self.check_wait.get(tid, {}).get("required", True)
             land = self.landing.get(tid, {})
-            self.fail(tid, f"the merge was refused: {MERGE_STATES['PENDING']} when the run ended; the next run "
+            self.fail(tid, f"the merge was refused: {waited_on(required)} when the run ended; the next run "
                       "merges the kept approval",
                       (land["branch"], land["sha"]) if land else None)
 
@@ -1511,6 +1518,9 @@ class Pilot(Desk, Periodic):
         refusal), so its push ends with the retry, and `once` says when it's due; any other failure is the work's
         own, which a retry would only repeat."""
         self.skip.add(tid)
+        with self.lock:  # whatever ended a merge wait, it no longer waits (`status`, a restart's `carry_over`)
+            self.check_wait.pop(tid, None)
+            self.checking.pop(tid, None)
         if head:
             self.landing[tid] = dict(zip(("branch", "sha"), head))
         jobs.end_kept(self.p, tid, "its ticket failed")
@@ -1848,7 +1858,7 @@ class Pilot(Desk, Periodic):
         for t, at in dict(self.checking).items():
             if at > time.time():
                 avoid.add(t)
-                waits.append(f"{t} waits: its PR's required checks are still running")
+                waits.append(f"{t} waits: its PR's {waited_on(self.check_wait.get(t, {}).get('required', True))}")
         extra = self.outside(busy)  # once a pass: two git calls a running ticket
         kept, held = {}, self.kept_slots()
         for b in jobs.running_kept(self.p):

@@ -318,8 +318,7 @@ def cmd_status(a, p):
     for tid, w in sorted(st.get("checks", {}).items()) if on else ():
         waited = int((time.time() - w["since"]) // 60)
         print(f"merge waits: {tid} on PR #{w.get('pr', '?')}'s {'required ' * w.get('required', True)}checks "
-              f"({', '.join(w.get('names') or '?')}), "
-              f"{waited} min of {driver.CHECKS_MOST:g}")
+              f"({', '.join(w.get('names') or '?')}), {waited} min of {driver.CHECKS_MOST:g}")
     for tid in dict.fromkeys(st.get("failed", [])) if on else ():
         print(f"failed: {tid}; once its cause is fixed: windvane retry {tid}")
     for key, q in questions.waiting_on(st.get("questions", {})).items():
