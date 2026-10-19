@@ -4,6 +4,7 @@ driver warns about pushes once per content, and `stats --critic` counts unanswer
 import argparse
 import contextlib
 import io
+import os
 import sys
 import unittest
 from datetime import timedelta
@@ -12,9 +13,9 @@ from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-from windvane import critic, driver, stats  # noqa: E402
+from windvane import cli, critic, driver, stats  # noqa: E402
 from windvane.config import Project  # noqa: E402
-from windvane.util import append_jsonl, now  # noqa: E402
+from windvane.util import append_jsonl, now, read_jsonl  # noqa: E402
 
 from helpers import Sandbox  # noqa: E402
 from test_pipeline import args  # noqa: E402
@@ -73,6 +74,37 @@ class ReplyIds(unittest.TestCase):
                 ans, _ = self.read(f"The pack shows - safe: no, at first glance\n- safe: no, a preamble\n{heading}\n"
                                    "- safe: yes, kept\nCRITIC: T-001 fixes=0 ok")
                 self.assertEqual(ans["safe"], ("yes", "kept"))
+
+
+class ThroughTheCritic(unittest.TestCase):
+    """`windvane critic` with the Sandbox's fake critic replying `*`-bulleted answers to the heading words: the
+    ticket passes with nothing unanswered, where `* checks: yes` used to restart the block and lose `safe`."""
+
+    def test_a_star_bulleted_reply_passes_with_every_check_answered(self):
+        s = Sandbox()
+        self.addCleanup(s.close)
+        s.write(".windvane/config.toml", s.root.joinpath(".windvane/config.toml").read_text()
+                .replace("enabled = false", "enabled = true"))
+        s.write(".windvane/CRITIC.md", SCALE)
+        s.ticket("T-001")
+        s.publish("critic on, heading words as ids")
+        s.git("switch", "-q", "-c", "t-001-x")
+        p = Project(s.root)
+        notes = critic.pack_dir(p, "T-001") / "notes.md"
+        notes.parent.mkdir(parents=True)
+        notes.write_text("User-facing: yes\nfaster\n")
+        old = os.getcwd()
+        os.chdir(s.root)
+        self.addCleanup(os.chdir, old)
+        os.environ["FAKE_CRITIC_TEXT"] = ("* safe: yes, no loss\n* checks: yes, runs\n* beyond: yes, more\n"
+                                          "* fix: yes, gone\n* critic: yes, liked\n* fast: yes, 0.2 s\nGood.\n"
+                                          "Beyond this ticket:\n- a follow-up\nCRITIC: {tid} fixes=0 fine")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.suppress(SystemExit):
+            cli.cmd_critic(argparse.Namespace(ticket="T-001", project=False), p)
+        rec = read_jsonl(p.state / "critic.jsonl")[-1]
+        self.assertEqual((rec["unanswered"], rec["dims"], rec["step"]), ([], {"works": 10}, "pass"))
+        self.assertIn("CRITIC STEP: pass", out.getvalue())
 
 
 class ScalePush(unittest.TestCase):
