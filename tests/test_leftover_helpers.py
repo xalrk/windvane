@@ -88,7 +88,9 @@ class LeftoverHelpers(unittest.TestCase):
         older = subprocess.Popen(["sleep", "121"], cwd=self.s.root, start_new_session=True)  # the user's, before it
         self.addCleanup(kill, older.pid)
         time.sleep(0.1)
-        [msg] = self.run_once()
+        began = util.boot_started(older.pid) + 0.05  # the driver here is the test's process, older than `older`
+        with mock.patch.object(driver, "run_began", lambda: began):
+            [msg] = self.run_once()
         self.assertIn(f"Still running in the checkout, started by the run: sleep 120 (pid {self.helper()}).", msg)
         self.assertNotIn("sleep 121", msg)
         self.assertNotIn("sleep 121", self.log())
