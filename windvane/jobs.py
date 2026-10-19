@@ -438,6 +438,8 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
     until it ends."""
     outside_sandbox("a background job")  # it would end with the sandboxed call that started it
     tmp = scratch.job_env(cmd, "bg")  # before anything is written: a refused job leaves no trace
+    if alive(find_job(p, name)[0]):  # refused before writing anything; the check under the lock catches a racer
+        sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
     base = job_base(p, name)
     base.parent.mkdir(parents=True, exist_ok=True)
     with open(f"{base}.lock", "a") as lock:  # a session's parallel calls for one name: the second waits, then sees it

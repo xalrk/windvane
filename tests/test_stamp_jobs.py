@@ -123,18 +123,24 @@ class Leftovers(Proc, unittest.TestCase):
         self.sync(c.pid)
         return c.pid
 
+    def began(self):
+        """A run's start as `driver.run_began` reads it: the driver's start ticks (here a stand-in's, outside the
+        checkout)."""
+        c = subprocess.Popen(["sleep", "30"], start_new_session=True, stdin=subprocess.DEVNULL)
+        self.addCleanup(lambda: (c.kill(), c.wait()))
+        self.sync(c.pid)
+        return util.boot_started(c.pid)
+
     def test_a_process_older_than_the_run_stays_out_after_a_step_forward(self):
         users = self.spawn()
         time.sleep(0.05)
-        self.sync()  # the fake uptime is a copy: now, as the run would read it
-        since = util.clock()
+        since = self.began()
         self.assertNotIn(users, [pid for pid, _ in driver.leftover_helpers(self.p, since)])
         self.sync(step=HOUR)
         self.assertNotIn(users, [pid for pid, _ in driver.leftover_helpers(self.p, since)])
 
     def test_a_helper_the_run_started_is_listed_after_a_step_back(self):
-        self.sync()  # the fake uptime is a copy: now, as the run would read it
-        since = util.clock()
+        since = self.began()
         time.sleep(0.05)
         helper = self.spawn()
         self.sync(step=-HOUR)
