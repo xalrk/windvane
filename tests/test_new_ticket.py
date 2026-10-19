@@ -1,6 +1,7 @@
 """`windvane new` takes the id after every ticket in the checkout it writes to, and never overwrites one."""
 import contextlib
 import io
+import os
 import unittest
 from unittest import mock
 
@@ -13,6 +14,7 @@ class NewTicket(unittest.TestCase):
     def setUp(self):
         self.s = Sandbox()
         self.addCleanup(self.s.close)
+        self.addCleanup(os.chdir, os.getcwd())  # `-C` changes into the sandbox, which close() removes
 
     def new(self, root, *title):
         out = io.StringIO()
