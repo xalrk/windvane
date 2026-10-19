@@ -231,6 +231,20 @@ CHECK_FIELDS = "statusCheckRollup,reviewDecision"  # what `blocked_by` reads, in
 FAILED_CHECKS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 
 
+def check_end(c):
+    """One rollup entry's outcome, PENDING while it runs: a CheckRun has status and conclusion, a StatusContext a
+    state."""
+    end = (c.get("conclusion") or "") if c.get("status", "COMPLETED") == "COMPLETED" else "PENDING"
+    end = c.get("state") or end
+    return "PENDING" if end in ("PENDING", "EXPECTED", "") else end
+
+
+def running_checks(pr):
+    """The names of the PR's checks still running, as `blocked_by` counts them."""
+    return [c.get("name") or c.get("context") or "?" for c in pr.get("statusCheckRollup") or []
+            if check_end(c) == "PENDING"]
+
+
 def blocked_by(pr):
     """What blocks a BLOCKED PR, from its checks and review decision: some of FAILED, REVIEW and PENDING, in that
     order. Empty when they show nothing (a rule they don't cover, as a required signature), or the PR isn't BLOCKED.
@@ -239,10 +253,9 @@ def blocked_by(pr):
     if pr.get("mergeStateStatus") != "BLOCKED" or pr.get("isDraft"):
         return []
     out = set()
-    for c in pr.get("statusCheckRollup") or []:  # a CheckRun has status and conclusion, a StatusContext a state
-        end = (c.get("conclusion") or "") if c.get("status", "COMPLETED") == "COMPLETED" else "PENDING"
-        end = c.get("state") or end
-        out |= {"FAILED"} if end in FAILED_CHECKS else {"PENDING"} if end in ("PENDING", "EXPECTED", "") else set()
+    for c in pr.get("statusCheckRollup") or []:
+        end = check_end(c)
+        out |= {"FAILED"} if end in FAILED_CHECKS else {"PENDING"} if end == "PENDING" else set()
     if pr.get("reviewDecision") in ("REVIEW_REQUIRED", "CHANGES_REQUESTED"):
         out.add("REVIEW")
     return [k for k in ("FAILED", "REVIEW", "PENDING") if k in out]

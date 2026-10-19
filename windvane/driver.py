@@ -32,7 +32,7 @@ from . import (actions, critic, heavy, install, jobs, login, net, phone, privacy
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .heavy import minutes
-from .held import CHECK_FIELDS, MERGE_STATES, author_ident, blocked_by, merge_state, push_held
+from .held import CHECK_FIELDS, MERGE_STATES, author_ident, blocked_by, merge_state, push_held, running_checks
 from .periodic import Periodic
 from .phone import NTFY, REASON, cut, whole
 from .planner import plan
@@ -619,7 +619,8 @@ class Pilot(Desk, Periodic):
     def work(self, tid, kind, branches):
         p, wd = self.p, self.wd
         with self.lock:
-            self.checking.pop(tid, None)  # a merge still held by its checks says so again
+            if self.checking.pop(tid, None) is None:  # not a wait's own retry: a new wait starts its clock over
+                self.check_since.pop(tid, None)
         if self.land_again(tid):
             return
         start_five = self.usage.five
@@ -1184,8 +1185,7 @@ class Pilot(Desk, Periodic):
             self.checking[tid] = time.time() + CHECKS_EVERY * 60
         self.save()
         if first:
-            names = [c.get("name") or c.get("context") or "?" for c in state.get("statusCheckRollup") or []
-                     if c.get("status", "COMPLETED") != "COMPLETED" or c.get("state") in ("PENDING", "EXPECTED")]
+            names = running_checks(state)
             self.log(f"{tid}: merge waits: PR #{pr}'s required checks are still running ({', '.join(names)}); "
                      f"trying again every {CHECKS_EVERY} min")
 

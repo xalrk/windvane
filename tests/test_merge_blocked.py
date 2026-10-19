@@ -174,6 +174,24 @@ class MergeBlocked(unittest.TestCase):
                       "`gh pr checks 7`; once they pass, `windvane retry T-001` merges the kept approval", self.log())
         self.assertIn("T-001", self.landing())
 
+    def test_a_retry_in_the_same_run_waits_for_its_checks_afresh(self):
+        driver.CHECKS_EVERY, driver.CHECKS_MOST = 0.002, 0.005
+        orig, fails = driver.Pilot.fail, []
+
+        def fail(pilot, tid, why, head=None):  # the user asks `windvane retry` after the first fail, checks still running
+            fails.append(self.merges())
+            if len(fails) == 1:
+                (self.p.state / driver.RETRY).write_text(tid + "\n")
+            return orig(pilot, tid, why, head)
+        driver.Pilot.fail = fail
+        self.addCleanup(setattr, driver.Pilot, "fail", orig)
+        pilot = self.run_pilot(checks=RUNNING)
+        self.assertEqual((pilot.merged, pilot.failed), ([], ["T-001"]))
+        self.assertEqual(len(fails), 2)
+        self.assertGreaterEqual(fails[1] - fails[0], 2)  # tried again, not failed at its first refusal on the old clock
+        self.assertEqual(self.log().count("T-001: merge waits: PR #7's required checks are still running"), 2)
+        self.assertEqual(self.sessions(), (1, 0, 1))
+
     def test_a_failed_check_fails_it_at_once_naming_gh_pr_checks(self):
         pilot = self.run_pilot(checks=FAILED)
         self.assertEqual((pilot.failed, self.merges()), (["T-001"], 1))
