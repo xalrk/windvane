@@ -14,6 +14,7 @@ broke is resumed with no retry spent. At the 5-hour cap it stops the running ses
 resets. A detached run's driver is itself restarted after a crash (`supervise`).
 """
 import fcntl
+import hashlib
 import json
 import os
 import signal
@@ -268,6 +269,7 @@ class Pilot(Desk, Periodic):
         # ticket -> {"since", "pr", "names"}: when the run's wait for those checks began, and what it waits on. Saved
         # with `landing`, so a restart of the same run keeps the clock (`carry_over`); a new run starts it over.
         self.check_wait = s.get("checks", {})
+        self.scale_told = s.get("scale_told", "")  # the hash of the critic scale whose warnings went to the phone
         self.required = {}  # a PR base -> [its required checks' names or None, the check names asked about]
         self.required_said = False  # that gh couldn't say which checks are required: logged once a run
         self.skip, self.merged, self.failed = set(), [], []
@@ -352,7 +354,7 @@ class Pilot(Desk, Periodic):
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
-                                        "checks": dict(self.check_wait),
+                                        "checks": dict(self.check_wait), "scale_told": self.scale_told,
                                         "aside": dict(self.aside),
                                         "fixes": dict(self.fixes), "failed": list(self.failed),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
@@ -1951,9 +1953,21 @@ class Pilot(Desk, Periodic):
 
     def scale_note(self):
         """Log each critic scale id the critic's answers will be misread on, once, at the run's start: a check
-        named `beyond` read as the "Beyond this ticket" list cost three review rounds before anyone saw why."""
-        for what, fix in critic.scale_warnings(self.p, self.p.root):
+        named `beyond` read as the "Beyond this ticket" list cost three review rounds before anyone saw why. The
+        first run to warn about a given scale pushes it too, as a run started from the phone shows no log; its hash
+        in state.json keeps the next runs quiet until the scale changes."""
+        warns = critic.scale_warnings(self.p, self.p.root)
+        for what, fix in warns:
             self.log(f"{what}: {fix}")
+        if not warns:
+            return
+        told = hashlib.sha256((self.p.root / self.p.rubric_rel).read_bytes()).hexdigest()[:16]
+        what, fix = warns[0]
+        more = f" ({len(warns) - 1} more: windvane doctor lists them)" if len(warns) > 1 else ""
+        if told != self.scale_told and push("Critic scale", f"{fix[0].upper()}{fix[1:]}: {what.split(': ', 1)[-1]}."
+                                            f"{more}", 3, "warning"):
+            self.scale_told = told
+            self.save()
 
     def idle_note(self, notes):
         """Log why a slot sits idle, once per change rather than every pass of the loop."""

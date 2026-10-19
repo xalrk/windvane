@@ -306,10 +306,16 @@ def not_taken_up(p, patch, s):
     return {"windvane update not taken up": ("venv/bin/windvane is gone", "Reinstall windvane")}
 
 
+def scale_warned(p, patch, s):
+    s.write(".windvane/CRITIC.md", "## works\n- 5 safe: safe?\n- 8 safe: still safe?\n")
+    pilot(p).scale_note()
+    return {"Critic scale": ("Rename one in .windvane/CRITIC.md", "checks named `safe`")}
+
+
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer, late_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
          held, secret_aside, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full,
-         not_taken_up]
+         not_taken_up, scale_warned]
 
 
 def drive(site):
