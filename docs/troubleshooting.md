@@ -59,13 +59,16 @@ anyway.
 **"the merge was refused: ..." after the review approved.**
 The approval is kept: while the branch still has the approved head, `windvane retry T-007` (or the next run) merges
 it with no new worker or review. "Required checks are still running": windvane tried the merge every 2 minutes, for
-up to an hour, and the run ended or the hour ran out first; a required check that never starts (its workflow didn't
-trigger) looks like this too, so look at `gh pr checks 7`. "A check failed; see `gh pr checks 7`": re-run a flaky
-check yourself and retry once it passes; if the code is at fault, push a fix to the branch, and the new head goes
-through the worker and review again. "A required review hasn't approved it": once the review is given, `windvane
-retry T-007` merges the kept approval. "It is a draft": `gh pr ready 7`, then retry. "GitHub refused to mark it ready:
-the gh login lacks write access to pull requests (see `gh auth status`)": give the account `gh` is logged in with
-write access to the repository, then retry.
+up to an hour from the first refusal (a driver restarted in the same run keeps counting; a new run starts over), and
+the run ended or the hour ran out first; `windvane status` shows such a wait while it lasts ("merge waits: T-007 on PR
+#7's required checks (build), 12 min of 60"). Only checks the base branch requires count (`gh pr checks 7
+--required`); an optional one still running doesn't hold the merge. A required check that never starts (its workflow
+didn't trigger) looks like this too, so look at `gh pr checks 7`. "A check failed; see `gh pr checks 7`": re-run a
+flaky check yourself and retry once it passes; if the code is at fault, push a fix to the branch, and the new head
+goes through the worker and review again. "A required review hasn't approved it": once the review is given,
+`windvane retry T-007` merges the kept approval. "It is a draft": `gh pr ready 7`, then retry. "GitHub refused to mark
+it ready: the gh login lacks write access to pull requests": run `gh auth refresh -s repo` (or log `gh` in with a
+token that has pull-request write access), then retry.
 
 **The run paused (`paused ... Resuming at 14:00`).**
 Claude's 5-hour usage reached `cap`. It resumes by itself when the window resets. Raise `cap` (or `run --cap`) to

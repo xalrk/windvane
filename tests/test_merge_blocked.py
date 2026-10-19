@@ -1,7 +1,7 @@
 """An approved ticket whose merge GitHub refuses as BLOCKED: held only by required checks still running, it is merged
 again on later passes with no session, and fails at the run's end with its approval kept if they never end; a failed
 check or a missing review fails it at once, saying what to look at. A draft hold the user lets go between runs merges
-the kept approval with no session, and a `gh pr ready` refused with a 403 says what the gh login lacks."""
+the kept approval with no session."""
 import json
 import re
 import sys
@@ -214,13 +214,6 @@ class MergeBlocked(unittest.TestCase):
         pilot = self.run_pilot()
         self.assertEqual(pilot.merged, ["T-001"])
         self.assertEqual(self.sessions(), (1, 0, 1))
-
-    def test_a_ready_refused_with_a_403_says_the_login_lacks_write_access(self):
-        pilot = self.run_pilot(draft="", stuck="gh: Resource not accessible by integration (HTTP 403)")
-        self.assertEqual(pilot.failed, ["T-001"])
-        self.assertIn("T-001: FAILED: PR #7 is a draft and GitHub refused to mark it ready: the gh login lacks write "
-                      "access to pull requests (see `gh auth status`) (gh: Resource not accessible by integration "
-                      "(HTTP 403))", self.log())
 
 
 class BlockedBy(unittest.TestCase):

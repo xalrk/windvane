@@ -227,7 +227,7 @@ MERGE_STATES = {"UNKNOWN": "GitHub hadn't worked out whether it can merge", "CON
                 # what blocks a BLOCKED PR, when its checks and review decision say (`blocked_by`)
                 "FAILED": "a check failed", "REVIEW": "a required review hasn't approved it",
                 "PENDING": "required checks are still running"}
-CHECK_FIELDS = "statusCheckRollup,reviewDecision"  # what `blocked_by` reads, in the same `gh pr view` call
+CHECK_FIELDS = "statusCheckRollup,reviewDecision,baseRefName"  # what `blocked_by` reads, in the same `gh pr view` call
 FAILED_CHECKS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 
 
@@ -239,21 +239,42 @@ def check_end(c):
     return "PENDING" if end in ("PENDING", "EXPECTED", "") else end
 
 
-def running_checks(pr):
+def check_name(c):
+    """A rollup entry's name, as `gh pr checks` gives it: a CheckRun's name, a StatusContext's context."""
+    return c.get("name") or c.get("context") or "?"
+
+
+def checks_that_hold(pr, required=None):
+    """The PR's rollup entries that can hold its merge: those named in `required` (`required_checks`), or all of
+    them when that's None (gh couldn't say which are required)."""
+    return [c for c in pr.get("statusCheckRollup") or [] if required is None or check_name(c) in required]
+
+
+def running_checks(pr, required=None):
     """The names of the PR's checks still running, as `blocked_by` counts them."""
-    return [c.get("name") or c.get("context") or "?" for c in pr.get("statusCheckRollup") or []
-            if check_end(c) == "PENDING"]
+    return [check_name(c) for c in checks_that_hold(pr, required) if check_end(c) == "PENDING"]
 
 
-def blocked_by(pr):
+def required_checks(p, pr_n):
+    """The names of the checks PR `pr_n` needs to pass, from `gh pr checks --required`: a set (empty when its base
+    requires none), or None when gh can't say (an older gh without the flag, an API error)."""
+    res = net.call(["gh", "pr", "checks", pr_n, "--required", "--json", "name"], p.main_root())
+    try:  # gh exits non-zero while checks run or after one failed, with the JSON still out
+        return {c["name"] for c in json.loads(res.stdout)}
+    except (ValueError, TypeError, KeyError):
+        return set() if "no required checks" in (res.stderr or "") else None
+
+
+def blocked_by(pr, required=None):
     """What blocks a BLOCKED PR, from its checks and review decision: some of FAILED, REVIEW and PENDING, in that
     order. Empty when they show nothing (a rule they don't cover, as a required signature), or the PR isn't BLOCKED.
-    The rollup doesn't say which checks are required: a check still running on a PR that's otherwise clear is taken
-    for the one that holds it, since a non-required check can't."""
+    Only the `required` checks count when it's known: an optional check running, or failed, beside another block
+    doesn't hold the merge. When it isn't, a check still running on a PR that's otherwise clear is taken for the one
+    that holds it."""
     if pr.get("mergeStateStatus") != "BLOCKED" or pr.get("isDraft"):
         return []
     out = set()
-    for c in pr.get("statusCheckRollup") or []:
+    for c in checks_that_hold(pr, required):
         end = check_end(c)
         out |= {"FAILED"} if end in FAILED_CHECKS else {"PENDING"} if end == "PENDING" else set()
     if pr.get("reviewDecision") in ("REVIEW_REQUIRED", "CHANGES_REQUESTED"):
@@ -261,15 +282,16 @@ def blocked_by(pr):
     return [k for k in ("FAILED", "REVIEW", "PENDING") if k in out]
 
 
-def merge_state(pr, stderr):
+def merge_state(pr, stderr, required=None):
     """Why a PR didn't merge, in a few words: its conflict or wait, else the merge state that blocks it (and, when
-    BLOCKED, what blocks it), else gh's own error when GitHub saw nothing in the way."""
+    BLOCKED, what blocks it, counting only the `required` checks when known), else gh's own error when GitHub saw
+    nothing in the way."""
     mergeable, status = pr.get("mergeable", ""), pr.get("mergeStateStatus", "")
     if mergeable in ("CONFLICTING", "UNKNOWN"):
         return MERGE_STATES[mergeable]
     if pr.get("isDraft"):  # its state can still read CLEAN
         status = "DRAFT"
-    by = blocked_by(pr)
+    by = blocked_by(pr, required)
     if by:  # running checks matter only once nothing else blocks it
         return " and ".join(MERGE_STATES[k] for k in by if k != "PENDING" or by == ["PENDING"])
     return MERGE_STATES.get(status) or cut(" ".join(stderr.split())) or MERGE_STATES["UNKNOWN"]

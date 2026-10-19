@@ -32,7 +32,8 @@ from . import (actions, critic, heavy, install, jobs, login, net, phone, privacy
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .heavy import minutes
-from .held import CHECK_FIELDS, MERGE_STATES, author_ident, blocked_by, merge_state, push_held, running_checks
+from .held import (CHECK_FIELDS, MERGE_STATES, author_ident, blocked_by, check_name, merge_state, push_held,
+                   required_checks, running_checks)
 from .periodic import Periodic
 from .phone import NTFY, REASON, cut, whole
 from .planner import plan
@@ -258,7 +259,12 @@ class Pilot(Desk, Periodic):
         self.secrets = s.get("secrets", {})  # ticket -> {"branch", "sha"}: a head set aside for a secret (secret_aside)
         self.landing = s.get("landing", {})  # ticket -> {"branch", "sha"}: an approved head whose merge failed
         # ticket -> when to try its merge again: kept in `landing` while its PR's required checks still run
-        self.checking, self.check_since = {}, {}  # and ticket -> when this run's wait for them began
+        self.checking = {}
+        # ticket -> {"since", "pr", "names"}: when the run's wait for those checks began, and what it waits on. Saved
+        # with `landing`, so a restart of the same run keeps the clock (`carry_over`); a new run starts it over.
+        self.check_wait = s.get("checks", {})
+        self.required = {}  # a PR base -> [its required checks' names or None, the check names asked about]
+        self.required_said = False  # that gh couldn't say which checks are required: logged once a run
         self.skip, self.merged, self.failed = set(), [], []
         self.retried = []  # failed tickets `windvane retry` put back in this run's queue (take_retries)
         self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
@@ -341,6 +347,7 @@ class Pilot(Desk, Periodic):
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
+                                        "checks": dict(self.check_wait),
                                         "aside": dict(self.aside),
                                         "fixes": dict(self.fixes), "failed": list(self.failed),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
@@ -624,7 +631,7 @@ class Pilot(Desk, Periodic):
         p, wd = self.p, self.wd
         with self.lock:
             if self.checking.pop(tid, None) is None:  # not a wait's own retry: a new wait starts its clock over
-                self.check_since.pop(tid, None)
+                self.check_wait.pop(tid, None)
         if self.land_again(tid):
             return
         start_five = self.usage.five
@@ -1155,9 +1162,10 @@ class Pilot(Desk, Periodic):
                 state = {} if res.returncode == 0 else pr_state(p, pr)
                 merged = res.returncode == 0 or state.get("state") == "MERGED"
                 if not merged:
-                    why, by = merge_state(state, res.stderr or res.stdout), blocked_by(state)
+                    need = self.required_of(tid, pr, state)
+                    why, by = merge_state(state, res.stderr or res.stdout, need), blocked_by(state, need)
                     if by == ["PENDING"]:  # clears by itself: tried again on a later pass, with no session
-                        return self.wait_checks(tid, pr, (branch, sha), state)
+                        return self.wait_checks(tid, pr, (branch, sha), running_checks(state, need))
                     if why in STUCK or by:  # no retry clears it: fail now, saying why and what to look at
                         self.log(f"{tid}: merge refused ({why})")
                         see, once = refused_hint(pr, by)
@@ -1166,6 +1174,8 @@ class Pilot(Desk, Periodic):
                 res = net.git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
                 merged = res.returncode == 0
             if merged:
+                with self.lock:
+                    self.check_wait.pop(tid, None)
                 if self.landed(tid, branch, sha):  # the ci worktree is still on the merge
                     return self.merged_ok(tid, branch, sha, renumbered, self.off_touches(tid))
                 return None
@@ -1173,13 +1183,37 @@ class Pilot(Desk, Periodic):
             self.log(f"{tid}: merge refused ({why}); trying again")
         self.fail(tid, f"the merge was refused three times ({why})", (branch, sha))
 
-    def wait_checks(self, tid, pr, head, state):
-        """A merge held only by required checks still running: the approved head is kept (`landing`) and the loop
-        merges it again every CHECKS_EVERY minutes, with no worker, critic or review, until the checks end. Logged
-        once; CHECKS_MOST minutes on, or at the run's end (`checks_unfinished`), it fails: the one push."""
-        first = tid not in self.check_since
-        since = self.check_since.setdefault(tid, time.time())
-        if time.time() - since >= CHECKS_MOST * 60:
+    def required_of(self, tid, pr, state):
+        """The names of the checks that can hold PR `pr`'s merge (`required_checks`), learned once a run for its base
+        and asked again only when a check shows on it that the base's answer didn't cover (a workflow added since).
+        None when gh can't say: any running check then counts, as `blocked_by` says, and the log says so once."""
+        names = {check_name(c) for c in state.get("statusCheckRollup") or []}
+        if not names:
+            return None
+        known = self.required.setdefault(state.get("baseRefName", ""), [None, set()])
+        if names - known[1]:
+            got = required_checks(self.p, pr)
+            known[0] = known[0] if got is None else got | (known[0] or set())
+            known[1] |= names
+            if got is None and not self.required_said:
+                self.required_said = True
+                self.log(f"{tid}: gh couldn't say which of PR #{pr}'s checks are required (`gh pr checks --required`); "
+                         "any check still running counts as one")
+        return known[0]
+
+    def wait_checks(self, tid, pr, head, names):
+        """A merge held only by required checks still running (`names`): the approved head is kept (`landing`) and the
+        loop merges it again every CHECKS_EVERY minutes, with no worker, critic or review, until the checks end. Logged
+        once; CHECKS_MOST minutes on, or at the run's end (`checks_unfinished`), it fails: the one push. The clock is
+        saved with `landing`: a restart of the same run (a crash, a self-update) goes on counting from the first
+        refusal; a new run starts it over."""
+        with self.lock:
+            first = tid not in self.check_wait
+            wait = self.check_wait.setdefault(tid, {"since": time.time()})
+            wait.update(pr=pr, names=names)
+        if time.time() - wait["since"] >= CHECKS_MOST * 60:
+            with self.lock:
+                self.check_wait.pop(tid, None)
             self.log(f"{tid}: merge refused ({MERGE_STATES['PENDING']} after {CHECKS_MOST:g} min)")
             return self.fail(tid, f"the merge was refused: {MERGE_STATES['PENDING']} after {CHECKS_MOST:g} min; see "
                              f"`gh pr checks {pr}`", head, "they pass")
@@ -1188,7 +1222,6 @@ class Pilot(Desk, Periodic):
             self.checking[tid] = time.time() + CHECKS_EVERY * 60
         self.save()
         if first:
-            names = running_checks(state)
             self.log(f"{tid}: merge waits: PR #{pr}'s required checks are still running ({', '.join(names)}); "
                      f"trying again every {CHECKS_EVERY} min")
 
@@ -1197,6 +1230,7 @@ class Pilot(Desk, Periodic):
         the next run merges it without a worker."""
         for tid in list(self.checking):
             self.checking.pop(tid)
+            self.check_wait.pop(tid, None)
             land = self.landing.get(tid, {})
             self.fail(tid, f"the merge was refused: {MERGE_STATES['PENDING']} when the run ended; the next run "
                       "merges the kept approval",
@@ -1260,7 +1294,8 @@ class Pilot(Desk, Periodic):
         if res is None:
             return False
         if res.returncode:
-            lacks = ": the gh login lacks write access to pull requests (see `gh auth status`)" * ("HTTP 403" in (res.stderr or ""))
+            lacks = (": the gh login lacks write access to pull requests (`gh auth refresh -s repo` gives it, or a "
+                     "token with pull-request write access)") * ("HTTP 403" in (res.stderr or ""))
             self.fail(tid, f"PR #{pr} is a draft and GitHub refused to mark it ready{lacks} ({gh_error(res)})", head)
             return False
         self.log(f"{tid}: PR #{pr} was a draft; marked ready")
@@ -2257,6 +2292,10 @@ class Pilot(Desk, Periodic):
         replan budget, the same dead-session counts (so a ticket on trial is still decided by the next session), and
         the same merges in the final summary. Any other start begins afresh."""
         f = self.p.state / "restart.json"
+        # A merge that waited on its checks is tried again at once, on the clock it began (state.json, as a killed
+        # driver leaves no restart.json); a new run's wait starts over.
+        self.check_wait = {t: w for t, w in self.check_wait.items() if restarted and t in self.landing}
+        self.checking = dict.fromkeys(self.check_wait, time.time())
         if restarted:
             for k, v in load_json(f, {}).items():
                 if k in CARRIED:
