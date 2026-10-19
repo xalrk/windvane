@@ -543,7 +543,7 @@ def cmd_check(a, p):
         sys.exit("check --mem: only a heavy check waits for free memory; this project has heavy_check off "
                  f"({DIR}/config.toml)")
     in_job = bool(os.environ.get(jobs.IN_JOB))
-    if p.cfg["heavy_check"] and os.environ.get(heavy.STOP_AT) and not in_job:
+    if os.environ.get(heavy.STOP_AT) and not in_job:  # a session: past one tool call, its check goes on
         sys.exit(jobs.session_check(p, os.getcwd(), mem, a.lines))
     ok, summary, log = jobs.check(p, os.getcwd(), mem=mem, announce=in_job)
     if ok is False and log:

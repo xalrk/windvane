@@ -679,11 +679,11 @@ def await_(p, name, lines=40, limit=None):
 
 
 def session_check(p, cwd, mem=None, lines=60):
-    """A session's heavy check (`windvane check` with `STOP_AT` set). Its wait for the machine lasts until the
-    session's stop, hours past one tool call's 10 minutes, and a killed call would lose its place in the queue: so
-    it runs as the session's bg job `check` (the running one when there is one, never a second in line) and is
-    awaited as `await` does. Its exit code: the check's own once it ended, else TIMED_OUT, `await check` going on."""
-    outside_sandbox("a heavy check")  # the lock's folder is read-only there, and the job would die with the call
+    """A session's check (`windvane check` with `STOP_AT` set). A check can outlast one tool call's 10 minutes (a
+    heavy one's wait for the machine lasts until the session's stop), and a killed call loses the run and its pass:
+    so it runs as the session's bg job `check` (the running one when there is one, never a second) and is awaited
+    as `await` does. Its exit code: the check's own once it ended, else TIMED_OUT, `await check` going on."""
+    outside_sandbox("a session's check")  # the job would die with the call (and the heavy lock's folder is read-only)
     cwd = top(cwd)  # the job runs where the gate does
     base, head = find_job(p, SESSION_CHECK)[0], gout(cwd, "rev-parse", "--short", "HEAD")
     if not alive(base):
