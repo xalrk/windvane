@@ -52,7 +52,8 @@ class TicketIds(unittest.TestCase):
         self.assertFalse((self.s.root / ".windvane/tickets/T-002.md").exists())
 
     def test_new_asks_no_forge(self):
-        """On github, `new` doesn't look up the open plan's PR (each lookup is a network call): it keeps its ids."""
+        """On github, `new` doesn't look up an unmerged plan branch's PR (each lookup is a network call): it keeps its
+        ids unless closed_plans.json already lists the branch."""
         (self.s.bin / "gh").write_text(f"#!/bin/sh\necho \"$*\" >> {self.s.tmp}/gh.log\necho '[]'\n")
         (self.s.bin / "gh").chmod(0o755)
         cfg = self.s.root / ".windvane/config.toml"
