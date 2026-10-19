@@ -1,6 +1,7 @@
 """`windvane stats`: what the runs cost, from the ledger (tokens per role or ticket, checks, the gh guard's refusals,
 periodic scores), and how the critic's scores spread (`--critic`)."""
 import re
+import shlex
 import sys
 import textwrap
 from collections import Counter
@@ -237,12 +238,19 @@ def idle_stats(rows, logf):
     top = Counter(r.get("ticket") or "no ticket" for r in idle).most_common()
     names = ", ".join(f"{t} ×{n}" if n > 1 else t for t, n in top[:3])
     names += f" and {len(top) - 3} more" if len(top) > 3 else ""
-    names += f"; {plural(asked, 'quick question')} (BLOCKED, not counted)" if asked else ""
+    names += f". Not counted: {plural(asked, 'quick question')} (BLOCKED)" if asked else ""
     note(f"idle worker launches: {len(idle)} (PARTIAL within {IDLE_TURNS} turns), {k(fresh)} fresh in, "
          f"{k(sum(r.get('output') or 0 for r in idle))} out, {share:.0f}% of worker weighted tokens; most: {names}")
-    home = str(Path.home())
-    path = "~" + str(logf)[len(home):] if str(logf).startswith(home + "/") else str(logf)
-    print(f' why: grep "{top[0][0]}: partial" {path}')
+    if top[0][0] != "no ticket":
+        print(f' why: grep "{top[0][0]}: partial" {shell_path(logf)}')
+
+
+def shell_path(f):
+    """`f` as a shell word: under home as `~/...`, for width; quoted in full when it holds a space or the like."""
+    home, f = str(Path.home()), str(f)
+    if f.startswith(home + "/") and shlex.quote(f[len(home):]) == f[len(home):]:
+        return "~" + f[len(home):]
+    return shlex.quote(f)
 
 
 def lost_parts(died, killed):

@@ -49,17 +49,27 @@ class Wasted(unittest.TestCase):
         out = " ".join(self.stats().split())  # the line wraps at 100 columns
         # 20k of the workers' 200k weighted; fresh in 8k + 4k + 5k, out 400; the BLOCKED only counted apart
         self.assertIn(f"idle worker launches: 2 (PARTIAL within {stats.IDLE_TURNS} turns), 17k fresh in, 0k out, "
-                      "10% of worker weighted tokens; most: T-007 ×2; 1 quick question (BLOCKED, not counted)", out)
+                      "10% of worker weighted tokens; most: T-007 ×2. Not counted: 1 quick question (BLOCKED)", out)
         self.assertEqual(out.count("idle worker launches"), 1)
 
     def test_the_line_names_the_grep_that_finds_the_top_tickets_partials(self):
         self.ledger(IDLE + WORKED)
         why = [ln for ln in self.stats().splitlines() if ln.startswith(" why: ")]
         log = self.p.state / "autopilot.log"
-        home = str(Path.home())
-        shown = "~" + str(log)[len(home):] if str(log).startswith(home + "/") else str(log)
-        self.assertEqual(why, [f' why: grep "T-007: partial" {shown}'])
-        self.assertEqual(os.path.expanduser(shown), str(log))
+        self.assertEqual(why, [f' why: grep "T-007: partial" {stats.shell_path(log)}'])
+
+    def test_the_logs_path_is_a_shell_word(self):
+        with mock.patch.object(Path, "home", return_value=Path("/home/u")):
+            self.assertEqual(stats.shell_path(Path("/home/u/.local/state/p/autopilot.log")),
+                             "~/.local/state/p/autopilot.log")
+            self.assertEqual(stats.shell_path(Path("/home/u/my state/autopilot.log")), "'/home/u/my state/autopilot.log'")
+            self.assertEqual(stats.shell_path(Path("/srv/state/autopilot.log")), "/srv/state/autopilot.log")
+
+    def test_no_grep_for_launches_with_no_ticket(self):
+        self.ledger([{**r, "ticket": None} for r in IDLE[::2]] + WORKED)
+        out = self.stats()
+        self.assertIn("most: no ticket ×2", " ".join(out.split()))
+        self.assertNotIn(" why: grep", out)
 
     def test_the_grep_matches_the_drivers_partial_line(self):
         """The command finds a line shaped like the one the driver logs when a worker ends PARTIAL."""
