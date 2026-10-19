@@ -50,11 +50,13 @@ LABEL = (r"([^:\n]+?)[ \t]*:[ \t*_]*(yes|no|-)(?![\w-])[*_]*"
          r"(?:[ \t]*\(([ \t]*out of scope\b[^)]*)\))?[ \t,;:.—-]*(.*)$")
 LABEL_RE = re.compile(BULLET + LABEL, re.I)
 SAID_RE = re.compile(r"^[ \t]*(?:(?:[-*]|\d+\.)[ \t]*)?" + LABEL, re.I)  # bulleted or not: what `labels()` shows
-# A follow-up list's heading ends the Checks block; a bare `Beyond:` is one too, unless it's a bulleted answer to a
-# check or dimension named `beyond` (`- beyond: no, ...`), which would cut off every answer after it (T-194)
-LISTS_RE = re.compile(r"^(?![ \t]*(?:[-*]|\d+\.)[ \t]+[*_`]*beyond[*_`]*:[ \t*_]*(?:yes|no|-)(?![\w-]))"
-                      r"[ \t#*_-]*(?:(?:fix in|beyond) this ticket\b|beyond[*_]*:)", re.I | re.M)
-CHECKS_RE = re.compile(r"^[ \t#*_]*Checks[*_]*:[*_]*[ \t]*\n?", re.I | re.M)
+# A bulleted answer (`- <id>: yes|no|-`) is always an answer, never a heading, whatever word its id is: a check named
+# `beyond` read as the "Beyond this ticket" list cut off every answer after it (T-194), and `* checks: yes` restarted
+# the block
+NOT_ANSWER = r"(?!" + BULLET + r"[*_`]*[\w-]+[*_`]*[ \t]*:[ \t*_]*(?:yes|no|-)(?![\w-]))"
+# A follow-up list's heading ends the Checks block; a bare `Beyond:` is one too
+LISTS_RE = re.compile(r"^" + NOT_ANSWER + r"[ \t#*_-]*(?:(?:fix in|beyond) this ticket\b|beyond[*_]*:)", re.I | re.M)
+CHECKS_RE = re.compile(r"^" + NOT_ANSWER + r"[ \t#*_]*Checks[*_]*:[*_]*[ \t]*\n?", re.I | re.M)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
 DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]
@@ -211,37 +213,15 @@ def shared(lad):
     return {cid: ds for cid, ds in dims.items() if len(ds) > 1}
 
 
-def reply_words():
-    """{word: the reply part it starts} for each word the critic's reply format gives a meaning of its own: the
-    first word of each heading in the reply shape `prompts/CRITIC.md` asks for (`Checks:`, `Fix in this ticket:`,
-    `Beyond this ticket:`, `CRITIC:`, ...) and each key its CRITIC line writes (`fixes=`). Read from the prompt, so a
-    heading added there is covered too. An id that is one of them can read as that part of the reply: a check named
-    `beyond` cut off every answer after it for three review rounds (T-194)."""
-    text = (HOME / "prompts/CRITIC.md").read_text()
-    shape = re.search(r"^## Your reply\n.*?^```\n(.*?)^```", text, re.M | re.S)
-    out = {}
-    for line in shape.group(1).splitlines() if shape else []:
-        if m := re.match(r"([A-Za-z][\w-]*)[A-Za-z \t]*:", line):
-            out.setdefault(m.group(1).lower(), line.split(":", 1)[0] + ":")
-            for key in re.findall(r"([A-Za-z][\w-]*)=", line):
-                out.setdefault(key.lower(), f"{key}=")
-    return out
-
-
 def misread(text, rel):
-    """[(what, fix)] for each id in a ladder scale that parses but will be misread: an id that is a word of the reply
-    format (`reply_words`), two checks of one dimension with one id (the first answer scores both), and two headings
-    with one id (their checks merge into one ladder). Warned at doctor and the run's start, never refused: an id that
-    reads right today keeps working. `rel` is the scale's path, for the fix."""
-    lad, reserved, out = ladder(text), reply_words(), []
+    """[(what, fix)] for each id in a ladder scale that parses but will be misread: two checks of one dimension with
+    one id (the first answer scores both), and two headings with one id (their checks merge into one ladder). Warned
+    at doctor and the run's start, never refused: an id that reads right today keeps working. No id is a reserved
+    word: a bulleted answer is never read as a heading of the reply (`NOT_ANSWER`). `rel` is the scale's path, for
+    the fix."""
+    lad, out = ladder(text), []
     for d, cs in lad.items():
         ids = [cid for _, cid, _ in cs]
-        for kind, x in [("dimension", d)] + [("check", cid) for cid in dict.fromkeys(ids)]:
-            if x in reserved:
-                where = "" if kind == "dimension" else f" (in {d})"
-                out.append((f"critic scale: the {kind} id `{x}`{where} is a word of the critic's reply format "
-                            f"(`{reserved[x]}`), so its answer can read as that part of the reply and leave checks unanswered",
-                            f"rename it in {rel}"))
         for cid in [c for c in dict.fromkeys(ids) if ids.count(c) > 1]:
             out.append((f"critic scale: dimension {d} has {ids.count(cid)} checks named `{cid}`, so one answer "
                         "scores them all", f"rename one in {rel}"))
