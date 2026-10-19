@@ -147,7 +147,7 @@ class Periodic:
         """One periodic session: (its final reply, that plus the files it names), False when it was skipped before it
         started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
         it due, {group: its tickets}, named in its prompt."""
-        from .planner import pending_ids
+        from .planner import free_id
         from .runner import rules
         name, p = e["name"], self.p
         if not self.periodic_fits(e):
@@ -176,7 +176,7 @@ class Periodic:
             self.log(f"{name}: skipped: its prompt {e['prompt']} isn't on {p.upstream}")
             self.periodic_failed(name, f"its prompt {e['prompt']} isn't on {p.upstream}.")
             return False
-        first = int(re.search(r"\d+", Queue(p).next_id(taken_ids(p, cd) | pending_ids(p))).group())
+        first = int(re.search(r"\d+", free_id(p, cd)).group())
         ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + 6)]
         self.handed |= set(ids)
         triage = any(x["then"] == name for x in p.periodic.values())

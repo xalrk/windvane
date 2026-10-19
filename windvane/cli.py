@@ -636,22 +636,27 @@ def cmd_plan(a, p):
 
 
 def cmd_new(a, p):
-    """A ticket file with the id after every ticket this checkout knows: its own HEAD (a worktree's branch can be
-    ahead of the main checkout, where `Queue` runs git), its uncommitted files, and the upstream (merged there but not
-    pulled yet). Created exclusively, so an existing ticket is never overwritten."""
+    """A ticket file with the next free id (`planner.free_id`: this checkout's HEAD and files, the upstream, open
+    plans). No PR is looked up: a desk command answers at once, and a closed plan's ids are only skipped. Created
+    exclusively, so an existing ticket is never overwritten: a `new` that loses a race to another
+    takes the id after the winner's file, and refuses only if that one is taken too."""
     folder = p.root / p.tickets_rel
-    on_disk = [t for f in folder.glob("*.md") if (t := p.norm(f.stem))]
-    head = gout(p.root, "rev-parse", "--verify", "-q", "HEAD")
-    tid = Queue(p, head or p.upstream).next_id([*on_disk, *Queue(p).files])
-    f = folder / f"{tid}.md"
-    text = (HOME / "templates/ticket.md").read_text().replace("<ID>", tid).replace("<title>", " ".join(a.title))
     folder.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(f, "x") as out:
-            out.write(text)
-    except FileExistsError:
-        sys.exit(f"{f} already exists: not overwritten. Run `windvane new` again for the next free id.")
-    print(f)
+    tried = None
+    for _ in range(2):
+        tid = planner.free_id(p, p.root, ask_forge=False)
+        if tid == tried:
+            break
+        f, tried = folder / f"{tid}.md", tid
+        text = (HOME / "templates/ticket.md").read_text().replace("<ID>", tid).replace("<title>", " ".join(a.title))
+        try:
+            with open(f, "x") as out:
+                out.write(text)
+        except FileExistsError:
+            continue
+        print(f)
+        return
+    sys.exit(f"{f} already exists: not overwritten. Run `windvane new` again for the next free id.")
 
 
 def cmd_mode(a, p):

@@ -7,7 +7,7 @@ from pathlib import Path
 from . import actions, critic, login, net, privacy, requests
 from .held import author_ident, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
-from .queue import Queue
+from .queue import Queue, folder_ids, id_after, ref_ids
 from .runner import NO_REQUEST, rules, run_claude
 from .util import edit_json, git, gout, last_match, load_json, log, now, push
 from .worktree import clean_detach, ensure_worktree
@@ -50,21 +50,34 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
         return _plan(p, goal, use_followups, usage, stop_if, merge, max_new)
 
 
-def pending_ids(p):
+def pending_ids(p, ask_forge=True):
     """Ticket ids on unmerged remote `plan-*` and `periodic-*` branches: tickets whose PR is still open have claimed
     them, and so do local ones (a plan whose push was refused, waiting to be pushed by hand). A branch whose PR was
-    closed unmerged frees its ids (its branch is left alone)."""
-    return set(pending_branches(p))
+    closed unmerged frees its ids (its branch is left alone); without `ask_forge`, no PR is looked up and every such
+    branch keeps its ids (a skipped id costs nothing, a reused one collides)."""
+    return set(pending_branches(p, ask_forge))
 
 
-def pending_branches(p):
+def free_id(p, checkout=None, taken=(), ask_forge=True):
+    """The id after every one claimed anywhere, so no two paths that write tickets hand out the same id: the
+    upstream's tickets (merged there, maybe not pulled), `checkout`'s HEAD (a branch ahead of main) and its files (not
+    committed yet), the open plan and periodic branches (`pending_ids`, with `ask_forge`), and `taken` (ids the caller
+    just handed out)."""
+    ids = ref_ids(p, p.upstream) | pending_ids(p, ask_forge) | set(taken)
+    if checkout:
+        head = gout(checkout, "rev-parse", "--verify", "-q", "HEAD")
+        ids |= folder_ids(p, checkout) | (ref_ids(p, head) if head else set())
+    return id_after(p, ids)
+
+
+def pending_branches(p, ask_forge=True):
     """`pending_ids` as {ticket id: the branch it waits on}: a request accepted into a held ticket names its branch."""
     ids = {}
     remote = gout(p.main_root(), "branch", "-r", "--no-merged", p.upstream, "--format=%(refname:short)").split()
     local = gout(p.main_root(), "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split()
     heads = {b: b.removeprefix(f"{p.remote}/") if b in remote else b for b in remote + local}
     heads = {b: name for b, name in heads.items() if name.startswith(("plan-", "periodic-"))}
-    closed = closed_prs(p, set(heads.values()))
+    closed = closed_prs(p, set(heads.values())) if ask_forge else set()
     for b, name in heads.items():
         if name not in closed:
             names = gout(p.main_root(), "ls-tree", "--name-only", b, p.tickets_rel + "/").split()
@@ -149,7 +162,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
         log(p, "plan: can't check out main")
         return 0
     q = Queue(p)
-    first = int(re.search(r"\d+", q.next_id(pending_ids(p))).group())
+    first = int(re.search(r"\d+", free_id(p, cd)).group())
     ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + max_new)]
     notes = critic.followups(p) if use_followups else []
     if not goal and not notes:

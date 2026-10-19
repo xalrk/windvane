@@ -15,7 +15,7 @@ from . import privacy
 from .config import slots
 from .driver import REVIEW_DENY
 from .held import land
-from .planner import pending_ids
+from .planner import free_id
 from .questions import (BLOCK_RE, OPT_RE, blocks, give_answer, note, part, prov_numbers, qkey, remembered, shown,
                         ticket_of, waiting_on)
 from .queue import Queue
@@ -277,10 +277,10 @@ def record(p, answers):
         ensure_worktree(p, cd, setup=False)
         if not clean_detach(p, cd, p.upstream):
             return "couldn't check out main: answers not recorded"
-        q, taken = Queue(p), set(pending_ids(p))
+        taken = set()
         for i, a in enumerate(filed):
             if changed(*a):
-                tid = q.next_id(taken)
+                tid = free_id(p, cd, taken)
                 taken.add(tid)
                 followup(p, cd, tid, *a)
                 filed[i] = (*a, tid)
