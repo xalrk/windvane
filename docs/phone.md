@@ -59,7 +59,7 @@ characters is cut, at a sentence or line end, and the project log keeps all of i
 
 A **Set aside** push says which limit a ticket's run hit and where to change it: the `ticket_hours` time box, its
 max turns (`CLAUDE_CODE_MAX_TURNS` in windvane's environment: windvane passes no `--max-turns`, and the Claude CLI
-has no limit without one), or its dollar budget (windvane sets none either and has no setting for one, so that push only says to split the ticket). The summary lists every set-aside ticket with why, and on its own line the tickets stopped at the
+has no limit without one; a running windvane keeps the value it started with, so set the new one, then start `windvane run` again), or its dollar budget (windvane sets none either and has no setting for one, so that push only says to split the ticket). The summary lists every set-aside ticket with why, and on its own line the tickets stopped at the
 deadline mid-run, which the next run resumes. A `setup` that fails is quoted up to 60 characters; a deadline reached during setup reads
 "deadline reached during setup; nothing ran".
 

@@ -1,7 +1,6 @@
 """`windvane stats`: what the runs cost, from the ledger (tokens per role or ticket, checks, the gh guard's refusals,
 periodic scores), and how the critic's scores spread (`--critic`)."""
 import re
-import shlex
 import sys
 import textwrap
 from collections import Counter
@@ -11,7 +10,7 @@ from pathlib import Path
 from . import critic as critic_mod
 from . import jobs
 from .queue import Queue
-from .util import gout, last_log, now, read_jsonl
+from .util import PARTIAL_LOG, gout, last_log, now, read_jsonl, shell_path
 
 
 # Relative cost of a token by kind, the API's price ratios (cache write 1.25x input, cache read 0.1x, output 5x):
@@ -241,16 +240,12 @@ def idle_stats(rows, logf):
     names += f". Not counted: {plural(asked, 'quick question')} (BLOCKED)" if asked else ""
     note(f"idle worker launches: {len(idle)} (PARTIAL within {IDLE_TURNS} turns), {k(fresh)} fresh in, "
          f"{k(sum(r.get('output') or 0 for r in idle))} out, {share:.0f}% of worker weighted tokens; most: {names}")
-    if top[0][0] != "no ticket":
-        print(f' why: grep "{top[0][0]}: partial" {shell_path(logf)}')
-
-
-def shell_path(f):
-    """`f` as a shell word: under home as `~/...`, for width; quoted in full when it holds a space or the like."""
-    home, f = str(Path.home()), str(f)
-    if f.startswith(home + "/") and shlex.quote(f[len(home):]) == f[len(home):]:
-        return "~" + f[len(home):]
-    return shlex.quote(f)
+    if top[0][0] == "no ticket":
+        return
+    if logf.exists():
+        print(f' why: grep "{PARTIAL_LOG.format(tid=top[0][0])}" {shell_path(logf)}')
+    else:  # a grep would only say "No such file": its partials' reasons are gone with the log
+        print(f" why: no log at {shell_path(logf)} to say why {top[0][0]} stopped partway")
 
 
 def lost_parts(died, killed):
@@ -262,7 +257,8 @@ def lost_parts(died, killed):
 
 
 def k(n):
-    return f"{n / 1000:,.0f}k"
+    """`n` tokens in thousands. Under 1,000, "<1k": a rounded "0k" reads as none spent."""
+    return f"{n / 1000:,.0f}k" if n >= 1000 else "<1k" if n > 0 else "0"
 
 
 def usd(g):

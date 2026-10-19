@@ -45,7 +45,8 @@ from .questions import (answered, desk_answers, drop_answers, give_answer, keys,
                         with_ids)
 from .queue import Queue, branch_depends
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
-from .util import append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl, save_json
+from .util import (PARTIAL_LOG, append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl,
+                   save_json)
 from .worktree import (TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, clear_scrub_stubs, ensure_worktree,
                        guard_pushes, teardown)
 
@@ -92,6 +93,7 @@ SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it read
                   ("request too large", "Split the ticket, or trim what it reads."))
 # What caps a session's turns: windvane passes no --max-turns, and the Claude CLI has no limit of its own without one
 MAX_TURNS = "CLAUDE_CODE_MAX_TURNS"  # an environment variable: windvane's own reaches every session
+NEW_MAX_TURNS = f"A running windvane keeps its {MAX_TURNS}: set the new one, then start `windvane run` again."
 REWRITE = "Rewrite its branch without the secret, as its push says: runs leave it be until then."  # a secret's set-aside fix, for the queue hint
 
 
@@ -570,13 +572,14 @@ class Pilot(Desk, Periodic):
             body = whole(died, error, ". Branch kept, run goes on.", log=logged) + f"\n{why}"
         push(f"Set aside: {self.name(tid)}", body + self.held_line(tid), 4, "warning")
 
-    def set_aside_limit(self, tid, limit, fix):
+    def set_aside_limit(self, tid, limit, fix, then=""):
         """A worker run stopped at a limit of its own (the time box, max turns or budget): the ticket is too big for
-        one run as it stands, so the run goes on without it and the phone says which limit and what to change."""
+        one run as it stands, so the run goes on without it and the phone says which limit and what to change.
+        `then`, on a line of its own so the first still fits a lock screen, is how a change takes effect."""
         held = self.put_aside(tid, f"hit {limit}", fix)
         self.log(f"{tid}: the run hit {limit}; set aside{held}")
         push(f"Set aside: {self.name(tid)}", whole("Hit ", limit, f". {fix} Branch kept.", log=self.log)
-             + self.held_line(tid), 3,
+             + (f"\n{then}" if then else "") + self.held_line(tid), 3,
              "hourglass")
 
     def secret_aside(self, tid, branch, sha, found):
@@ -763,7 +766,7 @@ class Pilot(Desk, Periodic):
                 self.stopped += [tid] * (tid not in self.stopped)
                 self.log(f"{tid}: the worker run was stopped at the deadline")
             elif killed == "max turns":  # out of its own turns or budget: the ticket's doing, like the time box
-                self.set_aside_limit(tid, "its max turns", f"Split it, or raise {MAX_TURNS}.")
+                self.set_aside_limit(tid, "its max turns", f"Split it, or raise {MAX_TURNS}.", NEW_MAX_TURNS)
             elif killed.startswith("max ") or killed == "dollar budget":  # windvane sets no --max-budget-usd: only
                 self.set_aside_limit(tid, f"its {killed}", "Split the ticket.")  # splitting is left to the user
             return
@@ -786,7 +789,7 @@ class Pilot(Desk, Periodic):
             if kept:  # not out of time either: the queue holds it until its job ends, then resumes it
                 return self.log(f"{tid}: held until its kept job {', '.join(repr(b.name) for b in kept)} ends: {rest}")
             self.partials[tid] = self.partials.get(tid, 0) + 1
-            self.log(f"{tid}: partial ({self.partials[tid]}): {rest}")
+            self.log(f"{PARTIAL_LOG.format(tid=tid)} ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
                 held = self.put_aside(tid, f"{self.partials[tid]} runs in a row ran out of time", "Split it.")
                 self.log(f"{tid}: set aside: {self.aside[tid]}{held}")

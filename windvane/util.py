@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -121,6 +122,18 @@ def log(p, msg, echo=True):
     p.state.mkdir(parents=True, exist_ok=True)
     with (p.state / "autopilot.log").open("a") as f:
         f.write(line + "\n")
+
+
+def shell_path(f):
+    """`f` as a shell word: under home as `~/...`, for width; quoted in full when it holds a space or the like."""
+    home, f = str(Path.home()), str(f)
+    if f.startswith(home + "/") and shlex.quote(f[len(home):]) == f[len(home):]:
+        return "~" + f[len(home):]
+    return shlex.quote(f)
+
+
+# The driver's log line for a worker run that ended PARTIAL: `windvane stats` greps for it, so the two stay one text.
+PARTIAL_LOG = "{tid}: partial"
 
 
 def last_log(p, n=1):

@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 from .questions import blocks, part, ticket_of, waiting_on
-from .util import gout
+from .util import gout, shell_path
 
 ANSWERED = "it's answered"  # (a quote can't go in an f-string's braces before Python 3.12)
 PEOPLE = ("the user", "user", "you")  # outside items that stand for someone's answer, not a milestone
@@ -263,7 +263,8 @@ class Queue:
                     else "the next run takes it up again")
             return f"{d} was set aside this run ({aside[d]}){until('it merges')}; {then}"
         if d in run.get("failed", []):
-            return (f"{d} failed this run (the log's `{d}: FAILED` line says why)"
+            return (f"{d} failed this run (the `{d}: FAILED` line in {shell_path(self.p.state / 'autopilot.log')} says "
+                    "why)"
                     f"{until('it merges')}; `windvane retry {d}` puts it back in this run, or the next `windvane run` "
                     "takes it up")
         if d in self.files and (d in blocked or d in self.asked):

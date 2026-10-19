@@ -48,14 +48,15 @@ class Wasted(unittest.TestCase):
         self.ledger(IDLE + WORKED)
         out = " ".join(self.stats().split())  # the line wraps at 100 columns
         # 20k of the workers' 200k weighted; fresh in 8k + 4k + 5k, out 400; the BLOCKED only counted apart
-        self.assertIn(f"idle worker launches: 2 (PARTIAL within {stats.IDLE_TURNS} turns), 17k fresh in, 0k out, "
+        self.assertIn(f"idle worker launches: 2 (PARTIAL within {stats.IDLE_TURNS} turns), 17k fresh in, <1k out, "
                       "10% of worker weighted tokens; most: T-007 ×2. Not counted: 1 quick question (BLOCKED)", out)
         self.assertEqual(out.count("idle worker launches"), 1)
 
     def test_the_line_names_the_grep_that_finds_the_top_tickets_partials(self):
         self.ledger(IDLE + WORKED)
-        why = [ln for ln in self.stats().splitlines() if ln.startswith(" why: ")]
         log = self.p.state / "autopilot.log"
+        log.write_text("")
+        why = [ln for ln in self.stats().splitlines() if ln.startswith(" why: ")]
         self.assertEqual(why, [f' why: grep "T-007: partial" {stats.shell_path(log)}'])
 
     def test_the_logs_path_is_a_shell_word(self):
