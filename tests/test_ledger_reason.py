@@ -108,6 +108,19 @@ class LogRotation(Base):
         self.assertEqual(every[-1][17:], f"line {i + 59:03}")
         self.assertEqual(last_log(self.p)[0][17:], f"line {i + 59:03}")
 
+    def test_writers_past_the_cap_at_once_move_it_once_and_lose_no_line(self):
+        import threading
+        with mock.patch.object(util, "LOG_CAP", 6000):  # 400 lines of 26 bytes: past it once, never twice
+            threads = [threading.Thread(target=lambda t=t: [log(self.p, f"w{t} {i:03}", echo=False)
+                                                            for i in range(100)]) for t in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        every = [ln[17:] for ln in last_log(self.p, None)]
+        self.assertTrue(self.old.exists())
+        self.assertEqual(sorted(every), sorted(f"w{t} {i:03}" for t in range(4) for i in range(100)))
+
     def test_a_long_log_is_read_from_its_end(self):
         with mock.patch.object(util, "LOG_CAP", 10 ** 9):
             self.logf.parent.mkdir(parents=True, exist_ok=True)
