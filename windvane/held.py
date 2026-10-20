@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import time
+from urllib.parse import quote
 
 from . import actions, net, privacy
 from .config import DIR, author
@@ -226,7 +227,7 @@ MERGE_STATES = {"UNKNOWN": "GitHub hadn't worked out whether it can merge", "CON
                 "BLOCKED": "a required check or review blocks it",
                 # what blocks a BLOCKED PR, when its checks and review decision say (`blocked_by`)
                 "FAILED": "a check failed", "REVIEW": "a required review hasn't approved it",
-                "PENDING": "required checks are still running"}
+                "MISSING": "required check{} {} never started on this PR", "PENDING": "required checks are still running"}
 CHECK_FIELDS = "statusCheckRollup,reviewDecision,baseRefName"  # what `blocked_by` reads, in the same `gh pr view` call
 FAILED_CHECKS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 
@@ -267,35 +268,63 @@ def required_checks(p, pr_n):
         return (set(), True) if "no required checks" in err else (None, "unknown flag" in err)
 
 
-def blocked_by(pr, required=None):
-    """What blocks a BLOCKED PR, from its checks and review decision: some of FAILED, REVIEW and PENDING, in that
-    order. Empty when they show nothing (a rule they don't cover, as a required signature), or the PR isn't BLOCKED.
-    Only the `required` checks count when it's known: an optional check running, or failed, beside another block
-    doesn't hold the merge. When it isn't, a check still running on a PR that's otherwise clear is taken for the one
-    that holds it."""
+def base_required(p, base):
+    """The check names `base` requires, from its rulesets and its branch protection, both readable without admin:
+    unlike `gh pr checks --required` they list checks that never started on a PR. None when neither answers."""
+    out, answered = set(), False
+    for path in (f"rules/branches/{quote(base)}", f"branches/{quote(base)}"):
+        res = net.call(["gh", "api", "repos/{owner}/{repo}/" + path], p.main_root())
+        try:
+            got = json.loads(res.stdout) if res.returncode == 0 else None
+        except ValueError:
+            got = None
+        if isinstance(got, list):  # the rules of the rulesets that apply to it
+            out |= {c.get("context") for r in got if isinstance(r, dict) and r.get("type") == "required_status_checks"
+                    for c in (r.get("parameters") or {}).get("required_status_checks") or []}
+        elif isinstance(got, dict):  # the branch, with a summary of its protection
+            out |= set(((got.get("protection") or {}).get("required_status_checks") or {}).get("contexts") or [])
+        answered |= isinstance(got, (list, dict))
+    return out - {None, ""} if answered else None
+
+
+def never_started(pr, expected):
+    """The `expected` checks (`base_required`) with no rollup entry on the PR: their workflow never triggered, so
+    they'd never end. Sorted, for the message."""
+    return sorted(set(expected or ()) - {check_name(c) for c in pr.get("statusCheckRollup") or []})
+
+
+def blocked_by(pr, required=None, expected=()):
+    """What blocks a BLOCKED PR, from its checks and review decision: some of FAILED, REVIEW, MISSING and PENDING, in
+    that order. Empty when they show nothing (a rule they don't cover, as a required signature), or the PR isn't
+    BLOCKED. Only the `required` checks count when it's known: an optional check running, or failed, beside another
+    block doesn't hold the merge. When it isn't, a check still running on a PR that's otherwise clear is taken for the
+    one that holds it. MISSING: one of the base's `expected` checks isn't on the PR at all (`never_started`)."""
     if pr.get("mergeStateStatus") != "BLOCKED" or pr.get("isDraft"):
         return []
-    out = set()
+    out = {"MISSING"} if never_started(pr, expected) else set()
     for c in checks_that_hold(pr, required):
         end = check_end(c)
         out |= {"FAILED"} if end in FAILED_CHECKS else {"PENDING"} if end == "PENDING" else set()
     if pr.get("reviewDecision") in ("REVIEW_REQUIRED", "CHANGES_REQUESTED"):
         out.add("REVIEW")
-    return [k for k in ("FAILED", "REVIEW", "PENDING") if k in out]
+    return [k for k in ("FAILED", "REVIEW", "MISSING", "PENDING") if k in out]
 
 
-def merge_state(pr, stderr, required=None):
+def merge_state(pr, stderr, required=None, expected=()):
     """Why a PR didn't merge, in a few words: its conflict or wait, else the merge state that blocks it (and, when
-    BLOCKED, what blocks it, counting only the `required` checks when known), else gh's own error when GitHub saw
-    nothing in the way."""
+    BLOCKED, what blocks it, counting only the `required` checks when known, and naming the `expected` ones that
+    never started), else gh's own error when GitHub saw nothing in the way."""
     mergeable, status = pr.get("mergeable", ""), pr.get("mergeStateStatus", "")
     if mergeable in ("CONFLICTING", "UNKNOWN"):
         return MERGE_STATES[mergeable]
     if pr.get("isDraft"):  # its state can still read CLEAN
         status = "DRAFT"
-    by = blocked_by(pr, required)
+    by = blocked_by(pr, required, expected)
     if by:  # running checks matter only once nothing else blocks it
-        return " and ".join(MERGE_STATES[k] for k in by if k != "PENDING" or by == ["PENDING"])
+        missing = never_started(pr, expected)
+        said = dict(MERGE_STATES, MISSING=MERGE_STATES["MISSING"].format("s" * (len(missing) > 1),
+                                                                         ", ".join(f"`{n}`" for n in missing)))
+        return " and ".join(said[k] for k in by if k != "PENDING" or by == ["PENDING"])
     return MERGE_STATES.get(status) or cut(" ".join(stderr.split())) or MERGE_STATES["UNKNOWN"]
 
 
