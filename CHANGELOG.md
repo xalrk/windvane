@@ -64,6 +64,10 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- A merge blocked by a required check that never started on the pull request (a `paths` filter, a workflow not on
+  the default branch, Actions off) now fails at once naming it, "required check `ci` never started on this PR", read
+  from the base branch's rulesets and protection, instead of "a required check or review blocks it". The log line
+  for a gh too old to tell required checks apart names the version that can, gh 2.50.0, and `gh --version`.
 - `windvane new` no longer takes an id a running plan or periodic session was handed: the session claims its ids
   in the state dir (`id_claims/`) until its branch is pushed, and a claim whose process is gone is dropped. `new`
   also hands out again the ids of a plan whose pull request `closed_plans.json` already lists as closed, without

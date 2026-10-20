@@ -62,9 +62,15 @@ it with no new worker or review. "Required checks are still running": windvane t
 up to an hour from the first refusal (a driver restarted in the same run keeps counting; a new run starts over), and
 the run ended or the hour ran out first; `windvane status` shows such a wait while it lasts ("merge waits: T-007 on PR
 #7's required checks (build), 12 min of 60"). Only checks the base branch requires count (`gh pr checks 7
---required`); an optional one still running doesn't hold the merge. A gh too old for `--required` can't tell them apart: then
-any running check counts, and the messages say "checks", not "required checks"; a newer gh fixes it. A required check that never starts (its workflow
-didn't trigger) looks like this too, so look at `gh pr checks 7`. "A check failed; see `gh pr checks 7`": re-run a
+--required`); an optional one still running doesn't hold the merge. A gh too old for `gh pr checks --required --json`
+can't tell them apart: then any running check counts, and the messages say "checks", not "required checks"; gh 2.50.0
+or later fixes it (`gh --version` shows yours; [cli.github.com](https://cli.github.com) has the install). "Required
+check `ci` never started on this PR": the base branch's rulesets or protection require `ci`, but nothing ever reported
+it on the PR, so it would never end and windvane doesn't wait for it. Its workflow didn't trigger: a `paths` filter
+that skips the change, a workflow not on the default branch, Actions turned off, or a check renamed since the rule was
+set. Make it run (fix the trigger, or re-run it from the Actions tab), or drop it from the rule, then `windvane retry
+T-007`. When GitHub won't say what the base requires, this shows as "a required check or review blocks it" instead:
+look at the branch's rules on GitHub. "A check failed; see `gh pr checks 7`": re-run a
 flaky check yourself and retry once it passes; if the code is at fault, push a fix to the branch, and the new head
 goes through the worker and review again. "A required review hasn't approved it": once the review is given,
 `windvane retry T-007` merges the kept approval. "It is a draft": `gh pr ready 7`, then retry. "GitHub refused to mark
