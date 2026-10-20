@@ -50,6 +50,11 @@ release on the same day adds a number (`2026.10.9.1`).
   reads, saying the file's size and the cap, before any critic session starts and without counting a revision. It
   used to cut the notes there silently, and the critic failed notes that stopped mid-sentence. The worker rules give
   the limit in characters as well as lines.
+- The critic refusal says the cap counts characters, not bytes (`wc -m`, not `wc -c`). The driver's own critic run
+  on a worker's leftover pack cuts long notes at a line end and ends them with a line telling the critic so, from
+  what size, and not to judge the notes unclear for it.
+- A critic answer written like `- beyond: yes` that ends the Checks block before its last checks (in a scale with
+  no `beyond` check) is logged once, naming the line, since every answer after it counts as no.
 - A merge GitHub holds only for required checks still running is tried again every 2 minutes for up to an hour, with
   no new worker or review, instead of failing the ticket; if they're still running then, or the run ends first, it
   fails saying so, its approval kept. A failed check names `gh pr checks <n>`, a required review says `windvane retry
