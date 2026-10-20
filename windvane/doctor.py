@@ -152,13 +152,36 @@ def workflow_runs(text):
     counted), from the plain YAML GitHub's own examples use: a reading good enough to warn on, without a YAML
     library."""
     lines = [line.rstrip() for line in text.splitlines()]
+    names, counts = _triggers(lines), [_matrix_jobs(job) for job in _jobs(lines)]
+    return [t for t in AUTO_TRIGGERS if t in names], sum(counts) if counts and None not in counts else None
+
+
+def _triggers(lines):
+    """A workflow's `on:` events, inline or as keys."""
     inline, block = _value(lines, "on", 0)
-    names = re.findall(r"[\w-]+", inline) if inline else [re.match(r"-?\s*['\"]?([\w-]*)", line).group(1)
-                                                           for line in _top(block)]
+    return re.findall(r"[\w-]+", inline) if inline else [re.match(r"-?\s*['\"]?([\w-]*)", line).group(1)
+                                                         for line in _top(block)]
+
+
+def _jobs(lines):
+    """Each job's lines, its `id:` line first."""
     _, jobs = _value(lines, "jobs", 0)
     starts = [i for i, line in enumerate(jobs) if _indent(line) == _indent(jobs[0])] + [len(jobs)]
-    counts = [_matrix_jobs(jobs[a:b]) for a, b in zip(starts, starts[1:])]
-    return [t for t in AUTO_TRIGGERS if t in names], sum(counts) if counts and None not in counts else None
+    return [jobs[a:b] for a, b in zip(starts, starts[1:])]
+
+
+def dispatched_checks(text):
+    """The check names a workflow's jobs report (a job's `name:`, else its id; a matrix job adds ` (<values>)`) when
+    `gh workflow run` can start it (it has `workflow_dispatch`): empty otherwise."""
+    lines = [line.rstrip() for line in text.splitlines()]
+    if "workflow_dispatch" not in _triggers(lines):
+        return set()
+    out = set()
+    for job in _jobs(lines):
+        name = _value(job[1:], "name", _indent(job[1]))[0] if len(job) > 1 else ""
+        key = re.match(r"\s*['\"]?([\w-]+)['\"]?\s*:", job[0])  # not a job (YAML this reading doesn't follow): skipped
+        out |= {name.strip("'\"") or key.group(1)} if key else set()
+    return out
 
 
 def ci_warnings(root, p=None):

@@ -110,7 +110,10 @@ the order), and **open** otherwise. `windvane queue` shows all three.
 4. **Reviewer.** A fresh read-only session with the diff, the ticket and the critic's verdict in its prompt. It
    approves or lists changes.
 5. **Merge.** The driver merges `main` into the ticket's head in its own worktree, runs the check again if `main`
-   moved meanwhile, then merges the pull request (forge `github`) or pushes `main` (forge `git`).
+   moved meanwhile, then merges the pull request (forge `github`) or pushes `main` (forge `git`). A PR whose required
+   checks are still running is tried again every two minutes, without a session, and so is one whose required check
+   hasn't shown up yet, for one more pass after the last check ends; one that never does fails the ticket with the
+   `gh workflow run` command that starts it.
 
 Anything sent back (critic points, review changes, a red check, a merge conflict) reaches the ticket's next worker
 run as written feedback. Each kind of send-back spends its own budget, so a flaky check can't use up the reviewer's
