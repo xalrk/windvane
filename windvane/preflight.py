@@ -15,7 +15,7 @@ from . import privacy
 from .config import slots
 from .driver import REVIEW_DENY
 from .held import land
-from .planner import free_id
+from .planner import pick_ids, release_ids
 from .questions import (BLOCK_RE, OPT_RE, blocks, give_answer, note, part, prov_numbers, qkey, remembered, shown,
                         ticket_of, waiting_on)
 from .queue import Queue
@@ -277,20 +277,20 @@ def record(p, answers):
         ensure_worktree(p, cd, setup=False)
         if not clean_detach(p, cd, p.upstream):
             return "couldn't check out main: answers not recorded"
-        taken = set()
-        for i, a in enumerate(filed):
-            if changed(*a):
-                tid = free_id(p, cd, taken)
-                taken.add(tid)
-                followup(p, cd, tid, *a)
-                filed[i] = (*a, tid)
-        f = cd / p.questions_rel
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(file_answers(f.read_text() if f.exists() else "", filed, shown(p)["ids"]))
-        git(cd, "add", "-A", ".windvane")
-        ids = ", ".join(sorted({a[0]["ticket"] for a in filed}))
-        ok, where = land(p, cd, f"answers-{now():%Y%m%d-%H%M%S}", f"Answers at the desk: {ids}",
-                         "\n\n".join(block(*a) for a in filed), close=True)
+        follow = [i for i, a in enumerate(filed) if changed(*a)]
+        try:  # claimed until landed: a `windvane new` meanwhile takes the id after them
+            for i, tid in zip(follow, pick_ids(p, "answers", len(follow), cd) if follow else []):
+                followup(p, cd, tid, *filed[i])
+                filed[i] = (*filed[i], tid)
+            f = cd / p.questions_rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(file_answers(f.read_text() if f.exists() else "", filed, shown(p)["ids"]))
+            git(cd, "add", "-A", ".windvane")
+            ids = ", ".join(sorted({a[0]["ticket"] for a in filed}))
+            ok, where = land(p, cd, f"answers-{now():%Y%m%d-%H%M%S}", f"Answers at the desk: {ids}",
+                             "\n\n".join(block(*a) for a in filed), close=True)
+        finally:
+            release_ids(p, "answers")
         clean_detach(p, cd, p.upstream)
     if ok is None:  # its PR closed: the questions are still on main and saved, to answer again
         typed = '"<your answer>"'

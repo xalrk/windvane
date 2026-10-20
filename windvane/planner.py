@@ -3,6 +3,7 @@ commits, then pushes or lands it."""
 import fcntl
 import os
 import re
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import actions, critic, login, net, privacy, requests
@@ -63,16 +64,50 @@ def pending_ids(p, ask_forge=True):
     return set(pending_branches(p, ask_forge))
 
 
-def free_id(p, checkout=None, taken=(), ask_forge=True, own=None):
+def free_id(p, checkout=None, taken=(), ask_forge=True, own=None, known=None):
     """The id after every one claimed anywhere, so no two paths that write tickets hand out the same id: the
-    upstream's tickets (merged there, maybe not pulled), `checkout`'s HEAD (a branch ahead of main) and its files (not
-    committed yet), the unmerged plan and periodic branches (`pending_ids`), the ids a running plan or periodic
-    session was handed (`claimed_ids`, but `own`'s), and `taken` (ids the caller just handed out)."""
-    ids = ref_ids(p, p.upstream) | pending_ids(p, ask_forge) | claimed_ids(p, own) | set(taken)
-    if checkout:
-        head = gout(checkout, "rev-parse", "--verify", "-q", "HEAD")
-        ids |= folder_ids(p, checkout) | (ref_ids(p, head) if head else set())
-    return id_after(p, ids)
+    upstream's, `checkout`'s HEAD's and the unmerged plan and periodic branches' tickets (`known_ids`, or `known`
+    when the caller counted them before taking `id_lock`), the ticket files in the checkouts (`local_ids`), and
+    `taken` (ids the caller just handed out)."""
+    known = known_ids(p, checkout, ask_forge) if known is None else known
+    return id_after(p, known | local_ids(p, checkout, own) | set(taken))
+
+
+def known_ids(p, checkout=None, ask_forge=True):
+    """The ids on refs: the upstream's tickets (merged there, maybe not pulled), `checkout`'s HEAD (a branch ahead of
+    main) and the unmerged plan and periodic branches (`pending_ids`, which may ask the forge: seconds)."""
+    ids = ref_ids(p, p.upstream) | pending_ids(p, ask_forge)
+    head = gout(checkout, "rev-parse", "--verify", "-q", "HEAD") if checkout else ""
+    return ids | (ref_ids(p, head) if head else set())
+
+
+def local_ids(p, checkout=None, own=None):
+    """The ids only this machine knows, quick to read under `id_lock`: ticket files in the main checkout, this
+    project's root and `checkout` (`windvane new` leaves its ticket uncommitted in the user's checkout, a plan in its
+    own worktree), and the ids a running plan or periodic session was handed (`claimed_ids`, but `own`'s)."""
+    roots = {p.main_root(), Path(p.root)} | ({Path(checkout)} if checkout else set())
+    return set().union(*(folder_ids(p, r) for r in roots)) | claimed_ids(p, own)
+
+
+@contextmanager
+def id_lock(p):
+    """Held while an id is picked and reserved (claimed, or its ticket file created), so two pickers never count the
+    same ids. flock: the kernel releases it when its holder dies, so a killed picker blocks no one."""
+    p.state.mkdir(parents=True, exist_ok=True)
+    with open(p.state / "ids.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def pick_ids(p, name, n, checkout=None, ask_forge=True, own=None, keep=()):
+    """`n` free ids, claimed for session `name` (with `keep`, ids it holds already) in one step under `id_lock`. The
+    refs and the forge are read before the lock, so it's held only while the local files and claims are recounted."""
+    known = known_ids(p, checkout, ask_forge)
+    with id_lock(p):
+        first = int(re.search(r"\d+", free_id(p, checkout, own=own, known=known)).group())
+        ids = [f"{p.prefix}-{i:03d}" for i in range(first, first + n)]
+        claim_ids(p, name, set(ids) | set(keep))
+    return ids
 
 
 def pending_branches(p, ask_forge=True):
@@ -192,9 +227,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
         log(p, "plan: can't check out main")
         return 0
     q = Queue(p)
-    first = int(re.search(r"\d+", free_id(p, cd)).group())
-    ids = [f"{p.prefix}-{n:03d}" for n in range(first, first + max_new)]
-    claim_ids(p, "plan", ids)
+    ids = pick_ids(p, "plan", max_new, cd)
     notes = critic.followups(p) if use_followups else []
     if not goal and not notes:
         log(p, "plan: no goal and no critic follow-ups")
