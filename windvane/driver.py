@@ -1739,19 +1739,21 @@ class Pilot(Desk, Periodic):
         too): one push, and they're dropped only once it went out. One kept past phone.LATE_KEEP is dropped untold, and
         one over an hour old says its age, so an answer from days of ntfy being down doesn't read as new."""
         old = [e for e in self.late if time.time() - e[2] > phone.LATE_KEEP]
-        for e in old:
-            self.log(f"dropped a late answer given {phone.ago(time.time() - e[2])}, its push failing all that time: "
-                     f"{e[0]}")
-        self.late = [e for e in self.late if e not in old]
+        if old:  # saved first: a restart in between can't log a drop twice
+            self.late = [e for e in self.late if e not in old]
+            self.save()
+        for line, _, when in old:
+            key, what = line.split(": ", 1)
+            self.log(f"{key}: your answer from {phone.ago(time.time() - when)} wasn't taken ({what}), and its push "
+                     f"failed for {phone.LATE_KEEP // 86400} days, so it's dropped untold; once its ticket merges, "
+                     f"change it with `windvane answer {key} <letter>`.")
         if phone.late_pass([aged(*e) for e in self.late]):
-            if self.late or old or self.late_failed:
+            if self.late or self.late_failed:
                 self.late, self.late_failed = [], False
                 self.save()
         elif not self.late_failed:  # saved, so a restart in the same failure spell doesn't log it again
             self.log(f"the push of {len(self.late)} late answer(s) failed; trying again on the next pass")
             self.late_failed = True
-            self.save()
-        elif old:
             self.save()
 
     def late_answer(self, key):

@@ -60,9 +60,11 @@ class Age(Kept):
         pl.poll_questions()
         self.assertEqual(self.not_taken()[before:], [], "a week-old answer isn't told as new")
         self.assertEqual(self.kept(), [])
-        self.assertEqual(self.log().count("dropped a late answer given 7 days ago"), 1, self.log()[-500:])
+        said = ("T-001: your answer from 7 days ago wasn't taken (building A (New)), and its push failed for 7 days, so "
+                "it's dropped untold; once its ticket merges, change it with `windvane answer T-001 <letter>`.")
+        self.assertEqual(self.log().count(said), 1, self.log()[-500:])
         pl.poll_questions()
-        self.assertEqual(self.log().count("dropped a late answer"), 1)
+        self.assertEqual(self.log().count("dropped untold"), 1)
 
     def test_a_restart_while_the_push_keeps_failing_logs_it_once(self):
         self.failed_late_answer()
