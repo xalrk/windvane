@@ -85,6 +85,9 @@ NEXT = {
 }
 
 
+NOTES_CAP = 4000  # the characters of notes.md the critic reads
+
+
 def pack_dir(p, tid):
     return p.state / "critic" / tid
 
@@ -92,10 +95,22 @@ def pack_dir(p, tid):
 def pack(p, tid):
     """(notes or None, [image paths], user-facing?)."""
     d = pack_dir(p, tid)
-    notes = (d / "notes.md").read_text()[:4000] if (d / "notes.md").is_file() else None
+    notes = (d / "notes.md").read_text()[:NOTES_CAP] if (d / "notes.md").is_file() else None
     images = sorted(x for x in d.glob("*") if x.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"))[:4]
     facing = not re.match(r"\s*(user|player)-facing:\s*no", notes or "", re.I)
     return notes, images, facing
+
+
+def too_long(p, tid):
+    """Why the pack's notes.md is over the cap, or "". `windvane critic` refuses such a pack before any session starts:
+    a critic shown notes cut mid-sentence fails them as unclear, and the worker pays a revision for text it already
+    wrote. The driver's own run on a worker's leftover pack still reads the first NOTES_CAP characters."""
+    f = pack_dir(p, tid) / "notes.md"
+    size = len(f.read_text()) if f.is_file() else 0
+    if size <= NOTES_CAP:
+        return ""
+    return (f"CRITIC STEP: none. notes.md is {size} characters; the critic reads at most {NOTES_CAP}: shorten it and "
+            f"run `windvane critic {tid}` again.")
 
 
 def history(p, tid):

@@ -588,6 +588,9 @@ def cmd_critic(a, p):
         print(f"CRITIC STEP: pass. The verdict on {stood[:12]} stands: since then you only merged {p.upstream} and "
               "resolved it. Go on to the check.")
         return
+    long = critic_mod.too_long(p, tid)
+    if long:
+        sys.exit(long)
     usage = Usage(p)
     entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage),
                                    retry=critic_retry(p))
