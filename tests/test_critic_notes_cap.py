@@ -60,7 +60,8 @@ class NotesCap(unittest.TestCase):
         self.assertEqual(calls, [], "no critic session for a pack it would cut")
         self.assertTrue(code, "it exits non-zero")
         self.assertEqual(out, f"CRITIC STEP: none. notes.md is 5061 characters; the critic reads at most "
-                              f"{critic.NOTES_CAP}: shorten it and run `windvane critic T-001` again.")
+                              f"{critic.NOTES_CAP} (characters, not bytes: measure with `wc -m`, not `wc -c`): "
+                              f"shorten it and run `windvane critic T-001` again.")
         self.assertEqual(read_jsonl(self.p.state / "critic.jsonl"), [], "no revision, nor a no-verdict line")
 
     def test_a_pack_under_the_cap_reaches_the_critic_whole(self):

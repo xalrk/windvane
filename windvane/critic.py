@@ -29,7 +29,7 @@ from . import net, privacy
 from .config import HOME
 from .phone import cut
 from .runner import plain_error, run_claude
-from .util import append_jsonl, git, gout, load_json, read_jsonl
+from .util import append_jsonl, git, gout, load_json, log, read_jsonl
 
 OLD_RE = re.compile(r"CRITIC: (\d+(?:\.\d+)?)/10 (\S+) fixes=(\d+)[ \t]*(.*)")
 CRITIC_RE = re.compile(r"CRITIC: (\S+) ((?:[\w-]+=(?:\d+(?:\.\d+)?|-)[ \t]+)+?)fixes=(\d+)[ \t]*(.*)")
@@ -95,22 +95,36 @@ def pack_dir(p, tid):
 def pack(p, tid):
     """(notes or None, [image paths], user-facing?)."""
     d = pack_dir(p, tid)
-    notes = (d / "notes.md").read_text()[:NOTES_CAP] if (d / "notes.md").is_file() else None
+    notes = capped_notes((d / "notes.md").read_text()) if (d / "notes.md").is_file() else None
     images = sorted(x for x in d.glob("*") if x.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"))[:4]
     facing = not re.match(r"\s*(user|player)-facing:\s*no", notes or "", re.I)
     return notes, images, facing
 
 
+def capped_notes(text):
+    """The notes the critic reads: whole up to NOTES_CAP, else cut at the last line end that leaves room for a line
+    saying so. `windvane critic` refuses long notes, but the driver's own run on a worker's leftover pack reads them
+    anyway, and a critic shown notes that just stop fails them as unclear: the line tells it the cut is the driver's."""
+    if len(text) <= NOTES_CAP:
+        return text
+    note = (f"\n[The driver cut notes.md here, at a line end: it is {len(text)} characters and the critic reads at most "
+            f"{NOTES_CAP}. The rest isn't shown, so don't judge the notes unclear for ending here.]\n")
+    room = NOTES_CAP - len(note) - 1
+    end = text.rfind("\n", 0, room + 1)
+    return text[:end if end > 0 else room].rstrip() + "\n" + note
+
+
 def too_long(p, tid):
     """Why the pack's notes.md is over the cap, or "". `windvane critic` refuses such a pack before any session starts:
     a critic shown notes cut mid-sentence fails them as unclear, and the worker pays a revision for text it already
-    wrote. The driver's own run on a worker's leftover pack still reads the first NOTES_CAP characters."""
+    wrote. The driver's own run on a worker's leftover pack reads them cut (`capped_notes`). The cap counts characters,
+    and workers measured with `wc -c`, which counts bytes: an arrow or an em dash is three."""
     f = pack_dir(p, tid) / "notes.md"
     size = len(f.read_text()) if f.is_file() else 0
     if size <= NOTES_CAP:
         return ""
-    return (f"CRITIC STEP: none. notes.md is {size} characters; the critic reads at most {NOTES_CAP}: shorten it and "
-            f"run `windvane critic {tid}` again.")
+    return (f"CRITIC STEP: none. notes.md is {size} characters; the critic reads at most {NOTES_CAP} (characters, "
+            f"not bytes: measure with `wc -m`, not `wc -c`): shorten it and run `windvane critic {tid}` again.")
 
 
 def history(p, tid):
@@ -282,17 +296,34 @@ def block(text, lad=None):
     `lad`, an answer-shaped heading (`- Beyond: - add X`) is kept as an answer only when its label names an id in
     the scale (a check named `beyond`, T-194); otherwise it is the list's heading and ends the block, so the
     follow-ups under it answer nothing."""
-    body = (text or "").rsplit("CRITIC:", 1)[0]
-    if m := CHECKS_RE.search(body):
-        body = body[m.end():]
+    body = checks_body(text)
     if not lad:
         return LISTS_RE.split(body, 1)[0].splitlines()
-    out = []
-    for line in body.splitlines():
-        if HEADING_RE.match(line) and not ((m := LABEL_RE.match(line)) and named(lad, m.group(1))):
-            break
-        out.append(line)
-    return out
+    lines = body.splitlines()
+    return lines[:heading_at(lines, lad)]
+
+
+def checks_body(text):
+    """The reply before its CRITIC line, from just after its `Checks:` line when it has one."""
+    body = (text or "").rsplit("CRITIC:", 1)[0]
+    m = CHECKS_RE.search(body)
+    return body[m.end():] if m else body
+
+
+def heading_at(lines, lad):
+    """The index of the first line that heads a follow-up list on the scale `lad` (`block()`), or len(lines)."""
+    return next((i for i, line in enumerate(lines) if HEADING_RE.match(line)
+                 and not ((m := LABEL_RE.match(line)) and named(lad, m.group(1)))), len(lines))
+
+
+def ended_by(text, lad):
+    """The answer-shaped line (`- beyond: yes`) that ended `block()` on the scale `lad` as a follow-up heading, or "".
+    Every answer after it counts as `no`, so a critic that wrote one mid-block fails checks it passed: the log names
+    the line, or the score reads as the critic's alone."""
+    lines = checks_body(text).splitlines()
+    i = heading_at(lines, lad)
+    m = i < len(lines) and LABEL_RE.match(lines[i])
+    return lines[i].strip() if m and m.group(2).lower() in ("yes", "no") else ""
 
 
 def answers(text, lad=None):
@@ -698,6 +729,9 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None):
             f"- {d}.{cid} (rung {r:g}) failed: {q} ({ev})" for d, r, cid, q, ev in block)
     if missing:
         critique += f"\nUnanswered, counted as no: {', '.join(missing)}"
+        if line := ended_by(text, lad):
+            log(p, f"{tid}: the critic's line `{clip(line, 80)}` ended its Checks block as a follow-up heading, so "
+                   f"no answer after it counted: {', '.join(missing)} unanswered, counted as no", echo=False)
     critique += f"\nCRITIC: {tid} {scores} fixes={eff} {gist}"
     entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": min(dims.values()),
              "dims": dims, "fixes": fixes, "effective": eff, "revisions": n, "gist": cut(gist),
