@@ -143,7 +143,7 @@ class ScalePush(unittest.TestCase):
 
 
 class UnansweredStats(unittest.TestCase):
-    def test_stats_counts_unanswered_checks_per_id_top_three(self):
+    def test_stats_names_the_checks_left_unanswered_again_and_again(self):
         s = Sandbox()
         self.addCleanup(s.close)
         p = Project(s.root)
@@ -154,8 +154,9 @@ class UnansweredStats(unittest.TestCase):
                                                     "unanswered": missed})
         with contextlib.redirect_stdout(io.StringIO()) as out:
             stats.critic_stats(argparse.Namespace(last=10, since=None), p)
-        self.assertIn("unanswered checks, counted as no: beyond 3, safe 2, fast 1, 1 more\n", out.getvalue())
-        self.assertEqual(stats.unanswered_line([{"unanswered": []}, {}]), "")
+        self.assertIn("unanswered checks, counted as no (times of the last 4 verdicts): beyond 3; reword or rename it "
+                      "in .windvane/CRITIC.md.\n", out.getvalue())
+        self.assertEqual(stats.unanswered_line(p, [{"unanswered": []}, {}]), "")
 
 
 if __name__ == "__main__":

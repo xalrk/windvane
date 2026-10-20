@@ -55,7 +55,9 @@ SAID_RE = re.compile(r"^[ \t]*(?:(?:[-*]|\d+\.)[ \t]*)?" + LABEL, re.I)  # bulle
 # the block
 NOT_ANSWER = r"(?!" + BULLET + r"[*_`]*[\w-]+[*_`]*[ \t]*:[ \t*_]*(?:yes|no|-)(?![\w-]))"
 # A follow-up list's heading ends the Checks block; a bare `Beyond:` is one too
-LISTS_RE = re.compile(r"^" + NOT_ANSWER + r"[ \t#*_-]*(?:(?:fix in|beyond) this ticket\b|beyond[*_]*:)", re.I | re.M)
+HEADING = r"[ \t#*_-]*(?:(?:fix in|beyond) this ticket\b|beyond[*_]*:)"
+LISTS_RE = re.compile(r"^" + NOT_ANSWER + HEADING, re.I | re.M)
+HEADING_RE = re.compile(HEADING, re.I)  # `block()` with a scale: a heading unless its label is one of the scale's ids
 CHECKS_RE = re.compile(r"^" + NOT_ANSWER + r"[ \t#*_]*Checks[*_]*:[*_]*[ \t]*\n?", re.I | re.M)
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
@@ -217,8 +219,8 @@ def misread(text, rel):
     """[(what, fix)] for each id in a ladder scale that parses but will be misread: two checks of one dimension with
     one id (the first answer scores both), and two headings with one id (their checks merge into one ladder). Warned
     at doctor and the run's start, never refused: an id that reads right today keeps working. No id is a reserved
-    word: a bulleted answer is never read as a heading of the reply (`NOT_ANSWER`). `rel` is the scale's path, for
-    the fix."""
+    word: a bulleted answer naming one of its ids is never read as a heading of the reply (`block()`). `rel` is the
+    scale's path, for the fix."""
     lad, out = ladder(text), []
     for d, cs in lad.items():
         ids = [cid for _, cid, _ in cs]
@@ -258,14 +260,24 @@ def rubric(p, cwd):
     return ladder(f.read_text()) if f.is_file() else {}
 
 
-def block(text):
+def block(text, lad=None):
     """The lines that may answer checks: the Checks block, up to the "Fix in this ticket" / "Beyond this ticket"
     lists after it, so a follow-up never answers a check the block left out, and a reply that puts a list or its
-    verdict first keeps its answers. With no `Checks:` line, the lines above the first list count."""
+    verdict first keeps its answers. With no `Checks:` line, the lines above the first list count. With the scale
+    `lad`, an answer-shaped heading (`- Beyond: - add X`) is kept as an answer only when its label names an id in
+    the scale (a check named `beyond`, T-194); otherwise it is the list's heading and ends the block, so the
+    follow-ups under it answer nothing."""
     body = (text or "").rsplit("CRITIC:", 1)[0]
     if m := CHECKS_RE.search(body):
         body = body[m.end():]
-    return LISTS_RE.split(body, 1)[0].splitlines()
+    if not lad:
+        return LISTS_RE.split(body, 1)[0].splitlines()
+    out = []
+    for line in body.splitlines():
+        if HEADING_RE.match(line) and not ((m := LABEL_RE.match(line)) and named(lad, m.group(1))):
+            break
+        out.append(line)
+    return out
 
 
 def answers(text, lad=None):
@@ -274,10 +286,11 @@ def answers(text, lad=None):
     touch). With the scale `lad`, each label is read by what it names in it (`named`); without, a check may be
     named `safe`, `works.safe`, `5 safe` or `works 5 safe`. The first answer to an id wins: the Checks block comes
     first, and a later follow-up line that happens to read `safe: no ...` mustn't overturn it. Only `block()`'s
-    bulleted lines count. An id two dimensions share is keyed (dimension, id): a label naming the dimension answers
-    that one, the id alone every one not answered yet (T-116)."""
+    bulleted lines count, and with a scale only those naming one of its ids (`ignored()` lists the rest). An id two
+    dimensions share is keyed (dimension, id): a label naming the dimension answers that one, the id alone every one
+    not answered yet (T-116)."""
     out, both = {}, shared(lad) if lad else {}
-    for line in block(text):
+    for line in block(text, lad):
         m = LABEL_RE.match(line) if lad else ANSWER_RE.match(line)
         key = m and (named(lad, m.group(1)) if lad else m.group(1).lower())
         if key:
@@ -291,6 +304,14 @@ def answers(text, lad=None):
             else:
                 out.setdefault(key, got)
     return out
+
+
+def ignored(text, lad):
+    """The labels of the Checks block's answer lines that name nothing in the scale `lad`: they answer nothing, and
+    the log names them once per verdict, so a check the critic renamed shows as what it wrote, not only as
+    unanswered."""
+    return list(dict.fromkeys(m.group(1).strip() for line in block(text, lad)
+                              if (m := LABEL_RE.match(line)) and not named(lad, m.group(1))))
 
 
 def labels(text):
@@ -660,6 +681,7 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None):
              "step": step(p, dims, eff, n, floor=next(iter(lad.values()))[0][0]),
              "critique": critique, "scale": scale(p, cwd), "answers": said,
              "failed": [cid for _, _, cid, _, _ in block], "scoped": scoped, "unanswered": missing,
+             "ignored": ignored(text, lad),
              **(saved or {})}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique

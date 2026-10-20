@@ -170,10 +170,12 @@ and never writes a number: a dimension's score is its highest rung whose checks 
 `yes`, and the ticket's is the lowest dimension. So give every ladder a 10 rung, reachable by a good ticket: one
 that stops at 8 holds every ticket at 8 or under (`overview` and `stats --critic` say so). Pushes and the run's
 summary show a ticket's first score beside its final one (`2→8`): with the pass mark at 8, the final one alone says
-little. A check left unanswered counts as `no`, the log names it, and `stats --critic` counts the ids left
-unanswered most. No word is reserved for an id (a bulleted `- beyond: yes` is always an answer, never a heading of
-the reply), but don't give two checks of one dimension, or two dimensions, the same id: `doctor` and the run's start
-warn of each, and the first run on such a scale pushes it. (A scale without rungs still works the old way, the critic writing the numbers; `overview` says how
+little. A check left unanswered counts as `no` and the log names it; an id left unanswered in 3 of the last 10
+verdicts shows in `overview` and `stats --critic`. An answer counts only when its label names an id in the scale
+(the log names any other), so no word is reserved for an id: a bulleted `- beyond: yes` answers a check named
+`beyond`, and is the "Beyond" list's heading otherwise. Don't give two checks of one dimension, or two dimensions,
+the same id: `doctor` and the run's start warn of each, and the first run on such a scale pushes the first warning
+(`… (1 more: windvane doctor lists them)` when there are more). (A scale without rungs still works the old way, the critic writing the numbers; `overview` says how
 to convert it.)
 
 **The verdict** splits its points into "Fix in this ticket" and "Beyond this ticket". The critic never sees the pass

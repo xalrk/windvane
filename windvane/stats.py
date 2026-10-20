@@ -364,7 +364,7 @@ def critic_stats(a, p):
     for t, rs in c["tickets"]:
         print(f"  {t:8} {' → '.join(g(r['score']) for r in rs):14} {rs[-1].get('step', '')}")
     no_verdicts(p, recs, since)
-    for line in (shared_line(p, lad), unanswered_line(recs), critic_mod.ceiling_line(p, lad)):
+    for line in (shared_line(p, lad), unanswered_line(p, recs), critic_mod.ceiling_line(p, lad)):
         if line:
             print(line)
     rates = critic_mod.rates(recs, a.last)
@@ -438,13 +438,17 @@ def failed_tickets(p):
     return failed | {t for t, what in old.items() if what == "FAILED:"}
 
 
-def unanswered_line(recs):
-    """The check ids the critic's replies left unanswered most (counted as no), top three: an id the driver misreads
-    (a check named `beyond` once read as the "Beyond this ticket" list) shows as one id piling up here."""
-    n = Counter(cid for r in recs for cid in r.get("unanswered") or [])
+def unanswered_line(p, recs):
+    """The check ids the critic's replies left unanswered most (counted as no), top three, by the rule `overview`
+    and `doctor` use (`critic.unanswered`), so all three name the same ids: an id the driver misreads (a check named
+    `beyond` once read as the "Beyond this ticket" list) shows as one id piling up here."""
+    n = critic_mod.unanswered(recs)
+    if not n:
+        return ""
     more = f", {len(n) - 3} more" if len(n) > 3 else ""
-    return ("unanswered checks, counted as no: " + ", ".join(f"{cid} {k}" for cid, k in n.most_common(3)) + more
-            if n else "")
+    return (f"unanswered checks, counted as no (times of the last {n[0][2]} verdicts): "
+            + ", ".join(f"{cid} {k}" for cid, k, _ in n[:3]) + f"{more}; reword or rename "
+            f"{'it' if len(n) == 1 else 'them'} in {p.rubric_rel}.")
 
 
 def shared_line(p, lad):
