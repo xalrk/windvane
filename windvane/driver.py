@@ -1203,10 +1203,11 @@ class Pilot(Desk, Periodic):
                     need, expected = self.required_of(tid, pr, state), self.expected_of(state)
                     why = merge_state(state, res.stderr or res.stdout, need, expected)
                     by = blocked_by(state, need, expected)
-                    if sha != approved and "MISSING" in by and set(by) <= {"MISSING", "PENDING"}:  # pushed just now:
-                        by = ["PENDING"]  # its checks may not have queued yet: a pass before one never started
+                    if "MISSING" in by and set(by) <= {"MISSING", "PENDING"} and (
+                            sha != approved or running_checks(state)):  # a head pushed just now, or any check (an
+                        by = ["PENDING"]  # optional one too) still running that a `needs:` job may wait on: not yet
                     if by == ["PENDING"]:  # clears by itself: tried again on a later pass, with no session
-                        missing = never_started(state, expected)
+                        missing = [f"{n}, not started yet" for n in never_started(state, expected)]
                         return self.wait_checks(tid, pr, (branch, sha), running_checks(state, need) + missing,
                                                 need is not None or bool(missing))
                     if why in STUCK or by:  # no retry clears it: fail now, saying why and what to look at

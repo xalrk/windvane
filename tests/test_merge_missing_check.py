@@ -1,7 +1,7 @@
 """A merge blocked by a required check that never started on the PR (a path filter, a workflow off the default
 branch, Actions off) fails at once naming it, from the base's rulesets or branch protection, instead of the generic
-"a required check or review blocks it"; a required check still running waits as before, and a gh too old to tell
-required checks apart says which version does."""
+"a required check or review blocks it", once no check it may wait on (a `needs:` job) is still running; a required
+check still running waits as before, and a gh too old to tell required checks apart says which version does."""
 import json
 import re
 import sys
@@ -23,7 +23,8 @@ from helpers import Sandbox  # noqa: E402
 # test_merge_wait_restart's fake gh, with the base's required checks read through `gh api`: the state dir's `rules` (a
 # JSON list of names) answers the rulesets' call and `protection` the branch's; with no such file the call fails, as
 # one GitHub refuses does. `unknown` (a count) refuses that many merges with GitHub not yet sure it can merge, as it
-# is just after a push.
+# is just after a push. `later` ({"in": n, "checks": [...]}) gives the PR that rollup after n refused merges, and lifts
+# `held`: a job that only starts once another ends.
 GH = GH.replace('''"mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED" if blocked else "CLEAN",''', '''**unknown_view(),''').replace(
     """if args[:2] == ["pr", "list"]:""", """def unknown_view():
     n = int(read("unknown", "0"))
@@ -43,10 +44,20 @@ elif args[0] == "api" and "/branches/" in args[1]:
         sys.exit("gh: Branch not protected (HTTP 404)")
     print(json.dumps({{"name": "main", "protection": {{"enabled": True, "required_status_checks": {{
         "enforcement_level": "non_admins", "contexts": json.loads(read("protection"))}}}}}}))
-elif args[0] == "api" and "timeline" in args[2]:""")
+elif args[0] == "api" and "timeline" in args[2]:""").replace("""    if blocked:
+        for name, then in""", """    if blocked and (st / "later").exists():
+        later = json.loads(read("later"))
+        later["in"] -= 1
+        (st / "later").write_text(json.dumps(later))
+        if later["in"] == 0:
+            (st / "checks").write_text(json.dumps(later["checks"]))
+            (st / "held").unlink(missing_ok=True)
+    if blocked:
+        for name, then in""", 1)
 
 CI = {"__typename": "CheckRun", "name": "ci", "status": "IN_PROGRESS", "conclusion": ""}
 CI_PASSED = dict(CI, status="COMPLETED", conclusion="SUCCESS")
+TEST_PASSED = dict(CI_PASSED, name="test")
 LINT = {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS"}
 
 
@@ -132,15 +143,25 @@ class MergeMissingCheck(unittest.TestCase):
         self.assertNotIn("never started", self.log())
         self.assertEqual(len(self.gh_calls("api repos/{owner}/{repo}/rules/branches/")), 1)  # once a run per base
 
+    def test_a_required_job_not_started_behind_a_running_check_waits_and_merges_once_it_passes(self):
+        later = json.dumps({"in": 2, "checks": [CI_PASSED, TEST_PASSED]})  # `test` needs `ci`: it starts once ci ends
+        pilot = self.run_pilot(checks=json.dumps([CI]), rules='["ci", "test"]', required='["ci", "test"]', held="",
+                               later=later)
+        self.assertEqual((pilot.failed, pilot.merged), ([], ["T-001"]))
+        self.assertIn("T-001: merge waits: PR #7's required checks are still running (ci, test, not started yet)",
+                      self.log())
+        self.assertNotIn("never started", self.log())
+
     def test_rules_github_wont_give_fall_back_to_the_generic_refusal(self):
         pilot = self.run_pilot(checks=json.dumps([LINT]), required="[]", held="")
         self.assertEqual((pilot.failed, len(self.gh_calls("pr merge 7"))), (["T-001"], 1))
         self.assertIn("T-001: FAILED: the merge was refused: a required check or review blocks it", self.log())
         self.assertNotIn("never started", self.log())
 
-    def test_an_old_gh_says_which_version_tells_required_checks_apart_and_a_missing_one_still_fails_at_once(self):
-        pilot = self.run_pilot(checks=json.dumps([PREVIEW]), rules='["ci"]', held="")
-        self.assertEqual((pilot.failed, len(self.gh_calls("pr merge 7"))), (["T-001"], 1))
+    def test_an_old_gh_says_which_version_tells_required_checks_apart_and_a_missing_one_fails_once_all_end(self):
+        pilot = self.run_pilot(checks=json.dumps([PREVIEW]), rules='["ci"]', held="", clear="2")
+        self.assertEqual((pilot.failed, len(self.gh_calls("pr merge 7"))), (["T-001"], 2))
+        self.assertIn("T-001: merge waits: PR #7's required checks are still running (preview, ci, not started yet)", self.log())
         self.assertIn("T-001: gh couldn't say which of PR #7's checks are required (`gh pr checks --required`); any "
                       "check still running counts as one; gh 2.50.0 or later (`gh pr checks --required --json`) "
                       "tells them apart: `gh --version` shows yours", self.log())
@@ -153,7 +174,7 @@ class MergeMissingCheck(unittest.TestCase):
         (self.state / "held").write_text("")
         pilot.integrate("T-001", "t-001-work", sha)
         self.assertEqual((pilot.failed, pilot.merged), ([], []))
-        self.assertIn("T-001: merge waits: PR #7's required checks are still running (ci)", self.log())
+        self.assertIn("T-001: merge waits: PR #7's required checks are still running (ci, not started yet)", self.log())
         head = pilot.landing["T-001"]
         self.assertNotEqual(head["sha"], sha)  # the pushed resolution
         (self.state / "checks").write_text(json.dumps([CI_PASSED]))  # Actions queued it, and it passed

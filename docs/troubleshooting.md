@@ -64,19 +64,24 @@ ended or the hour ran out first; `windvane status` shows such a wait while it la
 required checks (build), 12 min of 60"). Only checks the base branch requires count (`gh pr checks 7 --required`); an
 optional one still running doesn't hold the merge. A gh too old for `gh pr checks --required --json` can't tell them
 apart: then any running check counts, and the messages say "checks", not "required checks"; gh 2.50.0 or later fixes it
-(`gh --version` shows yours; [cli.github.com](https://cli.github.com) has the install). "Required check `ci` never
-started on this PR": the base branch's rulesets or protection require `ci`, but nothing ever reported it on the PR, so
-it would never end and windvane doesn't wait for it (a head windvane pushed just before the merge, as a renumbering,
-gets one more try first). Its workflow didn't trigger: a `paths` filter that skips the change, a workflow not on the
-default branch, Actions turned off, or a check renamed since the rule was set. Have it report on the PR's head (a
-workflow with `workflow_dispatch` can be started on the branch by hand) or drop it from the rule, then `windvane retry
-T-007`; a commit that fixes its trigger is a new head, which goes through the worker and review again. When GitHub
-won't say what the base requires, this shows as "a required check or review blocks it" instead: look at the branch's
-rules on GitHub. "A check failed; see `gh pr checks 7`": re-run a flaky check yourself and retry once it passes; if the
+(`gh --version` shows yours; [cli.github.com](https://cli.github.com) has the install). "A check failed; see `gh pr
+checks 7`": re-run a flaky check yourself and retry once it passes; if the
 code is at fault, push a fix to the branch, and the new head goes through the worker and review again. "A required
 review hasn't approved it": once the review is given, `windvane retry T-007` merges the kept approval. "It is a draft":
 `gh pr ready 7`, then retry. "GitHub refused to mark it ready: the gh login lacks write access to pull requests": run
 `gh auth refresh -s repo` (or log `gh` in with a token that has pull-request write access), then retry.
+
+**"the merge was refused: required check `ci` never started on this PR".**
+The base branch's rulesets or protection require `ci`, but nothing ever reported it on the PR. GitHub adds a check to
+the PR only once its job starts, so while any other check is still running (`ci` may be a `needs:` job waiting on it)
+windvane waits as for a running one ("ci, not started yet"), up to the same hour; a head windvane pushed just before
+the merge, as a renumbering, gets one more try too. Once nothing is running and `ci` still isn't there, it would never
+end, so the merge fails at once. Its workflow didn't trigger: a `paths` filter that skips the change, a workflow not
+on the default branch, Actions turned off, or a check renamed since the rule was set. Have it report on the PR's head
+(a workflow with `workflow_dispatch` can be started on the branch by hand) or drop it from the rule, then `windvane
+retry T-007`; a commit that fixes its trigger is a new head, which goes through the worker and review again. When
+GitHub won't say what the base requires, this shows as "a required check or review blocks it" instead: look at the
+branch's rules on GitHub.
 
 **The run paused (`paused ... Resuming at 14:00`).**
 Claude's 5-hour usage reached `cap`. It resumes by itself when the window resets. Raise `cap` (or `run --cap`) to
