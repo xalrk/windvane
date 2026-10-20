@@ -204,7 +204,7 @@ def session_stats(a, p, rows, swept=0, checks=(), refusals=(), awaits=()):
         lost, total = sum(g["lost_w"] for g in agg.values()), sum(g["w"] for g in agg.values())
         print(f"died or killed: {plural(died + killed, 'run')} ({lost_parts(died, killed)}), "
               f"{k(lost)} weighted tokens, {100 * lost / max(1, total):.0f}% of all")
-    idle_stats(rows, p.state / "autopilot.log")
+    idle_stats(rows, p)
     orphans(swept)
     guard_stats(refusals, a.by)
     est = sum(g["no_usd"] for g in agg.values())
@@ -221,10 +221,10 @@ def session_stats(a, p, rows, swept=0, checks=(), refusals=(), awaits=()):
              "starts with and each turn re-reads.)")
 
 
-def idle_stats(rows, logf):
+def idle_stats(rows, p):
     """Worker launches that ended PARTIAL within IDLE_TURNS: each paid a worker's start-up tokens for no work. A
     quick BLOCKED is a worker asking a product question, its job, so it's only counted apart. The ticket with the
-    most gets the grep that finds its partials in `logf`, on its own line so the command never wraps. Rows from
+    most gets a command that says why they stopped (why_partial), on its own line so it never wraps. Rows from
     before the ledger kept `result` don't count. No line when there were none."""
     workers = [r for r in rows if r.get("role") == "worker"]
     quick = [r for r in workers if (r.get("turns") or 0) <= IDLE_TURNS]
@@ -240,12 +240,39 @@ def idle_stats(rows, logf):
     names += f". Not counted: {plural(asked, 'quick question')} (BLOCKED)" if asked else ""
     note(f"idle worker launches: {len(idle)} (PARTIAL within {IDLE_TURNS} turns), {k(fresh)} fresh in, "
          f"{k(sum(r.get('output') or 0 for r in idle))} out, {share:.0f}% of worker weighted tokens; most: {names}")
-    if top[0][0] == "no ticket":
-        return
-    if logf.exists():
-        print(f' why: grep "{PARTIAL_LOG.format(tid=top[0][0])}" {shell_path(logf)}')
-    else:  # a grep would only say "No such file": its partials' reasons are gone with the log
-        print(f" why: no log at {shell_path(logf)} to say why {top[0][0]} stopped partway")
+    if top[0][0] != "no ticket":
+        print(f" why: {why_partial(p, top[0][0], idle)}")
+
+
+def why_partial(p, tid, idle):
+    """Where the reason `tid`'s quick partials stopped still is, as a command: the log's grep only when the log holds
+    such a line (after a rotation, or with `--days` reaching rows older than the log, it would print nothing), else
+    the RESULT line of its latest idle run's transcript (`runs/`, pruned after some days), else the commits its
+    branch adds. With none of them left, says so rather than naming a command that finds nothing."""
+    logf, needle = p.state / "autopilot.log", PARTIAL_LOG.format(tid=tid)
+    if log_has(logf, needle):
+        return f'grep "{needle}" {shell_path(logf)}'
+    gone = f"the log no longer has {tid}'s partials" if logf.exists() else f"no log at {shell_path(logf)}"
+    runs = [p.state / "runs" / r["stream"] for r in idle if r.get("ticket") == tid and r.get("stream")]
+    if (f := next((f for f in reversed(runs) if f.is_file()), None)):
+        # [^"\]: the line ends where its JSON string does, or at its escaped newline; fish reads the quotes alike
+        return f"""{gone}; its last idle run's: grep -o 'RESULT: PARTIAL[^"\\]*' {shell_path(f)} | tail -1"""
+    try:
+        branches = Queue(p).wip.get(tid)
+    except Exception:  # no remote yet
+        branches = None
+    if branches:
+        return f"{gone}, nor its transcripts; its branch's commits: git log {p.upstream}..{p.remote}/{branches[0]}"
+    return f"{gone}, nor its transcripts, and {tid} has no branch left to say why"
+
+
+def log_has(f, needle):
+    """Whether a line of `f` holds `needle`, read a line at a time and stopped at the first: the log only grows."""
+    try:
+        with open(f, errors="replace") as fh:
+            return any(needle in line for line in fh)
+    except OSError:
+        return False
 
 
 def lost_parts(died, killed):

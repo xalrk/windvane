@@ -47,7 +47,8 @@ class LogHints(unittest.TestCase):
     def test_a_missing_log_says_so_instead_of_a_grep(self):
         out = self.stats()
         self.assertFalse(self.log.exists())
-        self.assertIn(f" why: no log at {shell_path(self.log)} to say why T-007 stopped partway", out)
+        self.assertIn(f" why: no log at {shell_path(self.log)}, nor its transcripts, and T-007 has no branch left to "
+                      "say why", out)
         self.assertNotIn("grep", out)
 
     def test_under_a_thousand_tokens_is_not_0k(self):
