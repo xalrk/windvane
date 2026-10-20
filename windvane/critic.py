@@ -109,8 +109,8 @@ def too_long(p, tid):
     size = len(f.read_text()) if f.is_file() else 0
     if size <= NOTES_CAP:
         return ""
-    return (f"notes.md is {size} characters; the critic reads at most {NOTES_CAP}: shorten it and run "
-            f"`windvane critic {tid}` again.")
+    return (f"CRITIC STEP: none. notes.md is {size} characters; the critic reads at most {NOTES_CAP}: shorten it and "
+            f"run `windvane critic {tid}` again.")
 
 
 def history(p, tid):
