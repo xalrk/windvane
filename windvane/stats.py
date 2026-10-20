@@ -247,8 +247,8 @@ def idle_stats(rows, p):
 def why_partial(p, tid, idle):
     """Where the reason `tid`'s quick partials stopped still is, as a command: the log's grep only when the log holds
     such a line (after a rotation, or with `--days` reaching rows older than the log, it would print nothing), else
-    the RESULT line of its latest idle run's transcript (`runs/`, pruned after some days), else its branch's commits.
-    With none of them left, says so rather than naming a command that finds nothing."""
+    the RESULT line of its latest idle run's transcript (`runs/`, pruned after some days), else the commits its
+    branch adds. With none of them left, says so rather than naming a command that finds nothing."""
     logf, needle = p.state / "autopilot.log", PARTIAL_LOG.format(tid=tid)
     if log_has(logf, needle):
         return f'grep "{needle}" {shell_path(logf)}'
@@ -262,7 +262,7 @@ def why_partial(p, tid, idle):
     except Exception:  # no remote yet
         branches = None
     if branches:
-        return f"{gone}, nor its transcripts; its branch's commits: git log {p.remote}/{branches[0]}"
+        return f"{gone}, nor its transcripts; its branch's commits: git log {p.upstream}..{p.remote}/{branches[0]}"
     return f"{gone}, nor its transcripts, and {tid} has no branch left to say why"
 
 

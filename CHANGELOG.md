@@ -66,7 +66,7 @@ release on the same day adds a number (`2026.10.9.1`).
 ### Fixed
 - `windvane stats`' idle-launch hint prints the log's grep only when the log still has the ticket's partial lines.
   After a rotation, or with `--days` reaching further back, it says so and gives a command that finds the reason where
-  it still is: the RESULT line in the ticket's latest quick run's transcript, else its branch's commits.
+  it still is: the RESULT line in the ticket's latest quick run's transcript, else the commits its branch adds.
 - A merge blocked by a required check that never started on the pull request (a `paths` filter, a workflow not on
   the default branch, Actions off) now fails naming it, "required check `ci` never started on this PR", read from the
   base branch's rulesets and protection, instead of "a required check or review blocks it". While any other check

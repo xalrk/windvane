@@ -85,10 +85,11 @@ class IdleLog(unittest.TestCase):
         self.s.git("checkout", "-q", "main")
         why = self.why()
         self.assertTrue(why.startswith(f"no log at {stats.shell_path(self.logf)}, nor its transcripts; its branch's "
-                                       "commits: git log origin/t-007-thing"), why)
+                                       "commits: git log origin/main..origin/t-007-thing"), why)
         res = self.run_cmd(why.split("commits: ", 1)[1])
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("WIP: half of T-007", res.stdout)
+        self.assertNotIn("init", res.stdout)  # only what the branch adds
 
     def test_nothing_left_says_so(self):
         self.logf.write_text("01:00 T-006: partial (1): another ticket\n")
