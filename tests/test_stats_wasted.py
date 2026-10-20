@@ -55,7 +55,7 @@ class Wasted(unittest.TestCase):
     def test_the_line_names_the_grep_that_finds_the_top_tickets_partials(self):
         self.ledger(IDLE + WORKED)
         log = self.p.state / "autopilot.log"
-        log.write_text("")
+        log.write_text("01:00 T-007: partial (1): started past its wrap-up\n")
         why = [ln for ln in self.stats().splitlines() if ln.startswith(" why: ")]
         self.assertEqual(why, [f' why: grep "T-007: partial" {stats.shell_path(log)}'])
 

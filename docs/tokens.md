@@ -95,8 +95,10 @@ The `died or killed` line is what outages, crashes and hung sessions cost: their
 of all. `idle worker launches` counts worker runs that ended PARTIAL within 8 turns, having done no work (started past
 their wrap-up, say), with their tokens, share of worker spend and the tickets that had most; none, no line. Quick
 BLOCKED runs are workers asking a product question, so they're only named apart (`Not counted: 1 quick question`), not
-in the tokens. A ` why: grep "T-035: partial" ~/.local/state/…/autopilot.log` line follows: the driver's log lines that
-say why the top ticket's runs stopped. `orphaned process groups killed: N` follows when a run killed process groups a
+in the tokens. A ` why: grep "T-035: partial" ~/.local/state/…/autopilot.log` line follows when the log still holds
+them: the driver's log lines that say why the top ticket's runs stopped. When it doesn't (it rotated, or `--days`
+reaches further back), the line says so and names where the reason still is: the RESULT line of the ticket's latest
+quick run's transcript in `runs/`, else its branch's commits (`git log origin/t-035-…`). `orphaned process groups killed: N` follows when a run killed process groups a
 dead driver's sessions left running (the ledger's `swept` rows); without any, there's no line. `gh guard refused: N
 workflow starts` counts the times workers tried to start, re-run or enable a workflow past `windvane ci` (the ledger's
 `gh-refused` rows; `--by ticket` adds the ticket that tried most); none, no line.
