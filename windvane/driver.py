@@ -970,7 +970,7 @@ class Pilot(Desk, Periodic):
         if last.get("unanswered"):
             self.log(f"{tid}: the critic left {', '.join(last['unanswered'])} unanswered (counted as no)")
         if last.get("ignored"):
-            self.log(f"{tid}: the critic answered {', '.join(last['ignored'])}, not in {self.p.rubric_rel}: ignored")
+            self.log(critic.ignored_note(self.p, tid, last["ignored"]))
         if last["step"] in ("revise", "rethink"):
             self.feedback[tid] = (f"The critic scored your head {score:g}/10 ({last['step']}). Fix its failed checks "
                                   f"and \"Fix in this ticket\" points, refresh the pack and run `windvane critic {tid}` again:\n"

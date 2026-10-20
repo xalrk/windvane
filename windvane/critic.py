@@ -314,6 +314,14 @@ def ignored(text, lad):
                               if (m := LABEL_RE.match(line)) and not named(lad, m.group(1))))
 
 
+def ignored_note(p, tid, said):
+    """The log's one line on a verdict's `ignored()` labels: what was dropped and the fix if it keeps happening."""
+    many = len(said) > 1
+    return (f"{tid}: ignored the critic's answer{'s' * many} {', '.join(f'`- {x}:`' for x in said)}, which "
+            f"name{'' if many else 's'} no check in {p.rubric_rel}; if it keeps writing {'them' if many else 'it'}, "
+            f"rename the check it meant to that word.")
+
+
 def labels(text):
     """The labels of the answer-shaped lines in the Checks block, matched to the scale or not: what a no-verdict
     message shows, so the worker sees how the critic wrote them."""

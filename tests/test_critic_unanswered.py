@@ -108,6 +108,11 @@ class OnlyScaleIds(unittest.TestCase):
         entry, _ = critic.climbed(p, "T-001", s.root, "HEAD", lad, CHECKS + "- failure: yes\nCRITIC: T-001 fixes=0 ok",
                                   0, "ok", 1)
         self.assertEqual((entry["ignored"], entry["unanswered"]), (["failure"], ["failures"]))
+        self.assertEqual(critic.ignored_note(p, "T-001", entry["ignored"]),
+                         "T-001: ignored the critic's answer `- failure:`, which names no check in "
+                         ".windvane/CRITIC.md; if it keeps writing it, rename the check it meant to that word.")
+        self.assertIn("answers `- failure:`, `- speed:`, which name no check",
+                      critic.ignored_note(p, "T-001", ["failure", "speed"]))
 
 
 class ScalePushSuffix(unittest.TestCase):
