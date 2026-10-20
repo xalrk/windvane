@@ -34,7 +34,7 @@ from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .heavy import minutes
 from .held import (CHECK_FIELDS, MERGE_STATES, author_ident, base_required, blocked_by, check_name, merge_state,
-                   push_held, required_checks, running_checks)
+                   never_started, push_held, required_checks, running_checks)
 from .periodic import Periodic
 from .phone import NTFY, REASON, cut, whole
 from .planner import plan
@@ -1126,7 +1126,7 @@ class Pilot(Desk, Periodic):
         """Merge the approved head into main: test the merge, check the merged tree, then merge (PR or push)."""
         p, cd = self.p, self.cd
         title = self.queue.titles.get(tid, tid)
-        why, undrafted = "", False
+        why, undrafted, approved = "", False, sha
         for _ in range(tries):
             if not self.clean_wait(tid, f"merging {tid}"):  # isolate off: the checkout was edited during the review
                 return None
@@ -1203,8 +1203,12 @@ class Pilot(Desk, Periodic):
                     need, expected = self.required_of(tid, pr, state), self.expected_of(state)
                     why = merge_state(state, res.stderr or res.stdout, need, expected)
                     by = blocked_by(state, need, expected)
+                    if sha != approved and set(by) <= {"MISSING", "PENDING"}:  # pushed just now: its checks may not
+                        by = ["PENDING"]  # have queued yet, so a missing one gets a pass before it never started
                     if by == ["PENDING"]:  # clears by itself: tried again on a later pass, with no session
-                        return self.wait_checks(tid, pr, (branch, sha), running_checks(state, need), need is not None)
+                        missing = never_started(state, expected)
+                        return self.wait_checks(tid, pr, (branch, sha), running_checks(state, need) + missing,
+                                                need is not None or bool(missing))
                     if why in STUCK or by:  # no retry clears it: fail now, saying why and what to look at
                         self.log(f"{tid}: merge refused ({why})")
                         see, once = refused_hint(pr, by)

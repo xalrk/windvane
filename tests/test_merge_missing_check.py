@@ -36,6 +36,7 @@ elif args[0] == "api" and "/branches/" in args[1]:
 elif args[0] == "api" and "timeline" in args[2]:""")
 
 CI = {"__typename": "CheckRun", "name": "ci", "status": "IN_PROGRESS", "conclusion": ""}
+CI_PASSED = dict(CI, status="COMPLETED", conclusion="SUCCESS")
 LINT = {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS"}
 
 
@@ -70,6 +71,33 @@ class MergeMissingCheck(unittest.TestCase):
 
     def log(self):
         return re.sub(r"^\S+ \S+ ", "", (self.p.state / "autopilot.log").read_text(), flags=re.M)
+
+    def renumbered_head(self):
+        """A ticket branch whose merge with main conflicts only in an appended entry: the driver resolves it and
+        pushes the resolution to the branch just before the merge, so GitHub has had no time to queue its checks. A
+        pilot ready to integrate it, and the branch's approved head."""
+        cfg = self.s.root / ".windvane/config.toml"
+        cfg.write_text(cfg.read_text() + "[[append_only]]\nfile = \"LOG.md\"\nentry = '^- L(\\d+):'\nref = 'L{n}'\n")
+        self.commit("LOG.md", "- L1: start\n")
+        self.s.git("switch", "-q", "-c", "t-001-work")
+        self.commit("LOG.md", "- L1: start\n- L2: ticket\n")
+        self.s.git("push", "-q", "origin", "t-001-work")
+        sha = self.s.git("rev-parse", "HEAD")
+        self.s.git("switch", "-q", "main")
+        self.commit("LOG.md", "- L1: start\n- L2: main\n")
+        self.p = Project(self.s.root)
+        pilot = driver.Pilot(self.p, args())
+        pilot.deadline = now() + timedelta(hours=1)
+        self.assertTrue(pilot.prepare(0))
+        pilot.queue = driver.Queue(self.p)
+        return pilot, sha
+
+    def commit(self, path, text):
+        self.s.write(path, text)
+        self.s.git("add", "-A")
+        self.s.git("commit", "-qm", "change")
+        if self.s.git("branch", "--show-current") == "main":
+            self.s.git("push", "-q", "origin", "main")
 
     def gh_calls(self, start):
         return [c for c in (self.state / "log").read_text().splitlines() if c.startswith(start)]
@@ -107,6 +135,33 @@ class MergeMissingCheck(unittest.TestCase):
                       "check still running counts as one; gh 2.50.0 or later (`gh pr checks --required --json`) "
                       "tells them apart: `gh --version` shows yours", self.log())
         self.assertIn("the merge was refused: required check `ci` never started on this PR", self.log())
+
+    def test_a_head_pushed_just_before_the_merge_waits_a_pass_for_a_missing_check_and_merges_once_it_shows(self):
+        pilot, sha = self.renumbered_head()
+        (self.state / "rules").write_text('["ci"]')
+        (self.state / "required").write_text("[]")
+        (self.state / "held").write_text("")
+        pilot.integrate("T-001", "t-001-work", sha)
+        self.assertEqual((pilot.failed, pilot.merged), ([], []))
+        self.assertIn("T-001: merge waits: PR #7's required checks are still running (ci)", self.log())
+        head = pilot.landing["T-001"]
+        self.assertNotEqual(head["sha"], sha)  # the pushed resolution
+        (self.state / "checks").write_text(json.dumps([CI_PASSED]))  # Actions queued it, and it passed
+        (self.state / "held").unlink()
+        pilot.integrate("T-001", head["branch"], head["sha"])
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.assertNotIn("never started", self.log())
+
+    def test_a_check_still_missing_on_the_pass_after_that_push_never_started(self):
+        pilot, sha = self.renumbered_head()
+        (self.state / "rules").write_text('["ci"]')
+        (self.state / "required").write_text("[]")
+        (self.state / "held").write_text("")
+        pilot.integrate("T-001", "t-001-work", sha)
+        head = pilot.landing["T-001"]
+        pilot.integrate("T-001", head["branch"], head["sha"])
+        self.assertEqual(pilot.failed, ["T-001"])
+        self.assertIn("T-001: FAILED: the merge was refused: required check `ci` never started on this PR", self.log())
 
 
 if __name__ == "__main__":
