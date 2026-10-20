@@ -175,8 +175,8 @@ verdicts shows in `overview` and `stats --critic`. An answer counts only when it
 (the log names any other), so no word is reserved for an id: a bulleted `- beyond: yes` answers a check named
 `beyond`, and is the "Beyond" list's heading otherwise. Don't give two checks of one dimension, or two dimensions,
 the same id: `doctor` and the run's start warn of each, and the first run on such a scale pushes the first warning
-(`… (1 more: windvane doctor lists them)` when there are more). (A scale without rungs still works the old way, the critic writing the numbers; `overview` says how
-to convert it.)
+(`… (1 more: windvane doctor lists them)` when there are more). (A scale without rungs still works the old way, the
+critic writing the numbers; `overview` says how to convert it.)
 
 **The verdict** splits its points into "Fix in this ticket" and "Beyond this ticket". The critic never sees the pass
 mark; the driver turns the score into the worker's next step. A plain `no` on a rung up to the first one at or over
