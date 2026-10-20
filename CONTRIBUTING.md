@@ -32,7 +32,7 @@ bin/windvane --help
 ```sh
 python3 -m unittest discover -s tests -q
 ```
-It runs the whole driver end to end, so give it a few minutes. `tools/check_pythons.sh` runs it on every Python from
+It runs the whole driver end to end, so it takes a while. `tools/check_pythons.sh` runs it on every Python from
 3.11 up that you have installed, the test modules side by side (slowest first, once it has timed them), reruns a
 failed module once on its own and names it (a test that times its steps can miss on a busy machine), and prints the
 five slowest modules; give it unittest arguments and it runs just those, in one process per Python. The CI workflow

@@ -5,9 +5,11 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -167,6 +169,36 @@ class Pool(unittest.TestCase):
             self.assertIn("Ran 1 test in ", r.stdout)
             self.assertIn("\nFAILED (errors=1)\n", r.stdout)
             self.assertIn("--- test_dies:\n", tails.read_text())
+
+    def test_a_stopped_pool_takes_its_modules_down_with_it(self):
+        with tempfile.TemporaryDirectory(prefix="windvane-pool-") as d:
+            tests, pids = Path(d, "tests"), Path(d, "pids")
+            tests.mkdir()
+            (tests / "test_hangs.py").write_text(
+                "import os, subprocess, time, unittest\nclass T(unittest.TestCase):\n    def test_x(self):\n"
+                "        child = subprocess.Popen(['sleep', '60'])\n"
+                f"        open({str(pids)!r}, 'w').write(f'{{os.getpid()}} {{child.pid}}')\n        time.sleep(60)\n")
+            pool = subprocess.Popen([sys.executable, str(REPO / "tools/test_pool.py"), "--tails", str(Path(d, "t")),
+                                     str(tests)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    env={**os.environ, "TMPDIR": d})
+            for _ in range(200):
+                if pids.exists() and " " in pids.read_text():
+                    break
+                time.sleep(0.05)
+            module, child = map(int, pids.read_text().split())
+            pool.terminate()
+            self.assertEqual(pool.wait(timeout=10), 128 + signal.SIGTERM)
+            for pid in (module, child):
+                for _ in range(100):
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        break
+                    if Path(f"/proc/{pid}/stat").exists() and Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z":
+                        break  # gone, only waiting for whoever adopted it to reap it
+                    time.sleep(0.05)
+                else:
+                    self.fail(f"pid {pid} outlived the stopped pool")
 
 
 if __name__ == "__main__":
