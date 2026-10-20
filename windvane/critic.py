@@ -104,7 +104,7 @@ def pack(p, tid):
 def too_long(p, tid):
     """Why the pack's notes.md is over the cap, or "". `windvane critic` refuses such a pack before any session starts:
     a critic shown notes cut mid-sentence fails them as unclear, and the worker pays a revision for text it already
-    wrote (R-046). The driver's own run on a worker's leftover pack still reads the first NOTES_CAP characters."""
+    wrote. The driver's own run on a worker's leftover pack still reads the first NOTES_CAP characters."""
     f = pack_dir(p, tid) / "notes.md"
     size = len(f.read_text()) if f.is_file() else 0
     if size <= NOTES_CAP:

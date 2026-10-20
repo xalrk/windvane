@@ -16,7 +16,7 @@ from helpers import REPO, Sandbox  # noqa: E402
 
 
 class NotesCap(unittest.TestCase):
-    """R-046, through `windvane critic` and the Sandbox's fake `claude`: notes over the cap start no critic session and
+    """Through `windvane critic` and the Sandbox's fake `claude`: notes over the cap start no critic session and
     say why; notes at the cap reach the critic whole."""
 
     def setUp(self):
