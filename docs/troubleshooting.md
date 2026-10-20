@@ -1,8 +1,9 @@
 # Troubleshooting and FAQ
 
 Start with `windvane doctor` (what this machine lacks) and `windvane status` (what the run is doing, with the log's
-tail). The full log is `~/.local/state/windvane/<name>/autopilot.log`, and each session's complete stream is in
-`runs/` next to it; `windvane watch` shows them readably.
+tail). The full log is `~/.local/state/windvane/<name>/autopilot.log`; past 4 MB it moves to `autopilot.log.1` next
+to it, replacing the older one, and a new log starts. Each session's complete stream is in `runs/` there too;
+`windvane watch` shows them readably.
 
 ## Troubleshooting
 

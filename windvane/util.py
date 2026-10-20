@@ -115,13 +115,39 @@ def hhmm(t):
     return t.strftime("%H:%M") if t.date() == now().date() else t.strftime("%a %H:%M")
 
 
+# Past this size the log moves to `autopilot.log.1` (replacing the one before) and a fresh one starts: every `status`
+# reads its tail, and `stats` all of it, so it can't grow for good.
+LOG_CAP = 4 * 1024 * 1024
+
+
+def log_paths(p):
+    """The rotated log and the current one, oldest first, whether or not they exist."""
+    f = p.state / "autopilot.log"
+    return [f.with_name(f.name + ".1"), f]
+
+
 def log(p, msg, echo=True):
     line = f"{now():%Y-%m-%d %H:%M} {msg}"
     if echo:
         print(line, flush=True)
     p.state.mkdir(parents=True, exist_ok=True)
-    with (p.state / "autopilot.log").open("a") as f:
-        f.write(line + "\n")
+    old, f = log_paths(p)
+    with f.open("a") as fh:
+        fh.write(line + "\n")
+        fh.flush()
+        if os.fstat(fh.fileno()).st_size > LOG_CAP:
+            rotate_log(f, old, fh)
+
+
+def rotate_log(f, old, fh):
+    """Moves the full log `f` (open as `fh`) to `old`. Locked on the full file, and only while it's still the one at
+    `f`: parallel slots past the cap at once move it once, never the fresh log over the full one."""
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    try:
+        if os.stat(f).st_ino == os.fstat(fh.fileno()).st_ino:
+            os.replace(f, old)
+    except OSError:  # another writer moved it first
+        pass
 
 
 def shell_path(f):
@@ -137,9 +163,39 @@ PARTIAL_LOG = "{tid}: partial"
 
 
 def last_log(p, n=1):
-    """The log's last `n` lines (None: all of them)."""
-    f = p.state / "autopilot.log"
-    return f.read_text().splitlines()[-n if n else 0:] if f.exists() else []
+    """The log's last `n` lines (None: all of them), from the rotated one too when the current one is short of them."""
+    lines = []
+    for f in reversed(log_paths(p)):
+        lines = tail_lines(f, n - len(lines) if n else None) + lines
+        if n and len(lines) >= n:
+            break
+    return lines
+
+
+def log_has(f, needle):
+    """Whether a line of `f` holds `needle`, read a line at a time and stopped at the first: a log runs to megabytes."""
+    try:
+        with open(f, errors="replace") as fh:
+            return any(needle in line for line in fh)
+    except OSError:
+        return False
+
+
+def tail_lines(f, n):
+    """`f`'s last `n` lines (None: all of them), read from the end: a status needs a dozen lines of a long log."""
+    try:
+        with open(f, "rb") as fh:
+            if not n:
+                return fh.read().decode(errors="replace").splitlines()
+            end = pos = fh.seek(0, 2)
+            data = b""
+            while pos and data.count(b"\n") <= n:
+                pos = max(0, pos - 65536)
+                fh.seek(pos)
+                data = fh.read(end - pos)
+            return data.decode(errors="replace").splitlines()[-n:]
+    except OSError:
+        return []
 
 
 def push(title, msg, prio=3, tags="", buttons=()):

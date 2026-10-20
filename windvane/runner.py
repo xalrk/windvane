@@ -542,19 +542,32 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         "role": role, "label": label, "ticket": ticket, "model": model, "effort": effort,
         "minutes": round((time.time() - started) / 60, 1), **spent(final, seen),
         "base": first_turn(seen), "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error,
-        "result": result_word(result), "exit": code, "stream": raw.name})
+        "result": result_word(result), "reason": result_reason(result), "exit": code, "stream": raw.name})
     actions.refresh(p)  # the next worker start reads a fresh total from the cache, never waits on a count
     return result, killed, error
 
 
 # The word a worker's RESULT line starts with, kept on its ledger row so `stats` can tell a launch that stopped at
-# once from a short one that finished; sessions with no RESULT line (critic, reviewer, planner) get None.
-RESULT_WORD = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED)\b")
+# once from a short one that finished; sessions with no RESULT line (critic, reviewer, planner) get None. The rest of
+# the line after the ticket id is kept too, as `reason`, so `stats` can say why without the log or the transcript.
+RESULT_WORD = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED)\b(?:[ \t]+[A-Za-z]+-\d+\b)?[ \t]*([^\n]*)")
+REASON_MAX = 200
 
 
 def result_word(text):
     m = last_match(RESULT_WORD, text)
     return m[1] if m else None
+
+
+def result_reason(text):
+    """The text after the last RESULT line's word and id, cut at a word to about REASON_MAX characters; None when
+    there's no such line or nothing follows the id."""
+    m = last_match(RESULT_WORD, text)
+    reason = " ".join(m[2].split()) if m else ""
+    if len(reason) > REASON_MAX:
+        head = reason[:REASON_MAX + 1]
+        reason = (head.rsplit(" ", 1)[0] if " " in head else head[:REASON_MAX]).rstrip(" ,;:.") + "…"
+    return reason or None
 
 
 def rules(p, name):
