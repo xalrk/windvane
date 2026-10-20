@@ -71,8 +71,9 @@ A **question** push carries buttons for options A and B and **Answer on computer
 C to E are typed as the letter. "Answer on computer" tells the run to leave the question for `windvane answer`
 without waiting for it. With no answer in `answer_wait` minutes (default 10), the run builds the recommended option
 and marks it provisional, so you can change it later. An answer that comes after its question was settled isn't taken,
-and an **Answer not taken** push says so; when that push fails, the next pass tries it again (after a restart too)
-until it goes out.
+and an **Answer not taken** push says so; once the ticket merges, change it with `windvane answer <id> <letter>`.
+When that push fails, the next pass tries it again (after a restart too) until it goes out, saying how old the answer
+is once it's over an hour old; after 7 days it's dropped, with a line in the log.
 
 ## Commands from the phone
 

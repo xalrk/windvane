@@ -63,6 +63,7 @@ BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
            "check": ("the check", "autopilot", "check_retries", 0, ""),
            "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0, ""),
            "secret": ("the scan for secrets", "autopilot", "check_retries", 0, "")}
+CAME = "your answer came"  # where a late answer's push alone puts its age: "your answer from 3 days ago came"
 NO_PR = "No open PR for"  # how a bounce for a missing PR starts: a later prompt that finds the PR drops it
 DIGEST_RETRY = 600  # seconds between tries to push provisional answers the phone missed, outside a quiet time
 PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket merges (a wait for answers)
@@ -262,6 +263,27 @@ def taken(q, letter, text):
             + ". Build that, and move the question to ## Answered with the answer.")
 
 
+def typed(text):
+    """A typed answer as a late answer's push names what is built: the start of its words, cut at a word."""
+    return f'your answer "{cut(" ".join(text.split()), 60)}"'
+
+
+def given_at(got):
+    """When a `windvane answer` was given (its "at", to the minute), or now for one without it."""
+    try:
+        return datetime.strptime(got["at"], "%Y-%m-%d %H:%M").timestamp()
+    except (KeyError, TypeError, ValueError):
+        return time.time()
+
+
+def aged(line, alone, when):
+    """A kept late answer's (line, push alone), saying how old the answer is once it's over an hour old."""
+    age = phone.ago(time.time() - when)
+    if not age:
+        return line, alone
+    return f"{line}; you answered {age}", alone.replace(CAME, f"your answer from {age} came", 1)
+
+
 class Pilot(Desk, Periodic):
     def __init__(self, p, a):
         self.p, self.a = p, a
@@ -275,8 +297,9 @@ class Pilot(Desk, Periodic):
         # question id -> [what was built for it ("A (5 tries)"), when]: a late answer's push names it, after a restart
         # too, for as long as a late answer is still told (phone.LATE_FOR)
         self.settled_as = s.get("settled_as", {})
-        self.late = s.get("late", [])  # late `windvane answer`s, [line, push alone], kept until their push goes out
-        self.late_failed = False  # that their push failed: logged once until one goes out
+        # late `windvane answer`s, [line, push alone, when given], kept until their push goes out (phone.LATE_KEEP)
+        self.late = [e if len(e) > 2 else [*e, time.time()] for e in s.get("late", [])]  # older ones: no time kept
+        self.late_failed = s.get("late_failed", False)  # that their push failed: logged once until one goes out
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.secrets = s.get("secrets", {})  # ticket -> {"branch", "sha"}: a head set aside for a secret (secret_aside)
@@ -376,7 +399,7 @@ class Pilot(Desk, Periodic):
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
                                         "checks": dict(self.check_wait), "scale_told": self.scale_told,
                                         "settled_as": dict(self.settled_as), "late": list(self.late),
-                                        "aside": dict(self.aside),
+                                        "late_failed": self.late_failed, "aside": dict(self.aside),
                                         "fixes": dict(self.fixes), "failed": list(self.failed),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
                                         "running": dict(self.running)})
@@ -1673,7 +1696,7 @@ class Pilot(Desk, Periodic):
                     q["later"] = True
             if letter or text:
                 q["result"] = taken(q, letter, text)
-                self.settled_as[key] = [self.built(q, letter) if letter else "your typed answer", time.time()]
+                self.settled_as[key] = [self.built(q, letter) if letter else typed(text), time.time()]
                 self.log(f"{key}: answered {letter or ''} {text or ''}".rstrip())
                 with self.lock:  # answered, so never mistaken for a reworded copy of a later provisional answer
                     note(p, lambda s: s["asked"].update({tid: [a for a in s["asked"].get(tid, []) if a != q["q"]]}))
@@ -1695,8 +1718,8 @@ class Pilot(Desk, Periodic):
             if key not in settled and (q is None or "result" in q):
                 if q is None or q["result"] != taken(q, got.get("option"), got.get("text")):  # else: read pre-restart
                     told = list(self.late_answer(key))
-                    if told not in self.late:  # else kept by a pass killed before it dropped the answer
-                        self.late.append(told)
+                    if told not in [e[:2] for e in self.late]:  # else kept by a pass killed before it dropped it
+                        self.late.append([*told, given_at(got)])
                 settled[key] = got
         if settled:  # saved before its answers go: a restart in between finds them settled or kept, never lost
             self.save()
@@ -1713,20 +1736,31 @@ class Pilot(Desk, Periodic):
 
     def tell_late(self):
         """The pass's late answers, with those whose push failed before (kept in state.json, so a restart sends them
-        too): one push, and they're dropped only once it went out."""
-        if phone.late_pass(self.late):
-            if self.late:
+        too): one push, and they're dropped only once it went out. One kept past phone.LATE_KEEP is dropped untold, and
+        one over an hour old says its age, so an answer from days of ntfy being down doesn't read as new."""
+        old = [e for e in self.late if time.time() - e[2] > phone.LATE_KEEP]
+        if old:  # saved first: a restart in between can't log a drop twice
+            self.late = [e for e in self.late if e not in old]
+            self.save()
+        for line, _, when in old:
+            key, what = line.split(": ", 1)
+            self.log(f"{key}: your answer from {phone.ago(time.time() - when)} wasn't taken ({what}), and its push "
+                     f"failed for {phone.LATE_KEEP // 86400} days, so it's dropped untold; once its ticket merges, "
+                     f"change it with `windvane answer {key} <letter>`.")
+        if phone.late_pass([aged(*e) for e in self.late]):
+            if self.late or self.late_failed:
                 self.late, self.late_failed = [], False
                 self.save()
-        elif not self.late_failed:
+        elif not self.late_failed:  # saved, so a restart in the same failure spell doesn't log it again
             self.log(f"the push of {len(self.late)} late answer(s) failed; trying again on the next pass")
             self.late_failed = True
+            self.save()
 
     def late_answer(self, key):
         """A `windvane answer` that came too late to be taken is told once, as a late phone answer is, then dropped,
         so it can't answer a later question of the same id: (its line among the pass's late answers, its push alone).
         The line names what is built when it was settled (kept in state.json for phone.LATE_FOR)."""
-        alone = (f"{key}: your answer came after it was settled, so it wasn't taken; once its ticket merges, change "
+        alone = (f"{key}: {CAME} after it was settled, so it wasn't taken; once its ticket merges, change "
                  f"it with `windvane answer {key} <letter>`.")
         self.log(alone)
         was = self.settled_as.get(key, [None])[0]
