@@ -68,6 +68,9 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- Two ticket pickers no longer hand out the same id. A plan or periodic session now counts the tickets `windvane new`
+  left uncommitted in your checkout, and every picker picks and reserves its ids in one step under a lock in the
+  state dir, so a `new` while a plan is picking takes the id after the plan's.
 - `windvane request --body`, `bg` and `heavy` no longer quietly read another file than the one a session's sandbox
   wrote under that name. In the sandbox `$TMPDIR` is a folder below the one a `windvane` command sees, so a path the
   shell expanded can name a file an earlier command left there. When the two differ, or only the sandbox's exists,
