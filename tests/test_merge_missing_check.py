@@ -22,8 +22,18 @@ from helpers import Sandbox  # noqa: E402
 
 # test_merge_wait_restart's fake gh, with the base's required checks read through `gh api`: the state dir's `rules` (a
 # JSON list of names) answers the rulesets' call and `protection` the branch's; with no such file the call fails, as
-# one GitHub refuses does.
-GH = GH.replace("""elif args[0] == "api" and "timeline" in args[2]:""", """elif args[0] == "api" and "/rules/branches/" in args[1]:
+# one GitHub refuses does. `unknown` (a count) refuses that many merges with GitHub not yet sure it can merge, as it
+# is just after a push.
+GH = GH.replace('''"mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED" if blocked else "CLEAN",''', '''**unknown_view(),''').replace(
+    """if args[:2] == ["pr", "list"]:""", """def unknown_view():
+    n = int(read("unknown", "0"))
+    if n > 0:
+        (st / "unknown").write_text(str(n - 1))
+        return {{"mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN"}}
+    return {{"mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED" if blocked else "CLEAN"}}
+if int(read("unknown", "0")) > 0 and args[:2] == ["pr", "merge"]:
+    sys.exit("GraphQL: Pull Request is not mergeable (mergePullRequest)")
+if args[:2] == ["pr", "list"]:""", 1).replace("""elif args[0] == "api" and "timeline" in args[2]:""", """elif args[0] == "api" and "/rules/branches/" in args[1]:
     if not (st / "rules").exists():
         sys.exit("gh: Not Found (HTTP 404)")
     print(json.dumps([{{"type": "deletion"}}] + [{{"type": "required_status_checks", "parameters": {{
@@ -162,6 +172,22 @@ class MergeMissingCheck(unittest.TestCase):
         pilot.integrate("T-001", head["branch"], head["sha"])
         self.assertEqual(pilot.failed, ["T-001"])
         self.assertIn("T-001: FAILED: the merge was refused: required check `ci` never started on this PR", self.log())
+
+    def test_a_pushed_head_github_cant_judge_yet_tries_again_at_once_instead_of_waiting_on_checks(self):
+        pilot, sha = self.renumbered_head()
+        (self.state / "unknown").write_text("1")
+        pilot.integrate("T-001", "t-001-work", sha)
+        self.assertEqual((pilot.failed, pilot.merged), ([], ["T-001"]))
+        self.assertIn("T-001: merge refused (GitHub hadn't worked out whether it can merge); trying again", self.log())
+        self.assertNotIn("merge waits", self.log())
+        self.assertEqual(len(self.gh_calls("api ")), 0)  # not BLOCKED: no rules asked for
+
+    def test_rules_github_didnt_give_are_asked_again_on_the_next_refusal(self):
+        pilot, blocked = driver.Pilot(self.p, args()), {"mergeStateStatus": "BLOCKED", "baseRefName": "main"}
+        self.assertEqual(pilot.expected_of(blocked), set())
+        (self.state / "rules").write_text('["ci"]')
+        self.assertEqual((pilot.expected_of(blocked), pilot.expected_of(blocked)), ({"ci"}, {"ci"}))
+        self.assertEqual(len(self.gh_calls("api repos/{owner}/{repo}/rules/branches/")), 2)
 
 
 if __name__ == "__main__":

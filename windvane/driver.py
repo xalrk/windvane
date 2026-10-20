@@ -1203,8 +1203,8 @@ class Pilot(Desk, Periodic):
                     need, expected = self.required_of(tid, pr, state), self.expected_of(state)
                     why = merge_state(state, res.stderr or res.stdout, need, expected)
                     by = blocked_by(state, need, expected)
-                    if sha != approved and set(by) <= {"MISSING", "PENDING"}:  # pushed just now: its checks may not
-                        by = ["PENDING"]  # have queued yet, so a missing one gets a pass before it never started
+                    if sha != approved and "MISSING" in by and set(by) <= {"MISSING", "PENDING"}:  # pushed just now:
+                        by = ["PENDING"]  # its checks may not have queued yet: a pass before one never started
                     if by == ["PENDING"]:  # clears by itself: tried again on a later pass, with no session
                         missing = never_started(state, expected)
                         return self.wait_checks(tid, pr, (branch, sha), running_checks(state, need) + missing,
@@ -1249,12 +1249,15 @@ class Pilot(Desk, Periodic):
     def expected_of(self, state):
         """The checks a BLOCKED PR's base requires (`base_required`), asked once a run per base, so a required check
         with no rollup entry is named (`never_started`) instead of read as a block nothing shows. Empty when GitHub
-        can't say: the refusal is then today's generic one."""
+        can't say, and then not kept: the refusal is the generic one."""
         if state.get("mergeStateStatus") != "BLOCKED":
             return set()
         base = state.get("baseRefName", "")
         if base not in self.expected:
-            self.expected[base] = base_required(self.p, base) or set()
+            names = base_required(self.p, base)
+            if names is None:  # GitHub didn't answer: asked again on the next refusal, as `required_of` does
+                return set()
+            self.expected[base] = names
         return self.expected[base]
 
     def wait_checks(self, tid, pr, head, names, required=True):
