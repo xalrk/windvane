@@ -641,27 +641,29 @@ def cmd_plan(a, p):
 
 
 def cmd_new(a, p):
-    """A ticket file with the next free id (`planner.free_id`: this checkout's HEAD and files, the upstream, unmerged
-    plan branches, the ids a running plan holds). No PR is looked up: a desk command answers at once, so a plan closed
-    since the last lookup still keeps its ids (only skipped), while one closed_plans.json lists frees them. Created
-    exclusively, so an existing ticket is never overwritten: a `new` that loses a race to another
-    takes the id after the winner's file, and refuses only if that one is taken too."""
+    """A ticket file with the next free id (`planner.free_id`: this checkout's HEAD and files, the main checkout's
+    files, the upstream, unmerged plan branches, the ids a running plan holds). No PR is looked up: a desk command
+    answers at once, so a plan closed since the last lookup still keeps its ids (only skipped), while one
+    closed_plans.json lists frees them. Picked and created exclusively under `planner.id_lock`, so an existing
+    ticket is never overwritten and a plan picking meanwhile counts it; a file that appeared by other means is
+    skipped for the id after it, and refused only if that one is taken too."""
     folder = p.root / p.tickets_rel
     folder.mkdir(parents=True, exist_ok=True)
-    tried = None
-    for _ in range(2):
-        tid = planner.free_id(p, p.root, ask_forge=False)
-        if tid == tried:
-            break
-        f, tried = folder / f"{tid}.md", tid
-        text = (HOME / "templates/ticket.md").read_text().replace("<ID>", tid).replace("<title>", " ".join(a.title))
-        try:
-            with open(f, "x") as out:
-                out.write(text)
-        except FileExistsError:
-            continue
-        print(f)
-        return
+    tried, known = None, planner.known_ids(p, p.root, ask_forge=False)
+    with planner.id_lock(p):  # picked and created in one step: a plan picking meanwhile counts this file
+        for _ in range(2):
+            tid = planner.free_id(p, p.root, known=known)
+            if tid == tried:
+                break
+            f, tried = folder / f"{tid}.md", tid
+            text = (HOME / "templates/ticket.md").read_text().replace("<ID>", tid).replace("<title>", " ".join(a.title))
+            try:
+                with open(f, "x") as out:
+                    out.write(text)
+            except FileExistsError:
+                continue
+            print(f)
+            return
     sys.exit(f"{f} already exists: not overwritten. Run `windvane new` again for the next free id.")
 
 
