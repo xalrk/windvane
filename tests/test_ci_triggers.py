@@ -68,7 +68,7 @@ class CheckPythons(unittest.TestCase):
         out, code = self.run_script(python3_12="OK", python3_14="FAILED (failures=1)")
         self.assertEqual(code, 1, out)
         self.assertIn("python3.14: Ran 3 tests in 0.1s FAILED (failures=1)\n", out)
-        self.assertIn("--- python3.14, the end of its output:\nargs: -m unittest discover -s tests -q\n", out)
+        self.assertIn("--- python3.14, the end of its output:\nargs: tools/test_pool.py --jobs ", out)
         self.assertNotIn("--- python3.12", out)
         self.assertTrue(out.endswith("FAILED on: python3.14\n"), out)
 

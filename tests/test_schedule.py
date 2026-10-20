@@ -20,10 +20,15 @@ from helpers import Sandbox, no_wrap_up  # noqa: E402
 from test_parallel import args  # noqa: E402
 
 
+WORK = 4.0  # seconds a fake worker takes: long beside the driver's own steps, which slow down on a busy machine
+SIDE_BY_SIDE = WORK - 1  # started this close together, the second began while the first still worked
+AFTER = WORK - 0.1  # started this far apart, the second waited for the first
+
+
 class Schedule(unittest.TestCase):
     def setUp(self):
         self.s = Sandbox()
-        os.environ["FAKE_WORK_S"] = "1.5"
+        os.environ["FAKE_WORK_S"] = str(WORK)
 
     def tearDown(self):
         self.s.close()
@@ -58,8 +63,8 @@ class Schedule(unittest.TestCase):
         pilot = self.run_pilot()
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002", "T-003"])
         at = self.start_times()
-        self.assertLess(abs(at["T-003"] - at["T-001"]), 1.0)  # the lower, unrelated ticket took the slot
-        self.assertGreater(at["T-002"] - at["T-001"], 1.4)  # only after T-001 merged
+        self.assertLess(abs(at["T-003"] - at["T-001"]), SIDE_BY_SIDE)  # the lower, unrelated ticket took the slot
+        self.assertGreater(at["T-002"] - at["T-001"], AFTER)  # only after T-001 merged
         self.assertEqual(self.log().count("T-002 waits: names windvane/critic.py, which T-001 changes"), 1)
 
     def test_related_tickets_and_named_ids_wait(self):
@@ -97,7 +102,7 @@ class Schedule(unittest.TestCase):
         pilot = self.run_pilot(minutes=600)  # 10% of the 5-hour window, cap 75: headroom to spend on speed
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
         at = self.start_times()
-        self.assertLess(abs(at["T-002"] - at["T-001"]), 1.0)
+        self.assertLess(abs(at["T-002"] - at["T-001"]), SIDE_BY_SIDE)
         self.assertEqual(pilot.peak, 2)
         self.assertNotIn("no 2nd slot", self.log())
 
@@ -108,13 +113,14 @@ class Schedule(unittest.TestCase):
         pilot = self.run_pilot(minutes=600)
         self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
         at = self.start_times()
-        self.assertGreater(at["T-002"] - at["T-001"], 1.4)
+        self.assertGreater(at["T-002"] - at["T-001"], AFTER)
         self.assertEqual(pilot.peak, 1)
         self.assertEqual(self.log().count("no 2nd slot: 2 tickets x 10 min fit before"), 1)
 
     def test_ticket_minutes_count_only_running_time(self):
         """A late answer to a question isn't time the ticket took: the slot gate would think tickets are slower."""
         os.environ["FAKE_WORKER"] = "question"
+        os.environ["FAKE_WORK_S"] = "1.5"  # nothing here runs side by side: shorter attempts only save time
         self.ticket("T-001", "a.py")
         self.s.publish()
         self.p = Project(self.s.root)
@@ -130,10 +136,12 @@ class Schedule(unittest.TestCase):
         sleep = time.sleep
         self.addCleanup(setattr, time, "sleep", sleep)
         time.sleep = lambda sec: sleep(min(sec, 0.2))  # the idle wait for an answer polls often
+        start = time.time()
         pilot.run(now() + timedelta(minutes=40))
+        took = time.time() - start
         self.assertEqual(pilot.merged, ["T-001"])
         self.assertGreater(time.time() - asked["T-001"], 6)
-        self.assertLess(pilot.minutes[-1] * 60, 6)  # two worker attempts and the checks, not the wait
+        self.assertLess(pilot.minutes[-1] * 60, took - 5)  # two worker attempts and the checks, not the 6 s wait
 
     def test_names_matches_whole_paths(self):
         self.assertTrue(driver.names("see `a.py`.", "a.py"))
