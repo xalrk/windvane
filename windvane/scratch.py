@@ -66,10 +66,19 @@ def sandbox_twin(arg, inner=None):
     if inner.resolve() in (Path(here).resolve(), *Path(here).resolve().parents):  # the sandbox's own dir, spelled out
         return None
     if os.path.lexists(here):
-        return twin if os.path.isfile(here) and twin.is_file() and not filecmp.cmp(here, twin, shallow=False) else None
+        return twin if os.path.isfile(here) and twin.is_file() and not same(here, twin) else None
     if twin.exists() or (twin.parent.is_dir() and not os.path.isdir(os.path.dirname(here))):
         return twin
     return None
+
+
+def same(a, b):
+    """Whether two files hold the same bytes; one we can't read counts as the same, so the command's own read of it
+    reports the error as it would without a sandbox."""
+    try:
+        return filecmp.cmp(a, b, shallow=False)
+    except OSError:
+        return True
 
 
 def refuse_twins(args, who, inner=None):

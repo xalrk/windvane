@@ -13,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import cli, jobs, requests, scratch  # noqa: E402
+from windvane import cli, heavy, jobs, requests, scratch  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
 
@@ -111,6 +111,22 @@ class Twin(unittest.TestCase):
             jobs.bg(p, "t", ["cat", f"--in={outer}"], str(self.s.root))
         self.assertIn(f"bg: `{outer}` and `{self.inner / 'req.md'}` differ", str(e.exception))
         self.assertFalse(jobs.job_base(p, "t").parent.exists(), "a refused job leaves nothing behind")
+
+    def test_heavy_refuses_a_differing_outer_file_before_queueing(self):
+        outer = self.write("old\n", "new\n")
+        with mock.patch.object(heavy, "run", return_value=0) as run, self.assertRaises(SystemExit) as e:
+            cli.main(["heavy", "--", "cat", outer])
+        run.assert_not_called()
+        self.assertIn(f"heavy: `{outer}` and `{self.inner / 'req.md'}` differ", str(e.exception))
+
+    @unittest.skipIf(os.getuid() == 0, "root reads any file")
+    def test_an_unreadable_outer_body_still_says_it_cant_be_read(self):
+        outer = self.write("old\n", "new\n")
+        os.chmod(outer, 0)
+        code, out = self.request(outer)
+        self.assertNotEqual(code, 0)
+        self.assertIn("can't read the body", out)
+        self.assertEqual(self.inbox(), {})
 
 
 if __name__ == "__main__":
