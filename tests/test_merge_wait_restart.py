@@ -213,7 +213,7 @@ class MergeWaitRestart(unittest.TestCase):
         self.assertEqual(self.log().count("gh couldn't say which of PR #7's checks are required"), 1)
         self.assertIn("T-001: merge waits: PR #7's checks are still running (preview)", self.log())
         self.assertIn("T-001: FAILED: the merge was refused: checks are still running after 0.005 min", self.log())
-        self.assertIn("a newer gh, with `--required`, tells them apart", self.log())
+        self.assertIn("gh 2.50.0 or later (`gh pr checks --required --json`) tells them apart", self.log())
 
     def test_a_gh_hiccup_on_the_required_checks_is_asked_again_at_the_next_refusal(self):
         checks = json.dumps(json.loads(RUNNING) + [PREVIEW])

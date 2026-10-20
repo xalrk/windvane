@@ -33,8 +33,8 @@ from . import (actions, critic, heavy, install, jobs, login, net, phone, privacy
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .heavy import minutes
-from .held import (CHECK_FIELDS, MERGE_STATES, author_ident, blocked_by, check_name, merge_state, push_held,
-                   required_checks, running_checks)
+from .held import (CHECK_FIELDS, MERGE_STATES, author_ident, base_required, blocked_by, check_name, merge_state,
+                   never_started, push_held, required_checks, running_checks)
 from .periodic import Periodic
 from .phone import NTFY, REASON, cut, whole
 from .planner import plan
@@ -222,9 +222,10 @@ DEFINITE = re.compile(r"HTTP 4\d\d|GraphQL:")
 
 
 def refused_hint(pr, by):
-    """What a merge blocked by a failed check or a missing review (`blocked_by`) asks of the user: the fail text's
-    pointer, and when `windvane retry` merges it (`fail`'s `once`)."""
-    return f"; see `gh pr checks {pr}`" * ("FAILED" in by), "it's given" if "REVIEW" in by else None
+    """What a merge blocked by a failed check, a missing review or a required check that never started
+    (`blocked_by`) asks of the user: the fail text's pointer, and when `windvane retry` merges it (`fail`'s `once`)."""
+    once = "it's given" if "REVIEW" in by else "the check has run on the PR" if "MISSING" in by else None
+    return f"; see `gh pr checks {pr}`" * ("FAILED" in by), once
 
 
 def gh_answer(cmd, cwd):
@@ -287,6 +288,7 @@ class Pilot(Desk, Periodic):
         self.check_wait = s.get("checks", {})
         self.scale_told = s.get("scale_told", "")  # the hash of the critic scale whose warnings went to the phone
         self.required = {}  # a PR base -> [its required checks' names or None, the check names asked about]
+        self.expected = {}  # a PR base -> the checks its rules and protection require, all of them (`expected_of`)
         self.required_said = False  # that gh couldn't say which checks are required: logged once a run
         self.skip, self.merged, self.failed = set(), [], []
         self.retried = []  # failed tickets `windvane retry` put back in this run's queue (take_retries)
@@ -1124,7 +1126,7 @@ class Pilot(Desk, Periodic):
         """Merge the approved head into main: test the merge, check the merged tree, then merge (PR or push)."""
         p, cd = self.p, self.cd
         title = self.queue.titles.get(tid, tid)
-        why, undrafted = "", False
+        why, undrafted, approved = "", False, sha
         for _ in range(tries):
             if not self.clean_wait(tid, f"merging {tid}"):  # isolate off: the checkout was edited during the review
                 return None
@@ -1198,10 +1200,16 @@ class Pilot(Desk, Periodic):
                 state = {} if res.returncode == 0 else pr_state(p, pr)
                 merged = res.returncode == 0 or state.get("state") == "MERGED"
                 if not merged:
-                    need = self.required_of(tid, pr, state)
-                    why, by = merge_state(state, res.stderr or res.stdout, need), blocked_by(state, need)
+                    need, expected = self.required_of(tid, pr, state), self.expected_of(state)
+                    why = merge_state(state, res.stderr or res.stdout, need, expected)
+                    by = blocked_by(state, need, expected)
+                    if "MISSING" in by and set(by) <= {"MISSING", "PENDING"} and (
+                            sha != approved or running_checks(state)):  # a head pushed just now, or any check (an
+                        by = ["PENDING"]  # optional one too) still running that a `needs:` job may wait on: not yet
                     if by == ["PENDING"]:  # clears by itself: tried again on a later pass, with no session
-                        return self.wait_checks(tid, pr, (branch, sha), running_checks(state, need), need is not None)
+                        missing = [f"{n}, not started yet" for n in never_started(state, expected)]
+                        return self.wait_checks(tid, pr, (branch, sha), running_checks(state, need) + missing,
+                                                need is not None or bool(missing))
                     if why in STUCK or by:  # no retry clears it: fail now, saying why and what to look at
                         self.log(f"{tid}: merge refused ({why})")
                         see, once = refused_hint(pr, by)
@@ -1235,8 +1243,23 @@ class Pilot(Desk, Periodic):
             if got is None and not self.required_said:
                 self.required_said = True
                 self.log(f"{tid}: gh couldn't say which of PR #{pr}'s checks are required (`gh pr checks --required`); "
-                         "any check still running counts as one; a newer gh, with `--required`, tells them apart")
+                         "any check still running counts as one; gh 2.50.0 or later (`gh pr checks --required "
+                         "--json`) tells them apart: `gh --version` shows yours")
         return known[0]
+
+    def expected_of(self, state):
+        """The checks a BLOCKED PR's base requires (`base_required`), asked once a run per base, so a required check
+        with no rollup entry is named (`never_started`) instead of read as a block nothing shows. Empty when GitHub
+        can't say, and then not kept: the refusal is the generic one."""
+        if state.get("mergeStateStatus") != "BLOCKED":
+            return set()
+        base = state.get("baseRefName", "")
+        if base not in self.expected:
+            names = base_required(self.p, base)
+            if names is None:  # GitHub didn't answer: asked again on the next refusal, as `required_of` does
+                return set()
+            self.expected[base] = names
+        return self.expected[base]
 
     def wait_checks(self, tid, pr, head, names, required=True):
         """A merge held only by required checks still running (`names`; any running check when gh couldn't say which
