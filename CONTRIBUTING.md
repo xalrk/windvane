@@ -33,7 +33,8 @@ bin/windvane --help
 python3 -m unittest discover -s tests -q
 ```
 It runs the whole driver end to end, so give it a few minutes. `tools/check_pythons.sh` runs it on every Python
-from 3.11 up that you have installed. The CI workflow (`.github/workflows/test.yml`) runs it on Linux and macOS; it
+from 3.11 up that you have installed, the test modules side by side (slowest first, once it has timed them), and
+prints the five slowest modules; give it unittest arguments and it runs just those, in one process per Python. The CI workflow (`.github/workflows/test.yml`) runs it on Linux and macOS; it
 is started by hand, so a maintainer runs it on your pull request before merging.
 
 The tests never run the real tools. Anything that would call `claude`, `gh` or `notify`, or reach your phone, goes
