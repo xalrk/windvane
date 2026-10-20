@@ -47,9 +47,10 @@ def parse(out):
     return int(ran[-1]), counts, word == "OK"
 
 
-def run_module(module, tests, logdir, tmpbase):
-    """Runs one module as `discover -s tests` would (the tests dir on sys.path, so `import helpers` works)."""
-    tmp = tmpbase / module
+def run_module(module, n, tests, logdir, tmpbase):
+    """Runs one module as `discover -s tests` would (the tests dir on sys.path, so `import helpers` works). Its
+    TMPDIR is numbered, not named after it: a test may look for a word in its paths that a module name holds."""
+    tmp = tmpbase / str(n)
     tmp.mkdir(parents=True, exist_ok=True)
     log = logdir / f"{module}.log"
     start = time.monotonic()
@@ -106,7 +107,8 @@ def main(argv=None):
                 if not queue:
                     return
                 module = queue.pop(0)
-            results[module] = run_module(module, tests, logdir, tmpbase)
+                n = len(todo) - len(queue)
+            results[module] = run_module(module, n, tests, logdir, tmpbase)
 
     threads = [threading.Thread(target=worker, daemon=True) for _ in range(max(1, min(a.jobs, len(todo))))]
     for t in threads:

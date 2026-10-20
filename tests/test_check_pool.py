@@ -97,6 +97,7 @@ class CheckPool(unittest.TestCase):
         seen = self.processes()
         self.assertEqual(len({pid for pid, _ in seen.values()}), 4, "one process a module")
         self.assertEqual(len({tmp for _, tmp in seen.values()}), 4, "and a TMPDIR of its own")
+        self.assertFalse([tmp for _, tmp in seen.values() if "test_" in tmp], "not named after it")
         self.assertEqual(list((self.root / "tmp").iterdir()), [], "nothing left in TMPDIR")
 
     def test_all_passing_passes(self):
