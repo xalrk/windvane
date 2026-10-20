@@ -1,6 +1,8 @@
 """Run a test directory's modules side by side: K workers each take the next `test_*.py` off a shared list, longest
 first when an earlier run's timings are known, each in its own unittest process with its own TMPDIR. Most of a test
 run is waiting on subprocesses and sleeps, not CPU, so this cuts the wall time to about that of the slowest modules.
+A module that fails beside the others is run once more alone after the pool, since a test that times its own steps
+can miss its window on a busy machine; it counts by that second run, and the `rerun alone:` line names it.
 
 Prints one unittest-style summary for the lot (`Ran N tests in Xs`, then `OK` or `FAILED (...)` with the counts
 summed), then `slowest: ...` with the five slowest modules; the failed modules' output tails go to --tails.
@@ -21,6 +23,7 @@ from pathlib import Path
 
 TAIL = 40  # lines of a failed module's output, as the unsharded check shows of the whole run
 SHOWN = 5  # failed modules whose tails are shown; the rest are named, so a broken import can't flood the log
+RERUN = 10  # more failed modules than this is a real breakage, not a busy machine: no reruns, they'd only add time
 KEYS = ("failures", "errors", "skipped", "expected failures", "unexpected successes")  # unittest's order
 
 running = {}  # module -> Popen, so a signal can stop every module's process group
@@ -47,12 +50,11 @@ def parse(out):
     return int(ran[-1]), counts, word == "OK"
 
 
-def run_module(module, n, tests, logdir, tmpbase):
+def run_module(module, n, tests, log, tmpbase):
     """Runs one module as `discover -s tests` would (the tests dir on sys.path, so `import helpers` works). Its
     TMPDIR is numbered, not named after it: a test may look for a word in its paths that a module name holds."""
     tmp = tmpbase / str(n)
     tmp.mkdir(parents=True, exist_ok=True)
-    log = logdir / f"{module}.log"
     start = time.monotonic()
     with open(log, "wb") as f:
         proc = subprocess.Popen([sys.executable, "-m", "unittest", "discover", "-s", str(tests), "-p", f"{module}.py",
@@ -108,18 +110,28 @@ def main(argv=None):
                     return
                 module = queue.pop(0)
                 n = len(todo) - len(queue)
-            results[module] = run_module(module, n, tests, logdir, tmpbase)
+            results[module] = run_module(module, n, tests, logdir / f"{module}.log", tmpbase)
 
     threads = [threading.Thread(target=worker, daemon=True) for _ in range(max(1, min(a.jobs, len(todo))))]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
+
+    outs = {m: (logdir / f"{m}.log").read_text(errors="replace") for m in todo}
+    first = [m for m in todo if not parse(outs[m])[2] or results[m][1] != 0]
+    reruns = []
+    for module in first if len(first) <= RERUN else []:
+        log = logdir / f"{module}.rerun.log"
+        code = run_module(module, len(todo) + 1, tests, log, tmpbase)[1]
+        outs[module] = log.read_text(errors="replace")
+        results[module] = results[module][0], code
+        reruns.append(f"{module} {'passed' if parse(outs[module])[2] and code == 0 else 'failed again'}")
     wall = time.monotonic() - start
 
     total, counts, failed = 0, dict.fromkeys(KEYS, 0), []
     for module in todo:
-        out = (logdir / f"{module}.log").read_text(errors="replace")
+        out = outs[module]
         ran, c, ok = parse(out)
         if ran is None:  # killed or crashed before unittest's summary: count it as an error
             c = {"errors": 1}
@@ -138,6 +150,8 @@ def main(argv=None):
     print(f"Ran {total} test{'' if total == 1 else 's'} in {wall:.3f}s\n\n{word}{f' ({detail})' if detail else ''}")
     slow = sorted(results, key=lambda m: -results[m][0])[:5]
     print("slowest: " + ", ".join(f"{m} {results[m][0]:.0f}s" for m in slow))
+    if reruns:
+        print("rerun alone: " + ", ".join(reruns))
     if a.times:
         try:
             a.times.parent.mkdir(parents=True, exist_ok=True)

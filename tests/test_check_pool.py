@@ -50,6 +50,16 @@ class L(unittest.TestCase):
             print("loud line", i)
 """,
 }
+# Fails its first run only, as a test that times its own steps can on a busy machine.
+FLAKY = """import os, unittest
+from pathlib import Path
+class Busy(unittest.TestCase):
+    def test_window(self):
+        mark = Path(os.environ["POOL_SEEN"]).parent / "flaky-ran"
+        if not mark.exists():
+            mark.write_text("")
+            self.fail("missed its window beside the others")
+"""
 
 
 class CheckPool(unittest.TestCase):
@@ -92,6 +102,7 @@ class CheckPool(unittest.TestCase):
         self.assertIn("AssertionError: boom from test_fail", out)
         self.assertNotIn("loud line", out, "a passing module's output stays out of the log")
         self.assertTrue(out.endswith(f"FAILED on: python{V}\n"), out)
+        self.assertIn(f"rerun alone on python{V}: test_fail failed again\n", out)
         slowest = re.search(rf"^slowest on python{V}: (.*)$", out, re.M).group(1)
         self.assertEqual(sorted(re.findall(r"(test_\w+) \d+s", slowest)), sorted(MODULES))
         seen = self.processes()
@@ -106,9 +117,19 @@ class CheckPool(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertRegex(out, rf"python{V}: Ran 5 tests in [\d.]+s OK \(skipped=1\)\n")
         self.assertNotIn("the end of its output", out)
+        self.assertNotIn("rerun", out)
         self.assertTrue(out.endswith(f"passed on: python{V}\n"), out)
         times = json.loads((self.root / f"home/.cache/windvane-check/times{V}.json").read_text())
         self.assertEqual(sorted(times), sorted(m for m in MODULES if m != "test_fail"), "kept for the next run")
+
+    def test_a_module_failing_only_beside_the_others_passes_on_its_rerun_and_is_named(self):
+        (self.root / "tests/test_fail.py").unlink()
+        (self.root / "tests/test_flaky.py").write_text(FLAKY)
+        out, code = self.run_script()
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, rf"python{V}: Ran 6 tests in [\d.]+s OK \(skipped=1\)\n", "counted once, by the rerun")
+        self.assertIn(f"rerun alone on python{V}: test_flaky passed\n", out)
+        self.assertTrue(out.endswith(f"passed on: python{V}\n"), out)
 
     def test_explicit_arguments_run_as_one_unittest_call(self):
         out, code = self.run_script("discover", "-s", "tests", "-q")

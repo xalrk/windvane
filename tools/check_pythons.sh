@@ -7,7 +7,9 @@
 # this script's own temp dir, so even a killed or leaky run leaves nothing in /tmp (a windvane-check-* dir a SIGKILL
 # leaves, the cleaner removes). Bash and the Pythons only: nothing to install.
 # Usage: tools/check_pythons.sh [unittest args]   (none: every tests/test_*.py, pooled; with args: one unittest run)
-# CHECK_JOBS sets K; by default it is twice the CPUs shared out among the versions, at least 2 each.
+# CHECK_JOBS sets K; by default the CPUs shared out among the versions, at least 2 each: the tests' own subprocesses
+# fill the rest, and more only slows every module down until the ones that time their steps miss their windows. A
+# module that fails beside the others is rerun alone once, and `rerun alone on` names it.
 cd "$(dirname "$0")/.." || exit 2
 args=("$@")
 VERSIONS="3.11 3.12 3.13 3.14"
@@ -25,7 +27,7 @@ done
 set -- $ran
 n=$#
 cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
-k=${CHECK_JOBS:-$(( cpus * 2 / n ))}
+k=${CHECK_JOBS:-$(( cpus / n ))}
 [ "$k" -ge 2 ] 2>/dev/null || k=2
 
 pids=""
@@ -54,6 +56,9 @@ for v in $ran; do
 done
 for v in $ran; do  # the first version's five slowest modules: what to speed up next
     slowest=$(grep -m1 '^slowest: ' "$tmp/log$v") && { echo "${slowest/slowest:/slowest on python$v:}"; break; }
+done
+for v in $ran; do
+    rerun=$(grep -m1 '^rerun alone: ' "$tmp/log$v") && echo "${rerun/rerun alone:/rerun alone on python$v:}"
 done
 for v in $failed; do
     echo "--- python$v, the end of its output:"
