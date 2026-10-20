@@ -34,7 +34,7 @@ from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .heavy import minutes
 from .held import (CHECK_FIELDS, MERGE_STATES, author_ident, base_required, blocked_by, check_name, merge_state,
-                   never_started, push_held, required_checks, running_checks)
+                   never_started, push_held, required_checks, running_checks, start_hint)
 from .periodic import Periodic
 from .phone import NTFY, REASON, cut, whole
 from .planner import plan
@@ -283,7 +283,8 @@ class Pilot(Desk, Periodic):
         self.landing = s.get("landing", {})  # ticket -> {"branch", "sha"}: an approved head whose merge failed
         # ticket -> when to try its merge again: kept in `landing` while its PR's required checks still run
         self.checking = {}
-        # ticket -> {"since", "pr", "names"}: when the run's wait for those checks began, and what it waits on. Saved
+        # ticket -> {"since", "pr", "names", "quiet"}: when the run's wait for those checks began, what it waits on, and
+        # the head given its one pass for a missing required check (`wait_checks`). Saved
         # with `landing`, so a restart of the same run keeps the clock (`carry_over`); a new run starts it over.
         self.check_wait = s.get("checks", {})
         self.scale_told = s.get("scale_told", "")  # the hash of the critic scale whose warnings went to the phone
@@ -1204,17 +1205,25 @@ class Pilot(Desk, Periodic):
                 if not merged:
                     need, expected = self.required_of(tid, pr, state), self.expected_of(state)
                     why = merge_state(state, res.stderr or res.stdout, need, expected)
-                    by = blocked_by(state, need, expected)
-                    if "MISSING" in by and set(by) <= {"MISSING", "PENDING"} and (
-                            sha != approved or running_checks(state)):  # a head pushed just now, or any check (an
-                        by = ["PENDING"]  # optional one too) still running that a `needs:` job may wait on: not yet
+                    by, running = blocked_by(state, need, expected), running_checks(state)
+                    if "MISSING" in by and set(by) <= {"MISSING", "PENDING"}:
+                        if sha != approved or running or self.check_wait.get(tid, {}).get("quiet") != sha:
+                            by = ["PENDING"]  # a head pushed just now, any check (an optional one too) still running
+                            # that a `needs:` job may wait on, or one ended since the last pass: GitHub may yet queue it
+                        else:  # asked again, so a check dropped from the base's rule since isn't read as missing
+                            expected = self.expected_of(state, again=True)
+                            why, by = merge_state(state, res.stderr or res.stdout, need, expected), blocked_by(
+                                state, need, expected)
+                            by = by if "MISSING" in by else ["PENDING"]  # GitHub's verdict may lag the rule's change
                     if by == ["PENDING"]:  # clears by itself: tried again on a later pass, with no session
                         missing = [f"{n}, not started yet" for n in never_started(state, expected)]
                         return self.wait_checks(tid, pr, (branch, sha), running_checks(state, need) + missing,
-                                                need is not None or bool(missing))
+                                                need is not None or bool(missing), None if running else sha)
                     if why in STUCK or by:  # no retry clears it: fail now, saying why and what to look at
                         self.log(f"{tid}: merge refused ({why})")
                         see, once = refused_hint(pr, by)
+                        if "MISSING" in by:
+                            see += start_hint(cd, sha, branch, never_started(state, expected))
                         return self.fail(tid, f"the merge was refused: {why}{see}", (branch, sha), once)
             else:  # by sha, so nothing that moves the ci worktree's HEAD meanwhile can turn it into a no-op
                 res = net.git(cd, "push", "-q", p.remote, f"{merge}:refs/heads/{p.main}")
@@ -1249,30 +1258,33 @@ class Pilot(Desk, Periodic):
                          "--json`) tells them apart: `gh --version` shows yours")
         return known[0]
 
-    def expected_of(self, state):
+    def expected_of(self, state, again=False):
         """The checks a BLOCKED PR's base requires (`base_required`), asked once a run per base, so a required check
-        with no rollup entry is named (`never_started`) instead of read as a block nothing shows. Empty when GitHub
-        can't say, and then not kept: the refusal is the generic one."""
+        with no rollup entry is named (`never_started`) instead of read as a block nothing shows; `again` asks anew
+        (before a merge fails on one: the user may have dropped it from the rule). Empty when GitHub can't say, and
+        then not kept: the refusal is the generic one, or the answer it last gave on `again`."""
         if state.get("mergeStateStatus") != "BLOCKED":
             return set()
         base = state.get("baseRefName", "")
-        if base not in self.expected:
+        if base not in self.expected or again:
             names = base_required(self.p, base)
             if names is None:  # GitHub didn't answer: asked again on the next refusal, as `required_of` does
-                return set()
+                return self.expected.get(base, set())
             self.expected[base] = names
         return self.expected[base]
 
-    def wait_checks(self, tid, pr, head, names, required=True):
+    def wait_checks(self, tid, pr, head, names, required=True, quiet=None):
         """A merge held only by required checks still running (`names`; any running check when gh couldn't say which
         are `required`): the approved head is kept (`landing`) and the loop merges it again every CHECKS_EVERY
         minutes, with no worker, critic or review, until the checks end. Logged once; CHECKS_MOST minutes on, or at
-        the run's end (`checks_unfinished`), it fails: the one push. The clock is saved with `landing`: a restart of
-        the same run (a crash, a self-update) goes on counting from the first refusal; a new run starts it over."""
+        the run's end (`checks_unfinished`), it fails: the one push. `quiet`: the head this pass found nothing
+        running on, a required check missing: the next pass on it reads that check as never started. Both are
+        saved with `landing`: a restart of the same run (a crash, a self-update) goes on counting from the first
+        refusal and gives no second pass; a new run starts them over."""
         with self.lock:
             first = tid not in self.check_wait
             wait = self.check_wait.setdefault(tid, {"since": time.time()})
-            wait.update(pr=pr, names=names, required=required)
+            wait.update(pr=pr, names=names, required=required, quiet=quiet)
         if time.time() - wait["since"] >= CHECKS_MOST * 60:
             self.log(f"{tid}: merge refused ({waited_on(required)} after {CHECKS_MOST:g} min)")
             return self.fail(tid, f"the merge was refused: {waited_on(required)} after {CHECKS_MOST:g} min; see "

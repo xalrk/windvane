@@ -71,17 +71,20 @@ review hasn't approved it": once the review is given, `windvane retry T-007` mer
 `gh pr ready 7`, then retry. "GitHub refused to mark it ready: the gh login lacks write access to pull requests": run
 `gh auth refresh -s repo` (or log `gh` in with a token that has pull-request write access), then retry.
 
-**"the merge was refused: required check `ci` never started on this PR".**
+**"the merge was refused: required check `ci` never started on this PR; start it: `gh workflow run ci.yml --ref
+t-007-retry`".**
 The base branch's rulesets or protection require `ci`, but nothing ever reported it on the PR. GitHub adds a check to
 the PR only once its job starts, so while any other check is still running (`ci` may be a `needs:` job waiting on it)
-windvane waits as for a running one ("ci, not started yet"), up to the same hour; a head windvane pushed just before
-the merge, as a renumbering, gets one more try too. Once nothing is running and `ci` still isn't there, it would never
-end, so the merge fails at once. Its workflow didn't trigger: a `paths` filter that skips the change, a workflow not
-on the default branch, Actions turned off, or a check renamed since the rule was set. Have it report on the PR's head
-(a workflow with `workflow_dispatch` can be started on the branch by hand) or drop it from the rule, then `windvane
-retry T-007`; a commit that fixes its trigger is a new head, which goes through the worker and review again. When
-GitHub won't say what the base requires, this shows as "a required check or review blocks it" instead: look at the
-branch's rules on GitHub.
+windvane waits as for a running one ("ci, not started yet"), up to the same hour. Once nothing is running it tries one
+more merge pass (two minutes on), as GitHub can take a moment to queue a job after the one it waits on ends, and asks
+the base's rules again, so a check you dropped from them meanwhile doesn't count. If `ci` still isn't there, it would
+never end, so the merge fails. Its workflow didn't trigger: a project whose CI runs only by hand (as windvane
+recommends, to save Actions minutes), a `paths` filter that skips the change, a workflow not on the default branch,
+Actions turned off, or a check renamed since the rule was set. Start it on the PR's branch with the command the
+refusal gives: it names the workflow when one with `workflow_dispatch` has that job, else you fill in `<workflow>`
+(`gh workflow list` shows them). Or drop the check from the rule. Then `windvane retry T-007`; a commit that fixes its
+trigger is a new head, which goes through the worker and review again. When GitHub won't say what the base requires,
+this shows as "a required check or review blocks it" instead: look at the branch's rules on GitHub.
 
 **The run paused (`paused ... Resuming at 14:00`).**
 Claude's 5-hour usage reached `cap`. It resumes by itself when the window resets. Raise `cap` (or `run --cap`) to

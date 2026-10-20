@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from . import actions, net, privacy
 from .config import DIR, author
+from .doctor import dispatched_checks
 from .phone import cut, whole
 from .util import git, gout, load_json, locked, log, push, save_json
 from .worktree import clean_detach, ensure_worktree
@@ -291,6 +292,22 @@ def never_started(pr, expected):
     """The `expected` checks (`base_required`) with no rollup entry on the PR: their workflow never triggered, so
     they'd never end. Sorted, for the message."""
     return sorted(set(expected or ()) - {check_name(c) for c in pr.get("statusCheckRollup") or []})
+
+
+def start_hint(cd, sha, branch, missing):
+    """How the user starts the `missing` checks (`never_started`) on `branch`: `gh workflow run` with the one workflow
+    at `sha` whose jobs report them all and that can be started by hand (`dispatched_checks`), else with `<workflow>`
+    to fill in."""
+    flows = {}
+    for path in gout(cd, "ls-tree", "--name-only", sha, ".github/workflows/").splitlines():
+        if path.endswith((".yml", ".yaml")):
+            names = dispatched_checks(gout(cd, "show", f"{sha}:{path}"))
+            for m in missing:
+                if any(m == n or m.startswith(n + " (") for n in names):
+                    flows.setdefault(m, set()).add(path.rsplit("/", 1)[-1])
+    pick = set().union(*flows.values())
+    flow = pick.pop() if len(pick) == 1 and len(flows) == len(missing) else "<workflow>"
+    return f"; start {'it' if len(missing) == 1 else 'them'}: `gh workflow run {flow} --ref {branch}`"
 
 
 def blocked_by(pr, required=None, expected=()):

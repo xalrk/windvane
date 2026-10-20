@@ -1,6 +1,6 @@
 """A merge blocked by a required check that never started on the PR (a path filter, a workflow off the default
-branch, Actions off) fails at once naming it, from the base's rulesets or branch protection, instead of the generic
-"a required check or review blocks it", once no check it may wait on (a `needs:` job) is still running; a required
+branch, Actions off) fails naming it, from the base's rulesets or branch protection, instead of the generic "a
+required check or review blocks it", one pass after no check it may wait on (a `needs:` job) is still running; a required
 check still running waits as before, and a gh too old to tell required checks apart says which version does."""
 import json
 import re
@@ -123,12 +123,11 @@ class MergeMissingCheck(unittest.TestCase):
     def gh_calls(self, start):
         return [c for c in (self.state / "log").read_text().splitlines() if c.startswith(start)]
 
-    def test_a_required_check_missing_from_the_rollup_fails_at_once_by_name(self):
+    def test_a_required_check_missing_from_the_rollup_fails_by_name_after_one_more_pass(self):
         pilot = self.run_pilot(checks=json.dumps([LINT]), rules='["ci"]', required="[]", held="")
-        self.assertEqual((pilot.failed, len(self.gh_calls("pr merge 7"))), (["T-001"], 1))
-        self.assertIn("T-001: FAILED: the merge was refused: required check `ci` never started on this PR; once the "
-                      "check has run on the PR, `windvane retry T-001` merges the kept approval", self.log())
-        self.assertNotIn("merge waits", self.log())
+        self.assertEqual((pilot.failed, len(self.gh_calls("pr merge 7"))), (["T-001"], 2))
+        self.assertIn("T-001: FAILED: the merge was refused: required check `ci` never started on this PR; start it: "
+                      "`gh workflow run <workflow> --ref t-001-work`; once the check has run on the PR, `windvane retry T-001` merges the kept approval", self.log())
 
     def test_a_pr_with_no_checks_at_all_names_the_missing_ones_from_branch_protection(self):
         pilot = self.run_pilot(protection='["test (macos)", "build"]', held="")
@@ -160,7 +159,7 @@ class MergeMissingCheck(unittest.TestCase):
 
     def test_an_old_gh_says_which_version_tells_required_checks_apart_and_a_missing_one_fails_once_all_end(self):
         pilot = self.run_pilot(checks=json.dumps([PREVIEW]), rules='["ci"]', held="", clear="2")
-        self.assertEqual((pilot.failed, len(self.gh_calls("pr merge 7"))), (["T-001"], 2))
+        self.assertEqual((pilot.failed, len(self.gh_calls("pr merge 7"))), (["T-001"], 3))
         self.assertIn("T-001: merge waits: PR #7's required checks are still running (preview, ci, not started yet)", self.log())
         self.assertIn("T-001: gh couldn't say which of PR #7's checks are required (`gh pr checks --required`); any "
                       "check still running counts as one; gh 2.50.0 or later (`gh pr checks --required --json`) "
