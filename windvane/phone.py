@@ -45,6 +45,7 @@ REST = " (the rest is in the log)"
 ASKED = 200  # bytes a question push adds around its question and options: the letters, the line on typed answers
 SEND_WAIT = 30  # seconds the user's `notify` / `notify-ask` get: a stalled network must not hold up the run's loop
 LATE_FOR = 86400  # seconds a timed-out question's late phone answer still gets told what is being built
+LATE_KEEP = 7 * 86400  # seconds a late `windvane answer` whose push keeps failing is kept: older, it's news to no one
 
 
 def cut(text, most=REASON, *, log=None):
@@ -63,6 +64,16 @@ def cut(text, most=REASON, *, log=None):
     if log:
         log(f"cut {where}; the whole text: {text}")
     return keep[:end].rstrip(" ,;:.") + mark
+
+
+def ago(seconds):
+    """How long ago something came, as a push says it: "" under an hour (it reads as new), else "5 hours ago" or
+    "3 days ago"."""
+    hours = int(seconds // 3600)
+    if hours < 1:
+        return ""
+    n, unit = (hours, "hour") if hours < 24 else (hours // 24, "day")
+    return f"{n} {unit}{'s' if n > 1 else ''} ago"
 
 
 def whole(head, free, tail="", *, log, most=MOST):
