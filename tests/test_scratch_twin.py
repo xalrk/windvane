@@ -61,8 +61,18 @@ class Twin(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn(outer, out)
         self.assertIn(self.rel, out)
-        self.assertIn("pass the full path of the one meant", out)
+        self.assertIn(f"pass `{self.inner / 'req.md'}` for the sandbox's file, or rename `{outer}`", out)
         self.assertEqual(self.inbox(), {})
+
+    def test_either_way_the_refusal_offers_gets_through(self):
+        outer = self.write("the body of an earlier request\n", "the body meant\n")
+        code, out = self.request(str(self.inner / "req.md"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("the body meant", "".join(self.inbox().values()))
+        os.rename(outer, self.outer / "old-req.md")
+        code, out = self.request(str(self.outer / "old-req.md"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("the body of an earlier request", "".join(self.inbox().values()))
 
     def test_the_same_bytes_on_both_sides_files(self):
         code, out = self.request(self.write("the body\n", "the body\n"))

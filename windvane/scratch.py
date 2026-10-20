@@ -84,8 +84,8 @@ def refuse_twins(args, who, inner=None):
         here = a.split("=", 1)[1] if a.startswith("-") and "=" in a else a
         if not os.path.lexists(here):
             sys.exit(f"{who}: `{a}` isn't there outside the sandbox; the file is `{twin}`: pass that path")
-        sys.exit(f"{who}: `{here}` and `{twin}` differ (`$TMPDIR` names the second in the sandbox, the first out "
-                 "here): pass the full path of the one meant")
+        sys.exit(f"{who}: `{here}` and `{twin}` differ (`$TMPDIR` names the first out here, the second in the "
+                 f"sandbox): pass `{twin}` for the sandbox's file, or rename `{here}` and pass the new name for this one")
 
 
 def job_env(cmd, who):
