@@ -179,7 +179,8 @@ def dispatched_checks(text):
     out = set()
     for job in _jobs(lines):
         name = _value(job[1:], "name", _indent(job[1]))[0] if len(job) > 1 else ""
-        out.add(name.strip("'\"") or re.match(r"\s*['\"]?([\w-]+)", job[0]).group(1))
+        key = re.match(r"\s*['\"]?([\w-]+)['\"]?\s*:", job[0])  # not a job (YAML this reading doesn't follow): skipped
+        out |= {name.strip("'\"") or key.group(1)} if key else set()
     return out
 
 

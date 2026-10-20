@@ -171,6 +171,31 @@ class MergeMissingGrace(unittest.TestCase):
         pilot.integrate("T-001", "t-001-work", sha)
         self.assertIn("start it: `gh workflow run <workflow> --ref t-001-work`", self.log())
 
+    def test_workflows_it_cant_read_leave_the_name_to_the_user_and_the_refusal_still_goes_out(self):
+        pilot, sha = self.ready_head("on: workflow_dispatch\njobs:\n  - test\n")
+        self.s.git("switch", "-q", "t-001-work")
+        (self.s.root / ".github/workflows/odd.yml").write_bytes(b"on: workflow_dispatch\xff\njobs:\n  test: {}\n")
+        self.commit(".github/workflows/none.yml", "on: workflow_dispatch\n")
+        self.s.git("push", "-q", "origin", "t-001-work")
+        sha = self.s.git("rev-parse", "HEAD")
+        self.s.git("switch", "-q", "main")
+        self.blocked_on_test()
+        pilot.integrate("T-001", "t-001-work", sha)
+        pilot.integrate("T-001", "t-001-work", sha)
+        self.assertEqual(pilot.failed, ["T-001"])
+        self.assertIn("start it: `gh workflow run <workflow> --ref t-001-work`", self.log())
+
+    def test_a_matrix_jobs_check_names_its_workflow(self):
+        pilot, sha = self.ready_head(WORKFLOW.replace("    name: test\n", "    name: test\n    strategy:\n      matrix:\n"
+                                                      "        os: [linux, macos]\n"))
+        for name, text in (("checks", json.dumps([CI_PASSED])), ("rules", '["ci", "test (macos)"]'),
+                           ("required", '["ci", "test (macos)"]'), ("held", "")):
+            (self.state / name).write_text(text)
+        pilot.integrate("T-001", "t-001-work", sha)
+        pilot.integrate("T-001", "t-001-work", sha)
+        self.assertIn("required check `test (macos)` never started on this PR; start it: `gh workflow run tests.yml "
+                      "--ref t-001-work`", self.log())
+
     def test_the_checks_a_workflow_started_by_hand_reports(self):
         self.assertEqual(dispatched_checks(WORKFLOW), {"ci", "test"})
         self.assertEqual(dispatched_checks("on: [push, workflow_dispatch]\njobs:\n  'lint':\n    runs-on: x\n"),

@@ -297,11 +297,14 @@ def never_started(pr, expected):
 def start_hint(cd, sha, branch, missing):
     """How the user starts the `missing` checks (`never_started`) on `branch`: `gh workflow run` with the one workflow
     at `sha` whose jobs report them all and that can be started by hand (`dispatched_checks`), else with `<workflow>`
-    to fill in."""
+    to fill in. A workflow it can't read (not UTF-8) is passed over: the refusal must still go out."""
     flows = {}
     for path in gout(cd, "ls-tree", "--name-only", sha, ".github/workflows/").splitlines():
         if path.endswith((".yml", ".yaml")):
-            names = dispatched_checks(gout(cd, "show", f"{sha}:{path}"))
+            try:
+                names = dispatched_checks(gout(cd, "show", f"{sha}:{path}"))
+            except ValueError:
+                continue
             for m in missing:
                 if any(m == n or m.startswith(n + " (") for n in names):
                     flows.setdefault(m, set()).add(path.rsplit("/", 1)[-1])
