@@ -7,6 +7,8 @@ import sys
 import time
 import unicodedata
 
+from .util import log_paths
+
 tty = sys.stdout.isatty()
 c = lambda code, s: f"\033[{code}m{s}\033[0m" if tty else s
 
@@ -382,10 +384,26 @@ def show(ev, out_lines):
         print(c("32", f"■ done: {ev.get('num_turns')} turns, {ev.get('duration_ms', 0) / 60000:.0f} min"))
 
 
+def inode(f):
+    try:
+        return f.stat().st_ino
+    except OSError:
+        return None
+
+
+def log_lines(f, pos):
+    """Shows the driver's lines `f` gained past `pos`; where it ends."""
+    with f.open() as fh:
+        fh.seek(pos)
+        for line in fh.read().splitlines():
+            print(c("33", f"[driver] {line}"))
+        return fh.tell()
+
+
 def main(p, n=30, out_lines=6):
     sys.stdout.reconfigure(line_buffering=True)  # piped into less or a file, it still streams
-    runs, logf = p.state / "runs", p.state / "autopilot.log"
-    current, pos, log_pos = None, 0, logf.stat().st_size if logf.exists() else 0
+    runs, (oldf, logf) = p.state / "runs", log_paths(p)
+    current, pos, log_pos, log_id = None, 0, logf.stat().st_size if logf.exists() else 0, inode(logf)
     first = True
     try:
         while True:
@@ -415,12 +433,12 @@ def main(p, n=30, out_lines=6):
                         except ValueError:
                             pass
                     pos += len(chunk[:done].encode())
+            if (now_id := inode(logf)) != log_id:  # rotated: the rest of the old one, then the new one from its start
+                if log_id is not None and inode(oldf) == log_id:
+                    log_lines(oldf, log_pos)
+                log_pos, log_id = 0, now_id
             if logf.exists() and logf.stat().st_size > log_pos:
-                with logf.open() as f:
-                    f.seek(log_pos)
-                    for line in f.read().splitlines():
-                        print(c("33", f"[driver] {line}"))
-                    log_pos = f.tell()
+                log_pos = log_lines(logf, log_pos)
             time.sleep(1)
     except KeyboardInterrupt:
         pass

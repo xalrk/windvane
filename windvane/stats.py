@@ -10,7 +10,7 @@ from pathlib import Path
 from . import critic as critic_mod
 from . import jobs
 from .queue import Queue
-from .util import PARTIAL_LOG, gout, last_log, now, read_jsonl, shell_path
+from .util import PARTIAL_LOG, gout, last_log, log_paths, now, read_jsonl, shell_path
 
 
 # Relative cost of a token by kind, the API's price ratios (cache write 1.25x input, cache read 0.1x, output 5x):
@@ -245,13 +245,16 @@ def idle_stats(rows, p):
 
 
 def why_partial(p, tid, idle):
-    """Where the reason `tid`'s quick partials stopped still is, as a command: the log's grep only when the log holds
-    such a line (after a rotation, or with `--days` reaching rows older than the log, it would print nothing), else
-    the RESULT line of its latest idle run's transcript (`runs/`, pruned after some days), else the commits its
-    branch adds. With none of them left, says so rather than naming a command that finds nothing."""
-    logf, needle = p.state / "autopilot.log", PARTIAL_LOG.format(tid=tid)
-    if log_has(logf, needle):
-        return f'grep "{needle}" {shell_path(logf)}'
+    """Why `tid`'s quick partials stopped: the reason its newest idle row kept from its RESULT line. Rows from before
+    the ledger kept it get where the reason still is, as a command: the logs' grep only when a log holds such a line
+    (with `--days` reaching rows older than the logs, it would print nothing), else the RESULT line of its latest
+    idle run's transcript (`runs/`, pruned after some days), else the commits its branch adds. With none of them left,
+    says so rather than naming a command that finds nothing."""
+    if (said := next((r["reason"] for r in reversed(idle) if r.get("ticket") == tid and r.get("reason")), None)):
+        return f"{tid}'s last idle run said: {said}"
+    (oldf, logf), needle = log_paths(p), PARTIAL_LOG.format(tid=tid)
+    if (hits := [shell_path(f) for f in (oldf, logf) if log_has(f, needle)]):
+        return f'grep {"-h " if len(hits) > 1 else ""}"{needle}" {" ".join(hits)}'
     gone = f"the log no longer has {tid}'s partials" if logf.exists() else f"no log at {shell_path(logf)}"
     runs = [p.state / "runs" / r["stream"] for r in idle if r.get("ticket") == tid and r.get("stream")]
     if (f := next((f for f in reversed(runs) if f.is_file()), None)):
