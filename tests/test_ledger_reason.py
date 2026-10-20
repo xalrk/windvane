@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from windvane import cli, runner, stats, util, watch  # noqa: E402
 from windvane.config import Project  # noqa: E402
+from windvane.queue import Queue  # noqa: E402
 from windvane.util import append_jsonl, last_log, log, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
@@ -76,6 +77,7 @@ class LedgerReason(Base):
         self.assertIsNone(runner.result_reason("RESULT: PARTIAL T-1"))
         self.assertIsNone(runner.result_reason("RESULT: PARTIAL T-1\nmore text"))
         self.assertIsNone(runner.result_reason("no result line"))
+        self.assertEqual(runner.result_reason("RESULT: PARTIAL out of time"), "out of time")  # no id: all of it
 
 
 class LogRotation(Base):
@@ -122,6 +124,12 @@ class LogRotation(Base):
         self.assertEqual(cmd, f'grep "T-007: partial" {stats.shell_path(self.old)}')
         res = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
         self.assertIn(REASON, res.stdout)
+
+    def test_the_failed_hint_names_the_old_log_when_the_line_rotated_into_it(self):
+        log(self.p, "T-001: FAILED: the API it needs is gone", echo=False)
+        self.logged(0, 20)
+        hint = Queue(self.p).release("T-001", [], {"failed": ["T-001"]})
+        self.assertIn(f"`T-001: FAILED` line in {stats.shell_path(self.old)} says why", hint)
 
     def test_watch_follows_the_log_across_a_rotation(self):
         self.logged(0, 2)  # there before it starts: not shown

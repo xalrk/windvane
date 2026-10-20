@@ -550,7 +550,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
 # The word a worker's RESULT line starts with, kept on its ledger row so `stats` can tell a launch that stopped at
 # once from a short one that finished; sessions with no RESULT line (critic, reviewer, planner) get None. The rest of
 # the line after the ticket id is kept too, as `reason`, so `stats` can say why without the log or the transcript.
-RESULT_WORD = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED)\b(?:[ \t]+\S+)?[ \t]*([^\n]*)")
+RESULT_WORD = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED)\b(?:[ \t]+[A-Za-z]+-\d+\b)?[ \t]*([^\n]*)")
 REASON_MAX = 200
 
 

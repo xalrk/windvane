@@ -10,7 +10,7 @@ from pathlib import Path
 from . import critic as critic_mod
 from . import jobs
 from .queue import Queue
-from .util import PARTIAL_LOG, gout, last_log, log_paths, now, read_jsonl, shell_path
+from .util import PARTIAL_LOG, gout, last_log, log_has, log_paths, now, read_jsonl, shell_path
 
 
 # Relative cost of a token by kind, the API's price ratios (cache write 1.25x input, cache read 0.1x, output 5x):
@@ -267,15 +267,6 @@ def why_partial(p, tid, idle):
     if branches:
         return f"{gone}, nor its transcripts; its branch's commits: git log {p.upstream}..{p.remote}/{branches[0]}"
     return f"{gone}, nor its transcripts, and {tid} has no branch left to say why"
-
-
-def log_has(f, needle):
-    """Whether a line of `f` holds `needle`, read a line at a time and stopped at the first: the log only grows."""
-    try:
-        with open(f, errors="replace") as fh:
-            return any(needle in line for line in fh)
-    except OSError:
-        return False
 
 
 def lost_parts(died, killed):

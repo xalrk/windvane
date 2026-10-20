@@ -3,6 +3,7 @@ says when there is no log rather than print a grep that can't work, its grep fin
 for a partial, a token count under 1,000 never reads as `0k`, and the max-turns push says a new limit needs a fresh
 `windvane run`."""
 import io
+import json
 import os
 import re
 import sys
@@ -17,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import cli, driver, stats  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
-from windvane.util import append_jsonl, now, shell_path  # noqa: E402
+from windvane.util import append_jsonl, now, read_jsonl, shell_path  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_set_aside import Base  # noqa: E402
 
@@ -66,7 +67,10 @@ class DriverLines(Base):
         os.environ["FAKE_WORKER"] = "partial"
         self.addCleanup(os.environ.pop, "FAKE_WORKER", None)
         self.pilot().run(now() + timedelta(hours=2))
-        append_jsonl(self.p.state / "ledger.jsonl", {**IDLE[0], "ticket": "T-001"})
+        ledger = self.p.state / "ledger.jsonl"  # rows from before the ledger kept the reason: the grep is the way
+        rows = [{k: v for k, v in r.items() if k != "reason"} for r in read_jsonl(ledger)]
+        ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        append_jsonl(ledger, {**IDLE[0], "ticket": "T-001"})
         out, here = io.StringIO(), os.getcwd()
         self.addCleanup(os.chdir, here)
         with redirect_stdout(out):

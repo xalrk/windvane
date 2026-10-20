@@ -172,6 +172,15 @@ def last_log(p, n=1):
     return lines
 
 
+def log_has(f, needle):
+    """Whether a line of `f` holds `needle`, read a line at a time and stopped at the first: a log runs to megabytes."""
+    try:
+        with open(f, errors="replace") as fh:
+            return any(needle in line for line in fh)
+    except OSError:
+        return False
+
+
 def tail_lines(f, n):
     """`f`'s last `n` lines (None: all of them), read from the end: a status needs a dozen lines of a long log."""
     try:
