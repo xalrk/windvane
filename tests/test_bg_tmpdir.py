@@ -99,8 +99,8 @@ class BgTmpdir(unittest.TestCase):
         self.assertEqual(seen["t"], str(self.inner))
 
     def test_existing_paths_and_paths_outside_tmpdir_pass_untouched(self):
-        (self.inner / "in.txt").write_text("inner\n")
-        (self.outer / "in.txt").write_text("outer\n")  # there on both sides: the one named is the one read
+        (self.inner / "in.txt").write_text("same\n")
+        (self.outer / "in.txt").write_text("same\n")  # the same bytes on both sides: either is the one meant
         args = [str(self.outer / "in.txt"), str(self.inner / "in.txt"), str(self.s.root / "README"),
                 str(self.outer / "new.log"), "--x=1", "plain"]
         out = self.job_output("t", "bash", "-c", 'for a; do echo "$a"; done', "_", *args)
