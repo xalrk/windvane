@@ -68,6 +68,10 @@ release on the same day adds a number (`2026.10.9.1`).
   heavy jobs that need more or less memory than a big build.
 
 ### Fixed
+- `windvane request --body`, `bg` and `heavy` no longer quietly read another file than the one a session's sandbox
+  wrote under that name. In the sandbox `$TMPDIR` is a folder below the one a `windvane` command sees, so a path the
+  shell expanded can name a file an earlier command left there. When the two differ, or only the sandbox's exists,
+  the command stops before doing anything, names both paths and says how to pass either.
 - `windvane stats`' idle-launch hint prints the log's grep only when the log still has the ticket's partial lines.
   After a rotation, or with `--days` reaching further back, it says so and gives a command that finds the reason where
   it still is: the RESULT line in the ticket's latest quick run's transcript, else the commits its branch adds.

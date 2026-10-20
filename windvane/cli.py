@@ -411,6 +411,8 @@ def cmd_request(a):
         return
     if not a.title:
         sys.exit('windvane request: give a title: windvane request "<what windvane should do>" [--body FILE|-]')
+    if a.body and a.body != "-":
+        scratch.refuse_twins([a.body], "windvane request")
     try:
         body = sys.stdin.read() if a.body == "-" else Path(a.body).read_text(errors="replace") if a.body else ""
     except OSError as err:

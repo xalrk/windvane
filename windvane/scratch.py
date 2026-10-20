@@ -4,6 +4,7 @@ inodes long before space, and then no shell command runs). A cleaner removes wha
 the temp dir and the session dirs of tickets no longer running, once they're an hour old and in use by no process; and
 the `tmpXXXXXXXX` dirs tests leaked before windvane named them (old leaks), once they're a day old and hold only what
 windvane makes."""
+import filecmp
 import os
 import re
 import shutil
@@ -45,9 +46,11 @@ def sandbox_dir():
 
 
 def sandbox_twin(arg, inner=None):
-    """The file in the sandbox's TMPDIR that `arg` (a path, or `--opt=path`) was meant to name, when `arg` is under
-    our TMPDIR and isn't there (nor its folder) while that file (or its folder) is: the shell running a `windvane`
-    command expanded `$TMPDIR` outside the sandbox. None for anything else: a path that exists, one outside TMPDIR."""
+    """The file in the sandbox's TMPDIR that `arg` (a path, or `--opt=path`) may have been meant to name, when `arg` is
+    under our TMPDIR and either isn't there (nor its folder) while that file (or its folder) is, or both are files
+    with different bytes: the shell running a `windvane` command expanded `$TMPDIR` outside the sandbox, and an
+    outer file of that name is a stale one some earlier command wrote. None for anything else: the same bytes on both
+    sides, a directory, a path outside TMPDIR."""
     inner = inner or sandbox_dir()
     if inner is None:
         return None
@@ -63,22 +66,45 @@ def sandbox_twin(arg, inner=None):
     if inner.resolve() in (Path(here).resolve(), *Path(here).resolve().parents):  # the sandbox's own dir, spelled out
         return None
     if os.path.lexists(here):
-        return None
+        return twin if os.path.isfile(here) and twin.is_file() and not same(here, twin) else None
     if twin.exists() or (twin.parent.is_dir() and not os.path.isdir(os.path.dirname(here))):
         return twin
     return None
 
 
+def same(a, b):
+    """Whether two files hold the same bytes; one we can't read counts as the same, so the command's own read of it
+    reports the error as it would without a sandbox."""
+    try:
+        return filecmp.cmp(a, b, shallow=False)
+    except OSError:
+        return True
+
+
+def refuse_twins(args, who, inner=None):
+    """Exit before a command does anything when one of `args` is the outside twin of a file in the sandbox's dir
+    (`sandbox_twin`), naming the path to pass: reading the outer one would quietly use another file's bytes."""
+    inner = inner or sandbox_dir()
+    if inner is None:
+        return
+    for a in args:
+        if not (twin := sandbox_twin(a, inner)):
+            continue
+        here = a.split("=", 1)[1] if a.startswith("-") and "=" in a else a
+        if not os.path.lexists(here):
+            sys.exit(f"{who}: `{a}` isn't there outside the sandbox; the file is `{twin}`: pass that path")
+        sys.exit(f"{who}: `{here}` and `{twin}` differ (`$TMPDIR` names the first out here, the second in the "
+                 f"sandbox): pass `{twin}` for the sandbox's file, or rename `{here}` and pass the new name for this one")
+
+
 def job_env(cmd, who):
     """What a `bg` or `heavy` job started from a session changes in its environment: the sandbox's TMPDIR, so the job
-    and the worker's sandboxed commands mean the same files by `$TMPDIR`. Exits, naming the full path to pass, when
-    an argument is the outside twin of a file in the sandbox's dir (`sandbox_twin`)."""
+    and the worker's sandboxed commands mean the same files by `$TMPDIR`. Refuses an argument that names the outside
+    twin of a file in the sandbox's dir (`refuse_twins`)."""
     inner = sandbox_dir()
     if inner is None:
         return {}
-    for a in cmd:
-        if twin := sandbox_twin(a, inner):
-            sys.exit(f"{who}: `{a}` isn't there outside the sandbox; the file is `{twin}`: pass that path")
+    refuse_twins(cmd, who, inner)
     return {"TMPDIR": str(inner)}
 
 
