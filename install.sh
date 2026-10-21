@@ -8,7 +8,7 @@ if [ -n "${WINDVANE_SOURCE:-}" ]; then
 elif [ -f "$here/pyproject.toml" ]; then
     src=$here
 else
-    src="git+https://github.com/xalrk/windvane@v2026.10.13"
+    src="git+https://github.com/xalrk/windvane@v2026.10.21"
 fi
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || {
     echo "windvane needs Python 3.11 or newer (python3 here: $(python3 --version 2>&1))" >&2

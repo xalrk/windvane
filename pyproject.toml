@@ -5,7 +5,7 @@ backend-path = ["tools"]
 
 [project]
 name = "windvane"
-version = "2026.10.13"
+version = "2026.10.21"
 description = "An autopilot for Claude Code: works a git project's tickets unattended, with a critic, a reviewer and phone questions"
 readme = "README.md"
 requires-python = ">=3.11"

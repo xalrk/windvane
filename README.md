@@ -77,7 +77,7 @@ Requires Linux (macOS mostly works), Python 3.11+, git, and Claude Code logged i
 projects, tmux for detached runs, the ntfy app for your phone.
 
 ```sh
-pipx install git+https://github.com/xalrk/windvane@v2026.10.13    # or: uv tool install git+https://...
+pipx install git+https://github.com/xalrk/windvane@v2026.10.21    # or: uv tool install git+https://...
 windvane doctor                                               # what this machine lacks, and how to fix each
 ```
 Without pipx or uv, clone the repository and run `sh install.sh`. Details in [Getting started](docs/getting-started.md#install).
