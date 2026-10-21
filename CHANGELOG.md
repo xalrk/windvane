@@ -39,6 +39,10 @@ release on the same day adds a number (`2026.10.9.1`).
   prints it as its first line.
 - `windvane heavy --mem <GB>` (and `bg --heavy --mem`), and a project's `heavy_mem`: the free memory a heavy job
   waits for, instead of `machine.toml`'s one `min_free_gb` for every job.
+- Kept heavy jobs: `windvane bg --heavy --keep` starts a job that outlives its session (a long training run, a
+  render). The driver holds the ticket and its worktree until the job ends, then resumes the ticket with the job's
+  exit code and log. A project's `heavy_keep_hours` lets such a job go on that many hours past the run's stop; a
+  deadline moved earlier brings its stop earlier too, and `windvane stop` kills it at once.
 - A project's `heavy_reuses`: helpers its heavy jobs reuse between runs (an emulator, a Gradle daemon). The memory
   they hold counts as free for that project's heavy jobs, which no longer wait on memory they'd never need. A
   daemon that detached into its own dir (Gradle's, Kotlin's) counts by the checkout its build was started in. A
@@ -110,10 +114,6 @@ release on the same day adds a number (`2026.10.9.1`).
 - An approved ticket whose PR was opened as a draft is marked ready and merged instead of failing after three
   refused tries; one a person turned into a draft is set aside with a push saying `gh pr ready <n>` lets it go, and
   a refused merge now says why (a draft, a required check or review), failing at once when no retry can clear it.
-- `heavy_keep_hours` keeps a kept job (`bg --heavy --keep`) running past the run's stop. The job was told only
-  the stop, and its own watch killed it while the run wound down, before the hours were added. It is now told the
-  stop plus the hours from the start; `windvane stop` still kills it at once, and a deadline moved earlier brings its
-  stop earlier too.
 - A ticket whose branch a killed run left checked out in another slot's tree lands again. Its next worker couldn't
   switch to the branch, and every READY bounced with "No open PR" while the PR was open, until `review_rounds` failed
   it. The driver now detaches such a tree before the worker starts (one with uncommitted changes keeps the ticket, so
