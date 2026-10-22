@@ -65,7 +65,8 @@ windvane phone setup                   # again, now that the server takes them: 
 ```
 
 Grant only those two topics, never `"*"`: the token rides in every push's buttons, so whoever sees one push's buttons
-can read and post wherever its user may. Setup prints the topics in the terminal only, and
+can read and post wherever its user may. A user given `"*"` before drops it with `ntfy access --reset me`, then
+gets the two lines `windvane phone setup` prints. Setup prints the topics in the terminal only, and
 `windvane phone rotate` prints the grants for its new topics the same way. A topic of your own on the same server
 can be granted to the same user too; the token then reaches it as well.
 
