@@ -907,6 +907,8 @@ def late_pass(desk=()):
 
 def subscribe_help(c):
     url = f"{c['server'].rstrip('/')}/{c['topic']}"
+    if c.get("token"):
+        print("Your server lets in only its users: in the ntfy app, add yours first (Android: Settings, Manage users).")
     print("On the phone: install the ntfy app, tap +, and subscribe to this topic"
           + ("" if c["server"].rstrip("/") == SERVER else f" on server {c['server']} (\"Use another server\")") + ":")
     print(f"  {c['topic']}")

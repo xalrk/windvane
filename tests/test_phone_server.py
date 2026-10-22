@@ -197,6 +197,7 @@ class Setup(Base):
         self.assertEqual(c["token"], TOKEN)
         self.assertEqual(stat.S_IMODE(phone.conf_path().stat().st_mode), 0o600)
         self.assertIn("test push: sent", out)
+        self.assertIn("add yours first (Android: Settings, Manage users)", out)
         self.assertEqual(self.ntfy.msgs[-1]["title"], "windvane: phone works")
         self.assert_never_shown(out)
 
