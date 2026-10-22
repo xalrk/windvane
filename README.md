@@ -73,8 +73,8 @@ preflight       2           0     2       26k        18k      1k       38k    0.
 
 ## Install
 
-Requires Linux (macOS mostly works), Python 3.11+, git, and Claude Code logged in. Optional: `gh` for GitHub
-projects, tmux for detached runs, the ntfy app for your phone.
+Requires Linux (or WSL2 on Windows; macOS mostly works), Python 3.11+, git, and Claude Code logged in. Optional:
+`gh` for GitHub projects, tmux for detached runs, the ntfy app for your phone.
 
 ```sh
 pipx install git+https://github.com/xalrk/windvane@v2026.10.21    # or: uv tool install git+https://...

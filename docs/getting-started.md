@@ -4,14 +4,35 @@ This guide takes you from nothing to a first unattended run on one of your proje
 
 ## Requirements
 
-- **Linux.** macOS mostly works, but `windvane heavy` can't see free memory there and waits only on busy processes.
-  Windows is untested.
+- **Linux**, or WSL2 on Windows (see below). macOS mostly works, but `windvane heavy` can't see free memory there and
+  waits only on busy processes.
 - **Python 3.11 or newer** and **git**.
 - **[Claude Code](https://docs.claude.com/en/docs/claude-code)**, installed and logged in (`claude` on your `PATH`).
 - **Optional:** the [GitHub CLI](https://cli.github.com) `gh`, logged in, for projects on GitHub (pull requests);
   **tmux** for `windvane run --detach`; the [ntfy](https://ntfy.sh) app on your phone for pushes and answers.
 
 windvane itself needs nothing beyond the Python standard library.
+
+### On Windows
+
+windvane runs inside WSL2, Windows' built-in Linux, as it is. What differs from a plain Linux machine:
+
+1. Install WSL2 with Ubuntu: `wsl --install` in a PowerShell run as administrator, then restart and open Ubuntu.
+2. Install git, Python and Claude Code inside Ubuntu, not in Windows: `sudo apt install git python3 pipx`, then
+   `curl -fsSL https://claude.ai/install.sh | bash` and `claude auth login`. WSL puts the Windows `PATH` after Linux's,
+   so Claude Code installed on Windows with npm answers to `claude` until the Linux one is in, and it can't see Linux
+   paths; `windvane doctor` names any Windows program that answers for one of windvane's tools.
+3. Keep your repositories and windvane's state under your Linux home (`~`), not on the Windows drives under `/mnt/`:
+   git and checks are slow there and its file locks aren't reliable. Clone a project again under `~` rather than
+   using its Windows copy.
+4. For the phone's commands between runs, turn systemd on: put these lines in `/etc/wsl.conf`, run `wsl --shutdown`
+   in PowerShell and reopen Ubuntu.
+   ```ini
+   [boot]
+   systemd=true
+   ```
+
+Then follow the Linux steps below in the Ubuntu terminal. As on any laptop, runs pause while Windows sleeps.
 
 ## Install
 

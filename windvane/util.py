@@ -286,6 +286,25 @@ PS_WAIT = 10  # seconds a `ps` may take: a hung one counts as no answer
 PS_GRAIN = 1  # seconds `ps lstart` (macOS's start times) rounds down to: within one, it can't say which came first
 
 
+def wsl():
+    """1 or 2 inside Windows' WSL (its kernel names Microsoft in /proc/version), else 0: there the Windows drives and
+    the Windows PATH are in reach, and both trip windvane up."""
+    try:
+        version = (PROC / "version").read_text().lower()
+    except OSError:
+        return 0
+    if "microsoft" not in version:
+        return 0
+    return 2 if "wsl2" in version or "microsoft-standard" in version else 1
+
+
+def windows_drive(path):
+    """The drive letter when `path` is on a Windows drive as WSL mounts them (/mnt/<letter>/...), else "": git and the
+    checks crawl there, and its fcntl locks (slots, the heavy line, the phone's) aren't reliable."""
+    m = re.match(r"/mnt/([a-zA-Z])(/|$)", str(path))
+    return m.group(1).lower() if m else ""
+
+
 def cwds(pid=None):
     """{pid: working directory} of every process we can see, or of `pid` alone. /proc on Linux; elsewhere (macOS)
     `lsof`, which macOS keeps in /usr/sbin, often off PATH. Empty when neither answers."""

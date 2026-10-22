@@ -16,7 +16,7 @@ from pathlib import Path
 from . import actions
 from . import critic as critic_mod
 from . import (doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, publiccheck, questions,
-               requests, schedule, scratch, watch)
+               requests, schedule, scratch, util, watch)
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
@@ -92,6 +92,8 @@ def cmd_init(a):
           f"  then commit {DIR}/ and push it to {p.upstream}: the autopilot reads tickets from there")
     if hooks:
         print(f"  phone: status/stop/overview hooks in {', '.join(hooks)}")
+    for _, what, fix in doctor.drive_warnings("the project", root) if util.wsl() else []:
+        print(f"  WARNING: {what}: {fix}")
     if p.cfg["forge"] == "github":
         for _, what, fix in doctor.public_warnings(p):
             print(f"  WARNING: {what}: {fix}")
