@@ -42,6 +42,7 @@ RETRY_CAP = 300  # the longest wait between reconnects: a server that is down he
 STEADY = 60  # seconds a stream must stay up (or deliver a message) for the next drop to wait RETRY again
 STREAM_WAIT = 90  # seconds a stream may go silent (ntfy sends a keepalive every 45 s) before it counts as dropped
 RESTREAM = 1800  # seconds a listener that fell back to polling waits before it tries a stream again
+TRY_WAIT = 50  # seconds that try waits for a first line (ntfy sends its `open` event at once, a keepalive within 45 s)
 HOLD_CAP = 3600  # the longest Retry-After taken as given: a bad header must not silence the phone for days
 QID_RE = r"[a-z][a-z0-9-]{1,39}"
 HELP = ("status: the autopilots that are on\noverview: where each project stands\nusage: Claude usage\n"
@@ -719,8 +720,13 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
     Every install leans on one ntfy server's per-visitor budget, so a dropped stream is opened again after RETRY
     seconds, doubling to RETRY_CAP while it keeps dropping (a 429 waits its Retry-After), with one line per spell
     of drops; a stream that delivers or stays up STEADY seconds starts over at RETRY. Where a stream opens but
-    nothing ever comes through (a proxy holding it back), it looks every PUMP_EVERY seconds instead, trying a
-    stream again every RESTREAM seconds and going back to it once one brings anything."""
+    nothing comes through (a proxy holding it back), it looks every PUMP_EVERY seconds instead, trying a stream
+    again every RESTREAM seconds and going back to it once one brings anything. Before any stream worked, one silent
+    stream is enough; after, it takes two in a row (one can be a hiccup), so a proxy that turns up later is caught
+    too. A try waits TRY_WAIT, not STREAM_WAIT, for its first line: polling pauses meanwhile, and a shorter try
+    keeps an answer sent then from waiting longer than it would for a poll (two extra polls around a full-length
+    try wouldn't: the answer would still wait out the try). A try that gets through keeps that timeout for its life;
+    a keepalive late past it is an ordinary drop."""
     since = time.time() if since is None else since
     d = state_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -729,7 +735,7 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
         lock.close()
         return False
     recent, handled = [], 0
-    wait, spell, polling, streamed, restream_at = RETRY, False, False, False, 0.0
+    wait, spell, polling, streamed, silent, restream_at = RETRY, False, False, False, 0, 0.0
     try:
         while not until():
             c = conf()
@@ -746,7 +752,7 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
             began, lines, delivered, opened, err = time.time(), 0, False, False, None
             try:
                 req = urllib.request.Request(url, headers=auth(c))
-                with urllib.request.urlopen(req, timeout=15 if poll else STREAM_WAIT) as stream:
+                with urllib.request.urlopen(req, timeout=15 if poll else TRY_WAIT if retrying else STREAM_WAIT) as stream:
                     opened = True
                     for raw in stream:
                         lines += 1
@@ -779,6 +785,10 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
             if once:
                 return handled
             streamed = streamed or (lines > 0 and not poll)
+            if lines:
+                silent = 0
+            elif opened and not polling and isinstance(err, TimeoutError):
+                silent += 1  # opened, then nothing in STREAM_WAIT: not even ntfy's keepalive got through
             if retrying and polling:
                 restream_at = time.time() + RESTREAM
                 if opened and isinstance(err, TimeoutError):
@@ -791,8 +801,8 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
             if err is None and polling:
                 rest(PUMP_EVERY, until)
                 continue
-            if opened and not lines and not streamed and isinstance(err, TimeoutError):
-                polling, restream_at = True, time.time() + RESTREAM
+            if silent >= (2 if streamed else 1):
+                polling, restream_at, silent = True, time.time() + RESTREAM, 0
                 tell(f"windvane phone: the server's stream opened but brought nothing in {span(STREAM_WAIT)}: check "
                      f"for a proxy or VPN that buffers long requests (`env | grep -i proxy`, a company gateway). "
                      f"Asking every {span(PUMP_EVERY)} instead, and trying a stream again every {span(RESTREAM)}")
@@ -813,8 +823,9 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
 def take(lock, kind, until):
     """Lock the one reader's place and write who holds it ("<pid> <kind>"). The `listen` kind (the service, or one
     run by hand) waits until the holder lets go or `until()`, a second at a time so a stop ends it at once, with one
-    line naming the holder; a run's stream and `once` give up at once."""
-    told = False
+    line for each holder (a run's stream can let go and a third reader take over before this one), so the journal
+    names whoever holds it now; a run's stream and `once` give up at once."""
+    told = None
     while True:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -822,22 +833,23 @@ def take(lock, kind, until):
             lock.truncate()
             lock.write(f"{os.getpid()} {kind}\n")
             lock.flush()
-            if told:
+            if told is not None:
                 tell("windvane phone: the reply topic is free; listening")
             return True
         except OSError:
             if kind != "listen" or until():
                 return False
-        if not told:
-            tell(f"windvane phone: {holder(lock)}")
-            told = True
+        lock.seek(0)
+        name = lock.read().strip()
+        if name != told and (name or told is None):  # empty: a new holder between truncating and naming itself
+            tell(f"windvane phone: {holder(name)}")
+            told = name
         time.sleep(1)
 
 
-def holder(lock):
-    """Who holds the reply topic, and what ends the wait, for a waiting listener's one line."""
-    lock.seek(0)
-    pid, _, kind = lock.read().strip().partition(" ")
+def holder(name):
+    """Who holds the reply topic (its "<pid> <kind>"), and what ends the wait, for a waiting listener's line."""
+    pid, _, kind = name.partition(" ")
     if kind == "run":
         return "a run reads the phone's replies on its own stream; listening once that run ends"
     if kind == "listen":
