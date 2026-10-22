@@ -13,6 +13,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from test_install import REPO
 
@@ -117,7 +118,7 @@ class CheckPool(unittest.TestCase):
         self.assertIn("AssertionError: boom from test_fail", out)
         self.assertNotIn("loud line", out, "a passing module's output stays out of the log")
         self.assertTrue(out.endswith(f"FAILED on: python{V}\n"), out)
-        self.assertRegex(out, rf"\nrerun alone: test_fail failed again on {V} \(a real failure: its tail is below\); "
+        self.assertRegex(out, rf"\nrerun alone: test_fail failed again on {V} \(a real failure: see below\); "
                               r"added \d+s\n")
         log = (self.root / "home/.cache/windvane-check/reruns.log").read_text().splitlines()
         self.assertEqual(len(log), 1, log)
@@ -262,7 +263,7 @@ class Pool(unittest.TestCase):
 
     def test_reruns_fold_into_one_line_across_versions_with_the_time_they_added(self):
         with tempfile.TemporaryDirectory(prefix="windvane-pool-") as d:
-            flaky, real = "(flaky beside others, no action)", "(a real failure: its tail is below)"
+            flaky, real = "(flaky beside others, no action)", "(a real failure: see below)"
             logs = {"3.11": "Ran 3 tests in 1s\n\nOK\nslowest: test_a 1s\n",
                     "3.12": f"OK\nrerun alone: test_bg_keep passed {flaky}; added 12s\n",
                     "3.14": f"OK\nrerun alone: test_bg_keep passed {flaky}, test_x failed again {real}; added 41s\n"}
@@ -272,6 +273,9 @@ class Pool(unittest.TestCase):
                 f"rerun alone: test_bg_keep passed on 3.12, 3.14 {flaky}, test_x failed again on 3.14 {real}; added 41s",
                 "test_bg_keep passed (3.12, 3.14), test_x failed again (3.14); added 41s"))
             self.assertEqual(test_pool.fold([("3.11", Path(d, "3.11"))]), (None, None), "no reruns, no line")
+            self.assertEqual(test_pool.fold((v, Path(d, v)) for v in ("3.12", "3.14"))[0],
+                             f"rerun alone: test_bg_keep passed on every Python {flaky}, test_x failed again on 3.14 "
+                             f"{real}; added 41s")
 
     def test_the_reruns_log_keeps_one_line_a_check_and_only_the_newest(self):
         with tempfile.TemporaryDirectory(prefix="windvane-pool-") as d:
@@ -283,6 +287,18 @@ class Pool(unittest.TestCase):
             self.assertRegex(lines[-1], rf"^\S+ check-{test_pool.LOGGED + 19} test_x passed \(3.12\); added 3s$")
             self.assertRegex(lines[-2], rf"^\S+ check-{test_pool.LOGGED + 18} no reruns$")
             self.assertRegex(lines[0], r"^\S+ check-20 ", "the oldest went first")
+
+    def test_checks_ending_at_once_each_keep_their_lines(self):
+        with tempfile.TemporaryDirectory(prefix="windvane-pool-") as d:
+            log = Path(d, "reruns.log")
+            code = (f"import sys; sys.path.insert(0, {str(REPO / 'tools')!r}); import test_pool\n"
+                    f"for i in range(100): test_pool.log_check(__import__('pathlib').Path({str(log)!r}), "
+                    "f'check-{sys.argv[1]}-{i}', None)")
+            procs = [subprocess.Popen([sys.executable, "-c", code, str(n)]) for n in range(4)]
+            self.assertEqual([p.wait(timeout=60) for p in procs], [0] * 4)
+            lines = log.read_text().splitlines()
+            self.assertEqual(len(lines), 400)
+            self.assertFalse([l for l in lines if not re.fullmatch(r"\S+ check-\d-\d+ no reruns", l)])
 
     def test_a_killed_pool_s_half_made_marker_is_swept_when_the_next_opens(self):
         with tempfile.TemporaryDirectory(prefix="windvane-pool-") as d:
@@ -301,6 +317,27 @@ class Pool(unittest.TestCase):
             self.assertFalse(stale.exists(), "no pid to read, and older than an hour")
             self.assertTrue(fresh.exists())
             self.assertEqual(share.jobs_now(), 8)
+
+    def test_a_pool_whose_half_made_marker_is_swept_makes_another(self):
+        """A pool that can't see this one's pid may sweep its marker in the instant before it is locked."""
+        with tempfile.TemporaryDirectory(prefix="windvane-pool-") as d:
+            folder, replace, calls = Path(d), os.replace, []
+
+            def swept_first(src, dst):
+                calls.append(src)
+                if len(calls) == 1:
+                    Path(src).unlink()
+                return replace(src, dst)
+
+            with mock.patch.object(test_pool.os, "replace", swept_first):
+                share = test_pool.Share(folder, "check-a", 8)
+            self.addCleanup(share.close)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual([f.name for f in folder.iterdir()], [f"check-a.{os.getpid()}"])
+            self.assertTrue(test_pool.held(folder / share.name), "and it holds the lock on it")
+            other = test_pool.Share(folder, "check-b", 8)
+            self.addCleanup(other.close)
+            self.assertEqual(other.jobs_now(), 4, "so the next pool counts it")
 
     def test_checks_count_by_their_held_markers_once_each(self):
         with tempfile.TemporaryDirectory(prefix="windvane-pool-") as d:

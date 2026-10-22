@@ -34,7 +34,7 @@ except ImportError:  # no flock (Windows): every check keeps the jobs it was giv
 TAIL = 40  # lines of a failed module's output, as the unsharded check shows of the whole run
 SHOWN = 5  # failed modules whose tails are shown; the rest are named, so a broken import can't flood the log
 RERUN = 10  # more failed modules than this is a real breakage, not a busy machine: no reruns, they'd only add time
-MEANS = {"passed": "flaky beside others, no action", "failed again": "a real failure: its tail is below"}
+MEANS = {"passed": "flaky beside others, no action", "failed again": "a real failure: see below"}
 LOGGED = 500  # newest lines --log keeps: months of checks, and never a file that grows without end
 STALE = 3600  # seconds after which a half-made marker is left over whatever its pid says (pids get reused)
 KEYS = ("failures", "errors", "skipped", "expected failures", "unexpected successes")  # unittest's order
@@ -166,7 +166,7 @@ def fold(logs):
     on and what the outcome means, and the most seconds any version's reruns added. The versions run side by side, so
     that's about what the check's wall time grew by. Also the same without the meanings, for the log; (None, None)
     when nothing reran."""
-    seen, added = {}, 0
+    seen, added, logs = {}, 0, list(logs)
     for version, log in logs:
         try:
             line = next((l for l in Path(log).read_text(errors="replace").splitlines()
@@ -183,7 +183,9 @@ def fold(logs):
     if not seen:
         return None, None
     end = f"; added {added}s"
-    line = ", ".join(f"{item} on {', '.join(vs)} ({MEANS[item.split(' ', 1)[1]]})" for item, vs in seen.items())
+    def on(vs):  # four versions read as one phrase
+        return "every Python" if len(logs) > 1 and len(vs) == len(logs) else ", ".join(vs)
+    line = ", ".join(f"{item} on {on(vs)} ({MEANS[item.split(' ', 1)[1]]})" for item, vs in seen.items())
     return "rerun alone: " + line + end, ", ".join(f"{item} ({', '.join(vs)})" for item, vs in seen.items()) + end
 
 
