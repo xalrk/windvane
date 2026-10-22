@@ -63,7 +63,9 @@ done
 for v in $ran; do
     grep -m1 '^shared: ' "$tmp/log$v" && break
 done
-[ ${#args[@]} -gt 0 ] || "$py" tools/test_pool.py --fold $(for v in $ran; do echo "$v=$tmp/log$v"; done)
+if grep -qs '^rerun alone: ' $(for v in $ran; do echo "$tmp/log$v"; done); then  # the versions' reruns, as one line
+    "$py" tools/test_pool.py --fold $(for v in $ran; do echo "$v=$tmp/log$v"; done)
+fi
 for v in $failed; do
     echo "--- python$v, the end of its output:"
     if [ -s "$tmp/tails$v" ]; then cat "$tmp/tails$v"; else tail -n 40 "$tmp/log$v"; fi
