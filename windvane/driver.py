@@ -298,23 +298,33 @@ def dropped_unseen(p):
     shown = set(load_json(shown_f, []))
     unseen = [e for e in kept if dropped_id(e) not in shown]
     done = Queue(p).is_done if unseen else None  # the upstream's merges and `- done:` lines: no forge call
-    out = [dropped_line(key, what, when, bool((tid := p.norm(key.split(".")[0])) and done(tid)))
-           for key, what, when in unseen]
+    out = [dropped_line(key, what, when, merged(p, key, done)) for key, what, when in unseen]
     now = sorted(dropped_id(e) for e in kept)
     if now != sorted(shown):
         save_json(shown_f, now)
     return out
 
 
+def merged(p, key, done):
+    """Whether a question's ticket has merged (`T-003`, or `T-003.q2` of several), by `done` (a Queue's is_done)."""
+    tid = p.norm(key.split(".")[0])
+    return bool(tid and done(tid))
+
+
+def change_it(key, merged, tick=""):
+    """How to change what a dropped answer's ticket built: told a week or more after the answer, its ticket has
+    usually merged by then, so it says which, and whether `windvane answer` changes it now or only after."""
+    cmd = f"{tick}windvane answer {key} <letter>{tick}"
+    return (f"Its ticket has merged: change it now with {cmd}" if merged
+            else f"Its ticket is still open: once it merges, change it with {cmd}")
+
+
 def dropped_line(key, what, when, merged):
-    """`windvane status`'s line on a dropped late answer: shown a week or more after it, its ticket has usually
-    merged by then, so it says which, and whether `windvane answer` can change the build now or only after."""
+    """`windvane status`'s line on a dropped late answer."""
     built = what.removeprefix("building ")
     did = (f"; {key} built {built}" if merged else f"; {key} is {what}") if what.startswith("building ") else ""
     return (f"dropped answer: {key}: your answer from {phone.ago(time.time() - when)} came after it was settled, so "
-            f"it wasn't taken{did}. " + (f"Its ticket has merged: change it now with windvane answer {key} <letter>"
-                                         if merged else "Its ticket is still open: once it merges, change it with "
-                                         f"windvane answer {key} <letter>"))
+            f"it wasn't taken{did}. " + change_it(key, merged))
 
 
 def aged(line, alone, when):
@@ -1786,20 +1796,24 @@ class Pilot(Desk, Periodic):
         being down doesn't read as new."""
         old, over = [e for e in self.late if time.time() - e[2] > phone.LATE_KEEP], []
         if old:  # saved first, with the status record: a kill before the log line loses only the line, never the record
+            done = Queue(self.p).is_done
+            kept = sorted(unshown(self.p, self.dropped + [[*e[0].split(": ", 1), e[2]] for e in old]),
+                          key=lambda e: e[2])  # the shown ones out first, so only unshown ones count to the cap
+            over, kept = kept[:-DROPPED_MOST], kept[-DROPPED_MOST:]
+            for key, what, when in over:  # logged before the save: a kill between them logs one twice, never none
+                self.log(f"{key}: your answer from {phone.ago(time.time() - when)} wasn't taken ({what}), and "
+                         f"`windvane status` won't name it: it keeps only the newest {DROPPED_MOST} dropped answers. "
+                         f"{change_it(key, merged(self.p, key, done), '`')}.")
             self.late = [e for e in self.late if e not in old]
-            self.dropped = sorted(unshown(self.p, self.dropped + [[*e[0].split(": ", 1), e[2]] for e in old]),
-                                  key=lambda e: e[2])  # the shown ones first, so only unshown ones count to the cap
-            over, self.dropped = self.dropped[:-DROPPED_MOST], self.dropped[-DROPPED_MOST:]
+            self.dropped = kept
             self.save()
+        cut = {dropped_id(e) for e in over}
         for line, _, when in old:
             key, what = line.split(": ", 1)
-            self.log(f"{key}: your answer from {phone.ago(time.time() - when)} wasn't taken ({what}), and it was kept "
-                     f"{phone.LATE_KEEP // 86400} days without its push going out, so it's dropped; `windvane status` "
-                     f"names it once. Once its ticket merges, change it with `windvane answer {key} <letter>`.")
-        for key, what, when in over:  # never shown by `windvane status`, so the log is all that says it
-            self.log(f"{key}: your dropped answer from {phone.ago(time.time() - when)} ({what}) won't be named by "
-                     f"`windvane status`: it keeps only the newest {DROPPED_MOST}. Once its ticket merges, change it "
-                     f"with `windvane answer {key} <letter>`.")
+            if dropped_id([key, what, when]) not in cut:
+                self.log(f"{key}: your answer from {phone.ago(time.time() - when)} wasn't taken ({what}), and it was "
+                         f"kept {phone.LATE_KEEP // 86400} days without its push going out, so it's dropped; `windvane "
+                         f"status` names it once. {change_it(key, merged(self.p, key, done), '`')}.")
         if phone.late_pass([aged(*e) for e in self.late]):
             if self.late or self.late_failed:
                 self.late, self.late_failed = [], False

@@ -61,8 +61,8 @@ class Age(Kept):
         self.assertEqual(self.not_taken()[before:], [], "a week-old answer isn't told as new")
         self.assertEqual(self.kept(), [])
         said = ("T-001: your answer from 7 days ago wasn't taken (building A (New)), and it was kept 7 days without its "
-                "push going out, so it's dropped; `windvane status` names it once. Once its ticket merges, change it "
-                "with `windvane answer T-001 <letter>`.")
+                "push going out, so it's dropped; `windvane status` names it once. Its ticket is still open: once it "
+                "merges, change it with `windvane answer T-001 <letter>`.")
         self.assertEqual(self.log().count(said), 1, self.log()[-500:])
         pl.poll_questions()
         self.assertEqual(self.log().count("so it's dropped"), 1)

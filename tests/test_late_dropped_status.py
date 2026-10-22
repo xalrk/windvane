@@ -76,8 +76,8 @@ class Dropped(age_tests.Kept):
     def test_the_drop_line_says_it_was_kept_seven_days(self):
         self.dropped()
         said = ("T-001: your answer from 7 days ago wasn't taken (building A (New)), and it was kept 7 days without its "
-                "push going out, so it's dropped; `windvane status` names it once. Once its ticket merges, change it "
-                "with `windvane answer T-001 <letter>`.")
+                "push going out, so it's dropped; `windvane status` names it once. Its ticket is still open: once it "
+                "merges, change it with `windvane answer T-001 <letter>`.")
         self.assertEqual(self.log().count(said), 1, self.log()[-500:])
         self.assertNotIn("failed for 7 days", self.log())
 
@@ -145,17 +145,52 @@ class Dropped(age_tests.Kept):
         kept = load_json(self.p.state / "state.json", {})["dropped"]
         self.assertEqual([e[0] for e in kept], [f"T-2{i:02}" for i in range(3, driver.DROPPED_MOST + 3)])
         for i in range(3):
-            self.assertEqual(self.log().count(
-                f"T-2{i:02}: your dropped answer from 7 days ago (building A (New)) won't be named by `windvane status`: "
-                f"it keeps only the newest {driver.DROPPED_MOST}. Once its ticket merges, change it with "
-                f"`windvane answer T-2{i:02} <letter>`."), 1)
-        self.assertNotIn("T-203: your dropped answer", self.log())
-        self.assertNotIn("T-001: your dropped answer", self.log(), "a shown one isn't capped")
+            self.assertEqual(self.log().count(f"T-2{i:02}: "), 1, "one line for a cut answer")
+            self.assertIn(self.cut_line(f"T-2{i:02}"), self.log())
+        self.assertNotIn("T-203: your answer from 7 days ago wasn't taken (building A (New)), and `windvane", self.log())
+        self.assertNotIn("T-001: your answer from 7 days ago wasn't taken (building A (New)), and `windvane", self.log(),
+                         "a shown one isn't capped")
         self.drop(pl, 5, ago=phone.LATE_KEEP + 10, key="T-3{:02}")  # given after the first batch
         kept = load_json(self.p.state / "state.json", {})["dropped"]
         self.assertEqual(len(kept), driver.DROPPED_MOST, "bounded across passes")
         self.assertEqual(kept[-5:], [e for e in kept if e[0].startswith("T-3")], "the newest stay")
-        self.assertIn("T-207: your dropped answer", self.log())
+        self.assertIn(self.cut_line("T-207"), self.log(), "one dropped in an earlier pass is logged when cut")
+
+    def cut_line(self, key, merged=False):
+        return (f"{key}: your answer from 7 days ago wasn't taken (building A (New)), and `windvane status` won't name "
+                f"it: it keeps only the newest {driver.DROPPED_MOST} dropped answers. "
+                + (f"Its ticket has merged: change it now with `windvane answer {key} <letter>`." if merged else
+                   f"Its ticket is still open: once it merges, change it with `windvane answer {key} <letter>`."))
+
+    def test_a_cut_answer_whose_ticket_merged_says_to_change_it_now(self):
+        pl = self.dropped()
+        self.merge_t001()
+        pl.dropped = [["T-001.q2", "building A (New)", time.time() - phone.LATE_KEEP - 999]]
+        pl.save()
+        self.drop(pl, driver.DROPPED_MOST, key="T-2{:02}")
+        self.assertIn(self.cut_line("T-001.q2", merged=True), self.log())
+        self.assertIn("T-200: your answer from 7 days ago wasn't taken (building A (New)), and it was kept 7 days "
+                      "without its push going out, so it's dropped; `windvane status` names it once. Its ticket is "
+                      "still open", self.log())
+
+    def test_a_kill_at_the_save_logs_a_cut_answer_again_never_loses_it(self):
+        pl = self.dropped()
+        now = time.time() - phone.LATE_KEEP - 60
+        pl.late = [[f"T-2{i:02}: building A (New)", "alone", now - 30 + i] for i in range(driver.DROPPED_MOST + 2)]
+        pl.save()
+
+        def killed():
+            raise SystemExit("killed")
+        with mock.patch.object(pl, "save", killed), self.assertRaises(SystemExit):
+            pl.tell_late()
+        self.assertIn(self.cut_line("T-200"), self.log(), "logged before the save")
+        with mock.patch.object(phone, "late_pass", lambda lines: True):
+            driver.Pilot(self.p, driver_args(answer_wait=0)).tell_late()
+        for key in ("T-200", "T-201"):
+            self.assertEqual(self.log().count(self.cut_line(key)), 2, "logged again after the restart")
+        kept = load_json(self.p.state / "state.json", {})
+        self.assertEqual(len(kept["dropped"]), driver.DROPPED_MOST)
+        self.assertEqual(kept["late"], [])
 
     def test_status_racing_a_driver_save_names_each_once(self):
         """`windvane status` marks shown without the driver's lock while the driver drops more and saves: every
