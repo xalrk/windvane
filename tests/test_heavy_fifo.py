@@ -101,12 +101,15 @@ class HeavyFifo(unittest.TestCase):
         a waiter looking in between sees no holder, which isn't news worth a line. A new holder is."""
         reads = [{"pid": os.getpid(), "since": 5.0}, {}, {}, {"pid": os.getppid(), "since": 6.0}]
         lines, looked = [], []
-        with mock.patch.dict(os.environ, self.env, clear=True), mock.patch.object(heavy, "ahead", lambda e: [self.d / "x"]), \
-                mock.patch.object(heavy, "free_gb", lambda: None), mock.patch.object(heavy.time, "sleep", lambda s: None), \
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(heavy, "ahead", lambda e: [self.d / "x"]), \
+                mock.patch.object(heavy, "free_gb", lambda: None), \
+                mock.patch.object(heavy.time, "sleep", lambda s: None), \
                 mock.patch.object(heavy, "holder", lambda lock: looked.append(1) or reads[len(looked) - 1]):
             heavy.take(None, None, None, {"busy": []}, lambda: time.time() + 30, lines.append,
                        lambda: len(looked) == len(reads))
-        said = [m.group(1) for ln in lines if (m := re.search(r"lock: (held by (pid \d+|another heavy job)).*; 1 ahead", ln))]
+        held = r"lock: (held by (pid \d+|another heavy job)).*; 1 ahead"
+        said = [m.group(1) for ln in lines if (m := re.search(held, ln))]
         self.assertEqual(said, [f"held by pid {os.getpid()}", f"held by pid {os.getppid()}"])
 
     def test_giving_up_drops_the_queue_entry(self):

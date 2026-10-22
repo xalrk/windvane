@@ -347,8 +347,8 @@ class Drain(unittest.TestCase):
         fetch = self.pilot.fetch
 
         def slow_fetch():
-            if threading.current_thread() is threading.main_thread() and \
-                    {"T-001", "T-002", "T-003"} <= set(self.pilot.merged) | set(self.pilot.running):  # the loop's look, not a slot's
+            loop = threading.current_thread() is threading.main_thread()  # the loop's look, not a slot's
+            if loop and {"T-001", "T-002", "T-003"} <= set(self.pilot.merged) | set(self.pilot.running):
                 end = time.time() + 30
                 while self.pilot.running and time.time() < end:
                     time.sleep(0.05)
