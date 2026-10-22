@@ -243,7 +243,7 @@ def limit_name(e):
 def refused(code, c):
     """What a 401 or 403 means for the user: a token to set or change. Never the token itself."""
     what = "refused the token" if c.get("token") else "asks for a token"
-    return f"the server {what} ({code}): windvane phone setup --token TOKEN"
+    return f"the server {what} ({code}): windvane phone setup --token -"
 
 
 def tell(line):
@@ -908,7 +908,7 @@ def late_pass(desk=()):
 def subscribe_help(c):
     url = f"{c['server'].rstrip('/')}/{c['topic']}"
     if c.get("token"):
-        print("Your server lets in only its users: in the ntfy app, add yours first (Android: Settings, Manage users).")
+        print("Your server lets in only its users: in the ntfy app's settings, add yours first (its name and password).")
     print("On the phone: install the ntfy app, tap +, and subscribe to this topic"
           + ("" if c["server"].rstrip("/") == SERVER else f" on server {c['server']} (\"Use another server\")") + ":")
     print(f"  {c['topic']}")
@@ -972,8 +972,8 @@ def read_token(token):
     if token == "-":
         token = getpass.getpass("token: ") if sys.stdin.isatty() else sys.stdin.readline()
     token = token.strip()
-    if any(ch.isspace() for ch in token):
-        raise SystemExit("windvane phone: a token is one word, with no spaces")
+    if not token.isascii() or any(ch.isspace() for ch in token):  # it can't go in a header: every push would fail
+        raise SystemExit("windvane phone: a token is one word of plain letters, digits and signs; paste it again")
     return token
 
 

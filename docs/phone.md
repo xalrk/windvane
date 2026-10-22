@@ -51,7 +51,8 @@ upstream-base-url: "https://ntfy.sh"   # only for iPhones, which get no push at 
 With `deny-all`, make a user and a token for windvane on the server, then give windvane the token:
 
 ```sh
-ntfy user add --role=admin me          # asks for a password: the phone app logs in with it
+ntfy user add me                       # asks for a password: the phone app logs in with it
+ntfy access me "*" rw                  # read and post on every topic, but no say over other users
 ntfy token add me                      # prints tk_...
 windvane phone setup --server https://ntfy.example.com --token -   # then paste the token
 ```
@@ -62,9 +63,9 @@ kept in `phone.toml` with the topics, censored from every push like them, and ne
 `windvane doctor` says "own server, token set". Every request windvane makes carries it, and so do the buttons of
 each push, so a tap on the phone reaches the reply topic: anyone who can read your push topic can see it, which on
 a `deny-all` server is only you. If the server refuses the token, the log says so once: "the server refused the
-token (403): windvane phone setup --token TOKEN"; the run carries on without the phone.
+token (403): windvane phone setup --token -"; the run carries on without the phone.
 
-In the app, add your server's user first (Android: Settings, Manage users), then tap **+**, choose "Use another
+In the app's settings, add your server's user first (its name and password), then tap **+**, choose "Use another
 server", enter your server's address and the topic `setup` shows.
 
 About `upstream-base-url`: Apple lets only ntfy.sh wake the iPhone app, so for each message your server sends

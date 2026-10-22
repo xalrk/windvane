@@ -152,7 +152,7 @@ class WithoutToken(Base):
         self.assertNotIn("headers", json.dumps(self.ntfy.bodies))
         lines = self.log().splitlines()
         self.assertEqual(len(lines), 1, lines)
-        self.assertIn("windvane phone: the server asks for a token (401): windvane phone setup --token TOKEN",
+        self.assertIn("windvane phone: the server asks for a token (401): windvane phone setup --token -",
                       lines[0])
 
 
@@ -164,7 +164,7 @@ class WrongToken(Base):
         self.assertFalse(phone.push("Done: T-002", "merged"))
         lines = self.log().splitlines()
         self.assertEqual(len(lines), 1, lines)
-        self.assertIn("windvane phone: the server refused the token (403): windvane phone setup --token TOKEN",
+        self.assertIn("windvane phone: the server refused the token (403): windvane phone setup --token -",
                       lines[0])
         self.assertNotIn(self.token, self.log())
         self.ntfy.token = self.token  # the server takes it again (or the user set the right one)
@@ -175,7 +175,7 @@ class WrongToken(Base):
         phone.listen(until=lambda: len(self.waits) >= 3)
         lines = self.log().splitlines()
         self.assertEqual(len(lines), 1, lines)
-        self.assertIn("the server refused the token (403): windvane phone setup --token TOKEN; reconnecting, next "
+        self.assertIn("the server refused the token (403): windvane phone setup --token -; reconnecting, next "
                       "try in 10 s", lines[0])
         self.assertEqual(self.waits, [10, 20, 40])
 
@@ -197,7 +197,7 @@ class Setup(Base):
         self.assertEqual(c["token"], TOKEN)
         self.assertEqual(stat.S_IMODE(phone.conf_path().stat().st_mode), 0o600)
         self.assertIn("test push: sent", out)
-        self.assertIn("add yours first (Android: Settings, Manage users)", out)
+        self.assertIn("in the ntfy app's settings, add yours first", out)
         self.assertEqual(self.ntfy.msgs[-1]["title"], "windvane: phone works")
         self.assert_never_shown(out)
 
@@ -218,12 +218,18 @@ class Setup(Base):
         self.assertNotIn("token", phone.conf())
         self.assertNotIn("token", phone.conf_path().read_text())
 
+    def test_a_token_that_cant_go_in_a_header_is_refused_at_setup(self):
+        with self.assertRaises(SystemExit) as e:
+            self.setup_cli("--token", "-", stdin=TOKEN + "\u200b\n")  # a zero-width space pasted with it
+        self.assertIn("paste it again", str(e.exception))
+        self.assertNotIn("token", phone.conf())
+
     def test_a_refused_test_push_says_to_set_the_token(self):
         out = self.setup_cli()
-        self.assertIn("test push: FAILED (the server asks for a token (401): windvane phone setup --token TOKEN)",
+        self.assertIn("test push: FAILED (the server asks for a token (401): windvane phone setup --token -)",
                       out)
         out = self.setup_cli("--token", "tk_wrong0000000000000000000000000")
-        self.assertIn("test push: FAILED (the server refused the token (403): windvane phone setup --token TOKEN)",
+        self.assertIn("test push: FAILED (the server refused the token (403): windvane phone setup --token -)",
                       out)
 
 
