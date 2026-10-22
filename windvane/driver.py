@@ -71,6 +71,7 @@ DRAIN_AFTER = 3 * 3600  # seconds a driver may run behind its install's code bef
 WRAP_UP = 20  # minutes before its stop a worker is told to wrap up
 WRAP_LEAD = 5  # minutes a worker's wrap-up must still be ahead for it to start: less, and it ends PARTIAL at once
 DROPPED_SHOWN = "dropped-shown.json"  # in the state dir: the dropped late answers `windvane status` has shown
+DROPPED_MOST = 20  # dropped late answers state.json keeps for `windvane status`: older ones past it are only logged
 RETRY = "RETRY"  # in the state dir: the failed tickets `windvane retry` puts back in the running autopilot's queue
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
@@ -282,6 +283,12 @@ def dropped_id(e):
     return f"{e[0]}@{int(e[2])}"
 
 
+def unshown(p, dropped):
+    """The dropped late answers `windvane status` hasn't shown: the ones the driver keeps for it."""
+    shown = set(load_json(p.state / DROPPED_SHOWN, []))
+    return [e for e in dropped if dropped_id(e) not in shown]
+
+
 def dropped_unseen(p):
     """The late answers dropped after phone.LATE_KEEP that `windvane status` hasn't shown yet, as lines, each marked
     shown: their push never went out, so this is how the user learns their answer didn't count. The shown file holds
@@ -289,14 +296,25 @@ def dropped_unseen(p):
     kept = load_json(p.state / "state.json", {}).get("dropped", [])
     shown_f = p.state / DROPPED_SHOWN
     shown = set(load_json(shown_f, []))
-    out = [f"dropped answer: {key}: your answer from {phone.ago(time.time() - when)} came after it was settled, so "
-           f"it wasn't taken" + (f"; {key} is {what}" if what.startswith("building ") else "")
-           + f". Once its ticket merges, change it with windvane answer {key} <letter>"
-           for key, what, when in kept if dropped_id([key, what, when]) not in shown]
+    unseen = [e for e in kept if dropped_id(e) not in shown]
+    done = Queue(p).is_done if unseen else None  # the upstream's merges and `- done:` lines: no forge call
+    out = [dropped_line(key, what, when, bool((tid := p.norm(key.split(".")[0])) and done(tid)))
+           for key, what, when in unseen]
     now = sorted(dropped_id(e) for e in kept)
     if now != sorted(shown):
         save_json(shown_f, now)
     return out
+
+
+def dropped_line(key, what, when, merged):
+    """`windvane status`'s line on a dropped late answer: shown a week or more after it, its ticket has usually
+    merged by then, so it says which, and whether `windvane answer` can change the build now or only after."""
+    built = what.removeprefix("building ")
+    did = (f"; {key} built {built}" if merged else f"; {key} is {what}") if what.startswith("building ") else ""
+    return (f"dropped answer: {key}: your answer from {phone.ago(time.time() - when)} came after it was settled, so "
+            f"it wasn't taken{did}. " + (f"Its ticket has merged: change it now with windvane answer {key} <letter>"
+                                         if merged else "Its ticket is still open: once it merges, change it with "
+                                         f"windvane answer {key} <letter>"))
 
 
 def aged(line, alone, when):
@@ -419,8 +437,7 @@ class Pilot(Desk, Periodic):
     def save(self):
         with self.lock:
                 self.settled_as = self.settled_kept()
-                shown = set(load_json(self.p.state / DROPPED_SHOWN, []))
-                self.dropped = [e for e in self.dropped if dropped_id(e) not in shown]
+                self.dropped = unshown(self.p, self.dropped)
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
@@ -1767,16 +1784,22 @@ class Pilot(Desk, Periodic):
         too): one push, and they're dropped only once it went out. One given over phone.LATE_KEEP ago is dropped from the
         push, for `windvane status` to name once, and one over an hour old says its age, so an answer from days of ntfy
         being down doesn't read as new."""
-        old = [e for e in self.late if time.time() - e[2] > phone.LATE_KEEP]
+        old, over = [e for e in self.late if time.time() - e[2] > phone.LATE_KEEP], []
         if old:  # saved first, with the status record: a kill before the log line loses only the line, never the record
             self.late = [e for e in self.late if e not in old]
-            self.dropped += [[*e[0].split(": ", 1), e[2]] for e in old]
+            self.dropped = sorted(unshown(self.p, self.dropped + [[*e[0].split(": ", 1), e[2]] for e in old]),
+                                  key=lambda e: e[2])  # the shown ones first, so only unshown ones count to the cap
+            over, self.dropped = self.dropped[:-DROPPED_MOST], self.dropped[-DROPPED_MOST:]
             self.save()
         for line, _, when in old:
             key, what = line.split(": ", 1)
             self.log(f"{key}: your answer from {phone.ago(time.time() - when)} wasn't taken ({what}), and it was kept "
                      f"{phone.LATE_KEEP // 86400} days without its push going out, so it's dropped; `windvane status` "
                      f"names it once. Once its ticket merges, change it with `windvane answer {key} <letter>`.")
+        for key, what, when in over:  # never shown by `windvane status`, so the log is all that says it
+            self.log(f"{key}: your dropped answer from {phone.ago(time.time() - when)} ({what}) won't be named by "
+                     f"`windvane status`: it keeps only the newest {DROPPED_MOST}. Once its ticket merges, change it "
+                     f"with `windvane answer {key} <letter>`.")
         if phone.late_pass([aged(*e) for e in self.late]):
             if self.late or self.late_failed:
                 self.late, self.late_failed = [], False

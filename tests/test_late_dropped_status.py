@@ -1,12 +1,18 @@
 """T-233: a late `windvane answer` dropped after phone.LATE_KEEP is kept in state.json for `windvane status` to name
 once, so the user learns their answer didn't count without reading the log; the drop line says it was kept that long
-(the answer may be older because the driver was stopped); and the failed push's line counts its answers right."""
+(the answer may be older because the driver was stopped); and the failed push's line counts its answers right.
+T-238: the line says whether its ticket has merged, state.json keeps at most driver.DROPPED_MOST of them, and
+`windvane status` racing a driver save names each exactly once."""
 import contextlib
 import io
 import os
+import random
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS.parent))
@@ -44,8 +50,8 @@ class Dropped(age_tests.Kept):
         pl = self.dropped()
         out = [line for line in self.status().splitlines() if line.startswith("dropped answer:")]
         self.assertEqual(out, ["dropped answer: T-001: your answer from 7 days ago came after it was settled, so it "
-                               "wasn't taken; T-001 is building A (New). Once its ticket merges, change it with "
-                               "windvane answer T-001 <letter>"])
+                               "wasn't taken; T-001 is building A (New). Its ticket is still open: once it merges, "
+                               "change it with windvane answer T-001 <letter>"])
         self.assertNotIn("dropped answer:", self.status(), "shown once")
         pl.poll_questions()  # the driver forgets it once shown
         self.assertEqual(load_json(self.p.state / "state.json", {})["dropped"], [])
@@ -58,7 +64,8 @@ class Dropped(age_tests.Kept):
         pl.save()
         out = [line for line in self.status().splitlines() if line.startswith("dropped answer:")]
         self.assertEqual(out, ["dropped answer: T-001: your answer from 7 days ago came after it was settled, so it "
-                               "wasn't taken. Once its ticket merges, change it with windvane answer T-001 <letter>"])
+                               "wasn't taken. Its ticket is still open: once it merges, change it with windvane answer "
+                               "T-001 <letter>"])
 
     def test_the_driver_keeps_it_until_status_shows_it(self):
         self.dropped()
@@ -97,6 +104,105 @@ class Dropped(age_tests.Kept):
         with mock.patch.dict(os.environ, FAKE_EXIT="1"):
             pl.tell_late()
         self.assertIn("the push of 3 late answers failed; trying again", self.log())
+
+    def merge_t001(self):
+        """T-001's branch merged on the upstream, as the driver merges one."""
+        self.s.git("checkout", "-qb", "t-001-work")
+        self.s.write("done.txt", "T-001\n")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-qm", "T-001")
+        self.s.git("checkout", "-q", "main")
+        self.s.git("merge", "--no-ff", "-qm", "Merge T-001: do T-001 (branch t-001-work)", "t-001-work")
+        self.s.git("push", "-q", "origin", "main")
+
+    def test_one_whose_ticket_merged_says_so_and_to_change_it_now(self):
+        self.dropped()
+        self.merge_t001()
+        out = [line for line in self.status().splitlines() if line.startswith("dropped answer:")]
+        self.assertEqual(out, ["dropped answer: T-001: your answer from 7 days ago came after it was settled, so it "
+                               "wasn't taken; T-001 built A (New). Its ticket has merged: change it now with windvane "
+                               "answer T-001 <letter>"])
+
+    def test_a_question_of_several_is_read_by_its_ticket(self):
+        pl = self.dropped()
+        self.merge_t001()
+        pl.dropped = [["T-001.q2", "settled before your answer came", pl.dropped[0][2]]]
+        pl.save()
+        self.assertIn("T-001.q2: your answer from 7 days ago came after it was settled, so it wasn't taken. Its ticket "
+                      "has merged: change it now with windvane answer T-001.q2 <letter>", self.status())
+
+    def drop(self, pl, n, ago=phone.LATE_KEEP + 60, key="T-{:03}"):
+        """`n` late answers past phone.LATE_KEEP dropped in one pass whose push goes out, the oldest first."""
+        now = time.time()
+        pl.late = [[f"{key.format(i)}: building A (New)", "alone", now - ago - (n - i)] for i in range(n)]
+        with mock.patch.object(phone, "late_pass", lambda lines: True):
+            pl.tell_late()
+
+    def test_the_list_keeps_the_newest_and_logs_the_rest(self):
+        pl = self.dropped()
+        self.status()  # T-001 shown: it doesn't count to the cap
+        self.drop(pl, driver.DROPPED_MOST + 3, key="T-2{:02}")
+        kept = load_json(self.p.state / "state.json", {})["dropped"]
+        self.assertEqual([e[0] for e in kept], [f"T-2{i:02}" for i in range(3, driver.DROPPED_MOST + 3)])
+        for i in range(3):
+            self.assertEqual(self.log().count(
+                f"T-2{i:02}: your dropped answer from 7 days ago (building A (New)) won't be named by `windvane status`: "
+                f"it keeps only the newest {driver.DROPPED_MOST}. Once its ticket merges, change it with "
+                f"`windvane answer T-2{i:02} <letter>`."), 1)
+        self.assertNotIn("T-203: your dropped answer", self.log())
+        self.assertNotIn("T-001: your dropped answer", self.log(), "a shown one isn't capped")
+        self.drop(pl, 5, ago=phone.LATE_KEEP + 10, key="T-3{:02}")  # given after the first batch
+        kept = load_json(self.p.state / "state.json", {})["dropped"]
+        self.assertEqual(len(kept), driver.DROPPED_MOST, "bounded across passes")
+        self.assertEqual(kept[-5:], [e for e in kept if e[0].startswith("T-3")], "the newest stay")
+        self.assertIn("T-207: your dropped answer", self.log())
+
+    def test_status_racing_a_driver_save_names_each_once(self):
+        """`windvane status` marks shown without the driver's lock while the driver drops more and saves: every
+        dropped answer is named exactly once, and the driver forgets none before status has named it."""
+        pl = self.dropped()
+        pl.dropped = []
+        pl.save()
+        real_load, real_save = driver.load_json, driver.save_json
+
+        def jitter():
+            time.sleep(random.random() * 0.002)
+
+        def load(*a):
+            jitter()
+            out = real_load(*a)
+            jitter()
+            return out
+
+        def save(*a):
+            jitter()
+            real_save(*a)
+            jitter()
+        named, n, done = [], 12, threading.Event()
+
+        def status():
+            while not done.is_set():
+                named.extend(driver.dropped_unseen(self.p))
+            named.extend(driver.dropped_unseen(self.p))
+
+        def drive():
+            for i in range(n):
+                self.drop(pl, 1, key=f"T-{100 + i}")
+                pl.save()
+            done.set()
+        open_queue = mock.patch.object(driver, "Queue", lambda p: SimpleNamespace(is_done=lambda tid: False))
+        with open_queue, mock.patch.object(driver, "load_json", load), mock.patch.object(driver, "save_json", save):
+            threads = [threading.Thread(target=status), threading.Thread(target=drive)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(30)
+            pl.save()
+            named.extend(driver.dropped_unseen(self.p))
+        keys = [line.split(":")[1].strip() for line in named]
+        self.assertEqual(sorted(keys), [f"T-{100 + i}" for i in range(n)], "each named exactly once")
+        pl.save()
+        self.assertEqual(load_json(self.p.state / "state.json", {})["dropped"], [], "all forgotten once named")
 
 
 if __name__ == "__main__":

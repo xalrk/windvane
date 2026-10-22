@@ -20,6 +20,9 @@ release on the same day adds a number (`2026.10.9.1`).
   filled in, and `windvane phone rotate` adds the lines that take the old topics back.
 
 ### Changed
+- A dropped late answer's line in `windvane status` says whether its ticket has merged, so you know whether
+  `windvane answer` changes it now or only after the merge. At most 20 unshown ones are kept for it; the log names
+  any past that.
 - The phone goes easier on the ntfy server. A dropped stream is opened again after 10 s, then 20, 40 and so on up
   to 5 minutes, with one log line per outage instead of one every 10 s, and a `429` waits out its `Retry-After`.
   A push the server refuses with a `429` is logged once with the limit's name, and the next push waits out its
