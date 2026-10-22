@@ -52,14 +52,23 @@ auth-default-access: "deny-all"        # nobody reads or posts without logging i
 upstream-base-url: "https://ntfy.sh"   # only for iPhones, which get no push at all without it
 ```
 
-With `deny-all`, make a user and a token for windvane on the server, then give windvane the token:
+With `deny-all`, make a user and a token for windvane on the server, give windvane the token, then grant that user
+windvane's two topics and nothing more:
 
 ```sh
 ntfy user add me                       # asks for a password: the phone app logs in with it
-ntfy access me "*" rw                  # read and post on every topic, but no say over other users
 ntfy token add me                      # prints tk_...
-windvane phone setup --server https://ntfy.example.com --token -   # then paste the token
+windvane phone setup --server https://ntfy.example.com --token -   # paste the token; prints the two lines below
+ntfy access me <push topic> rw         # the two lines setup printed, with <user> as me
+ntfy access me <reply topic> rw
+windvane phone setup                   # again, now that the server takes them: sends the test push
 ```
+
+Grant only those two topics, never `"*"`: the token rides in every push's buttons, so whoever sees one push's buttons
+can read and post wherever its user may. A user given `"*"` before drops it with `ntfy access --reset me`, then
+gets the two lines `windvane phone setup` prints. Setup prints the topics in the terminal only, and
+`windvane phone rotate` prints the grants for its new topics the same way. A topic of your own on the same server
+can be granted to the same user too; the token then reaches it as well.
 
 `--token -` asks for the token without showing it, so it stays out of your shell's history; `--token TOKEN` works too,
 and `windvane phone setup --token -` later changes it without touching the topics (`--token ""` removes it). It is
@@ -67,7 +76,9 @@ kept in `phone.toml` with the topics, censored from every push like them, and ne
 `windvane doctor` says "own server, token set". Every request windvane makes carries it, and so do the buttons of
 each push, so a tap on the phone reaches the reply topic: anyone who can read your push topic can see it, which on
 a `deny-all` server is only you. If the server refuses the token, the log says so once: "the server refused the
-token (403): windvane phone setup --token -"; the run carries on without the phone.
+token (401): windvane phone setup --token -", or, when its user hasn't been granted the topics, "the server hasn't
+let the token's user use windvane's topics (403): run the two `ntfy access` lines `windvane phone setup` prints";
+the run carries on without the phone.
 
 In the app's settings, add your server's user first (its name and password), then tap **+**, choose "Use another
 server", enter your server's address and the topic `setup` shows.

@@ -246,9 +246,14 @@ BAD_TOKEN = "the token in phone.toml isn't plain text: windvane phone setup --to
 
 
 def refused(code, c):
-    """What a 401 or 403 means for the user: a token to set or change. Never the token itself."""
-    what = "refused the token" if c.get("token") else "asks for a token"
-    return f"the server {what} ({code}): windvane phone setup --token -"
+    """What a 401 or 403 means for the user: a token to set or change, or, with a token ntfy knows (it answers 401
+    to one it doesn't), topics its user hasn't been granted. Never the token itself."""
+    if not c.get("token"):
+        return f"the server asks for a token ({code}): windvane phone setup --token -"
+    if code == 403:
+        return "the server hasn't let the token's user use windvane's topics (403): run the two `ntfy access` lines " \
+               "`windvane phone setup` prints"
+    return f"the server refused the token ({code}): windvane phone setup --token -"
 
 
 def tell(line):
@@ -968,10 +973,22 @@ def late_pass(desk=()):
 
 # ---------- `windvane phone ...` at the desk
 
+def access_help(c):
+    """The grants a deny-all server needs for windvane's two topics, and no others: the token rides in every push's
+    buttons, so whoever sees one can do what its user may. Printed at the terminal only, never pushed or logged."""
+    if not c.get("token"):
+        return
+    print("On the server, let the token's user (<user> below) read and post on windvane's two topics, and only them:")
+    for topic in (c["topic"], c["reply_topic"]):
+        print(f"  ntfy access <user> {topic} rw")
+
+
 def subscribe_help(c):
     url = f"{c['server'].rstrip('/')}/{c['topic']}"
+    access_help(c)
     if c.get("token"):
         print("Your server lets in only its users: in the ntfy app's settings, add yours first (its name and password).")
+        print("On an iPhone, pushes come only if the server's server.yml sets upstream-base-url: \"https://ntfy.sh\".")
     print("On the phone: install the ntfy app, tap +, and subscribe to this topic"
           + ("" if c["server"].rstrip("/") == SERVER else f" on server {c['server']} (\"Use another server\")") + ":")
     print(f"  {c['topic']}")
@@ -1073,10 +1090,11 @@ def setup(server=None, service=True, project=None, token=None):
         register(project)
     if shutil.which("notify"):
         print("Your own `notify` / `notify-ask` are on PATH: windvane keeps using them; this setup is the fallback.")
+    subscribe_help(c)  # first: a deny-all server takes the test push only once the topics are granted
     ok = send(c, "windvane: phone works", "Pushes and questions from windvane come here. Tap Status to try a "
               "command.", 3, "white_check_mark", ("Status=status",))
     print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
-    subscribe_help(c)
+    grant_then_retry(c, ok)
     if service:
         install_service()
     return 0 if ok else 1
@@ -1086,6 +1104,12 @@ def why_failed(c):
     """Why setup's test push failed, as far as windvane can tell."""
     return BAD_TOKEN if _refused == -1 else refused(_refused, c) if _refused else \
         "check the server address and the network"
+
+
+def grant_then_retry(c, ok):
+    """After a test push the server refused for want of the grants access_help printed: the next step."""
+    if not ok and c.get("token") and _refused == 403:
+        print("Once they have run on the server, `windvane phone setup` again sends the test push.")
 
 
 def off():
@@ -1112,6 +1136,7 @@ def rotate():
     if on(c):
         ok = send(c, "windvane: new topic works", "Pushes come here from now on.", 3, "white_check_mark")
         print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
+        grant_then_retry(c, ok)
 
 
 def main(a, project=None):
