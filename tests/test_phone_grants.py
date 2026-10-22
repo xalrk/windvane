@@ -51,7 +51,7 @@ class Grants(server.Base):
                 out = self.setup_cli()
                 c = phone.conf()
                 self.assertIn(f"  ntfy access <user> {c['topic']} rw", out.splitlines())
-                self.assertIn("(<user> below: the server didn't say its name)", out)
+                self.assertIn("(the server didn't say who: put that account's name for <user>)", out)
 
     def test_an_account_lookup_that_fails_is_none(self):
         self.ntfy.username = "ann"
@@ -72,6 +72,12 @@ class Grants(server.Base):
         self.assertEqual(sum("--reset" in line for line in lines), 2, out)
         self.assert_no_token(out)
         self.assertNotIn(self.c["topic"], self.log(), "printed at the terminal only")
+
+    def test_a_garbled_reply_mid_rotate_still_prints_the_resets(self):
+        self.ntfy.garbled = True
+        out = self.rotated()
+        self.assertIn(f"  ntfy access --reset <user> {self.c['topic']}", out.splitlines())
+        self.assertIn(f"  ntfy access <user> {phone.conf()['topic']} rw", out.splitlines())
 
     def test_a_rotate_without_a_token_has_nothing_to_reset(self):
         phone.save_conf({k: v for k, v in self.c.items() if k != "token"})

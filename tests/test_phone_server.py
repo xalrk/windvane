@@ -26,11 +26,11 @@ class Locked(Server):
     """The scripted ntfy of test_phone_backoff, set to deny-all: a request without `Bearer <token>` gets 401 (no
     token) or 403 (another one) and reaches nothing. `seen`: (method, path, Authorization) of every request;
     `bodies`: every accepted push as sent. `username`: what /v1/account names the token's user (None: a 404, as from
-    an older server)."""
+    an older server); `garbled`: it answers with no status line, as a proxy in the way might."""
 
     def __init__(self, token=TOKEN):
         super().__init__()
-        self.token, self.seen, self.bodies, self.username = token, [], [], None
+        self.token, self.seen, self.bodies, self.username, self.garbled = token, [], [], None, False
         base, fake = self.httpd.RequestHandlerClass, self
 
         class Guard(base):
@@ -46,7 +46,10 @@ class Locked(Server):
             def do_GET(self):
                 if not self.allowed():
                     return
-                if self.path == "/v1/account":
+                if self.path == "/v1/account" and fake.garbled:
+                    self.wfile.write(b"garbage\r\n")  # no status line: http.client raises BadStatusLine
+                    self.close_connection = True
+                elif self.path == "/v1/account":
                     self.send_response(200 if fake.username else 404)
                     self.end_headers()
                     self.wfile.write(json.dumps({"username": fake.username} if fake.username else

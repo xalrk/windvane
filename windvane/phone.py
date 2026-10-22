@@ -15,6 +15,7 @@ The user's own `notify` / `notify-ask` scripts, when on PATH, are used instead (
 import fcntl
 import functools
 import getpass
+import http.client
 import json
 import os
 import re
@@ -992,7 +993,7 @@ def account(c):
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             got = json.loads(r.read(1 << 16))
-    except (OSError, ValueError) as e:  # an HTTPError, a timeout, not JSON, a token unfit for a header
+    except (OSError, ValueError, http.client.HTTPException) as e:  # a refusal, a timeout, a cut-off or garbled reply
         if isinstance(e, urllib.error.HTTPError):
             e.close()
         return None
@@ -1007,7 +1008,7 @@ def access_help(c, old=()):
     if not c.get("token"):
         return
     user = account(c)
-    who = "the token's user" + ("" if user else " (<user> below: the server didn't say its name)")
+    who = "the token's user" + ("" if user else " (the server didn't say who: put that account's name for <user>)")
     user = user or "<user>"
     if old:
         print(f"On the server, take the old topics back from {who}, as every old push's buttons carry the token, "
