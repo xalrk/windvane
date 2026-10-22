@@ -21,6 +21,7 @@ from test_leftover_helpers import TITLE, kill  # noqa: E402
 
 TCK = os.sysconf("SC_CLK_TCK")
 USERS, HELPER = 4000001, 4000002  # pids no real process here has
+CLOCK_TID = 4000003  # and the thread `util.clock` reads its start from: all in the fake /proc, none in a real one
 
 
 class LeftoverClock(unittest.TestCase):
@@ -31,10 +32,11 @@ class LeftoverClock(unittest.TestCase):
         self.root = Path(os.path.realpath(tmp.name)) / "checkout"
         self.root.mkdir()
         self.p = SimpleNamespace(cfg={"isolate": False}, main_root=lambda: self.root)
-        self.now = util.clock()  # the host's clock, which the run reads off a thread of its own (the real one's ticks)
-        patch = mock.patch.object(util, "PROC", self.proc)
-        patch.start()
-        self.addCleanup(patch.stop)
+        self.now = 86400.0  # the host's clock, a day since boot: what the run reads off a thread of its own (`clock`)
+        for patch in (mock.patch.object(util, "PROC", self.proc),
+                      mock.patch.object(util.threading, "get_native_id", lambda: CLOCK_TID)):
+            patch.start()
+            self.addCleanup(patch.stop)
         env = mock.patch.dict(os.environ)
         env.start()
         self.addCleanup(env.stop)
@@ -43,8 +45,9 @@ class LeftoverClock(unittest.TestCase):
         # the container's uptime says 50 s, far below every process's start ticks, the host's
         self.proc.mkdir()
         (self.proc / "uptime").write_text("50.00 40.00\n")
-        (self.proc / str(os.getpid())).mkdir()
-        os.symlink(f"/proc/{os.getpid()}/task", self.proc / str(os.getpid()) / "task")
+        (self.proc / str(os.getpid()) / "task" / str(CLOCK_TID)).mkdir(parents=True)  # the thread `clock` starts
+        (self.proc / str(os.getpid()) / "task" / str(CLOCK_TID) / "stat").write_text(
+            f"{CLOCK_TID} (python3) S " + " ".join(["0"] * 18 + [str(int(self.now * TCK))] + ["0"] * 5) + "\n")
         self.fake(USERS, self.now / 2, self.root, "vim notes")  # the user's, older than the run
         self.fake(HELPER, self.now + 1000, self.root, "sleep 120")  # what the run's tools started
 
@@ -68,7 +71,7 @@ class LeftoverClock(unittest.TestCase):
         self.assertEqual(self.left(), [(HELPER, "sleep 120")])
 
     def test_no_clock_reports_nothing_rather_than_everything(self):
-        (self.proc / str(os.getpid()) / "task").unlink()
+        shutil.rmtree(self.proc / str(os.getpid()) / "task")
         self.assertIsNone(driver.run_began())
         self.assertEqual(self.left(), [])
 

@@ -15,11 +15,21 @@ from windvane import config, heavy, util  # noqa: E402
 GB = 1048576  # kB
 
 
+def linked(tmp):
+    """A dir under `tmp` reached through a symlink, as a process reports it: resolved. macOS's temp dir is one
+    (/var/folders is /private/var/folders), and the dirs a project's helpers count by (`heavy.reuse_of`) and the dir a
+    daemon was started from (`heavy.started_in`) are resolved too, so a fake process given the unresolved path would
+    belong to no project there."""
+    (tmp / "private").mkdir()
+    (tmp / "var").symlink_to("private")
+    return (tmp / "var").resolve()
+
+
 class HeavyReuse(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(prefix="windvane-")
         self.addCleanup(tmp.cleanup)
-        self.d = d = Path(tmp.name)
+        self.d = d = linked(Path(tmp.name))
         self.proc = d / "proc"
         self.proc.mkdir()
         (self.proc / "meminfo").write_text(f"MemTotal: {32 * GB} kB\nMemAvailable: {int(4.2 * GB)} kB\n")

@@ -13,8 +13,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import cli, heavy, jobs, util  # noqa: E402
 from windvane.runner import TICKET  # noqa: E402
+from test_heavy_reuse import linked  # noqa: E402
 
 # The driver's heavy check waits in a python child: this stands in for its interpreter, reading the fake /proc.
 SHIM = """import sys
@@ -33,7 +35,7 @@ class ReuseHint(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(prefix="windvane-")
         self.addCleanup(tmp.cleanup)
-        self.d = d = Path(tmp.name)
+        self.d = d = linked(Path(tmp.name))
         self.proc = d / "proc"
         self.proc.mkdir()
         (self.proc / "meminfo").write_text(f"MemTotal: {32 * GB} kB\nMemAvailable: {int(2.4 * GB)} kB\n")
