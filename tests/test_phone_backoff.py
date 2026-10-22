@@ -25,9 +25,9 @@ LIMIT = json.dumps({"code": 42901, "http": 429, "error": "limit reached: too man
 
 class Server:
     """A scripted ntfy. Each GET takes the next of `gets` ("drop": closed with no answer, "429:<s>": refused with
-    that Retry-After, "silent": headers and then nothing, "deliver": all it has past `since`, then closed), and when
-    they run out it holds a stream open, sending each new message, until `close`. Each POST takes the next of
-    `posts` (an HTTP status; 200 when they run out)."""
+    that Retry-After, "silent": headers and then nothing, "deliver": all it has past `since`, then closed); when
+    they run out it holds a stream open, sending each new message until `close` (a poll gets what's there and
+    ends). Each POST takes the next of `posts` (an HTTP status; 200 when they run out)."""
 
     def __init__(self):
         self.gets, self.posts, self.urls, self.msgs = [], [], [], []
@@ -84,7 +84,7 @@ class Server:
                         if m["topic"] in topics:
                             self.wfile.write((json.dumps({"event": "message", **m}) + "\n").encode())
                             self.wfile.flush()
-                    if step == "deliver" or fake.closing:
+                    if step == "deliver" or "poll=1" in self.path or fake.closing:
                         return
                     with fake.cond:
                         fake.cond.wait(0.05)

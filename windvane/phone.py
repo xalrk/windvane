@@ -32,7 +32,7 @@ from .config import exe, user_dir
 from .util import log
 
 SERVER = "https://ntfy.sh"
-PUMP_EVERY = 15  # seconds between a run's polls of the reply topic when it has no stream (ntfy.sh refills a request per 5 s)
+PUMP_EVERY = 15  # seconds between a run's polls of the reply topic when it has no stream (ntfy refills one per 5 s)
 RETRY = 10  # seconds before the listener reconnects after a dropped stream, doubling while it keeps dropping
 RETRY_CAP = 300  # the longest wait between reconnects: a server that is down hears from each install every 5 min
 STEADY = 60  # seconds a stream must stay up (or deliver a message) for the next drop to wait RETRY again
