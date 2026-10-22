@@ -178,8 +178,8 @@ class Reconnects(Base):
         self.assertTrue(all("poll=1" in u for u in self.ntfy.urls[1:]), self.ntfy.urls)
         self.assertEqual(self.waits, [phone.PUMP_EVERY] * 2)
         self.assertIn("the server's stream opened but brought nothing in 0 s: check for a proxy or VPN that buffers "
-                      "long requests (HTTPS_PROXY, a company gateway). Asking every 15 s instead, and trying a stream "
-                      "again every 30 min", self.log()[0])
+                      "long requests (`env | grep -i proxy`, a company gateway). Asking every 15 s instead, and "
+                      "trying a stream again every 30 min", self.log()[0])
 
 
 class Pushes(Base):

@@ -789,8 +789,8 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
             if opened and not lines and not streamed and isinstance(err, TimeoutError):
                 polling, restream_at = True, time.time() + RESTREAM
                 tell(f"windvane phone: the server's stream opened but brought nothing in {span(STREAM_WAIT)}: check "
-                     f"for a proxy or VPN that buffers long requests (HTTPS_PROXY, a company gateway). Asking every "
-                     f"{span(PUMP_EVERY)} instead, and trying a stream again every {span(RESTREAM)}")
+                     f"for a proxy or VPN that buffers long requests (`env | grep -i proxy`, a company gateway). "
+                     f"Asking every {span(PUMP_EVERY)} instead, and trying a stream again every {span(RESTREAM)}")
                 continue
             is_429 = isinstance(err, urllib.error.HTTPError) and err.code == 429
             pause = max(retry_after(err, wait) if is_429 else wait, PUMP_EVERY if polling else 0)
