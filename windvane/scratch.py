@@ -126,6 +126,20 @@ def busy():
     return set(util.cwds().values()) | {d.rstrip("/") for d in util.tmpdirs().values()}
 
 
+class Busy:
+    """`busy()`, read at the first look and then kept. Without /proc (macOS) it is an `lsof` and a `ps` over every
+    process, up to seconds on a loaded machine, and the driver cleans after every ticket: a clean whose dirs are all
+    in recent use (the usual case) never asks."""
+
+    def __init__(self):
+        self.seen = None
+
+    def __iter__(self):
+        if self.seen is None:
+            self.seen = busy()
+        return iter(self.seen)
+
+
 def _recent(path, since):
     """Whether anything in the tree at `path` changed since `since`; stops at the first that did."""
     stack = [str(path)]
@@ -160,7 +174,7 @@ def size(path):
 
 def stale(dirs, age=AGE, procs=None):
     """The dirs among `dirs` that are ours, untouched for `age` seconds, and no process's cwd or TMPDIR is in."""
-    since, procs = time.time() - age, busy() if procs is None else procs
+    since, procs = time.time() - age, Busy() if procs is None else procs
     out = []
     for d in dirs:
         try:
@@ -169,7 +183,7 @@ def stale(dirs, age=AGE, procs=None):
         except OSError:
             continue
         names = {str(d), os.path.realpath(d)}  # lsof gives macOS's /var as /private/var; a TMPDIR is as it was set
-        if any(b == n or b.startswith(n + os.sep) for b in procs for n in names) or _recent(d, since):
+        if _recent(d, since) or any(b == n or b.startswith(n + os.sep) for b in procs for n in names):
             continue
         out.append(d)
     return out
@@ -218,7 +232,8 @@ def old_leaks():
 
 def removable(p=None, running=(), age=AGE):
     """The leftovers `clean` removes: stale windvane dirs, and old leaks untouched for a day."""
-    return stale(candidates(p, running), age) + stale(old_leaks(), max(age, DAY))
+    procs = Busy()
+    return stale(candidates(p, running), age, procs) + stale(old_leaks(), max(age, DAY), procs)
 
 
 def leftovers(p=None, running=(), age=AGE):
