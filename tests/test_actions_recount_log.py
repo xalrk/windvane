@@ -19,7 +19,7 @@ from windvane.util import save_json  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
 LOGGED_OUT = """#!/bin/sh
-if [ "$1" = repo ]; then echo me/proj; exit 0; fi
+if [ "$1" = repo ]; then echo '[{"nameWithOwner": "me/proj", "visibility": "PRIVATE"}]'; exit 0; fi
 echo "To get started with GitHub CLI, please run:  gh auth login" >&2
 echo "Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token." >&2
 exit 4
