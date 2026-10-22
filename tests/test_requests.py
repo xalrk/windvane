@@ -199,7 +199,7 @@ class Requests(unittest.TestCase):
         with unittest.mock.patch("windvane.held.land", lambda *a: (False, "the branch periodic-x")):
             self.triage([("Retry the check on a flaky network", "WANT=accept")])
         self.assertEqual(list(self.inbox()), [])  # the next round doesn't ticket it again
-        self.assertRegex(self.inbox(done=True)["R-001"], r"- Verdict: accepted → T-003 \(held on periodic-\d{8}-\d{4}\)")
+        self.assertRegex(self.inbox(done=True)["R-001"], r"- Verdict: accepted → T-003 \(held on periodic-\d{8}-\d{6}\)")
 
     def test_an_accept_naming_no_landed_ticket_stays_open(self):
         self.make()
