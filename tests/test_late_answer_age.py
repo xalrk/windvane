@@ -60,18 +60,19 @@ class Age(Kept):
         pl.poll_questions()
         self.assertEqual(self.not_taken()[before:], [], "a week-old answer isn't told as new")
         self.assertEqual(self.kept(), [])
-        said = ("T-001: your answer from 7 days ago wasn't taken (building A (New)), and its push failed for 7 days, so "
-                "it's dropped untold; once its ticket merges, change it with `windvane answer T-001 <letter>`.")
+        said = ("T-001: your answer from 7 days ago wasn't taken (building A (New)), and it was kept 7 days without its "
+                "push going out, so it's dropped; `windvane status` names it once. Once its ticket merges, change it "
+                "with `windvane answer T-001 <letter>`.")
         self.assertEqual(self.log().count(said), 1, self.log()[-500:])
         pl.poll_questions()
-        self.assertEqual(self.log().count("dropped untold"), 1)
+        self.assertEqual(self.log().count("so it's dropped"), 1)
 
     def test_a_restart_while_the_push_keeps_failing_logs_it_once(self):
         self.failed_late_answer()
         with mock.patch.dict(os.environ, FAKE_EXIT="1"):
             for _ in range(2):
                 driver.Pilot(self.p, driver_args(answer_wait=0)).poll_questions()
-        self.assertEqual(self.log().count("late answer(s) failed"), 1, self.log()[-500:])
+        self.assertEqual(self.log().count("late answer failed"), 1, self.log()[-500:])
         pl = driver.Pilot(self.p, driver_args(answer_wait=0))
         pl.poll_questions()  # it went out: the spell is over
         self.assertEqual(self.kept(), [])
@@ -79,7 +80,7 @@ class Age(Kept):
             self.settled(pl, "T-002")
             questions.give_answer(self.p, "T-002", "B")
             driver.Pilot(self.p, driver_args(answer_wait=0)).poll_questions()
-        self.assertEqual(self.log().count("late answer(s) failed"), 2, "a new spell is logged again")
+        self.assertEqual(self.log().count("late answer failed"), 2, "a new spell is logged again")
 
     def test_an_answer_kept_from_before_times_were_kept_is_told_as_new(self):
         pl, before = self.failed_late_answer()

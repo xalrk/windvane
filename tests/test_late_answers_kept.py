@@ -83,7 +83,7 @@ class Kept(Folded):
         with mock.patch.dict(os.environ, FAKE_EXIT="1"):
             pl.poll_questions()
         log = (self.p.state / "autopilot.log").read_text() if (self.p.state / "autopilot.log").exists() else ""
-        self.assertEqual(log.count("late answer(s) failed"), 1, log[-500:])
+        self.assertEqual(log.count("late answer failed"), 1, log[-500:])
         self.assertEqual(len(self.kept()), 1)
 
     def test_with_no_phone_at_all_nothing_is_kept(self):

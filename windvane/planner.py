@@ -55,8 +55,14 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
             release_ids(p, "plan")
 
 
+# The branches the driver lands its own tickets on: a plan's, a periodic chain's, the desk answers' (whose follow-up
+# tickets change a provisional answer). Until one merges its ticket ids are taken, so a new kind of branch that can
+# carry tickets goes here too, or its ids are handed out again.
+OWN_BRANCHES = ("plan-", "periodic-", "answers-")
+
+
 def pending_ids(p, ask_forge=True):
-    """Ticket ids on unmerged remote `plan-*` and `periodic-*` branches: tickets whose PR is still open have claimed
+    """Ticket ids on unmerged remote `OWN_BRANCHES`: tickets whose PR is still open have claimed
     them, and so do local ones (a plan whose push was refused, waiting to be pushed by hand). A branch whose PR was
     closed unmerged frees its ids (its branch is left alone); without `ask_forge`, no PR is looked up: a branch
     closed_plans.json already lists frees its ids, every other keeps them (a skipped id costs nothing, a reused one
@@ -116,7 +122,7 @@ def pending_branches(p, ask_forge=True):
     remote = gout(p.main_root(), "branch", "-r", "--no-merged", p.upstream, "--format=%(refname:short)").split()
     local = gout(p.main_root(), "branch", "--no-merged", p.upstream, "--format=%(refname:short)").split()
     heads = {b: b.removeprefix(f"{p.remote}/") if b in remote else b for b in remote + local}
-    heads = {b: name for b, name in heads.items() if name.startswith(("plan-", "periodic-"))}
+    heads = {b: name for b, name in heads.items() if name.startswith(OWN_BRANCHES)}
     closed = closed_prs(p, set(heads.values())) if ask_forge else set(load_json(p.state / "closed_plans.json", []))
     for b, name in heads.items():
         if name not in closed:
