@@ -136,7 +136,10 @@ without waiting for it. With no answer in `answer_wait` minutes (default 10), th
 and marks it provisional, so you can change it later. An answer that comes after its question was settled isn't taken,
 and an **Answer not taken** push says so; once the ticket merges, change it with `windvane answer <id> <letter>`.
 When that push fails, the next pass tries it again (after a restart too) until it goes out, saying how old the answer
-is once it's over an hour old; after 7 days it's dropped, and `windvane status` names it once.
+is once it's over an hour old; after 7 days it's dropped, and `windvane status` names it once, saying whether its
+ticket has merged: "Its ticket has merged: change it now with windvane answer <id> <letter>", or "Its ticket is still
+open: once it merges, change it with …". windvane keeps the newest 20 dropped answers until it has shown them; the
+project log names any past that.
 
 ## Commands from the phone
 
