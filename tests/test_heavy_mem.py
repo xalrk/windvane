@@ -14,9 +14,15 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import cli, heavy, jobs  # noqa: E402
+from windvane import cli, heavy, jobs, util  # noqa: E402
 from windvane.runner import TICKET  # noqa: E402
 from test_heavy_check_wait import hold  # noqa: E402
+
+
+def job_argv(popen):
+    """The argv `jobs.bg` started its job with, from a mocked Popen: not the last call, as without /proc (macOS) the
+    job's `util.stamp` runs `ps` through Popen after it."""
+    return next(c.args[0] for c in popen.call_args_list if c.args[0][:2] == ["bash", "-c"])
 
 ROOT = Path(__file__).parents[1]
 # A job whose free memory is the number in a file, polling fast instead of every second. Its need: argv[2] ("-": the
@@ -167,11 +173,13 @@ class MemSetting(unittest.TestCase):
 
     def test_bg_passes_its_mem_to_heavy(self):
         p = SimpleNamespace(state=self.d / "state")
-        with mock.patch.object(jobs.subprocess, "Popen") as popen, redirect_stdout(io.StringIO()), \
-                mock.patch.dict(os.environ, {TICKET: "T-1"}):
-            jobs.bg(p, "shots", ["make", "shots"], self.d, heavy=True, mem=2.0)
-        argv = popen.call_args.args[0]
-        self.assertEqual(argv[argv.index("heavy"):], ["heavy", "--mem", "2", "--", "make", "shots"])
+        for proc in (util.PROC, Path("/nonexistent/proc")):  # /proc, and macOS's branch: `ps` for the job's stamp
+            with self.subTest(proc=str(proc)), mock.patch.object(util, "PROC", proc), \
+                    mock.patch.object(jobs.subprocess, "Popen") as popen, redirect_stdout(io.StringIO()), \
+                    mock.patch.dict(os.environ, {TICKET: "T-1"}):
+                jobs.bg(p, "shots", ["make", "shots"], self.d, heavy=True, mem=2.0)
+            argv = job_argv(popen)
+            self.assertEqual(argv[argv.index("heavy"):], ["heavy", "--mem", "2", "--", "make", "shots"])
         with self.assertRaisesRegex(SystemExit, "--mem goes with --heavy"):
             cli.main(["bg", "--mem", "2", "shots", "make"])
 

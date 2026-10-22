@@ -8,8 +8,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(ROOT))
+from windvane import heavy  # noqa: E402
+
 HOLD = "import fcntl,sys,time; f=open(sys.argv[1],'w'); fcntl.flock(f,fcntl.LOCK_EX); open(sys.argv[2],'w'); time.sleep(2)"
 # A job whose free memory is short until a flag file appears, polling fast instead of every 10 s.
 MEMWAIT = ("import os,sys,time; import windvane.heavy as h; s=time.sleep; h.time.sleep=lambda t: s(min(t,0.1)); "
@@ -91,6 +95,22 @@ class HeavyFifo(unittest.TestCase):
         self.assertEqual(err.count("1 ahead of this job"), 1)  # reprinted only when it changes
         self.assertEqual(self.order.read_text().split(), ["held", "ahead", "waiter"])
         self.assertEqual((self.d / "windvane-heavy.lock").read_text(), "")  # the holder's line goes with it
+
+    def test_the_gap_between_two_holders_isnt_reprinted(self):
+        """A holder empties its line as it leaves, and the head takes the lock at its next look, up to a second later:
+        a waiter looking in between sees no holder, which isn't news worth a line. A new holder is."""
+        reads = [{"pid": os.getpid(), "since": 5.0}, {}, {}, {"pid": os.getppid(), "since": 6.0}]
+        lines, looked = [], []
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(heavy, "ahead", lambda e: [self.d / "x"]), \
+                mock.patch.object(heavy, "free_gb", lambda: None), \
+                mock.patch.object(heavy.time, "sleep", lambda s: None), \
+                mock.patch.object(heavy, "holder", lambda lock: looked.append(1) or reads[len(looked) - 1]):
+            heavy.take(None, None, None, {"busy": []}, lambda: time.time() + 30, lines.append,
+                       lambda: len(looked) == len(reads))
+        held = r"lock: (held by (pid \d+|another heavy job)).*; 1 ahead"
+        said = [m.group(1) for ln in lines if (m := re.search(held, ln))]
+        self.assertEqual(said, [f"held by pid {os.getpid()}", f"held by pid {os.getppid()}"])
 
     def test_giving_up_drops_the_queue_entry(self):
         holder = self.hold(seconds=60)

@@ -114,7 +114,7 @@ def trim_items(p, busy, since, procs):
     root, out = p.main_root(), []
     trees = ([] if 0 in busy else [p.work_dir, p.ci_dir]) + [p.plan_dir]
     for d in trees:
-        if d == root or not (d / ".git").exists() or in_use(d, procs) or scratch._recent(d, since):
+        if d == root or not (d / ".git").exists() or scratch._recent(d, since) or in_use(d, procs):
             continue
         paths = ignored(d)
         size = sum(scratch.size(x)[1] if x.is_dir() else x.lstat().st_size for x in paths if x.exists())
@@ -212,7 +212,7 @@ def survey(p, busy=None, keep_slots=0, trim=None, procs=None, now=None):
         return [], []
     s, now = settings(p), time.time() if now is None else now
     busy = busy_slots(p) if busy is None else set(busy)
-    procs = scratch.busy() if procs is None else procs
+    procs = scratch.Busy() if procs is None else procs
     since = now - scratch.AGE
     items, kept = slot_items(p, busy, keep_slots, since, procs)
     if s["trim_build"] if trim is None else trim:

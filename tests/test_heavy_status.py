@@ -45,6 +45,7 @@ class HeavyStatus(unittest.TestCase):
         while not ok():
             self.assertLess(time.time(), end, "timed out")
             time.sleep(0.05)
+            heavy._ps_seen.clear()  # without /proc (macOS) `paused` keeps an answer PS_KEEP s: a wait asks afresh
 
     def test_a_reused_pid_shows_the_lock_free(self):
         me = os.getpid()
@@ -79,6 +80,11 @@ class HeavyStatus(unittest.TestCase):
         self.assertTrue(line.startswith(f"held by pid {job.pid} "), line)
         self.assertTrue(line.endswith(f"; paused, so everyone waits: resume it with kill -CONT -{os.getpgid(job.pid)})"),
                         line)
+
+    @unittest.skipUnless(shutil.which("ps"), "no ps on this system")
+    def test_a_paused_holder_is_marked_through_ps(self):
+        with mock.patch.object(util, "PROC", self.d / "no-proc"):  # macOS's branch: its answers kept PS_KEEP s
+            self.test_a_paused_holder_is_marked()
 
     @unittest.skipUnless(Path("/proc/self/stat").exists(), "reads a child's state from /proc")
     def test_the_paused_holders_way_out_resumes_its_command_too(self):

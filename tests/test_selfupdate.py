@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import unittest
+import threading
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -339,6 +340,23 @@ class Drain(unittest.TestCase):
         self.assertNotIn("waits for", log)
         self.assertEqual(len(self.calls), 1)
         self.assertIn("windvane restarting with its new code (so far merged: ", log)
+
+    def test_the_last_ticket_merging_during_the_fetch_still_restarts(self):
+        """A pass looks for new code, then fetches: on a slow machine the last running ticket merges in between, and
+        the pass finds the queue empty and nothing running. It takes the new code up before the run ends."""
+        fetch = self.pilot.fetch
+
+        def slow_fetch():
+            loop = threading.current_thread() is threading.main_thread()  # the loop's look, not a slot's
+            if loop and {"T-001", "T-002", "T-003"} <= set(self.pilot.merged) | set(self.pilot.running):
+                end = time.time() + 30
+                while self.pilot.running and time.time() < end:
+                    time.sleep(0.05)
+            fetch()
+        self.pilot.fetch = slow_fetch
+        self.run_pilot()
+        self.assertEqual(sorted(self.pilot.merged), ["T-001", "T-002", "T-003"])
+        self.assertEqual(len(self.calls), 1)
 
 
 if __name__ == "__main__":

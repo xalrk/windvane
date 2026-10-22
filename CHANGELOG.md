@@ -29,6 +29,13 @@ release on the same day adds a number (`2026.10.9.1`).
 ### Fixed
 - `windvane heavy --status` gives a paused job's way out as `kill -CONT -<pgid>`, which every shell takes; the
   `kill -CONT -- -<pgid>` it gave before was refused by dash and busybox `sh` (`Illegal number: -`).
+- On macOS the driver no longer runs `lsof` and `ps` over every process up to three times after each ticket to tidy
+  the temp and state dirs: it asks only when a dir is old enough to go, and once.
+- On macOS a helper the run started less than a second after it began (as a schedule's window does) is named at the
+  run's end; `ps` gives whole seconds, and the rule asked for a second more than they need.
+- A heavy job's waiting line is no longer said twice when one holder leaves and the next hasn't yet taken the lock.
+- A run whose last ticket merged while it was looking for the next one takes its new windvane code up before it
+  ends, instead of ending on the old code.
 
 ## 2026.10.21 - 2026-10-21
 

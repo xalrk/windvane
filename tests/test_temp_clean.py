@@ -118,6 +118,18 @@ class Cleaner(unittest.TestCase):
         self.assertEqual([d for d in gone if d.exists()], [])
         self.assertEqual([d for d in kept if not d.exists()], [])
 
+    def test_the_process_table_is_read_once_and_only_for_an_old_dir(self):
+        """Without /proc (macOS) reading it is an `lsof` and a `ps` over every process, and the driver cleans after
+        every ticket: a clean of young dirs never reads it, one of old dirs reads it once for all of them."""
+        calls, real = [], scratch.busy
+        with mock.patch.object(scratch, "busy", lambda: calls.append(1) or real()):
+            self.leftover("windvane-new", old=False)
+            self.assertEqual(scratch.clean(self.p, set()), (0, 0))
+            self.assertEqual(calls, [])
+            self.leftover("windvane-old"), self.leftover("T-001")
+            self.assertEqual(scratch.clean(self.p, set())[0], 2)
+            self.assertEqual(calls, [1])
+
     def test_a_dir_a_process_works_in_is_kept_however_old(self):
         cwd, env = self.leftover("windvane-check-cwd"), self.leftover("windvane-check-env")
         (env / "tmp3.11").mkdir()

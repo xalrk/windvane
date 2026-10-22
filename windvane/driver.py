@@ -2257,6 +2257,7 @@ class Pilot(Desk, Periodic):
                     self.idle_note(self.waits)
                     self.pause()
                     continue
+                self.self_update()  # the last ticket may have merged after this pass's look (during the fetch)
                 if self.questions:
                     if not self.idle:
                         self.log(f"waiting for answers on {', '.join(waiting_on(self.questions))}")

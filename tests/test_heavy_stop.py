@@ -58,6 +58,7 @@ class HeavyStop(unittest.TestCase):
         while not ok():
             self.assertLess(time.time(), end, "timed out")
             time.sleep(0.05)
+            heavy._ps_seen.clear()  # without /proc (macOS) `paused` keeps an answer PS_KEEP s: a wait asks afresh
 
     def waiters(self):
         q = self.d / "windvane-heavy.queue"
