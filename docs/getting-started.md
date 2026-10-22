@@ -18,9 +18,10 @@ windvane itself needs nothing beyond the Python standard library.
 windvane runs inside WSL2, Windows' built-in Linux, as it is. What differs from a plain Linux machine:
 
 1. Install WSL2 with Ubuntu: `wsl --install` in a PowerShell run as administrator, then restart and open Ubuntu.
-2. Install Claude Code, git and Python inside Ubuntu, not in Windows. WSL puts the Windows `PATH` after Linux's, so
-   Claude Code installed on Windows with npm answers to `claude` there, and it can't see Linux paths;
-   `windvane doctor` names any Windows program that answers for one of windvane's tools.
+2. Install git, Python and Claude Code inside Ubuntu, not in Windows: `sudo apt install git python3 pipx`, then
+   `curl -fsSL https://claude.ai/install.sh | bash` and `claude auth login`. WSL puts the Windows `PATH` after Linux's,
+   so Claude Code installed on Windows with npm answers to `claude` until the Linux one is in, and it can't see Linux
+   paths; `windvane doctor` names any Windows program that answers for one of windvane's tools.
 3. Keep your repositories and windvane's state under your Linux home (`~`), not on the Windows drives under `/mnt/`:
    git and checks are slow there and its file locks aren't reliable. Clone a project again under `~` rather than
    using its Windows copy.
