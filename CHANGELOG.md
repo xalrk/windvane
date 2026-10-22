@@ -25,6 +25,10 @@ release on the same day adds a number (`2026.10.9.1`).
 - A run on a machine without the `windvane phone listen` service (`setup --no-service`, or macOS) holds one stream
   for the phone's replies instead of polling every 15 s, so several projects running at once no longer run into
   ntfy.sh's limit and miss answers.
+- The `windvane phone listen` service waits while a run reads the phone's replies on its own stream and takes over
+  within a second of the run's end, instead of exiting and being started again every 30 s.
+- Behind a proxy or VPN that holds the stream back, the listener still polls every 15 s, but now tries a stream
+  again every 30 minutes and goes back to it once one gets through. Its log line says what to check.
 
 ### Fixed
 - `windvane heavy --status` gives a paused job's way out as `kill -CONT -<pgid>`, which every shell takes; the
