@@ -228,7 +228,7 @@ def checks(p=None):
             "only for busy processes", "nothing to run: the rest works; tell the windvane repo what breaks")
     elif util.wsl() == 1:
         out.append(("warn", "Linux (WSL 1): no real Linux kernel, so the Bash sandbox and file locks may fail",
-                    "in Windows: wsl --set-version <distro> 2"))
+                    "in Windows: wsl -l -v names it, then wsl --set-version <name> 2"))
     elif util.wsl():
         add(True, False, "Linux (WSL2)", "")
     out += wsl_warnings(p)

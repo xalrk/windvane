@@ -61,7 +61,8 @@ class InWsl(unittest.TestCase):
 
     def test_wsl1_is_told_to_convert(self):
         self.kernel(WSL1)
-        self.assertRegex(self.doctor(), r"WARNING +Linux \(WSL 1\).*-> in Windows: wsl --set-version <distro> 2")
+        self.assertRegex(self.doctor(), r"WARNING +Linux \(WSL 1\).*-> in Windows: wsl -l -v names it, then "
+                                        r"wsl --set-version <name> 2")
 
     def test_a_windows_claude_on_path_gets_its_warning_and_fix(self):
         self.kernel(WSL2)
@@ -79,7 +80,8 @@ class InWsl(unittest.TestCase):
         p = SimpleNamespace(root=Path(f"{D}/code/app"), state=self.tmp / "state/app")
         self.assertEqual(doctor.wsl_warnings(p), [
             ("warn", f"the project {D}/code/app is on the Windows drive {D}: git and the checks are slow there "
-             "and its file locks aren't reliable", "git clone <the URL from git remote -v> ~/code/app, then use that copy")])
+             "and its file locks aren't reliable",
+             "git clone <the URL from git remote -v> ~/code/app, then use that copy")])
 
     def test_the_state_dir_and_projects_dir_on_a_windows_drive_are_named(self):
         self.kernel(WSL2)
