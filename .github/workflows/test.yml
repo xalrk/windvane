@@ -2,7 +2,8 @@
 # times from `ps`). Standard library only: nothing to install.
 # By hand only (Actions tab, or `gh workflow run test.yml`): hosted minutes are limited, and a push or pull_request
 # trigger ran it twice per autopilot ticket. Every merge is already gated by the local check, tools/check_pythons.sh,
-# which runs every supported Python installed on the machine.
+# which runs every supported Python installed on the machine. On 3.12 and newer it ends with the 30 slowest tests,
+# to show where a slow runner spends its time.
 name: tests
 
 on:
@@ -30,4 +31,4 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Run the tests
-        run: python3 -m unittest discover -s tests -q
+        run: python3 -m unittest discover -s tests -q $(python3 -c 'import sys; print("--durations 30" * (sys.version_info >= (3, 12)))')

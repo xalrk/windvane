@@ -15,6 +15,9 @@ from windvane.config import DEFAULTS, STATE
 DOCS = REPO / "docs"
 PAGES = [REPO / "README.md", REPO / "CONTRIBUTING.md", REPO / "CHANGELOG.md", *sorted(DOCS.glob("*.md"))]
 WORKFLOW = REPO / ".github/workflows/test.yml"
+# The workflow's one step: the suite, ending with the slowest tests where unittest can list them (3.12+).
+RUN = ("python3 -m unittest discover -s tests -q "
+       "$(python3 -c 'import sys; print(\"--durations 30\" * (sys.version_info >= (3, 12)))')")
 
 
 def prose(text):
@@ -183,7 +186,7 @@ class Workflow(unittest.TestCase):
     def test_runs_by_hand_on_the_oldest_and_newest_python(self):
         """Hosted minutes are limited: the local check runs every Python, the workflow only on request."""
         job = self.wf["jobs"]["test"]
-        self.assertEqual([s["run"] for s in job["steps"] if "run" in s], ["python3 -m unittest discover -s tests -q"])
+        self.assertEqual([s["run"] for s in job["steps"] if "run" in s], [RUN])
         self.assertEqual(self.wf["on"], {"workflow_dispatch": None})
         script = REPO / "tools/check_pythons.sh"
         self.assertTrue(os.access(script, os.X_OK), "the local check is an executable script")
