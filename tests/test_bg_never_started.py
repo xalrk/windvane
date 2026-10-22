@@ -16,12 +16,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import doctor, jobs  # noqa: E402
-from test_bg_locks import CutCaller, InProject  # noqa: E402
+from test_bg_locks import Cut, InProject  # noqa: E402
 from test_statedir import OLD, Base  # noqa: E402
 from test_temp_clean import age  # noqa: E402
 
 
-class NeverStarted(CutCaller):
+class NeverStarted(Cut):
     def test_a_starter_killed_before_the_pid_reads_as_never_started(self):
         with redirect_stdout(io.StringIO()):  # an earlier run of the name: its log mustn't pass for the new one's
             jobs.bg(self.p, "j", ["echo", "the earlier run"], str(self.s.root))

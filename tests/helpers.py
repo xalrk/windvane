@@ -1,5 +1,6 @@
 """Test helpers: a throwaway project repo with a bare remote, and an environment that can't reach the real phone
 or the real Claude (PATH holds only a fake `claude` and the system's bin dirs)."""
+import atexit
 import faulthandler
 import os
 import shutil
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import weakref
 from pathlib import Path
 
@@ -357,12 +359,43 @@ def tmpdir(test, prefix="windvane-"):
     return d
 
 
+RAM = Path("/dev/shm")  # a RAM-backed dir, where the system has one
+STALE_S = 3600  # a test process's dir there untouched this long, its process gone, was left by a killed run
+_base = None
+
+
+def sandbox_base():
+    """Where sandboxes go: a dir of this process's own in RAM where there is one, else TMPDIR. A sandbox is mostly
+    small files made and removed (repos, worktrees, logs), and on a busy disk each of those can take milliseconds: a
+    Sandbox took 3 s to make and remove there, a tenth of that in RAM. The dir goes at this process's
+    exit; one a killed run left goes with the next run's first sandbox."""
+    global _base
+    if _base is None:
+        _base = ""
+        if RAM.is_dir() and os.access(RAM, os.W_OK):
+            for old in RAM.glob("windvane-tests-*"):
+                try:
+                    pid, age = int(old.name.rsplit("-", 1)[1]), time.time() - old.stat().st_mtime
+                except (ValueError, OSError):
+                    continue
+                if age > STALE_S and not running(pid):  # by age too: a pid in another pid namespace looks gone
+                    shutil.rmtree(old, ignore_errors=True)
+            base = RAM / f"windvane-tests-{os.getpid()}"
+            try:
+                base.mkdir(exist_ok=True)
+                _base = str(base)
+                atexit.register(shutil.rmtree, _base, True)
+            except OSError:
+                pass
+    return _base or None
+
+
 class Sandbox:
     """A project with a bare `origin`, `.windvane/` set up for forge git, and an isolated environment."""
 
     def __init__(self, config_extra=""):
         # resolved: macOS's temp dir is behind a symlink (/var -> /private/var), and windvane reports real paths
-        self.tmp = Path(tempfile.mkdtemp(prefix="windvane-test-")).resolve()
+        self.tmp = Path(tempfile.mkdtemp(prefix="windvane-test-", dir=sandbox_base())).resolve()
         # removed by close(), or when it's collected or the run ends: a setUp that fails after this never calls close
         self.rm = weakref.finalize(self, shutil.rmtree, str(self.tmp), True)
         self.old_env = dict(os.environ)
