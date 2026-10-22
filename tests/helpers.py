@@ -363,6 +363,10 @@ RAM = Path("/dev/shm")  # a RAM-backed dir, where the system has one
 IN_TMPDIR = "WINDVANE_TESTS_IN_TMPDIR"  # "1": the tests' files stay in TMPDIR, for a test of what they leave there
 STALE_S = 3600  # a test process's dir there untouched this long, its process gone, was left by a killed run
 AWAIT_POLL = 0.1  # seconds between `await`'s looks at a running job in a sandbox, for its 3
+# git as a Sandbox runs it (its own, the driver's, the fake sessions'): no fsync, since a test's repos needn't survive
+# a crash and on macOS each is a flush of the whole disk (the one a push still does is a plain fsync); and no
+# `git maintenance --auto` after each commit, fetch and merge, one in twelve of the git processes a driver test starts.
+GIT_CONFIG = (("core.fsync", "none"), ("core.fsyncMethod", "writeout-only"), ("maintenance.auto", "false"))
 
 
 def ram_tmp():
@@ -394,6 +398,14 @@ def ram_tmp():
 
 if (_ram := ram_tmp()) is not None:  # this process's temp files and its subprocesses'
     os.environ["TMPDIR"] = tempfile.tempdir = _ram
+
+
+def git_config_env(pairs):
+    """The (key, value) settings `pairs` as git reads them from the environment."""
+    out = {"GIT_CONFIG_COUNT": str(len(pairs))}
+    for i, (k, v) in enumerate(pairs):
+        out[f"GIT_CONFIG_KEY_{i}"], out[f"GIT_CONFIG_VALUE_{i}"] = k, v
+    return out
 
 
 class Sandbox:
@@ -429,15 +441,14 @@ class Sandbox:
                     "XDG_STATE_HOME": str(self.tmp / "state"), "XDG_CONFIG_HOME": str(self.tmp / "config"),
                     "WINDVANE_SELF_UPDATE": "0", "TMPDIR": str(self.tmp / "tmp"),
                     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "FAKE_LOG": str(self.tmp / "calls.jsonl")}
-        os.environ.clear()
-        os.environ.update({**self.old_env, **self.env})
+                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "FAKE_LOG": str(self.tmp / "calls.jsonl"),
+                    **git_config_env(GIT_CONFIG)}
+        os.environ.clear()  # without a worker's own GIT_CONFIG_* ([skip ci] hook, for one)
+        os.environ.update({**{k: v for k, v in self.old_env.items() if not k.startswith("GIT_CONFIG_")}, **self.env})
         for k in ("WINDVANE_SESSION", "WINDVANE_TICKET", "WINDVANE_STOP_AT", "WINDVANE_CAPS", "WINDVANE_ROLE",
                   "WINDVANE_SUPERVISED", "WINDVANE_RESTARTED", "WINDVANE_BEGAN",
                   "WINDVANE_BG_JOB"):  # when run in a session or its job
             os.environ.pop(k, None)
-        for k in [k for k in os.environ if k.startswith("GIT_CONFIG_")]:  # a worker's [skip ci] hook, for one
-            os.environ.pop(k)
         from windvane import login, net, scratch
         net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage
         login.waiter, login.back_at = None, 0.0  # nor an earlier test's run, in this same process
@@ -447,6 +458,8 @@ class Sandbox:
         self.merge_wait, held.MERGE_WAIT = held.MERGE_WAIT, 0  # a fake gh's PR is as mergeable as it will get
         assert shutil.which("claude") == str(fake) and not shutil.which("notify"), "tests must not reach the real tools"
         self.git("init", "-q", "--bare", "-b", "main", str(self.remote), cwd=self.tmp)
+        with open(self.remote / "config", "a") as f:  # a push's receive-pack doesn't get GIT_CONFIG_*: git drops it
+            f.writelines(f"[{k.split('.')[0]}]\n\t{k.split('.')[1]} = {v}\n" for k, v in GIT_CONFIG)
         self.root.mkdir()
         self.git("init", "-q", "-b", "main")
         self.write(".windvane/config.toml", textwrap.dedent(f"""\

@@ -44,6 +44,7 @@ STOPPING = "; the run is stopping, so don't run it again now"  # ...because a st
 # workers, is when it ends unless the driver moves it (`<job>.keep` holds the time it ends, empty for never).
 RUN_STOP = "WINDVANE_RUN_STOP"
 KILLED = 143  # a kept job's exit when the run's stop or a kill ended it (as SIGTERM's)
+STOPPED = "windvane: kept job stopped at the run's stop"  # `watch`'s last line in the log of a job it ended
 CANCELLED = "windvane: cancelled"  # a job's last log line after `bg --cancel`
 NEVER = "never started"  # `await_`'s answer for a job whose start was killed before its command ran
 NEVER_STARTED = 3  # `windvane await`'s exit then: it exits 0 for any job that ran, whatever the job's own code
@@ -550,9 +551,9 @@ def watch(base, cmd):
             pass
         until = kept_until(base)
         if until is not None and time.time() >= until:
-            print("windvane: kept job stopped at the run's stop", file=sys.stderr, flush=True)
             stop_groups([(child.pid, Path(f"{base}.child"))])
             child.wait()
+            print(STOPPED, file=sys.stderr, flush=True)  # after what the command said as it died: `end_kept` looks
             return KILLED
 
 
@@ -619,12 +620,24 @@ def end_job(base, line):
 
 def end_kept(p, ticket=None, why="the run's stop"):
     """Kill the kept jobs still waiting or running (a ticket's, or every one), each with a last log line saying why.
-    Their names."""
+    Those their own `watch` has already ended at the run's stop count too: the watch and the run both stop at that
+    time, and a run winding down (its sessions, its checks) gets there seconds after the watch's next look. Their
+    names."""
     out = []
-    for b in running_kept(p, ticket):
-        end_job(b, f"windvane: kept job killed: {why}")
-        out.append(f"{b.parent.name}'s '{b.name}'")
+    for b in kept_jobs(p, ticket):
+        if alive(b) and end_job(b, f"windvane: kept job killed: {why}") or stopped_by_watch(b):
+            out.append(f"{b.parent.name}'s '{b.name}'")
     return out
+
+
+def stopped_by_watch(b):
+    """Whether `watch` ended kept job `b` at the run's stop and no `end_kept` has said so yet; if so, says it, so
+    its log reads as if the run had killed it, and the next `end_kept` doesn't count it again."""
+    if alive(b) or tail(f"{b}.log", 1) != STOPPED:
+        return False
+    with open(f"{b}.log", "a") as f:
+        f.write("windvane: kept job killed: the run's stop\n")
+    return True
 
 
 def cancel(p, name):
