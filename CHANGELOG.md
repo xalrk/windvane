@@ -6,6 +6,13 @@ release on the same day adds a number (`2026.10.9.1`).
 
 ## Unreleased
 
+### Added
+- `windvane phone setup --token TOKEN` for an ntfy server of your own that lets nobody in without logging in
+  (`auth-default-access: deny-all`). Pushes, the phone's replies and the buttons on each push all carry the token;
+  it is kept private like the topics and never shown. A refused token is logged once and named by `setup`. The
+  [phone docs](docs/phone.md#your-own-server) now explain how to run your own server, including the setting an
+  iPhone needs.
+
 ### Changed
 - The phone goes easier on the ntfy server. A dropped stream is opened again after 10 s, then 20, 40 and so on up
   to 5 minutes, with one log line per outage instead of one every 10 s, and a `429` waits out its `Retry-After`.

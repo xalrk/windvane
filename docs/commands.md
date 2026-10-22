@@ -12,7 +12,7 @@ options. Commands that read state (`status`, `queue`, `watch`, `stats` and so on
 | `windvane public-check [--github]` | What the repository would expose if it went public, read-only, in any git repository. It scans every commit on every branch and tag in one pass, deleted files included: the lines each adds, files named like secrets, commit messages, and personal author or committer emails. It also checks workflows that give a fork's pull request secrets (`pull_request_target`, or `pull_request` with secrets). `--github` also scans the pull requests (titles, bodies, comments, reviews) through `gh`, and checks secret scanning, push protection, existing Actions runs and artifacts, and whether your account keeps its email private. It prints the kind and place (commit, PR number, `file:line`), never the text, so the output is safe to paste. Then it lists what to do, in order. Exits 0 when clean, 1 on a leak or a workflow to fix (GitHub settings warn without changing it), 2 when the scan couldn't finish ([before going public](safety.md#before-going-public)). |
 | `windvane install [--yes]` | Add the windvane skill and the mention hook to Claude Code, asking before each change. |
 | `windvane uninstall [--yes]` | Remove exactly what `install` added. |
-| `windvane phone setup [--server URL] [--no-service]` | Turn on pushes and questions on your phone through ntfy. See [Phone setup](phone.md). |
+| `windvane phone setup [--server URL] [--token TOKEN] [--no-service]` | Turn on pushes and questions on your phone through ntfy. See [Phone setup](phone.md). |
 | `windvane phone off` / `rotate` / `listen` | Turn the phone off; make new topics; act on the phone's replies (what the background service runs). |
 
 ## Tickets

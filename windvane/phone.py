@@ -3,7 +3,9 @@
 Off by default: without it, questions wait for `windvane answer` at the desk. `windvane phone setup` turns it on with
 two fully random topics (pushes go to one; the phone's buttons and typed commands come back on the other), kept in
 ~/.config/windvane/phone.toml (mode 600, outside every repo). On ntfy.sh a topic name is the only thing keeping
-strangers out, so topics are never written to logs, pushes, PRs or commits, and every push is censored first.
+strangers out, so topics are never written to logs, pushes, PRs or commits, and every push is censored first. A
+server of your own can also demand a token (`setup --token`): every request and every button then carries it, and it
+is kept and censored as the topics are.
 
 Whoever learns the reply topic can send to it, so nothing from the phone is ever instructions: only one of a few
 fixed commands, or a letter choosing among the options windvane itself wrote for a question.
@@ -12,6 +14,7 @@ The user's own `notify` / `notify-ask` scripts, when on PATH, are used instead (
 """
 import fcntl
 import functools
+import getpass
 import json
 import os
 import re
@@ -119,6 +122,7 @@ def save_conf(c):
     lines = ["# windvane phone (ntfy). Keep private: anyone with a topic can read your pushes or send commands.",
              f'enabled = {"true" if c.get("enabled") else "false"}', f'server = {json.dumps(c["server"])}',
              f'topic = {json.dumps(c["topic"])}', f'reply_topic = {json.dumps(c["reply_topic"])}',
+             *([f'token = {json.dumps(c["token"])}'] if c.get("token") else []),
              f'redact = {json.dumps(c.get("redact", []))}  # extra words to censor: names, hosts, projects']
     tmp = f.with_suffix(".tmp")
     tmp.unlink(missing_ok=True)
@@ -126,6 +130,17 @@ def save_conf(c):
     with os.fdopen(fd, "w") as out:
         out.write("\n".join(lines) + "\n")
     tmp.replace(f)
+
+
+def auth(c):
+    """The headers that open a server set to `deny-all`: none without a token (ntfy.sh, an open server)."""
+    return {"Authorization": f"Bearer {c['token']}"} if c.get("token") else {}
+
+
+def where(c):
+    """Which server the phone uses, as doctor says it: never the address or the token, only that there is one."""
+    own = c.get("server", SERVER).rstrip("/") != SERVER
+    return ("own server" if own else "ntfy.sh") + (", token set" if c.get("token") else "")
 
 
 def new_topic():
@@ -164,9 +179,9 @@ def git_names():
 
 
 def words(c):
-    """Names that identify the user or open the phone: $USER, git's name and email, the topics, `redact`."""
-    found = {os.environ.get("USER", ""), c.get("topic", ""), c.get("reply_topic", ""), *c.get("redact", []),
-             *git_names()}
+    """Names that identify the user or open the phone: $USER, git's name and email, the topics, the token, `redact`."""
+    found = {os.environ.get("USER", ""), c.get("topic", ""), c.get("reply_topic", ""), c.get("token", ""),
+             *c.get("redact", []), *git_names()}
     return sorted((w for w in found if len(w) >= 3), key=len, reverse=True)
 
 
@@ -182,6 +197,7 @@ def censor(text, c):
 
 _hold_until = 0.0  # no push before this: the server answered 429 (see send)
 _held = False  # that 429 is in the log already: one line per spell of them, not one per push
+_refused = 0  # the 401 or 403 the last push got (told once until a push goes through again), else 0
 
 
 def rest(seconds, until=lambda: False):
@@ -224,6 +240,12 @@ def limit_name(e):
     return cut(str(said)) or "too many requests"
 
 
+def refused(code, c):
+    """What a 401 or 403 means for the user: a token to set or change. Never the token itself."""
+    what = "refused the token" if c.get("token") else "asks for a token"
+    return f"the server {what} ({code}): windvane phone setup --token TOKEN"
+
+
 def tell(line):
     """A line about the phone's connection: the project's log in a run, stderr (the service's journal) outside."""
     if _p:
@@ -237,7 +259,7 @@ def send(c, title, msg, prio=3, tags="", buttons=(), wait=10):
     first: if the censor fails, nothing is sent. Never raises: a push is never worth stopping a run for. After a
     429 the pushes wait out its Retry-After, within `wait` (past it, this one fails as a stalled network does), so
     an install over the server's budget stops adding to it instead of being refused once a push."""
-    global _hold_until, _held
+    global _hold_until, _held, _refused
     hold = _hold_until - time.time()
     if hold > wait:
         return False
@@ -254,16 +276,22 @@ def send(c, title, msg, prio=3, tags="", buttons=(), wait=10):
     if tags:
         body["tags"] = tags.split(",")
     acts = [{"action": "http", "label": b.split("=", 1)[0], "url": f"{server}/{c['reply_topic']}", "method": "POST",
-             "body": b.split("=", 1)[1], "clear": False} for b in buttons[:3] if "=" in b]
+             "body": b.split("=", 1)[1], "clear": False, **({"headers": auth(c)} if auth(c) else {})}
+            for b in buttons[:3] if "=" in b]  # the phone posts a tap itself: a deny-all server wants the token there too
     if acts:
         body["actions"] = acts
-    req = urllib.request.Request(server, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(server, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json", **auth(c)})
     try:
         with urllib.request.urlopen(req, timeout=max(min(wait, 10), 0.01)):
-            _held = False
+            _held, _refused = False, 0
             return True
     except urllib.error.HTTPError as e:
-        if e.code == 429:
+        if e.code in (401, 403):
+            if not _refused:
+                tell(f"windvane phone: {refused(e.code, c)}")
+            _refused = e.code
+        elif e.code == 429:
             _hold_until = time.time() + retry_after(e, RETRY)
             if not _held:
                 tell(f"windvane phone: the ntfy server refused a push (429, {limit_name(e)}); "
@@ -703,7 +731,8 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
             url = f"{server}/{c['reply_topic']},{c['topic']}/json?since={after}" + ("&poll=1" if poll else "")
             began, lines, delivered, opened, err = time.time(), 0, False, False, None
             try:
-                with urllib.request.urlopen(url, timeout=15 if poll else STREAM_WAIT) as stream:
+                req = urllib.request.Request(url, headers=auth(c))
+                with urllib.request.urlopen(req, timeout=15 if poll else STREAM_WAIT) as stream:
                     opened = True
                     for raw in stream:
                         lines += 1
@@ -726,6 +755,8 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
                                 heard()
             except (OSError, ValueError) as e:  # a dropped stream, a keepalive timeout, a server restart, a 429
                 if once:
+                    if isinstance(e, urllib.error.HTTPError):
+                        e.close()
                     return False
                 err = e
             if once:
@@ -747,7 +778,7 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
             is_429 = isinstance(err, urllib.error.HTTPError) and err.code == 429
             pause = max(retry_after(err, wait) if is_429 else wait, PUMP_EVERY if polling else 0)
             if not spell:
-                tell(f"windvane phone: {dropped(err)}; reconnecting, next try in {span(pause)}")
+                tell(f"windvane phone: {dropped(err, c)}; reconnecting, next try in {span(pause)}")
                 spell = True
             if isinstance(err, urllib.error.HTTPError):
                 err.close()
@@ -757,10 +788,12 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
         lock.close()
 
 
-def dropped(err):
+def dropped(err, c):
     """Why a stream ended, for its spell's one log line."""
     if err is None:
         return "the stream ended at once"
+    if isinstance(err, urllib.error.HTTPError) and err.code in (401, 403):
+        return refused(err.code, c)
     if isinstance(err, urllib.error.HTTPError):
         return f"the server refused the stream (429, {limit_name(err)})" if err.code == 429 else \
             f"the server answered {err.code}"
@@ -932,9 +965,23 @@ def mark_now():
     return since
 
 
-def setup(server=None, service=True, project=None):
+def read_token(token):
+    """`--token`'s value: "-" reads it from stdin, unseen at a terminal (out of the shell's history), "" removes it."""
+    if token == "-":
+        token = getpass.getpass("token: ") if sys.stdin.isatty() else sys.stdin.readline()
+    token = token.strip()
+    if any(ch.isspace() for ch in token):
+        raise SystemExit("windvane phone: a token is one word, with no spaces")
+    return token
+
+
+def setup(server=None, service=True, project=None, token=None):
+    """Turn the phone on, keeping the topics (and the token) it had. `token`: set ("" removes) the one a server of
+    your own demands; a setup with only it changes nothing else."""
     c = conf()
     c["server"] = (server or c.get("server") or SERVER).rstrip("/")
+    if token is not None:
+        c["token"] = read_token(token)
     c.setdefault("topic", new_topic())
     c.setdefault("reply_topic", new_topic())
     c["enabled"] = True
@@ -946,11 +993,16 @@ def setup(server=None, service=True, project=None):
         print("Your own `notify` / `notify-ask` are on PATH: windvane keeps using them; this setup is the fallback.")
     ok = send(c, "windvane: phone works", "Pushes and questions from windvane come here. Tap Status to try a "
               "command.", 3, "white_check_mark", ("Status=status",))
-    print(f"test push: {'sent' if ok else 'FAILED (check the server address and the network)'}")
+    print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
     subscribe_help(c)
     if service:
         install_service()
     return 0 if ok else 1
+
+
+def why_failed(c):
+    """Why setup's test push failed, as far as windvane can tell."""
+    return refused(_refused, c) if _refused else "check the server address and the network"
 
 
 def off():
@@ -976,12 +1028,12 @@ def rotate():
     subscribe_help(c)
     if on(c):
         ok = send(c, "windvane: new topic works", "Pushes come here from now on.", 3, "white_check_mark")
-        print(f"test push: {'sent' if ok else 'FAILED'}")
+        print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
 
 
 def main(a, project=None):
     if a.action == "setup":
-        return setup(a.server, not a.no_service, project)
+        return setup(a.server, not a.no_service, project, a.token)
     if a.action == "off":
         return off()
     if a.action == "rotate":

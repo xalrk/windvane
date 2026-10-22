@@ -11,6 +11,8 @@ windvane phone setup                 # on ntfy.sh
 windvane phone setup --server https://ntfy.example.com   # or on your own ntfy server
 ```
 
+(See [Your own server](#your-own-server) for one that wants a token.)
+
 This:
 1. creates two random 32-character topics, one for pushes and one for the phone's replies, and saves them in
    `~/.config/windvane/phone.toml` (readable only by you);
@@ -32,6 +34,42 @@ One install costs the server one open stream (the listener's, or without it a ru
 request per push, reconnecting after a drop with a wait that doubles from 10 s to 5 minutes and waiting out any
 `429 Too Many Requests` it gets. That keeps it well inside ntfy.sh's budget for each address: 60 requests, refilled
 one every 5 s, 30 open connections and 250 messages a day.
+
+## Your own server
+
+Your own ntfy server keeps your pushes off ntfy.sh and past its 250 messages a day. ntfy is one binary
+(`ntfy serve`, packaged for most Linux distributions and macOS) or one container (`binwiederhier/ntfy serve`); its
+install guide at docs.ntfy.sh covers running it behind HTTPS. Three settings in its `server.yml` matter:
+
+```yaml
+base-url: "https://ntfy.example.com"   # the address the phone reaches it on
+auth-file: "/var/lib/ntfy/user.db"
+auth-default-access: "deny-all"        # nobody reads or posts without logging in
+upstream-base-url: "https://ntfy.sh"   # only for iPhones, which get no push at all without it
+```
+
+With `deny-all`, make a user and a token for windvane on the server, then give windvane the token:
+
+```sh
+ntfy user add --role=admin me          # asks for a password: the phone app logs in with it
+ntfy token add me                      # prints tk_...
+windvane phone setup --server https://ntfy.example.com --token -   # then paste the token
+```
+
+`--token -` asks for the token without showing it, so it stays out of your shell's history; `--token TOKEN` works too,
+and `windvane phone setup --token -` later changes it without touching the topics (`--token ""` removes it). It is
+kept in `phone.toml` with the topics, censored from every push like them, and never printed or logged.
+`windvane doctor` says "own server, token set". Every request windvane makes carries it, and so do the buttons of
+each push, so a tap on the phone reaches the reply topic: anyone who can read your push topic can see it, which on
+a `deny-all` server is only you. If the server refuses the token, the log says so once: "the server refused the
+token (403): windvane phone setup --token TOKEN"; the run carries on without the phone.
+
+In the app, add your server's user first (Android: Settings, Manage users), then tap **+**, choose "Use another
+server", enter your server's address and the topic `setup` shows.
+
+About `upstream-base-url`: Apple lets only ntfy.sh wake the iPhone app, so for each message your server sends
+ntfy.sh just its id, and the app then fetches the message from your server. The text stays on your server. Android
+keeps its own connection and needs nothing.
 
 ## What you get
 

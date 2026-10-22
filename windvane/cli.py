@@ -785,6 +785,8 @@ def main(argv=None):
     s.add_argument("action", choices=("setup", "off", "rotate", "listen"),
                    help="setup: turn it on and subscribe; off; rotate: new topics; listen: act on the phone's replies")
     s.add_argument("--server", help=f"an ntfy server of your own (default {phone.SERVER})")
+    s.add_argument("--token", help="setup: the access token your own server demands (- reads it from stdin, \"\" "
+                   "removes it)")
     s.add_argument("--no-service", action="store_true", help="setup: don't install the background listener service")
     s = sub.add_parser("run", help="work the tickets until a deadline")
     g = s.add_mutually_exclusive_group()

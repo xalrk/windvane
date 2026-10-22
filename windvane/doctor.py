@@ -257,8 +257,10 @@ def checks(p=None):
     if github and getattr(p, "root", None):
         out += identity_warnings(p)
     add(shutil.which("tmux"), False, "tmux (for `windvane run --detach`)", "install tmux (e.g. sudo apt install tmux)")
-    add(shutil.which("notify") and shutil.which("notify-ask") or phone.on(phone.conf()), False,
-        "phone pushes and questions (ntfy)", "windvane phone setup; without it, questions wait for `windvane answer`")
+    own_tools, c = shutil.which("notify") and shutil.which("notify-ask"), phone.conf()
+    add(own_tools or phone.on(c), False, "phone pushes and questions (ntfy"
+        + ("" if own_tools or not phone.on(c) else f", {phone.where(c)}") + ")",
+        "windvane phone setup; without it, questions wait for `windvane answer`")
     add(shutil.which("windvane"), True, "`windvane` on PATH",
         "windvane install" if CHECKOUT else f"{install.PATH_LINE} (and in your shell's startup file)")
     skill = install.claude_dir() / "skills/windvane"
