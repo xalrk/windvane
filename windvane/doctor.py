@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from . import actions, critic, heavy, install, phone, runner, scratch, selfupdate, statedir, util
-from .config import CHECKOUT, DIR, HOME, TOKEN_FIX, Project, author, github_token
+from .config import CHECKOUT, DIR, HOME, TOKEN_FIX, Project, author, github_token, user_dir
 from .util import gout, load_json
 
 # How gh says GitHub turned a token down (expired, revoked, or not given this repo), as opposed to not reaching it.
@@ -226,6 +226,12 @@ def checks(p=None):
     if not sys.platform.startswith("linux"):
         add(False, False, f"Linux (this is {sys.platform}): `windvane heavy` can't see free memory here, so it waits "
             "only for busy processes", "nothing to run: the rest works; tell the windvane repo what breaks")
+    elif util.wsl() == 1:
+        out.append(("warn", "Linux (WSL 1): no real Linux kernel, so the Bash sandbox and file locks may fail",
+                    "in Windows: wsl --set-version <distro> 2"))
+    else:
+        add(True, False, "Linux (WSL2)" if util.wsl() else "Linux", "")
+    out += wsl_warnings(p)
     add(shutil.which("git"), True, f"git {version('git').removeprefix('git version ')}".strip(),
         "install git (e.g. sudo apt install git)")
     has_claude = bool(shutil.which("claude"))
@@ -261,6 +267,9 @@ def checks(p=None):
     add(own_tools or phone.on(c), False, "phone pushes and questions (ntfy"
         + ("" if own_tools or not phone.on(c) else f", {phone.where(c)}") + ")",
         "windvane phone setup; without it, questions wait for `windvane answer`")
+    if sys.platform.startswith("linux"):
+        add(phone.has_systemd(), False, "systemd (a user service keeps the ntfy listener up between runs)",
+            phone.no_systemd_fix())
     add(shutil.which("windvane"), True, "`windvane` on PATH",
         "windvane install" if CHECKOUT else f"{install.PATH_LINE} (and in your shell's startup file)")
     skill = install.claude_dir() / "skills/windvane"
@@ -273,6 +282,41 @@ def checks(p=None):
     add(install.has_keyword_hook(settings, any_copy=True), False, f"the mention hook in {settings}",
         "windvane install")
     return out + moved_warnings(p) + tmp_warnings(p) + state_warnings(p)
+
+
+# What WSL's Windows PATH (appended to Linux's) can shadow: a Windows build runs in the wrong world, blind to Linux
+# paths. Each with the Ubuntu package that puts a Linux one first.
+WINDOWS_TOOLS = {"claude": "", "git": "git", "python3": "python3", "node": "nodejs", "gh": "gh", "tmux": "tmux"}
+MOVE_REPO = "clone it again under ~ (e.g. ~/code) and use that copy"
+
+
+def drive_warnings(what, path, fix=MOVE_REPO):
+    """A warning when `path` is on a Windows drive (util.windows_drive): one line, the same in doctor and init."""
+    drive = util.windows_drive(path)
+    if not drive:
+        return []
+    return [("warn", f"{what} {path} is on the Windows drive /mnt/{drive}: git and the checks are slow there and "
+             "its file locks aren't reliable", fix)]
+
+
+def wsl_warnings(p=None):
+    """In WSL: what of windvane's sits on a Windows drive or resolves to a Windows program, each with its fix. Quiet
+    everywhere else, where /mnt is just a folder."""
+    if not util.wsl():
+        return []
+    out = drive_warnings("the project", p.root) if getattr(p, "root", None) else []
+    state = getattr(p, "state", None) or user_dir("XDG_STATE_HOME", ".local/state")
+    out += drive_warnings("the state dir", state, "set XDG_STATE_HOME to a folder under ~, or unset it")
+    folder = heavy.machine().get("projects_dir")
+    if folder:
+        out += drive_warnings("projects_dir", folder, f"set projects_dir in {heavy.machine_file()} to a folder under ~")
+    for tool, package in WINDOWS_TOOLS.items():
+        where = shutil.which(tool)
+        if where and any(x.startswith("/mnt/") for x in (where, os.path.realpath(where))):
+            fix = (f"install it inside WSL (sudo apt install {package}): a Linux one comes first on PATH" if package
+                   else "install Claude Code inside WSL: curl -fsSL https://claude.ai/install.sh | bash")
+            out.append(("warn", f"`{tool}` on PATH is a Windows program ({where}) that can't see Linux paths", fix))
+    return out
 
 
 def moved_warnings(p):

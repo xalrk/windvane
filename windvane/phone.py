@@ -31,6 +31,7 @@ import urllib.request
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+from . import util
 from .config import exe, user_dir
 from .util import log
 
@@ -938,11 +939,26 @@ def systemctl(*args):
     return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
 
 
+# Where systemd says it is the running init (sd_booted): WSL ships `systemctl` but boots without systemd by default.
+SYSTEMD = Path("/run/systemd/system")
+
+
+def has_systemd():
+    return bool(shutil.which("systemctl")) and SYSTEMD.is_dir()
+
+
+def no_systemd_fix():
+    """How to get the phone's commands between runs without systemd; WSL has it one setting away."""
+    if util.wsl():
+        return ("put `[boot]` and `systemd=true` in /etc/wsl.conf, run `wsl --shutdown` in Windows, reopen WSL and "
+                "run `windvane phone setup` again; until then the phone's commands work only during runs")
+    return "keep `windvane phone listen` running (e.g. in tmux) for the phone's commands between runs"
+
+
 def install_service():
     """A systemd user service running `windvane phone listen`, so the phone's commands work with no run on."""
-    if not shutil.which("systemctl"):
-        print("No systemd here: keep `windvane phone listen` running (e.g. in tmux) for the phone's commands between "
-              "runs. During a run, answers and stop reach it anyway.")
+    if not has_systemd():
+        print(f"No systemd here: {no_systemd_fix()}. During a run, answers and stop reach it anyway.")
         return False
     f = unit_path()
     f.parent.mkdir(parents=True, exist_ok=True)

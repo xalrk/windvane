@@ -7,6 +7,10 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- Windows, through WSL2: `windvane doctor` says when it runs in WSL and warns, each with its fix, about a project,
+  state dir or `projects_dir` on a Windows drive (under `/mnt/`), a Windows `claude`, `git`, `python3`, `node`, `gh` or
+  `tmux` on `PATH`, and systemd being off (the `wsl.conf` setting that turns it on). `windvane init` warns about a
+  repository on a Windows drive. [Getting started](docs/getting-started.md#on-windows) says how to install there.
 - `windvane phone setup --token TOKEN` for an ntfy server of your own that lets nobody in without logging in
   (`auth-default-access: deny-all`). Pushes, the phone's replies and the buttons on each push all carry the token;
   it is kept private like the topics and never shown. A refused token is logged once and named by `setup`. The

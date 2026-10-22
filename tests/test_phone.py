@@ -214,6 +214,7 @@ class Setup(PhoneTest):
         calls = []
         with mock.patch.object(phone, "systemctl", side_effect=lambda *a: calls.append(a) or mock.Mock(returncode=0)), \
                 mock.patch.object(phone.shutil, "which", side_effect=lambda n: "/bin/x" if n == "systemctl" else None), \
+                mock.patch.object(phone, "SYSTEMD", self.s.root), \
                 contextlib.redirect_stdout(io.StringIO()):
             phone.install_service()
             self.assertIn("phone listen", phone.unit_path().read_text())
