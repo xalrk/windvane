@@ -61,6 +61,21 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
 OWN_BRANCHES = ("plan-", "periodic-", "answers-")
 
 
+def branch_name(p, cd, kind):
+    """`<kind>-<date>-<time to the second>`, with a suffix should that name be taken here or on the remote: the name
+    of every branch the driver lands its own tickets on. An unknown `kind` raises: one missing from `OWN_BRANCHES`
+    would hand its tickets' ids out again."""
+    if f"{kind}-" not in OWN_BRANCHES:
+        raise ValueError(f"{kind}: not one of the driver's own branches {OWN_BRANCHES}")
+    base = name = f"{kind}-{now():%Y%m%d-%H%M%S}"
+    n = 1
+    while any(git(cd, "rev-parse", "-q", "--verify", ref).returncode == 0
+              for ref in (f"refs/heads/{name}", f"refs/remotes/{p.remote}/{name}")):
+        n += 1
+        name = f"{base}-{n}"
+    return name
+
+
 def pending_ids(p, ask_forge=True):
     """Ticket ids on unmerged remote `OWN_BRANCHES`: tickets whose PR is still open have claimed
     them, and so do local ones (a plan whose push was refused, waiting to be pushed by hand). A branch whose PR was
@@ -201,17 +216,6 @@ def closed_prs(p, branches):
     return closed
 
 
-def plan_branch(p, cd):
-    """`plan-<date>-<time to the second>`, with a suffix should that name be taken here or on the remote."""
-    base = name = f"plan-{now():%Y%m%d-%H%M%S}"
-    n = 1
-    while any(git(cd, "rev-parse", "-q", "--verify", ref).returncode == 0
-              for ref in (f"refs/heads/{name}", f"refs/remotes/{p.remote}/{name}")):
-        n += 1
-        name = f"{base}-{n}"
-    return name
-
-
 def unmerged(p, n, where):
     """A plan that couldn't merge counts as none (so `run --replan` doesn't take it for new work), but the user
     hears where it waits: it was a paid planner session."""
@@ -275,7 +279,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
         log(p, f"plan: wrote outside .windvane/ ({outside[0]}); discarded")
         return 0
     n = int(m.group(1) or 0)
-    branch = plan_branch(p, cd)
+    branch = branch_name(p, cd, "plan")
     git(cd, "add", "-A", ".windvane")
     title = actions.tag(p, f"Plan: {n_tickets(n)} ({m.group(3)[:60]})", cd)
     text = privacy.censor(text)  # in the commit and the PR body: the session's own words, quoting what it read

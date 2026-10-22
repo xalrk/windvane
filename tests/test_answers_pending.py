@@ -99,14 +99,5 @@ class AnswersPending(unittest.TestCase):
         self.assertEqual(self.new(), "T-003")  # `new` asks no forge: closed_plans.json now lists it
 
 
-class OwnBranches(unittest.TestCase):
-    def test_every_dated_branch_the_driver_makes_is_one_of_its_own(self):
-        """A new kind of driver branch (named `<kind>-<date>`) that `OWN_BRANCHES` misses would hand its ids out
-        again."""
-        src = Path(planner.__file__).parent
-        kinds = {m for f in src.glob("*.py") for m in re.findall(r'f"([a-z]+-)\{now\(', f.read_text())}
-        self.assertEqual(kinds, set(planner.OWN_BRANCHES))
-
-
 if __name__ == "__main__":
     unittest.main()

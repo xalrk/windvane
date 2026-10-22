@@ -15,7 +15,7 @@ from . import privacy
 from .config import slots
 from .driver import REVIEW_DENY
 from .held import land
-from .planner import pick_ids, release_ids
+from .planner import branch_name, pick_ids, release_ids
 from .questions import (BLOCK_RE, OPT_RE, blocks, give_answer, note, part, prov_numbers, qkey, remembered, shown,
                         ticket_of, waiting_on)
 from .queue import Queue
@@ -287,7 +287,7 @@ def record(p, answers):
             f.write_text(file_answers(f.read_text() if f.exists() else "", filed, shown(p)["ids"]))
             git(cd, "add", "-A", ".windvane")
             ids = ", ".join(sorted({a[0]["ticket"] for a in filed}))
-            ok, where = land(p, cd, f"answers-{now():%Y%m%d-%H%M%S}", f"Answers at the desk: {ids}",
+            ok, where = land(p, cd, branch_name(p, cd, "answers"), f"Answers at the desk: {ids}",
                              "\n\n".join(block(*a) for a in filed), close=True)
         finally:
             release_ids(p, "answers")

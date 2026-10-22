@@ -32,6 +32,9 @@ release on the same day adds a number (`2026.10.9.1`).
   again every 30 minutes and goes back to it once one gets through. Its log line says what to check.
 
 ### Fixed
+- Two `windvane answer` runs that landed in the same second no longer pick one branch name, which left the second's
+  branch only on this machine (its push was refused); a periodic session's branch, named to the minute, could
+  collide the same way. Every branch the driver lands its own tickets on now gets a suffix when its name is taken.
 - `windvane heavy --status` gives a paused job's way out as `kill -CONT -<pgid>`, which every shell takes; the
   `kill -CONT -- -<pgid>` it gave before was refused by dash and busybox `sh` (`Illegal number: -`).
 - On macOS the driver no longer runs `lsof` and `ps` over every process up to three times after each ticket to tidy

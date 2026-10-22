@@ -366,7 +366,8 @@ class Periodic:
         body = f"Written by the [[periodic]] session {name}; land = {land}."
         if reply:
             body += f"\n\n## Its final reply\n{cut_lines(reply, 80)}"
-        branch = f"periodic-{now():%Y%m%d-%H%M}"
+        from .planner import branch_name
+        branch = branch_name(p, cd, "periodic")
         with self.critical():  # a signal waits until the land is pushed
             ok, where = land_on_main(p, cd, branch, title, body)
         how = {"near": f"right after {anchor}" if anchor else "at the top", "next": "at the top",
