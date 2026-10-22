@@ -20,8 +20,8 @@ This:
 3. shows the topic to subscribe to, as text and, when `qrencode` is installed, as a QR code;
 4. installs `windvane phone listen` as a systemd user service, so the phone's commands are answered even when no run
    is going. `--no-service` skips it; a running autopilot then reads the replies itself, on a stream of its own.
-   Only one reader runs at a time: a listener started while a run's stream holds the replies waits, and takes over
-   when that run ends.
+   Only one reader runs at a time: a listener started while a run's stream or another listener holds the replies
+   waits, says which one, and takes over when it stops.
 
 On the phone, install the ntfy app, tap **+**, and subscribe to the topic shown (for your own server, choose "Use
 another server" first).

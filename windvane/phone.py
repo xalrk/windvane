@@ -719,8 +719,8 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
     since = time.time() if since is None else since
     d = state_dir()
     d.mkdir(parents=True, exist_ok=True)
-    lock = open(d / "listen.lock", "w")
-    if not take(lock, wait=not (once or heard), until=until):
+    lock = open(d / "listen.lock", "a+")  # not "w": that would wipe the holder's name a waiting listener reads
+    if not take(lock, "run" if heard else "once" if once else "listen", until):
         lock.close()
         return False
     recent, handled = [], 0
@@ -805,24 +805,41 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
         lock.close()
 
 
-def take(lock, wait, until):
-    """Lock the one reader's place. `wait` (the service's listener): until the holder lets go or `until()`, a
-    second at a time so a stop ends it at once, with one line saying who it waits for; otherwise give up at once."""
+def take(lock, kind, until):
+    """Lock the one reader's place and write who holds it ("<pid> <kind>"). The `listen` kind (the service, or one
+    run by hand) waits until the holder lets go or `until()`, a second at a time so a stop ends it at once, with one
+    line naming the holder; a run's stream and `once` give up at once."""
     told = False
     while True:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock.seek(0)
+            lock.truncate()
+            lock.write(f"{os.getpid()} {kind}\n")
+            lock.flush()
             if told:
                 tell("windvane phone: the reply topic is free; listening")
             return True
         except OSError:
-            if not wait or until():
+            if kind != "listen" or until():
                 return False
         if not told:
-            tell("windvane phone: another reader (a run's own stream) holds the reply topic; listening once it "
-                 "lets go")
+            tell(f"windvane phone: {holder(lock)}")
             told = True
         time.sleep(1)
+
+
+def holder(lock):
+    """Who holds the reply topic, and what ends the wait, for a waiting listener's one line."""
+    lock.seek(0)
+    pid, _, kind = lock.read().strip().partition(" ")
+    if kind == "run":
+        return "a run reads the phone's replies on its own stream; listening once that run ends"
+    if kind == "listen":
+        leave = " (Ctrl-C leaves)" if sys.stderr.isatty() else ""
+        return f"another `windvane phone listen` (pid {pid}) already reads the phone's replies; waiting until it " \
+            f"stops{leave}"
+    return "another reader holds the phone's replies; listening once it lets go"
 
 
 def dropped(err, c):

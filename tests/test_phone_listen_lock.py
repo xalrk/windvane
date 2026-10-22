@@ -2,6 +2,7 @@
 polling goes back to a stream once one gets through, and a run's stream that raises is started again."""
 import fcntl
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -67,7 +68,12 @@ class Lock(Base):
         self.addCleanup(self.held.close)
         fcntl.flock(self.held, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
+    def hold_as(self, kind, pid=4242):
+        self.held.write(f"{pid} {kind}\n")
+        self.held.flush()
+
     def test_the_listener_waits_for_the_lock_and_takes_over_when_it_is_released(self):
+        self.hold_as("run")
         stop = threading.Event()
         self.addCleanup(stop.set)
         out = []
@@ -77,12 +83,12 @@ class Lock(Base):
         self.assertTrue(t.is_alive(), "it waits, it doesn't exit")
         self.assertEqual(self.ntfy.urls, [])
         self.assertEqual(len(self.log()), 1, self.log())
-        self.assertIn("another reader (a run's own stream) holds the reply topic; listening once it lets go",
-                      self.log()[0])
+        self.assertIn("a run reads the phone's replies on its own stream; listening once that run ends", self.log()[0])
         self.held.close()  # the run's stream ends
         self.assertTrue(soon(lambda: self.ntfy.urls), "it opens a stream once the lock is free")
         self.assertNotIn("poll=1", self.ntfy.urls[0])
         self.assertIn("the reply topic is free; listening", self.log()[-1])
+        self.assertEqual((phone.state_dir() / "listen.lock").read_text(), f"{os.getpid()} listen\n", "it names itself")
         self.ntfy.publish(self.c["reply_topic"], "status")
         self.assertTrue(soon(lambda: any(m.get("title") == "Status" for m in self.ntfy.msgs)), self.ntfy.msgs)
         stop.set()
@@ -91,7 +97,9 @@ class Lock(Base):
         self.assertFalse(t.is_alive())
         self.assertNotIn("already listening", "\n".join(self.log()))
 
-    def test_the_service_command_waits_and_a_sigterm_ends_it_at_once(self):
+    def test_a_second_listener_waits_for_the_first_naming_it_and_a_sigterm_ends_it_at_once(self):
+        """`windvane phone listen` started by hand while the service listens: it says which one it waits for."""
+        self.hold_as("listen")
         proc = subprocess.Popen([sys.executable, "-m", "windvane", "phone", "listen"], cwd=ROOT,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
@@ -105,7 +113,8 @@ class Lock(Base):
         self.assertLess(time.time() - t, 2)
         err = proc.stderr.read()
         proc.stderr.close()
-        self.assertIn("holds the reply topic; listening once it lets go", err)
+        self.assertIn("another `windvane phone listen` (pid 4242) already reads the phone's replies; waiting until "
+                      "it stops\n", err)
         self.assertNotIn("already listening", err)
 
     def test_a_run_s_stream_and_once_still_give_up_at_once(self):
