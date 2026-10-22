@@ -79,7 +79,7 @@ class InWsl(unittest.TestCase):
         p = SimpleNamespace(root=Path(f"{D}/code/app"), state=self.tmp / "state/app")
         self.assertEqual(doctor.wsl_warnings(p), [
             ("warn", f"the project {D}/code/app is on the Windows drive {D}: git and the checks are slow there "
-             "and its file locks aren't reliable", "git clone <its remote> ~/code/app, then use that copy")])
+             "and its file locks aren't reliable", "git clone <the URL from git remote -v> ~/code/app, then use that copy")])
 
     def test_the_state_dir_and_projects_dir_on_a_windows_drive_are_named(self):
         self.kernel(WSL2)
@@ -97,8 +97,7 @@ class InWsl(unittest.TestCase):
         (self.tmp / "xdg/windvane").mkdir(parents=True)
         (self.tmp / "xdg/windvane/machine.toml").write_text(f'projects_dir = "{C}/code"\n')
         out = self.doctor(windows=("claude",))
-        self.assertIn("ok        Linux\n", out)
-        self.assertNotRegex(out, r"WSL|Windows|wsl\.conf")
+        self.assertNotRegex(out, r"Linux|WSL|Windows|wsl\.conf")  # nothing new on plain Linux
         self.assertEqual(doctor.wsl_warnings(SimpleNamespace(root=Path(f"{C}/code/app"), state=self.tmp)), [])
 
     def test_the_systemd_line_names_wsl_conf_only_in_wsl(self):
@@ -110,13 +109,13 @@ class InWsl(unittest.TestCase):
         self.assertRegex(out, r"optional +systemd .*-> keep `windvane phone listen` running")
         self.assertNotIn("wsl.conf", out)
 
-    def test_systemd_up_is_ok_and_systemctl_alone_is_not(self):
+    def test_systemd_up_is_quiet_and_systemctl_alone_is_not_up(self):
         self.kernel(WSL2)
         with mock.patch.object(phone.shutil, "which", lambda n: "/usr/bin/systemctl"):
             self.assertFalse(phone.has_systemd())  # WSL ships systemctl, but boots without systemd
             with mock.patch.object(phone, "SYSTEMD", self.tmp):
                 self.assertTrue(phone.has_systemd())
-                self.assertRegex(self.doctor(), r"ok +systemd ")
+                self.assertNotIn("systemd", self.doctor())  # a row only when it's missing
 
 
 class PhoneSetupInWsl(unittest.TestCase):

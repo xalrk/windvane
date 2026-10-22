@@ -229,8 +229,8 @@ def checks(p=None):
     elif util.wsl() == 1:
         out.append(("warn", "Linux (WSL 1): no real Linux kernel, so the Bash sandbox and file locks may fail",
                     "in Windows: wsl --set-version <distro> 2"))
-    else:
-        add(True, False, "Linux (WSL2)" if util.wsl() else "Linux", "")
+    elif util.wsl():
+        add(True, False, "Linux (WSL2)", "")
     out += wsl_warnings(p)
     add(shutil.which("git"), True, f"git {version('git').removeprefix('git version ')}".strip(),
         "install git (e.g. sudo apt install git)")
@@ -267,8 +267,8 @@ def checks(p=None):
     add(own_tools or phone.on(c), False, "phone pushes and questions (ntfy"
         + ("" if own_tools or not phone.on(c) else f", {phone.where(c)}") + ")",
         "windvane phone setup; without it, questions wait for `windvane answer`")
-    if sys.platform.startswith("linux"):
-        add(phone.has_systemd(), False, "systemd (a user service keeps the ntfy listener up between runs)",
+    if sys.platform.startswith("linux") and not phone.has_systemd():  # a row only when it's missing
+        add(False, False, "systemd (a user service keeps the ntfy listener up between runs)",
             phone.no_systemd_fix())
     add(shutil.which("windvane"), True, "`windvane` on PATH",
         "windvane install" if CHECKOUT else f"{install.PATH_LINE} (and in your shell's startup file)")
@@ -292,7 +292,7 @@ WINDOWS_TOOLS = {"claude": "", "git": "git", "python3": "python3", "node": "node
 def move_repo(root):
     """The command that puts a copy of the repo at `root` under ~, its remote filled in when it has one."""
     url = gout(root, "remote", "get-url", "origin") if Path(root).is_dir() else ""
-    return f"git clone {url or '<its remote>'} ~/code/{Path(root).name}, then use that copy"
+    return f"git clone {url or '<the URL from git remote -v>'} ~/code/{Path(root).name}, then use that copy"
 
 
 def drive_warnings(what, path, fix=None):
