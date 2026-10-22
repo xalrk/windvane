@@ -27,7 +27,8 @@ WINDOWS_CLAUDE = f"{C}/Users/me/AppData/Roaming/npm/claude"
 
 
 class InWsl(unittest.TestCase):
-    """test_doctor's fakes on PATH, with /proc/version, systemd and the Windows PATH faked on top."""
+    """test_doctor's fakes on PATH, with /proc/version, systemd and the Windows PATH faked on top, on a Linux platform:
+    doctor asks sys.platform before it reads /proc/version, so a Mac host would otherwise skip the WSL rows."""
 
     def setUp(self):
         self.tmp = tmpdir(self, "windvane-doctor-wsl-")
@@ -38,8 +39,8 @@ class InWsl(unittest.TestCase):
         self.proc.mkdir()
         env = {"HOME": str(self.tmp / "home"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude"), "PATH": str(bindir),
                "XDG_CONFIG_HOME": str(self.tmp / "xdg"), "XDG_STATE_HOME": str(self.tmp / "state")}
-        for patch in (mock.patch.object(util, "PROC", self.proc), mock.patch.object(phone, "SYSTEMD", self.tmp / "no"),
-                      mock.patch.dict(os.environ, env)):
+        for patch in (mock.patch.object(sys, "platform", "linux"), mock.patch.object(util, "PROC", self.proc),
+                      mock.patch.object(phone, "SYSTEMD", self.tmp / "no"), mock.patch.dict(os.environ, env)):
             patch.start()
             self.addCleanup(patch.stop)
 
@@ -118,6 +119,16 @@ class InWsl(unittest.TestCase):
             with mock.patch.object(phone, "SYSTEMD", self.tmp):
                 self.assertTrue(phone.has_systemd())
                 self.assertNotIn("systemd", self.doctor())  # a row only when it's missing
+
+
+class InWslOnAMac(InWsl):
+    """InWsl again on a host that says darwin, as a Mac's does: its tests describe the same machine on any host."""
+
+    def setUp(self):
+        patch = mock.patch.object(sys, "platform", "darwin")
+        patch.start()
+        self.addCleanup(patch.stop)
+        super().setUp()
 
 
 class PhoneSetupInWsl(unittest.TestCase):
