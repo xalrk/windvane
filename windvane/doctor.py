@@ -287,14 +287,21 @@ def checks(p=None):
 # What WSL's Windows PATH (appended to Linux's) can shadow: a Windows build runs in the wrong world, blind to Linux
 # paths. Each with the Ubuntu package that puts a Linux one first.
 WINDOWS_TOOLS = {"claude": "", "git": "git", "python3": "python3", "node": "nodejs", "gh": "gh", "tmux": "tmux"}
-MOVE_REPO = "clone it again under ~ (e.g. ~/code) and use that copy"
 
 
-def drive_warnings(what, path, fix=MOVE_REPO):
-    """A warning when `path` is on a Windows drive (util.windows_drive): one line, the same in doctor and init."""
+def move_repo(root):
+    """The command that puts a copy of the repo at `root` under ~, its remote filled in when it has one."""
+    url = gout(root, "remote", "get-url", "origin") if Path(root).is_dir() else ""
+    return f"git clone {url or '<its remote>'} ~/code/{Path(root).name}, then use that copy"
+
+
+def drive_warnings(what, path, fix=None):
+    """A warning when `path` is on a Windows drive (util.windows_drive): one line, the same in doctor and init. With
+    no `fix`, `path` is a repo to clone again under ~."""
     drive = util.windows_drive(path)
     if not drive:
         return []
+    fix = fix or move_repo(path)
     return [("warn", f"{what} {path} is on the Windows drive /mnt/{drive}: git and the checks are slow there and "
              "its file locks aren't reliable", fix)]
 
@@ -306,10 +313,10 @@ def wsl_warnings(p=None):
         return []
     out = drive_warnings("the project", p.root) if getattr(p, "root", None) else []
     state = getattr(p, "state", None) or user_dir("XDG_STATE_HOME", ".local/state")
-    out += drive_warnings("the state dir", state, "set XDG_STATE_HOME to a folder under ~, or unset it")
+    out += drive_warnings("the state dir", state, "unset XDG_STATE_HOME (and drop it from your shell's startup file)")
     folder = heavy.machine().get("projects_dir")
     if folder:
-        out += drive_warnings("projects_dir", folder, f"set projects_dir in {heavy.machine_file()} to a folder under ~")
+        out += drive_warnings("projects_dir", folder, f'set projects_dir = "~/code" in {heavy.machine_file()}')
     for tool, package in WINDOWS_TOOLS.items():
         where = shutil.which(tool)
         if where and any(x.startswith("/mnt/") for x in (where, os.path.realpath(where))):
