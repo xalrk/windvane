@@ -360,6 +360,7 @@ def tmpdir(test, prefix="windvane-"):
 
 
 RAM = Path("/dev/shm")  # a RAM-backed dir, where the system has one
+AWAIT_POLL = 0.1  # seconds between `await`'s looks at a running job in a sandbox, for its 3
 STALE_S = 3600  # a test process's dir there untouched this long, its process gone, was left by a killed run
 _base = None
 
@@ -436,6 +437,8 @@ class Sandbox:
         net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage
         login.waiter, login.back_at = None, 0.0  # nor an earlier test's run, in this same process
         self.fullness, scratch.fullness = scratch.fullness, lambda path=None: (10, 10)  # nor the real disk (a full one pushes)
+        from windvane import jobs
+        self.await_poll, jobs.AWAIT_POLL = jobs.AWAIT_POLL, AWAIT_POLL  # an `await` here sees a job end at once
         assert shutil.which("claude") == str(fake) and not shutil.which("notify"), "tests must not reach the real tools"
         self.git("init", "-q", "--bare", "-b", "main", str(self.remote), cwd=self.tmp)
         self.root.mkdir()
@@ -482,4 +485,6 @@ class Sandbox:
         net.probe, net.waiter = None, None
         login.waiter = None
         scratch.fullness = getattr(self, "fullness", scratch.fullness)
+        from windvane import jobs
+        jobs.AWAIT_POLL = getattr(self, "await_poll", jobs.AWAIT_POLL)
         phone.use(None)  # the next test's pushes name its own project
