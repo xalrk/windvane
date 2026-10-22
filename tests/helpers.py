@@ -438,8 +438,9 @@ class Sandbox:
         net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage
         login.waiter, login.back_at = None, 0.0  # nor an earlier test's run, in this same process
         self.fullness, scratch.fullness = scratch.fullness, lambda path=None: (10, 10)  # nor the real disk (a full one pushes)
-        from windvane import jobs
+        from windvane import held, jobs
         self.await_poll, jobs.AWAIT_POLL = jobs.AWAIT_POLL, AWAIT_POLL  # an `await` here sees a job end at once
+        self.merge_wait, held.MERGE_WAIT = held.MERGE_WAIT, 0  # a fake gh's PR is as mergeable as it will get
         assert shutil.which("claude") == str(fake) and not shutil.which("notify"), "tests must not reach the real tools"
         self.git("init", "-q", "--bare", "-b", "main", str(self.remote), cwd=self.tmp)
         self.root.mkdir()
@@ -486,6 +487,7 @@ class Sandbox:
         net.probe, net.waiter = None, None
         login.waiter = None
         scratch.fullness = getattr(self, "fullness", scratch.fullness)
-        from windvane import jobs
+        from windvane import held, jobs
         jobs.AWAIT_POLL = getattr(self, "await_poll", jobs.AWAIT_POLL)
+        held.MERGE_WAIT = getattr(self, "merge_wait", held.MERGE_WAIT)
         phone.use(None)  # the next test's pushes name its own project
