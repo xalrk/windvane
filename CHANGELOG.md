@@ -16,6 +16,8 @@ release on the same day adds a number (`2026.10.9.1`).
   it is kept private like the topics and never shown. A refused token is logged once and named by `setup`. The
   [phone docs](docs/phone.md#your-own-server) now explain how to run your own server, including the setting an
   iPhone needs.
+  Setup prints the `ntfy access` lines that grant the token's user windvane's two topics with that user's name
+  filled in, and `windvane phone rotate` adds the lines that take the old topics back.
 
 ### Changed
 - The phone goes easier on the ntfy server. A dropped stream is opened again after 10 s, then 20, 40 and so on up
