@@ -194,6 +194,13 @@ it first, or let its run clean at its end). Work is never removed: a worktree wi
 `windvane doctor` checks the phone. Make sure the app is subscribed to the topic `windvane phone setup` showed (and
 to the right server, if you use your own). `windvane phone setup` again sends a test push.
 
+**The log says "the server's stream opened but brought nothing".**
+Something between you and the ntfy server holds long requests back: an HTTPS proxy (`HTTPS_PROXY`), a VPN or a
+company gateway that buffers a response until it ends. The phone still works, asking every 15 s, and tries a stream
+again every 30 minutes; it says "gets through again" once one does. Outside a run the line is in the service's
+journal (`journalctl --user -u windvane-phone`). To stream again, let the ntfy server's address bypass the proxy
+(`NO_PROXY`) or use [a server of your own](phone.md#your-own-server) the network doesn't hold back.
+
 **The critic gives everything the same score.**
 `windvane stats --critic` shows the spread and each check's yes rate. Sharpen a check every ticket passes, lower one
 none ever does (or, on an old numeric scale, rewrite `.windvane/CRITIC.md` as ladders of yes/no checks, like

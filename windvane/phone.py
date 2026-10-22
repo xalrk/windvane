@@ -41,6 +41,7 @@ RETRY = 10  # seconds before the listener reconnects after a dropped stream, dou
 RETRY_CAP = 300  # the longest wait between reconnects: a server that is down hears from each install every 5 min
 STEADY = 60  # seconds a stream must stay up (or deliver a message) for the next drop to wait RETRY again
 STREAM_WAIT = 90  # seconds a stream may go silent (ntfy sends a keepalive every 45 s) before it counts as dropped
+RESTREAM = 1800  # seconds a listener that fell back to polling waits before it tries a stream again
 HOLD_CAP = 3600  # the longest Retry-After taken as given: a bad header must not silence the phone for days
 QID_RE = r"[a-z][a-z0-9-]{1,39}"
 HELP = ("status: the autopilots that are on\noverview: where each project stands\nusage: Claude usage\n"
@@ -707,25 +708,23 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
     there now, then return; otherwise hold a stream open until `until()`. `heard`: a run's own stream (see
     keep_stream), called for each message acted on; it gives up quietly when another reader or the phone being off
     stops it. Commands sent before `since` (default: now) are stale. One reader at a time on this machine, so no
-    command is done twice.
+    command is done twice: the service's listener waits for the lock while a run's stream holds it, and takes over
+    within a second of its release, instead of exiting for systemd to start it again every 30 s.
 
     Every install leans on one ntfy server's per-visitor budget, so a dropped stream is opened again after RETRY
     seconds, doubling to RETRY_CAP while it keeps dropping (a 429 waits its Retry-After), with one line per spell
     of drops; a stream that delivers or stays up STEADY seconds starts over at RETRY. Where a stream opens but
-    nothing ever comes through (a proxy holding it back), it looks every PUMP_EVERY seconds instead."""
+    nothing ever comes through (a proxy holding it back), it looks every PUMP_EVERY seconds instead, trying a
+    stream again every RESTREAM seconds and going back to it once one brings anything."""
     since = time.time() if since is None else since
     d = state_dir()
     d.mkdir(parents=True, exist_ok=True)
-    lock = open(d / "listen.lock", "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    lock = open(d / "listen.lock", "a+")  # not "w": that would wipe the holder's name a waiting listener reads
+    if not take(lock, "run" if heard else "once" if once else "listen", until):
         lock.close()
-        if once or heard:
-            return False
-        raise SystemExit("windvane phone: already listening on this machine")
+        return False
     recent, handled = [], 0
-    wait, spell, polling, streamed = RETRY, False, False, False
+    wait, spell, polling, streamed, restream_at = RETRY, False, False, False, 0.0
     try:
         while not until():
             c = conf()
@@ -736,7 +735,8 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
             last = d / "last-id"
             after = last.read_text().strip() if last.exists() else mark_now()
             server = c.get("server", SERVER).rstrip("/")
-            poll = once or polling
+            retrying = polling and time.time() >= restream_at
+            poll = once or (polling and not retrying)
             url = f"{server}/{c['reply_topic']},{c['topic']}/json?since={after}" + ("&poll=1" if poll else "")
             began, lines, delivered, opened, err = time.time(), 0, False, False, None
             try:
@@ -745,6 +745,9 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
                     opened = True
                     for raw in stream:
                         lines += 1
+                        if polling and not poll:
+                            polling = False
+                            tell("windvane phone: the server's stream gets through again; polling stopped")
                         ev = json.loads(raw)
                         if ev.get("event") != "message":
                             continue
@@ -771,6 +774,10 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
             if once:
                 return handled
             streamed = streamed or (lines > 0 and not poll)
+            if retrying and polling:
+                restream_at = time.time() + RESTREAM
+                if opened and isinstance(err, TimeoutError):
+                    continue  # still held back: back to polling, quietly
             good = delivered or time.time() - began >= STEADY
             if good:
                 wait, spell = RETRY, False
@@ -780,9 +787,10 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
                 rest(PUMP_EVERY, until)
                 continue
             if opened and not lines and not streamed and isinstance(err, TimeoutError):
-                polling = True
-                tell(f"windvane phone: the server's stream opened but brought nothing in {span(STREAM_WAIT)} (a proxy "
-                     f"holding it back?); asking every {span(PUMP_EVERY)} instead")
+                polling, restream_at = True, time.time() + RESTREAM
+                tell(f"windvane phone: the server's stream opened but brought nothing in {span(STREAM_WAIT)}: check "
+                     f"for a proxy or VPN that buffers long requests (`env | grep -i proxy`, a company gateway). "
+                     f"Asking every {span(PUMP_EVERY)} instead, and trying a stream again every {span(RESTREAM)}")
                 continue
             is_429 = isinstance(err, urllib.error.HTTPError) and err.code == 429
             pause = max(retry_after(err, wait) if is_429 else wait, PUMP_EVERY if polling else 0)
@@ -795,6 +803,43 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
             wait = min(wait * 2, RETRY_CAP)
     finally:
         lock.close()
+
+
+def take(lock, kind, until):
+    """Lock the one reader's place and write who holds it ("<pid> <kind>"). The `listen` kind (the service, or one
+    run by hand) waits until the holder lets go or `until()`, a second at a time so a stop ends it at once, with one
+    line naming the holder; a run's stream and `once` give up at once."""
+    told = False
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock.seek(0)
+            lock.truncate()
+            lock.write(f"{os.getpid()} {kind}\n")
+            lock.flush()
+            if told:
+                tell("windvane phone: the reply topic is free; listening")
+            return True
+        except OSError:
+            if kind != "listen" or until():
+                return False
+        if not told:
+            tell(f"windvane phone: {holder(lock)}")
+            told = True
+        time.sleep(1)
+
+
+def holder(lock):
+    """Who holds the reply topic, and what ends the wait, for a waiting listener's one line."""
+    lock.seek(0)
+    pid, _, kind = lock.read().strip().partition(" ")
+    if kind == "run":
+        return "a run reads the phone's replies on its own stream; listening once that run ends"
+    if kind == "listen":
+        leave = " (Ctrl-C leaves)" if sys.stderr.isatty() else ""
+        return f"another `windvane phone listen` (pid {pid}) already reads the phone's replies; waiting until it " \
+            f"stops{leave}"
+    return "another reader holds the phone's replies; listening once it lets go"
 
 
 def dropped(err, c):
@@ -816,6 +861,7 @@ _late_due = False  # a pass pump started whose late answers haven't been looked 
 _run_start = None
 _run_over = None  # a run's: set when it ends, which ends its stream (see keep_stream)
 _stream = None  # that stream's thread
+_stream_broke = False  # that stream raised, and its line is in the log
 _heard, _heard_lock = 0, threading.Lock()  # messages the stream acted on that pump hasn't reported yet
 
 
@@ -851,11 +897,17 @@ def keep_stream():
 
 
 def read_stream(over, since):
+    """The run's stream thread. A stream that raises is started again by the next pump, told once until one ends
+    without raising: a fault that keeps coming back must not fill the log a line every PUMP_EVERY."""
+    global _stream_broke
     try:
         listen(until=over.is_set, since=since, heard=hear)
+        _stream_broke = False
     except Exception as e:  # the phone must never stop a run: the next pump starts it again
-        tell(f"windvane phone: the run's stream stopped ({type(e).__name__}); it starts again within "
-             f"{span(PUMP_EVERY)}")
+        if not _stream_broke:
+            tell(f"windvane phone: the run's stream stopped ({type(e).__name__}); it starts again within "
+                 f"{span(PUMP_EVERY)}")
+        _stream_broke = True
 
 
 def hear():
