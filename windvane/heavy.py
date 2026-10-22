@@ -702,6 +702,8 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
         info = holder(lock)
         n = 0 if turn else len(line)
         key = "memory" if mine else why or (info.get("pid"), info.get("since"), n)
+        if key[:1] == (None,) and isinstance(said, tuple) and said[2] == n:  # a holder gone, the next yet to claim
+            key = said  # it (it looks once a second): an empty line for that moment says nothing new
         if key != said or time.time() >= looked + 60:  # the wrap-up is looked at again each minute as time passes
             work, looked = work_ahead(info, [job_of(w) for w in line[:n]], load_times()), time.time()
             if key != said and mine:
