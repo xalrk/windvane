@@ -43,14 +43,22 @@ class Dropped(age_tests.Kept):
     def test_status_names_a_dropped_answer_once(self):
         pl = self.dropped()
         out = [line for line in self.status().splitlines() if line.startswith("dropped answer:")]
-        self.assertEqual(out, ["dropped answer: T-001: your answer from 7 days ago wasn't taken (building A (New)), "
-                               "and it was kept 7 days without its push going out. Once its ticket merges, change it "
-                               "with windvane answer T-001 <letter>"])
+        self.assertEqual(out, ["dropped answer: T-001: your answer from 7 days ago came after it was settled, so it "
+                               "wasn't taken; T-001 is building A (New). Once its ticket merges, change it with "
+                               "windvane answer T-001 <letter>"])
         self.assertNotIn("dropped answer:", self.status(), "shown once")
         pl.poll_questions()  # the driver forgets it once shown
         self.assertEqual(load_json(self.p.state / "state.json", {})["dropped"], [])
         self.assertNotIn("dropped answer:", self.status())
         self.assertEqual(load_json(self.p.state / driver.DROPPED_SHOWN, None), [], "nothing left to remember")
+
+    def test_one_settled_with_nothing_built_says_only_that_it_came_late(self):
+        pl = self.dropped()
+        pl.dropped = [["T-001", "settled before your answer came", pl.dropped[0][2]]]
+        pl.save()
+        out = [line for line in self.status().splitlines() if line.startswith("dropped answer:")]
+        self.assertEqual(out, ["dropped answer: T-001: your answer from 7 days ago came after it was settled, so it "
+                               "wasn't taken. Once its ticket merges, change it with windvane answer T-001 <letter>"])
 
     def test_the_driver_keeps_it_until_status_shows_it(self):
         self.dropped()

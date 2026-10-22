@@ -289,9 +289,9 @@ def dropped_unseen(p):
     kept = load_json(p.state / "state.json", {}).get("dropped", [])
     shown_f = p.state / DROPPED_SHOWN
     shown = set(load_json(shown_f, []))
-    out = [f"dropped answer: {key}: your answer from {phone.ago(time.time() - when)} wasn't taken ({what}), and it "
-           f"was kept {phone.LATE_KEEP // 86400} days without its push going out. Once its ticket merges, change it "
-           f"with windvane answer {key} <letter>"
+    out = [f"dropped answer: {key}: your answer from {phone.ago(time.time() - when)} came after it was settled, so "
+           f"it wasn't taken" + (f"; {key} is {what}" if what.startswith("building ") else "")
+           + f". Once its ticket merges, change it with windvane answer {key} <letter>"
            for key, what, when in kept if dropped_id([key, what, when]) not in shown]
     now = sorted(dropped_id(e) for e in kept)
     if now != sorted(shown):
