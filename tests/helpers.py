@@ -360,36 +360,40 @@ def tmpdir(test, prefix="windvane-"):
 
 
 RAM = Path("/dev/shm")  # a RAM-backed dir, where the system has one
-AWAIT_POLL = 0.1  # seconds between `await`'s looks at a running job in a sandbox, for its 3
+IN_TMPDIR = "WINDVANE_TESTS_IN_TMPDIR"  # "1": the tests' files stay in TMPDIR, for a test of what they leave there
 STALE_S = 3600  # a test process's dir there untouched this long, its process gone, was left by a killed run
-_base = None
+AWAIT_POLL = 0.1  # seconds between `await`'s looks at a running job in a sandbox, for its 3
 
 
-def sandbox_base():
-    """Where sandboxes go: a dir of this process's own in RAM where there is one, else TMPDIR. A sandbox is mostly
-    small files made and removed (repos, worktrees, logs), and on a busy disk each of those can take milliseconds: a
-    Sandbox took 3 s to make and remove there, a tenth of that in RAM. The dir goes at this process's
-    exit; one a killed run left goes with the next run's first sandbox."""
-    global _base
-    if _base is None:
-        _base = ""
-        tempfile.gettempdir()  # its default is set on first use: now, not in a sandbox whose TMPDIR goes with it
-        if RAM.is_dir() and os.access(RAM, os.W_OK):
-            for old in RAM.glob("windvane-tests-*"):
-                try:
-                    pid, age = int(old.name.rsplit("-", 1)[1]), time.time() - old.stat().st_mtime
-                except (ValueError, OSError):
-                    continue
-                if age > STALE_S and not running(pid):  # by age too: a pid in another pid namespace looks gone
-                    shutil.rmtree(old, ignore_errors=True)
-            base = RAM / f"windvane-tests-{os.getpid()}"
-            try:
-                base.mkdir(exist_ok=True)
-                _base = str(base)
-                atexit.register(shutil.rmtree, _base, True)
-            except OSError:
-                pass
-    return _base or None
+def ram_tmp():
+    """A temp dir of this process's own in RAM, where there is one. The tests mostly make and remove small files
+    (repos, worktrees, logs), and on a busy disk each of those can take milliseconds: a Sandbox took 3 s to make and
+    remove there, a tenth of that in RAM. The dir goes at this process's exit; one a killed run left goes
+    when the next run starts."""
+    if os.environ.get(IN_TMPDIR) == "1" or not (RAM.is_dir() and os.access(RAM, os.W_OK)):
+        return None
+    if os.statvfs(RAM).f_flag & getattr(os, "ST_NOEXEC", 0):  # a sandbox runs the fake claude from its bin dir
+        return None
+    if Path(os.environ.get("TMPDIR") or "/").resolve().is_relative_to(RAM.resolve()):
+        return None  # a test's own test process: its files go in its parent's dir, which outlives a kill of it
+    for old in RAM.glob("windvane-tests-*"):
+        try:
+            pid, age = int(old.name.rsplit("-", 1)[1]), time.time() - old.stat().st_mtime
+        except (ValueError, OSError):
+            continue
+        if age > STALE_S and not running(pid):  # by age too: a pid in another pid namespace looks gone
+            shutil.rmtree(old, ignore_errors=True)
+    base = RAM / f"windvane-tests-{os.getpid()}"
+    try:
+        base.mkdir(exist_ok=True)
+    except OSError:
+        return None
+    atexit.register(shutil.rmtree, str(base), True)
+    return str(base)
+
+
+if (_ram := ram_tmp()) is not None:  # this process's temp files and its subprocesses'
+    os.environ["TMPDIR"] = tempfile.tempdir = _ram
 
 
 class Sandbox:
@@ -397,7 +401,7 @@ class Sandbox:
 
     def __init__(self, config_extra=""):
         # resolved: macOS's temp dir is behind a symlink (/var -> /private/var), and windvane reports real paths
-        self.tmp = Path(tempfile.mkdtemp(prefix="windvane-test-", dir=sandbox_base())).resolve()
+        self.tmp = Path(tempfile.mkdtemp(prefix="windvane-test-")).resolve()
         # removed by close(), or when it's collected or the run ends: a setUp that fails after this never calls close
         self.rm = weakref.finalize(self, shutil.rmtree, str(self.tmp), True)
         self.old_env = dict(os.environ)
