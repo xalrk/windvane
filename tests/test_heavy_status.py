@@ -2,6 +2,7 @@
 without /proc doesn't run `ps` on every poll."""
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -76,12 +77,14 @@ class HeavyStatus(unittest.TestCase):
         self.until(lambda: heavy.paused(job.pid))
         line = heavy.status()[0]
         self.assertTrue(line.startswith(f"held by pid {job.pid} "), line)
-        self.assertTrue(line.endswith(f"; paused, so everyone waits: resume it with kill -CONT -- -{os.getpgid(job.pid)})"),
+        self.assertTrue(line.endswith(f"; paused, so everyone waits: resume it with kill -CONT -{os.getpgid(job.pid)})"),
                         line)
 
     @unittest.skipUnless(Path("/proc/self/stat").exists(), "reads a child's state from /proc")
     def test_the_paused_holders_way_out_resumes_its_command_too(self):
-        """Ctrl-Z stops the whole group: waking only `windvane heavy`'s pid would leave its command stopped."""
+        """Ctrl-Z stops the whole group: waking only `windvane heavy`'s pid would leave its command stopped. The way
+        out is typed into whatever shell the person has, so it runs in each one here (dash is Debian's and Ubuntu's
+        `sh`, with a stricter `kill` than bash's)."""
         job = subprocess.Popen([sys.executable, "-c", RUN, "echo $$ > child; exec sleep 30"], env=self.env,
                                cwd=self.d, stderr=subprocess.DEVNULL, start_new_session=True)
 
@@ -92,12 +95,17 @@ class HeavyStatus(unittest.TestCase):
         self.addCleanup(end)
         self.until(lambda: (self.d / "child").exists() and (self.d / "child").read_text().strip())
         child = int((self.d / "child").read_text())
-        os.killpg(job.pid, signal.SIGSTOP)  # what Ctrl-Z does
-        self.until(lambda: heavy.paused(job.pid) and heavy.paused(child))
-        way_out = heavy.status()[0].rsplit("resume it with ", 1)[1].rstrip(")")
-        subprocess.run(way_out, shell=True, check=True)
-        self.until(lambda: not heavy.paused(child))
-        self.assertNotIn("paused", heavy.status()[0])
+        for shell in ("sh", "dash", "bash", "zsh"):
+            with self.subTest(shell=shell):
+                if not shutil.which(shell):
+                    self.skipTest(f"no {shell} here")
+                os.killpg(job.pid, signal.SIGSTOP)  # what Ctrl-Z does
+                self.until(lambda: heavy.paused(job.pid) and heavy.paused(child))
+                way_out = heavy.status()[0].rsplit("resume it with ", 1)[1].rstrip(")")
+                ran = subprocess.run([shell, "-c", way_out], capture_output=True, text=True)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.until(lambda: not heavy.paused(child))
+                self.assertNotIn("paused", heavy.status()[0])
 
     def test_without_proc_ps_runs_once_per_pid_in_ten_seconds(self):
         bin_ = self.d / "bin"
