@@ -267,7 +267,8 @@ def send(c, title, msg, prio=3, tags="", buttons=(), wait=10):
             _hold_until = time.time() + retry_after(e, RETRY)
             if not _held:
                 tell(f"windvane phone: the ntfy server refused a push (429, {limit_name(e)}); "
-                     f"{held_for(_hold_until)}. A server of your own lifts its limits: windvane phone setup --server URL")
+                     f"{held_for(_hold_until)}. A server of your own lifts its limits: "
+                     "windvane phone setup --server URL")
             _held = True
         e.close()
         return False
