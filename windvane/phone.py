@@ -1109,8 +1109,7 @@ def why_failed(c):
 def grant_then_retry(c, ok):
     """After a test push the server refused for want of the grants access_help printed: the next step."""
     if not ok and c.get("token") and _refused == 403:
-        print("Run the two `ntfy access` lines above on the server, then `windvane phone setup` again for the test "
-              "push.")
+        print("Once they have run on the server, `windvane phone setup` again sends the test push.")
 
 
 def off():

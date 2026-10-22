@@ -16,7 +16,7 @@ import test_phone_server as server  # noqa: E402
 
 UNGRANTED = ("the server hasn't let the token's user use windvane's topics (403): run the two `ntfy access` lines "
              "`windvane phone setup` prints")
-RETRY = "Run the two `ntfy access` lines above on the server, then `windvane phone setup` again for the test push."
+RETRY = "Once they have run on the server, `windvane phone setup` again sends the test push."
 
 
 class Access(server.Base):
