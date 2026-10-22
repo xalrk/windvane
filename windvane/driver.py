@@ -70,6 +70,7 @@ PULL_EVERY = 600  # seconds between looks for a newer windvane while no ticket m
 DRAIN_AFTER = 3 * 3600  # seconds a driver may run behind its install's code before it stops refilling slots for it
 WRAP_UP = 20  # minutes before its stop a worker is told to wrap up
 WRAP_LEAD = 5  # minutes a worker's wrap-up must still be ahead for it to start: less, and it ends PARTIAL at once
+DROPPED_SHOWN = "dropped-shown.json"  # in the state dir: the dropped late answers `windvane status` has shown
 RETRY = "RETRY"  # in the state dir: the failed tickets `windvane retry` puts back in the running autopilot's queue
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
@@ -276,6 +277,28 @@ def given_at(got):
         return time.time()
 
 
+def dropped_id(e):
+    """A dropped late answer's id ([key, what, when given]), as `windvane status` marks it shown."""
+    return f"{e[0]}@{int(e[2])}"
+
+
+def dropped_unseen(p):
+    """The late answers dropped after phone.LATE_KEEP that `windvane status` hasn't shown yet, as lines, each marked
+    shown: their push never went out, so this is how the user learns their answer didn't count. The shown file holds
+    only ids still in state.json; the driver forgets an entry once it's in there (Pilot.save)."""
+    kept = load_json(p.state / "state.json", {}).get("dropped", [])
+    shown_f = p.state / DROPPED_SHOWN
+    shown = set(load_json(shown_f, []))
+    out = [f"dropped answer: {key}: your answer from {phone.ago(time.time() - when)} wasn't taken ({what}), and it "
+           f"was kept {phone.LATE_KEEP // 86400} days without its push going out. Once its ticket merges, change it "
+           f"with windvane answer {key} <letter>"
+           for key, what, when in kept if dropped_id([key, what, when]) not in shown]
+    now = sorted(dropped_id(e) for e in kept)
+    if now != sorted(shown):
+        save_json(shown_f, now)
+    return out
+
+
 def aged(line, alone, when):
     """A kept late answer's (line, push alone), saying how old the answer is once it's over an hour old."""
     age = phone.ago(time.time() - when)
@@ -300,6 +323,8 @@ class Pilot(Desk, Periodic):
         # late `windvane answer`s, [line, push alone, when given], kept until their push goes out (phone.LATE_KEEP)
         self.late = [e if len(e) > 2 else [*e, time.time()] for e in s.get("late", [])]  # older ones: no time kept
         self.late_failed = s.get("late_failed", False)  # that their push failed: logged once until one goes out
+        self.dropped = s.get("dropped", [])  # late answers kept past phone.LATE_KEEP, [key, what, when given], until
+        # `windvane status` has shown them (dropped_unseen)
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.secrets = s.get("secrets", {})  # ticket -> {"branch", "sha"}: a head set aside for a secret (secret_aside)
@@ -394,12 +419,15 @@ class Pilot(Desk, Periodic):
     def save(self):
         with self.lock:
                 self.settled_as = self.settled_kept()
+                shown = set(load_json(self.p.state / DROPPED_SHOWN, []))
+                self.dropped = [e for e in self.dropped if dropped_id(e) not in shown]
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
                                         "checks": dict(self.check_wait), "scale_told": self.scale_told,
                                         "settled_as": dict(self.settled_as), "late": list(self.late),
-                                        "late_failed": self.late_failed, "aside": dict(self.aside),
+                                        "late_failed": self.late_failed, "dropped": list(self.dropped),
+                                        "aside": dict(self.aside),
                                         "fixes": dict(self.fixes), "failed": list(self.failed),
                                         "costs": self.costs[-10:], "minutes": self.minutes[-10:],
                                         "running": dict(self.running)})
@@ -1736,23 +1764,26 @@ class Pilot(Desk, Periodic):
 
     def tell_late(self):
         """The pass's late answers, with those whose push failed before (kept in state.json, so a restart sends them
-        too): one push, and they're dropped only once it went out. One kept past phone.LATE_KEEP is dropped untold, and
-        one over an hour old says its age, so an answer from days of ntfy being down doesn't read as new."""
+        too): one push, and they're dropped only once it went out. One given over phone.LATE_KEEP ago is dropped from the
+        push, for `windvane status` to name once, and one over an hour old says its age, so an answer from days of ntfy
+        being down doesn't read as new."""
         old = [e for e in self.late if time.time() - e[2] > phone.LATE_KEEP]
-        if old:  # saved first: a restart in between can't log a drop twice
+        if old:  # saved first, with the status record: a kill before the log line loses only the line, never the record
             self.late = [e for e in self.late if e not in old]
+            self.dropped += [[*e[0].split(": ", 1), e[2]] for e in old]
             self.save()
         for line, _, when in old:
             key, what = line.split(": ", 1)
-            self.log(f"{key}: your answer from {phone.ago(time.time() - when)} wasn't taken ({what}), and its push "
-                     f"failed for {phone.LATE_KEEP // 86400} days, so it's dropped untold; once its ticket merges, "
-                     f"change it with `windvane answer {key} <letter>`.")
+            self.log(f"{key}: your answer from {phone.ago(time.time() - when)} wasn't taken ({what}), and it was kept "
+                     f"{phone.LATE_KEEP // 86400} days without its push going out, so it's dropped; `windvane status` "
+                     f"names it once. Once its ticket merges, change it with `windvane answer {key} <letter>`.")
         if phone.late_pass([aged(*e) for e in self.late]):
             if self.late or self.late_failed:
                 self.late, self.late_failed = [], False
                 self.save()
         elif not self.late_failed:  # saved, so a restart in the same failure spell doesn't log it again
-            self.log(f"the push of {len(self.late)} late answer(s) failed; trying again on the next pass")
+            n = len(self.late)
+            self.log(f"the push of {n} late answer{'s' * (n != 1)} failed; trying again on the next pass")
             self.late_failed = True
             self.save()
 
