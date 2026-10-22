@@ -226,7 +226,7 @@ class Guard(unittest.TestCase):
         code, out, err = self.sh("windvane ci --dry-run", env)
         self.assertEqual(code, 0, out + err)
         self.assertIn("Dry run: would run gh workflow run test.yml --ref main", out)
-        self.assertIn(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], self.calls())
+        self.assertIn(["repo", "view", "--json", "nameWithOwner,visibility"], self.calls())
         code, out, err = self.sh("windvane ci", env)
         self.assertEqual(code, 0, out + err)
         self.assertIn("Started test.yml on main.", out)

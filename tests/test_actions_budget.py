@@ -19,7 +19,7 @@ from test_pipeline import args  # noqa: E402
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)  # `windvane ci` and the driver count at the real time
 
-# Serves FAKE_GH_DATA: {"repos": [...], "runs": {repo: [run]}, "jobs": {"repo#id": [job]}, "workflows": {repo: [..]}},
+# Serves FAKE_GH_DATA: {"repos": [repo], "runs": {repo: [run]}, "jobs": {"repo#id": [job]}, "workflows": {repo: [..]}},
 # paging lists as GitHub does (per_page, page), and logs each call's arguments to FAKE_GH_LOG.
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -30,10 +30,12 @@ with open(os.environ["FAKE_GH_LOG"], "a") as f:
 d = json.load(open(os.environ["FAKE_GH_DATA"]))
 if d.get("fail") and any(d["fail"] in x for x in a):
     sys.exit(1)
+# A repo is "owner/name" (private) or {"nameWithOwner": ..., "visibility": "PUBLIC"}; --json without -q prints JSON.
+repos = [r if isinstance(r, dict) else {"nameWithOwner": r, "visibility": "PRIVATE"} for r in d["repos"]]
 if a[:2] == ["repo", "list"]:
-    print("\n".join(d["repos"]))
+    print(json.dumps(repos) if "-q" not in a else "\n".join(r["nameWithOwner"] for r in repos))
 elif a[:2] == ["repo", "view"]:
-    print(d["repos"][0])
+    print(json.dumps(repos[0]) if "-q" not in a else repos[0]["nameWithOwner"])
 elif a[:2] == ["workflow", "run"]:
     sys.exit(d.get("dispatch_exit", 0))
 elif a[0] == "api":
