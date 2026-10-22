@@ -17,7 +17,7 @@ This:
 2. sends a test push;
 3. shows the topic to subscribe to, as text and, when `qrencode` is installed, as a QR code;
 4. installs `windvane phone listen` as a systemd user service, so the phone's commands are answered even when no run
-   is going. `--no-service` skips it; a running autopilot reads the replies itself anyway.
+   is going. `--no-service` skips it; a running autopilot then reads the replies itself, on a stream of its own.
 
 On the phone, install the ntfy app, tap **+**, and subscribe to the topic shown (for your own server, choose "Use
 another server" first).
@@ -27,6 +27,11 @@ read your pushes. windvane never writes the topics into logs, pushes, commits or
 `windvane phone rotate` makes new ones (subscribe to the new topic afterwards).
 
 `windvane phone off` turns the phone off again; `windvane doctor` shows whether it is on and working.
+
+One install costs the server one open stream (the listener's, or without it a running autopilot's own) and one
+request per push, reconnecting after a drop with a wait that doubles from 10 s to 5 minutes and waiting out any
+`429 Too Many Requests` it gets. That keeps it well inside ntfy.sh's budget for each address: 60 requests, refilled
+one every 5 s, 30 open connections and 250 messages a day.
 
 ## What you get
 

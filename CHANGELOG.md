@@ -6,6 +6,15 @@ release on the same day adds a number (`2026.10.9.1`).
 
 ## Unreleased
 
+### Changed
+- The phone goes easier on the ntfy server. A dropped stream is opened again after 10 s, then 20, 40 and so on up
+  to 5 minutes, with one log line per outage instead of one every 10 s, and a `429` waits out its `Retry-After`.
+  A push the server refuses with a `429` is logged once with the limit's name, and the next pushes wait until the
+  server takes them again.
+- A run on a machine without the `windvane phone listen` service (`setup --no-service`, or macOS) holds one stream
+  for the phone's replies instead of polling every 15 s, so several projects running at once no longer run into
+  ntfy.sh's limit and miss answers.
+
 ## 2026.10.21 - 2026-10-21
 
 ### Added
