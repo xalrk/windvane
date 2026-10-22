@@ -373,6 +373,7 @@ def sandbox_base():
     global _base
     if _base is None:
         _base = ""
+        tempfile.gettempdir()  # its default is set on first use: now, not in a sandbox whose TMPDIR goes with it
         if RAM.is_dir() and os.access(RAM, os.W_OK):
             for old in RAM.glob("windvane-tests-*"):
                 try:
