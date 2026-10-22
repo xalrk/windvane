@@ -96,10 +96,12 @@ the order), and **open** otherwise. `windvane queue` shows all three.
    check (windvane's own runs every Python 3.11 to 3.14 installed, `tools/check_pythons.sh`), keep workflows
    `workflow_dispatch` only, and `windvane doctor` warns about any that run on their own.
    With `actions_minutes` set (your plan's monthly minutes), windvane counts the month's billed minutes itself from
-   the run history of your repos (every job that started this month, a re-run of an older run too, each rounded up
-   to the minute, macOS x10, Windows x2; finished attempts cached in the state dir, one count at a time across
-   projects) and keeps them under `actions_cap` (90%): a session starts a workflow only through `windvane ci`,
-   which refuses one whose last run's minutes would pass the cap. Workers can't start, re-run or enable one
+   the run history of your private and internal repos (every job that started this month, a re-run of an older run
+   too, each rounded up to the minute, macOS x10, Windows x2; finished attempts cached in the state dir, one count at
+   a time across projects) and keeps them under `actions_cap` (90%): a session starts a workflow only through
+   `windvane ci`, which refuses one whose last run's minutes would pass the cap. Public repos run free on GitHub's
+   standard runners, so they aren't counted and `windvane ci` starts theirs without a cap (a larger runner, billed
+   even there, isn't counted either). Workers can't start, re-run or enable one
    themselves (a `gh` guard first on their PATH refuses it, see [Safety](safety.md#workflows-run-only-by-hand)). At
    or over the cap the driver's merges and commits and the workers' own commits carry `[skip ci]` (through a git hook
    given only to the worker session, never your repo's config, that checks the last count at each commit: counts

@@ -1,9 +1,11 @@
 """The month's GitHub Actions minutes, counted from the run history, and the cap windvane keeps them under.
 
 windvane is the only thing that spends the user's Actions minutes, so it counts them itself instead of asking the
-billing API (which needs gh's `user` scope): every job that started this calendar month (UTC) in the login's repos,
-whichever month its run was created in (a re-run is billed when it runs), each rounded up to the minute, times 10
-on macOS runners and 2 on Windows ones; self-hosted runners are free.
+billing API (which needs gh's `user` scope): every job that started this calendar month (UTC) in the login's private
+and internal repos, whichever month its run was created in (a re-run is billed when it runs), each rounded up to the
+minute, times 10 on macOS runners and 2 on Windows ones; self-hosted runners are free. Public repos run free on
+GitHub's standard runners, so they aren't counted: a repo counts by its visibility now, as the run history doesn't
+keep a past one, and a larger runner (billed even on a public repo) isn't counted there.
 A desk count done this way matched GitHub's own figure. A running job counts up to now, a cancelled one up to its end.
 
 Off unless `.windvane/config.toml` sets `actions_minutes` (the plan's monthly minutes); `actions_cap` (0.9) is the
@@ -152,12 +154,22 @@ def run_minutes(cd, repo, run, now, whole=False):
     return sum(job_minutes(j, now) for j in jobs if whole or month(stamp(j.get("started_at")) or now) == month(now))
 
 
+def billable(repo):
+    """Whether a repo's minutes are billed: GitHub runs a public repo's standard-runner jobs free. A visibility gh
+    didn't give counts, so a doubt never lowers the count."""
+    return str(repo.get("visibility") or "").upper() != "PUBLIC"
+
+
 def repos(cd):
-    """The login's repos, owner/name: the only place its minutes can go."""
-    r = net.call(["gh", "repo", "list", "--limit", "1000", "--json", "nameWithOwner", "-q", ".[].nameWithOwner"], cd)
+    """The login's private and internal repos, owner/name: the only place its minutes can go."""
+    r = net.call(["gh", "repo", "list", "--limit", "1000", "--json", "nameWithOwner,visibility"], cd)
     if r.returncode != 0:
         raise GhFailed("gh repo list", r)
-    return r.stdout.split()
+    try:
+        listed = json.loads(r.stdout or "[]")
+    except ValueError:
+        raise GhFailed("gh repo list", r) from None
+    return [x["nameWithOwner"] for x in listed if billable(x)]
 
 
 def billed(cd, cache, repo, run, now):
@@ -768,11 +780,17 @@ def ci(p, name="", ref="", dry=False):
     estimate (its last finished run's, rounded up) stay within the cap. Prints what was used and what's left; returns
     the exit code."""
     cd = p.root
-    repo = net.sh(cd, "gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner")
+    try:
+        here = json.loads(net.sh(cd, "gh", "repo", "view", "--json", "nameWithOwner,visibility") or "{}")
+    except ValueError:
+        here = {}
+    repo = here.get("nameWithOwner")
     if not repo:
         print("windvane ci: no GitHub repo here (or gh is missing, logged out or offline)")
         return 1
-    b = budget(p)
+    b = billable(here) and budget(p)
+    if not billable(here):
+        print(f"{repo} is public: GitHub runs its workflows on standard runners for free, so no estimate or cap.")
     total = b and count(cd, max_age=60)
     if b and not total:
         print("windvane ci: couldn't count this month's Actions minutes (gh missing, logged out or offline), so no "
@@ -782,7 +800,7 @@ def ci(p, name="", ref="", dry=False):
         cap, used = cap_minutes(p), math.ceil(total["used"])
         print(f"Actions this month: {used:,} of {fmt(b[0])} min used; the cap is {cap:,} ({b[1]:.0%}), "
               f"{max(0, cap - used):,} left.")
-    else:
+    elif billable(here):
         print("No Actions budget set (actions_minutes in .windvane/config.toml): the minutes aren't counted.")
     try:
         flow = workflow(cd, repo, name)
