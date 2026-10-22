@@ -224,6 +224,24 @@ class Setup(Base):
         self.assertIn("paste it again", str(e.exception))
         self.assertNotIn("token", phone.conf())
 
+    def test_a_new_token_restarts_the_listener_service(self):
+        phone.unit_path().parent.mkdir(parents=True, exist_ok=True)
+        phone.unit_path().write_text("[Service]\n")
+        calls = []
+        with mock.patch.object(phone, "systemctl", side_effect=lambda *a: calls.append(a) or mock.Mock(returncode=0)):
+            self.setup_cli("--token", TOKEN)
+            self.setup_cli()
+        self.assertEqual(calls.count(("restart", phone.SERVICE)), 1, calls)
+
+    def test_a_hand_edited_token_that_cant_be_sent_is_told_once(self):
+        phone.save_conf({**self.c, "token": "tk_\u200bpasted"})
+        self.assertFalse(phone.push("Done: T-001", "merged"))
+        self.assertFalse(phone.push("Done: T-002", "merged"))
+        self.assertEqual(self.ntfy.seen, [])
+        lines = self.log().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("the token in phone.toml isn't plain text: windvane phone setup --token -", lines[0])
+
     def test_a_refused_test_push_says_to_set_the_token(self):
         out = self.setup_cli()
         self.assertIn("test push: FAILED (the server asks for a token (401): windvane phone setup --token -)",

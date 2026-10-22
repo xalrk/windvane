@@ -240,6 +240,9 @@ def limit_name(e):
     return cut(str(said)) or "too many requests"
 
 
+BAD_TOKEN = "the token in phone.toml isn't plain text: windvane phone setup --token -"
+
+
 def refused(code, c):
     """What a 401 or 403 means for the user: a token to set or change. Never the token itself."""
     what = "refused the token" if c.get("token") else "asks for a token"
@@ -299,6 +302,11 @@ def send(c, title, msg, prio=3, tags="", buttons=(), wait=10):
                      "windvane phone setup --server URL")
             _held = True
         e.close()
+        return False
+    except UnicodeError:  # a token edited into phone.toml by hand that can't go in a header
+        if not _refused:
+            tell(f"windvane phone: {BAD_TOKEN}")
+        _refused = -1
         return False
     except (OSError, ValueError):
         return False
@@ -794,6 +802,8 @@ def dropped(err, c):
         return "the stream ended at once"
     if isinstance(err, urllib.error.HTTPError) and err.code in (401, 403):
         return refused(err.code, c)
+    if isinstance(err, UnicodeError):
+        return BAD_TOKEN
     if isinstance(err, urllib.error.HTTPError):
         return f"the server refused the stream (429, {limit_name(err)})" if err.code == 429 else \
             f"the server answered {err.code}"
@@ -989,6 +999,8 @@ def setup(server=None, service=True, project=None, token=None):
     c["enabled"] = True
     save_conf(c)
     mark_now()
+    if token is not None:
+        restart_service()  # a listener's open stream still sends the old token
     if project:
         register(project)
     if shutil.which("notify"):
@@ -1004,7 +1016,8 @@ def setup(server=None, service=True, project=None, token=None):
 
 def why_failed(c):
     """Why setup's test push failed, as far as windvane can tell."""
-    return refused(_refused, c) if _refused else "check the server address and the network"
+    return BAD_TOKEN if _refused == -1 else refused(_refused, c) if _refused else \
+        "check the server address and the network"
 
 
 def off():
