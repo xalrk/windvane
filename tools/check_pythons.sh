@@ -8,8 +8,10 @@
 # leaves, the cleaner removes). Bash and the Pythons only: nothing to install.
 # Usage: tools/check_pythons.sh [unittest args]   (none: every tests/test_*.py, pooled; with args: one unittest run)
 # CHECK_JOBS sets K; by default the CPUs shared out among the versions, at least 2 each: the tests' own subprocesses
-# fill the rest, and more only slows every module down until the ones that time their steps miss their windows. A
-# module that fails beside the others is rerun alone once, and `rerun alone on` names it.
+# fill the rest, and more only slows every module down until the ones that time their steps miss their windows. For the
+# same reason checks running at once on one machine split K among them (markers in the cache dir; `shared:` says so),
+# unless CHECK_JOBS is set. A module that fails beside the others is rerun alone once, and `rerun alone:` names it,
+# with the Pythons it was rerun on and the seconds the reruns added.
 cd "$(dirname "$0")/.." || exit 2
 args=("$@")
 VERSIONS="3.11 3.12 3.13 3.14"
@@ -18,10 +20,10 @@ trap 'rm -rf "$tmp"' EXIT
 trap 'kill $(jobs -p) 2>/dev/null; exit 130' INT TERM
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/windvane-check"
 
-ran="" missing="" exes=""
+ran="" missing="" exes="" py=""
 for v in $VERSIONS; do
     exe=$(command -v "python$v") || { missing="$missing $v"; continue; }
-    ran="$ran $v" exes="$exes $exe"
+    ran="$ran $v" exes="$exes $exe" py=${py:-$exe}
 done
 [ -n "$ran" ] || { echo "no supported Python on PATH (looked for$(printf ' python%s' $VERSIONS))"; exit 1; }
 set -- $ran
@@ -38,6 +40,7 @@ for v in $ran; do
     mkdir "$tmp/bin$v" "$tmp/tmp$v" && ln -s "$exe" "$tmp/bin$v/python3"
     if [ ${#args[@]} -eq 0 ]; then
         cmd=(tools/test_pool.py --jobs "$k" --tails "$tmp/tails$v" --times "$cache/times$v.json" tests)
+        [ -n "$CHECK_JOBS" ] || cmd+=(--share "$cache/running" --check "${tmp##*/}")
     else
         cmd=(-m unittest "${args[@]}")
     fi
@@ -58,8 +61,11 @@ for v in $ran; do  # the first version's five slowest modules: what to speed up 
     slowest=$(grep -m1 '^slowest: ' "$tmp/log$v") && { echo "${slowest/slowest:/slowest on python$v:}"; break; }
 done
 for v in $ran; do
-    rerun=$(grep -m1 '^rerun alone: ' "$tmp/log$v") && echo "${rerun/rerun alone:/rerun alone on python$v:}"
+    grep -m1 '^shared: ' "$tmp/log$v" && break
 done
+if grep -qs '^rerun alone: ' $(for v in $ran; do echo "$tmp/log$v"; done); then  # the versions' reruns, as one line
+    "$py" tools/test_pool.py --fold $(for v in $ran; do echo "$v=$tmp/log$v"; done)
+fi
 for v in $failed; do
     echo "--- python$v, the end of its output:"
     if [ -s "$tmp/tails$v" ]; then cat "$tmp/tails$v"; else tail -n 40 "$tmp/log$v"; fi
