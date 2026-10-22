@@ -8,30 +8,30 @@ release on the same day adds a number (`2026.10.9.1`).
 
 ## 2026.10.21 - 2026-10-21
 
-A week of running windvane on itself and on other projects, 77 tickets merged. Three things changed most.
+This release keeps secrets out of everything windvane pushes, lets runs recover from failures that used to end a
+ticket, and adds control over heavy jobs.
 
-**Secrets stay out of what windvane pushes.** Every push a session makes is scanned by a `pre-push` hook, and every
-branch again before it merges: a token, a private key, an ntfy topic, a personal email, a private word or a file
-named like a secret is refused by kind and place and goes back to the worker. Reviews, critiques and check logs are
-censored before they reach GitHub, `windvane answer` refuses an answer holding one, and in auto mode the sessions
-can't reach Claude Code's login file. `windvane public-check` reads a repository's whole history before it goes
-public, and says what to rotate first.
+**Secrets.** Every push a session makes is scanned by a `pre-push` hook, and every branch again before it merges: a
+token, a private key, an ntfy topic, a personal email, a private word or a file named like a secret is refused by
+kind and place and returned to the worker. Reviews, critiques and check logs are censored before they reach GitHub,
+`windvane answer` refuses an answer holding one, and in auto mode sessions cannot reach Claude Code's login file.
+`windvane public-check` reads a repository's whole history before it goes public and lists what to rotate.
 
-**Runs recover instead of failing.** `windvane retry <ID>` puts a failed ticket back once you've fixed the cause. A
-merge held by a check still running is tried again for an hour, a draft pull request is marked ready, a branch a
-killed run left checked out lands again, a Ctrl-C finishes the wind-down, and a reinstall or a Python upgrade under
-a running driver no longer ends it. A plan and `windvane new` can no longer hand out the same ticket id.
+**Recovery.** `windvane retry <ID>` returns a failed ticket to the queue once its cause is fixed. A merge held by a
+check still running is retried for up to an hour, a draft pull request is marked ready, a branch left checked out by
+a killed run lands again, Ctrl-C completes the wind-down, and a reinstall or Python upgrade under a running driver no
+longer ends the run. A plan and `windvane new` can no longer hand out the same ticket id.
 
-**Heavy jobs are easier to live with.** `windvane bg --cancel` ends one, `--expect` tells the jobs behind it how long
-it likely runs, `--mem` and `heavy_mem` say what memory it waits for, `heavy_reuses` names the helpers (an emulator, a
-Gradle daemon) whose memory counts as free, and a kept job (`bg --heavy --keep`) outlives its session for a long
-training run or render. The head of the heavy line no longer holds up a smaller job that fits.
+**Heavy jobs.** `windvane bg --cancel` ends a job, `--expect` gives the jobs behind it an estimate, `--mem` and
+`heavy_mem` set the memory a job waits for, `heavy_reuses` names helpers (an emulator, a Gradle daemon) whose memory
+counts as free, and `bg --heavy --keep` lets a long run or render outlive its session. The head of the heavy line no
+longer holds up a smaller job that fits.
 
-Also: `windvane --version`; the critic refuses an evidence pack whose notes are over its cap instead of judging notes
-cut mid-sentence; a driver takes up new windvane code between tickets.
+**Other changes.** `windvane --version`; the critic refuses an evidence pack whose notes exceed its cap instead of
+judging notes cut mid-sentence; a running driver takes up new windvane code between tickets.
 
-Installs made with pipx or uv move to a new release on their own between tickets. To move now, run the install
-command in the [README](https://github.com/xalrk/windvane#install) again; a first install starts at
+Installs made with pipx or uv pick up new releases between tickets. To upgrade now, run the install command in the
+[README](https://github.com/xalrk/windvane#install) again. New users start at
 [Getting started](https://github.com/xalrk/windvane/blob/main/docs/getting-started.md).
 
 ### Added
