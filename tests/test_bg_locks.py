@@ -331,6 +331,12 @@ class SameSecondOnPs(unittest.TestCase):
         self.assertEqual(self.helpers(self.t - util.PS_GRAIN), [self.pid])
         self.assertEqual(self.helpers(None), [])
 
+    def test_one_in_the_next_second_after_a_run_began_mid_second_is(self):
+        """A run's start is read to the microsecond: a process started in the next whole second is after it, even less
+        than a second later."""
+        self.assertEqual(self.helpers(self.t - 0.5), [self.pid])
+        self.assertEqual(self.helpers(self.t - 0.001), [self.pid])
+
 
 if __name__ == "__main__":
     unittest.main()

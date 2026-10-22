@@ -3,6 +3,7 @@ import calendar
 import contextlib
 import fcntl
 import json
+import math
 import os
 import re
 import shlex
@@ -316,7 +317,7 @@ def cwds(pid=None):
             except OSError:
                 pass
         return out
-    exe = shutil.which("lsof") or next((x for x in ("/usr/sbin/lsof", "/usr/bin/lsof") if os.access(x, os.X_OK)), None)
+    exe = cwds_exe()
     if not exe:
         return {}
     try:
@@ -331,6 +332,11 @@ def cwds(pid=None):
         elif line.startswith("n") and at is not None:
             out[at] = line[1:]
     return out
+
+
+def cwds_exe():
+    """The `lsof` that `cwds` asks without /proc, or None."""
+    return shutil.which("lsof") or next((x for x in ("/usr/sbin/lsof", "/usr/bin/lsof") if os.access(x, os.X_OK)), None)
 
 
 def tmpdirs():
@@ -464,9 +470,11 @@ def boot_started(pid):
 
 def started_after(pid, since):
     """Whether process `pid` started after `since` (on `boot_started`'s clock), False when it's gone. `ps` gives whole
-    seconds, so there it must have started a whole PS_GRAIN later: one started in `since`'s own second may be older."""
+    seconds, rounded down, so there it must have started in a later second than `since`'s: one started in `since`'s
+    own second may be older. A whole PS_GRAIN past `since` itself would also pass over one started early in the next
+    second when `since` was read mid-second, as a run's start is."""
     t = boot_started(pid)
-    return t is not None and t >= since + (0 if PROC.is_dir() else PS_GRAIN)
+    return t is not None and t >= (since if PROC.is_dir() else math.floor(since) + PS_GRAIN)
 
 
 def command(pid):

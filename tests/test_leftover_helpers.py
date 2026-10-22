@@ -3,7 +3,9 @@ run's end, in the log and one push, and left running: the driver can't tell it f
 import contextlib
 import io
 import json
+import math
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,6 +24,14 @@ from helpers import Sandbox  # noqa: E402
 from test_pipeline import args  # noqa: E402
 
 TITLE = "windvane left helpers running"
+
+
+def next_second():
+    """Without /proc (macOS) a start time is a whole second, and a process started in the run's own second may be older
+    than the run: a helper the test's run starts waits for the next one, to be named. Linux's `ps` (here when a test
+    hides /proc) counts from a boot time cut to the second, so it may say a second early: it waits one more."""
+    if not util.PROC.is_dir():
+        time.sleep(math.ceil(time.time()) - time.time() + 0.01 + (sys.platform != "darwin"))
 
 
 class LeftoverHelpers(unittest.TestCase):
@@ -89,6 +99,7 @@ class LeftoverHelpers(unittest.TestCase):
         self.addCleanup(kill, older.pid)
         time.sleep(0.1)
         began = util.boot_started(older.pid) + 0.05  # the driver here is the test's process, older than `older`
+        next_second()
         with mock.patch.object(driver, "run_began", lambda: began):
             [msg] = self.run_once()
         self.assertIn(f"Still running in the checkout, started by the run: sleep 120 (pid {self.helper()}).", msg)
@@ -114,6 +125,16 @@ class LeftoverHelpers(unittest.TestCase):
         self.assertIn(f"Still running in the checkout, started by the run: sleep 122 (pid {self.helper()}).", msg)
         self.assertNotIn("sleep 121", msg)
 
+    @unittest.skipUnless(shutil.which("ps") and util.cwds_exe(), "no ps or lsof on this system")
+    def test_with_isolate_off_only_what_the_run_started_counts_on_ps(self):
+        with mock.patch.object(util, "PROC", Path("/nonexistent/proc")):  # macOS's branch: whole-second starts
+            self.test_with_isolate_off_only_what_the_run_started_counts()
+
+    @unittest.skipUnless(shutil.which("ps") and util.cwds_exe(), "no ps or lsof on this system")
+    def test_a_schedules_window_names_only_what_it_started_on_ps(self):
+        with mock.patch.object(util, "PROC", Path("/nonexistent/proc")):
+            self.test_a_schedules_window_names_only_what_it_started()
+
     def test_not_while_a_new_run_holds_the_lock(self):
         """What runs in the trees then is the new run's own work."""
         with mock.patch.object(driver, "locked", lambda p: True):
@@ -128,6 +149,7 @@ class LeftoverHelpers(unittest.TestCase):
         self.p.state.mkdir(parents=True, exist_ok=True)
 
         def start(a, env):  # the driver: its tools start a helper, then it crashes and isn't restarted
+            next_second()
             h = subprocess.Popen(["sleep", "122"], cwd=work, start_new_session=True)
             self.pidfile.write_text(str(h.pid))
             (self.p.state / "STOP").write_text("")
