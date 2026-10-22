@@ -612,9 +612,11 @@ def held_by(info, times=None, note=""):
 def paused_note(pid, who):
     """Why a stopped (Ctrl-Z) job matters and how to go on, for `status`'s parentheses. Ctrl-Z stops the whole
     process group and the pid is only `windvane heavy`'s own, its command a child in that group, so the way out
-    wakes the group (under `bg --heavy` led by the shell around it); the bare pid only if the group can't be read."""
+    wakes the group (under `bg --heavy` led by the shell around it); the bare pid only if the group can't be read.
+    No `--` before the group: dash's and busybox's `kill` reject it, and every shell's `kill` (and fish's
+    /usr/bin/kill) reads a negative number after the signal as a group."""
     try:
-        target = f"-- -{os.getpgid(pid)}"
+        target = f"-{os.getpgid(pid)}"
     except OSError:
         target = str(pid)
     return f"paused, so {who}: resume it with kill -CONT {target}"

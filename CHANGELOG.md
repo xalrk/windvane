@@ -15,6 +15,10 @@ release on the same day adds a number (`2026.10.9.1`).
   for the phone's replies instead of polling every 15 s, so several projects running at once no longer run into
   ntfy.sh's limit and miss answers.
 
+### Fixed
+- `windvane heavy --status` gives a paused job's way out as `kill -CONT -<pgid>`, which every shell takes; the
+  `kill -CONT -- -<pgid>` it gave before was refused by dash and busybox `sh` (`Illegal number: -`).
+
 ## 2026.10.21 - 2026-10-21
 
 ### Added
