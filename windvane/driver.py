@@ -2569,6 +2569,7 @@ class Pilot(Desk, Periodic):
                 push("windvane stopped", summary, 4 if self.failed or self.questions or self.halt else 3,
                      "checkered_flag", ("Usage=usage",))
             self.save()
+            phone.end_run()
             # After the push (a hung teardown can't hold it up) and under the lock (the next run's helpers are safe).
             # A crash `supervise` restarts goes on with this run's helpers; it tears down when it gives up.
             if not (crashed and os.environ.get(SUPERVISED)):

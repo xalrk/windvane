@@ -21,16 +21,23 @@ import signal
 import subprocess
 import sys
 import time
+import threading
 import tomllib
+import urllib.error
 import urllib.request
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from .config import exe, user_dir
 from .util import log
 
 SERVER = "https://ntfy.sh"
-PUMP_EVERY = 15  # seconds between a run's own looks at the reply topic (ntfy.sh allows a request per 5 s)
-RETRY = 10  # seconds before the listener reconnects after a dropped stream
+PUMP_EVERY = 15  # seconds between a run's polls of the reply topic when it has no stream (ntfy refills one per 5 s)
+RETRY = 10  # seconds before the listener reconnects after a dropped stream, doubling while it keeps dropping
+RETRY_CAP = 300  # the longest wait between reconnects: a server that is down hears from each install every 5 min
+STEADY = 60  # seconds a stream must stay up (or deliver a message) for the next drop to wait RETRY again
+STREAM_WAIT = 90  # seconds a stream may go silent (ntfy sends a keepalive every 45 s) before it counts as dropped
+HOLD_CAP = 3600  # the longest Retry-After taken as given: a bad header must not silence the phone for days
 QID_RE = r"[a-z][a-z0-9-]{1,39}"
 HELP = ("status: the autopilots that are on\noverview: where each project stands\nusage: Claude usage\n"
         "stop: stop the runs after their current ticket\nanswer <id> B: pick an option of a question\n"
@@ -173,9 +180,69 @@ def censor(text, c):
 
 # ---------- sending
 
+_hold_until = 0.0  # no push before this: the server answered 429 (see send)
+_held = False  # that 429 is in the log already: one line per spell of them, not one per push
+
+
+def rest(seconds, until=lambda: False):
+    """Sleep `seconds`, a second at a time so `until()` cuts it short (a run's stream ends with its run)."""
+    end = time.time() + seconds
+    while not until() and time.time() < end:
+        time.sleep(min(1.0, end - time.time()))
+
+
+def retry_after(e, default):
+    """Seconds an HTTP error's Retry-After asks for (seconds or a date), else `default`; at most HOLD_CAP."""
+    v = (e.headers.get("Retry-After") or "").strip() if getattr(e, "headers", None) else ""
+    try:
+        s = float(v) if v.replace(".", "", 1).isdigit() else parsedate_to_datetime(v).timestamp() - time.time()
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return min(max(s, 0), HOLD_CAP)
+
+
+def span(seconds):
+    """A wait as a log line says it: "10 s", "2 min", "1 h"."""
+    s = round(seconds)
+    return f"{s} s" if s < 90 else f"{round(s / 60)} min" if s < 5400 else f"{round(s / 3600)} h"
+
+
+def held_for(until):
+    """What a 429's hold does to the pushes after it: a short one delays the next, a long one skips them."""
+    left = until - time.time()
+    if left <= SEND_WAIT:
+        return f"the next push waits {span(left)}"
+    return f"pushes until {time.strftime('%H:%M', time.localtime(until))} are skipped, and questions asked again after"
+
+
+def limit_name(e):
+    """What ntfy says a 429 is about ("limit reached: daily message quota reached"), from its JSON body."""
+    try:
+        said = json.loads(e.read() or b"{}").get("error", "")
+    except (OSError, ValueError, AttributeError):
+        said = ""
+    return cut(str(said)) or "too many requests"
+
+
+def tell(line):
+    """A line about the phone's connection: the project's log in a run, stderr (the service's journal) outside."""
+    if _p:
+        log(_p, line, echo=False)
+    else:
+        print(line, file=sys.stderr, flush=True)
+
+
 def send(c, title, msg, prio=3, tags="", buttons=(), wait=10):
     """One push to the push topic; each button ("Label=command") posts its command to the reply topic. Censored
-    first: if the censor fails, nothing is sent. Never raises: a push is never worth stopping a run for."""
+    first: if the censor fails, nothing is sent. Never raises: a push is never worth stopping a run for. After a
+    429 the pushes wait out its Retry-After, within `wait` (past it, this one fails as a stalled network does), so
+    an install over the server's budget stops adding to it instead of being refused once a push."""
+    global _hold_until, _held
+    hold = _hold_until - time.time()
+    if hold > wait:
+        return False
+    if hold > 0:
+        rest(hold)
     try:
         msg, title = censor(msg, c), censor(title, c)
     except Exception:
@@ -192,8 +259,19 @@ def send(c, title, msg, prio=3, tags="", buttons=(), wait=10):
         body["actions"] = acts
     req = urllib.request.Request(server, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=max(wait, 0.01)):
+        with urllib.request.urlopen(req, timeout=max(min(wait, 10), 0.01)):
+            _held = False
             return True
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            _hold_until = time.time() + retry_after(e, RETRY)
+            if not _held:
+                tell(f"windvane phone: the ntfy server refused a push (429, {limit_name(e)}); "
+                     f"{held_for(_hold_until)}. A server of your own lifts its limits: "
+                     "windvane phone setup --server URL")
+            _held = True
+        e.close()
+        return False
     except (OSError, ValueError):
         return False
 
@@ -230,7 +308,7 @@ def push(title, msg, prio=3, tags="", buttons=(), wait=SEND_WAIT):
             args += ["-a", b]
         return (tool(args + [msg], wait) or (1,))[0] == 0
     c = conf()
-    return on(c) and send(c, title, msg, prio, tags, buttons, min(wait, 10))
+    return on(c) and send(c, title, msg, prio, tags, buttons, wait)
 
 
 def whole_to_log(line):
@@ -587,11 +665,17 @@ def handle(c, text, stale=False):
 
 # ---------- the listener
 
-def listen(once=False, until=lambda: False, since=None):
+def listen(once=False, until=lambda: False, since=None, heard=None):
     """Read the reply topic (and exact commands typed on the push topic) and act on each message. `once`: what's
-    there now, then return (a run does this itself between tickets); otherwise hold a stream open until `until()`.
-    Commands sent before `since` (default: now) are stale. One reader at a time on this machine, so no command is
-    done twice."""
+    there now, then return; otherwise hold a stream open until `until()`. `heard`: a run's own stream (see
+    keep_stream), called for each message acted on; it gives up quietly when another reader or the phone being off
+    stops it. Commands sent before `since` (default: now) are stale. One reader at a time on this machine, so no
+    command is done twice.
+
+    Every install leans on one ntfy server's per-visitor budget, so a dropped stream is opened again after RETRY
+    seconds, doubling to RETRY_CAP while it keeps dropping (a 429 waits its Retry-After), with one line per spell
+    of drops; a stream that delivers or stays up STEADY seconds starts over at RETRY. Where a stream opens but
+    nothing ever comes through (a proxy holding it back), it looks every PUMP_EVERY seconds instead."""
     since = time.time() if since is None else since
     d = state_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -600,79 +684,173 @@ def listen(once=False, until=lambda: False, since=None):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         lock.close()
-        if once:
+        if once or heard:
             return False
         raise SystemExit("windvane phone: already listening on this machine")
     recent, handled = [], 0
+    wait, spell, polling, streamed = RETRY, False, False, False
     try:
         while not until():
             c = conf()
             if not on(c):
-                if once:
+                if once or heard:
                     return False
                 raise SystemExit("windvane phone: the phone is off (windvane phone setup)")
             last = d / "last-id"
             after = last.read_text().strip() if last.exists() else mark_now()
             server = c.get("server", SERVER).rstrip("/")
-            url = f"{server}/{c['reply_topic']},{c['topic']}/json?since={after}" + ("&poll=1" if once else "")
+            poll = once or polling
+            url = f"{server}/{c['reply_topic']},{c['topic']}/json?since={after}" + ("&poll=1" if poll else "")
+            began, lines, delivered, opened, err = time.time(), 0, False, False, None
             try:
-                with urllib.request.urlopen(url, timeout=15 if once else 90) as stream:
+                with urllib.request.urlopen(url, timeout=15 if poll else STREAM_WAIT) as stream:
+                    opened = True
                     for raw in stream:
+                        lines += 1
                         ev = json.loads(raw)
                         if ev.get("event") != "message":
                             continue
+                        delivered = True
                         last.write_text(ev["id"])
                         text = ev.get("message", "")
                         if ev.get("topic") == c["topic"] and (ev.get("title") or not is_command(text)):
                             continue  # windvane's own pushes, or chat typed on the push topic
+                        if until():
+                            break
                         now = time.time()
                         recent = [t for t in recent if now - t < 60] + [now]
                         if len(recent) <= 10:  # a flood isn't the user
                             handle(c, text[:200], ev.get("time", 0) < int(since))
                             handled += 1
-                        if until():
-                            break
-            except (OSError, ValueError) as e:  # a dropped stream, a keepalive timeout, a server restart
+                            if heard:
+                                heard()
+            except (OSError, ValueError) as e:  # a dropped stream, a keepalive timeout, a server restart, a 429
                 if once:
                     return False
-                print(f"windvane phone: {type(e).__name__}; reconnecting", file=sys.stderr, flush=True)
-                time.sleep(RETRY)
+                err = e
             if once:
                 return handled
+            streamed = streamed or (lines > 0 and not poll)
+            good = delivered or time.time() - began >= STEADY
+            if good:
+                wait, spell = RETRY, False
+            if until() or (err is None and good and not polling):
+                continue  # a stream that served its time is simply opened again
+            if err is None and polling:
+                rest(PUMP_EVERY, until)
+                continue
+            if opened and not lines and not streamed and isinstance(err, TimeoutError):
+                polling = True
+                tell(f"windvane phone: the server's stream opened but brought nothing in {span(STREAM_WAIT)} (a proxy "
+                     f"holding it back?); asking every {span(PUMP_EVERY)} instead")
+                continue
+            is_429 = isinstance(err, urllib.error.HTTPError) and err.code == 429
+            pause = max(retry_after(err, wait) if is_429 else wait, PUMP_EVERY if polling else 0)
+            if not spell:
+                tell(f"windvane phone: {dropped(err)}; reconnecting, next try in {span(pause)}")
+                spell = True
+            if isinstance(err, urllib.error.HTTPError):
+                err.close()
+            rest(pause, until)
+            wait = min(wait * 2, RETRY_CAP)
     finally:
         lock.close()
+
+
+def dropped(err):
+    """Why a stream ended, for its spell's one log line."""
+    if err is None:
+        return "the stream ended at once"
+    if isinstance(err, urllib.error.HTTPError):
+        return f"the server refused the stream (429, {limit_name(err)})" if err.code == 429 else \
+            f"the server answered {err.code}"
+    return f"the stream dropped ({type(getattr(err, 'reason', err)).__name__})"
 
 
 _last_pump = 0.0
 _late_due = False  # a pass pump started whose late answers haven't been looked at yet
 _run_start = None
+_run_over = None  # a run's: set when it ends, which ends its stream (see keep_stream)
+_stream = None  # that stream's thread
+_heard, _heard_lock = 0, threading.Lock()  # messages the stream acted on that pump hasn't reported yet
 
 
 def start_run(p):
     """A run starts: its project becomes reachable from the phone, and only commands from now on reach it."""
-    global _run_start
+    global _run_start, _run_over
     register(p)
     _run_start = time.time()
+    _run_over = threading.Event()
+    keep_stream()
+
+
+def end_run():
+    """The run ends, and its stream with it (at its next message or keepalive at the latest), freeing the reply
+    topic for another run's."""
+    global _run_over
+    over, _run_over = _run_over, None
+    if over:
+        over.set()
+    if _stream:
+        _stream.join(2)
+
+
+def keep_stream():
+    """A run with no listener (no service, or none on macOS) reads the reply topic itself, on one stream in a thread
+    of its own: one open request instead of a poll every PUMP_EVERY seconds. pump starts it again when it ended:
+    another run's stream or a listener held the lock, or the phone was off."""
+    global _stream
+    if _run_over is None or (_stream and _stream.is_alive()) or shutil.which("notify-ask") or not on(conf()):
+        return
+    _stream = threading.Thread(target=read_stream, args=(_run_over, _run_start), name="phone-stream", daemon=True)
+    _stream.start()
+
+
+def read_stream(over, since):
+    try:
+        listen(until=over.is_set, since=since, heard=hear)
+    except Exception as e:  # the phone must never stop a run: the next pump starts it again
+        tell(f"windvane phone: the run's stream stopped ({type(e).__name__}); it starts again within "
+             f"{span(PUMP_EVERY)}")
+
+
+def hear():
+    global _heard
+    with _heard_lock:
+        _heard += 1
+
+
+def heard_since():
+    """How many messages the run's stream acted on since the last look."""
+    global _heard
+    with _heard_lock:
+        n, _heard = _heard, 0
+    return n
 
 
 def pump(late=True):
-    """A run's own look at the reply topic, at most every PUMP_EVERY seconds: answers and `stop` reach it even
-    without the listener service. Nothing when the listener (or the user's ntfy-listen) already reads it. How many
-    messages it acted on, so a waiting run wakes up for an answer. It starts a pass: the pass's looks for answers
-    and its replies to late ones share one SEND_WAIT. Open questions come first, so a stalled network spends it on
-    them: the driver, which looks at those, passes `late=False` and calls late_pass after its looks."""
+    """A run's own look at the reply topic: what its stream (see keep_stream) acted on since the last look, or,
+    outside a run, a poll at most every PUMP_EVERY seconds. Nothing when the listener (or the user's ntfy-listen)
+    already reads it. How many messages it acted on, so a waiting run wakes up for an answer. It starts a pass:
+    the pass's looks for answers and its replies to late ones share one SEND_WAIT. Open questions come first, so a
+    stalled network spends it on them: the driver, which looks at those, passes `late=False` and calls late_pass
+    after its looks."""
     global _last_pump, _pass_end, _late_due
     _pass_end = time.time() + SEND_WAIT
+    heard = heard_since()
     if time.time() - _last_pump < PUMP_EVERY:
-        return 0
+        return heard
+    _last_pump = time.time()
     if shutil.which("notify-ask"):
-        _last_pump, _late_due = time.time(), True
+        _late_due = True
         if late:
             late_pass()
-        return 0
+        return heard
     if not on(conf()):
-        return 0
-    _last_pump = time.time()
+        return heard
+    if _run_over is not None:
+        keep_stream()
+        return heard
     try:
         return listen(once=True, since=_run_start) or 0
     except Exception:  # the phone must never stop a run
