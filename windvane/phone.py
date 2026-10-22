@@ -207,6 +207,14 @@ def span(seconds):
     return f"{s} s" if s < 90 else f"{round(s / 60)} min" if s < 5400 else f"{round(s / 3600)} h"
 
 
+def held_for(until):
+    """What a 429's hold does to the pushes after it: a short one delays the next, a long one skips them."""
+    left = until - time.time()
+    if left <= SEND_WAIT:
+        return f"the next push waits {span(left)}"
+    return f"pushes until {time.strftime('%H:%M', time.localtime(until))} are skipped, and questions asked again after"
+
+
 def limit_name(e):
     """What ntfy says a 429 is about ("limit reached: daily message quota reached"), from its JSON body."""
     try:
@@ -258,8 +266,8 @@ def send(c, title, msg, prio=3, tags="", buttons=(), wait=10):
         if e.code == 429:
             _hold_until = time.time() + retry_after(e, RETRY)
             if not _held:
-                tell(f"phone: the ntfy server refused a push (429, {limit_name(e)}); pushes wait "
-                     f"{span(_hold_until - time.time())} before the next one")
+                tell(f"phone: the ntfy server refused a push (429, {limit_name(e)}); {held_for(_hold_until)}. A server "
+                     "of your own lifts its limits: windvane phone setup --server URL")
             _held = True
         e.close()
         return False
@@ -732,8 +740,8 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
                 continue
             if opened and not lines and not streamed and isinstance(err, TimeoutError):
                 polling = True
-                tell(f"windvane phone: streams from the server bring nothing here; looking every {span(PUMP_EVERY)}"
-                     " instead")
+                tell(f"windvane phone: the server's stream opened but brought nothing in {span(STREAM_WAIT)} (a proxy "
+                     f"holding it back?); asking every {span(PUMP_EVERY)} instead")
                 continue
             is_429 = isinstance(err, urllib.error.HTTPError) and err.code == 429
             pause = max(retry_after(err, wait) if is_429 else wait, PUMP_EVERY if polling else 0)
@@ -801,7 +809,8 @@ def read_stream(over, since):
     try:
         listen(until=over.is_set, since=since, heard=hear)
     except Exception as e:  # the phone must never stop a run: the next pump starts it again
-        tell(f"windvane phone: the run's stream stopped ({type(e).__name__})")
+        tell(f"windvane phone: the run's stream stopped ({type(e).__name__}); it starts again within "
+             f"{span(PUMP_EVERY)}")
 
 
 def hear():

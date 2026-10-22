@@ -4,6 +4,8 @@ import contextlib
 import fcntl
 import io
 import json
+import os
+import re
 import sys
 import threading
 import time
@@ -11,14 +13,17 @@ import unittest
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from datetime import timedelta
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import phone  # noqa: E402
+from windvane import driver, phone  # noqa: E402
 from windvane.config import Project  # noqa: E402
+from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
+from test_pipeline import args  # noqa: E402
 
 LIMIT = json.dumps({"code": 42901, "http": 429, "error": "limit reached: too many requests"}).encode()
 
@@ -172,7 +177,8 @@ class Reconnects(Base):
         self.assertNotIn("poll=1", self.ntfy.urls[0])
         self.assertTrue(all("poll=1" in u for u in self.ntfy.urls[1:]), self.ntfy.urls)
         self.assertEqual(self.waits, [phone.PUMP_EVERY] * 2)
-        self.assertIn("looking every 15 s instead", self.log()[0])
+        self.assertIn("the server's stream opened but brought nothing in 0 s (a proxy holding it back?); asking every "
+                      "15 s instead", self.log()[0])
 
 
 class Pushes(Base):
@@ -184,14 +190,17 @@ class Pushes(Base):
         self.assertEqual(self.waits, [30, 30])
         self.assertEqual([m["message"] for m in self.ntfy.msgs], ["merged"])
         self.assertEqual(len(self.log()), 1, self.log())
-        self.assertIn("refused a push (429, limit reached: too many requests); pushes wait 30 s", self.log()[0])
+        self.assertIn("refused a push (429, limit reached: too many requests); the next push waits 30 s. A server of "
+                      "your own lifts its limits: windvane phone setup --server URL", self.log()[0])
 
     def test_a_hold_past_the_pushs_wait_fails_it_without_asking_the_server(self):
         self.ntfy.posts = [429]
-        self.assertFalse(phone.push("Done: T-001", "merged"))
-        self.assertFalse(phone.push("Done: T-002", "merged", wait=5))
+        with mock.patch.object(phone, "retry_after", lambda e, default: 3600):
+            self.assertFalse(phone.push("Done: T-001", "merged"))
+        self.assertFalse(phone.push("Done: T-002", "merged"))
         self.assertEqual(self.waits, [])
         self.assertEqual(self.ntfy.msgs, [])
+        self.assertRegex(self.log()[0], r"pushes until \d\d:\d\d are skipped, and questions asked again after\.")
 
     def test_a_push_that_goes_out_ends_the_spell(self):
         self.ntfy.posts = [429]
@@ -241,6 +250,53 @@ class RunStream(Base):
             phone.start_run(self.p)
             self.pump_until(lambda: phone.pump() and False, most=0.5)
         self.assertEqual(self.ntfy.urls, [])
+
+
+
+class ARun(Base):
+    """The run itself, in the sandbox: no listener service, a worker's question goes to the phone, the phone
+    answers B, and the run builds B having made one request to the reply topic."""
+
+    def test_a_run_holds_one_stream_and_wakes_for_the_phones_answer(self):
+        self.s.ticket("T-001")
+        self.s.ticket("T-002", "T-001")
+        self.s.publish()
+        for k, v in (("NAP", 0.2),):
+            self.addCleanup(setattr, driver, k, getattr(driver, k))
+            setattr(driver, k, v)
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.dict(os.environ, FAKE_WORKER="question"))
+        stack.enter_context(mock.patch.object(phone, "PUMP_EVERY", 0.1))  # a poll each 0.1 s would show
+        done = threading.Event()
+        self.addCleanup(done.set)
+        self.addCleanup(lambda: setattr(self.ntfy, "closing", True))
+        stuck = threading.Timer(60, lambda: (self.p.state / "STOP").write_text(""))  # no answer: end, don't hang
+        stuck.daemon = True
+        stuck.start()
+        self.addCleanup(stuck.cancel)
+
+        def phone_user():  # what tapping B does: the button posts "answer <id> B" to the reply topic
+            answered = set()
+            while not done.is_set():
+                for m in list(self.ntfy.msgs):
+                    q = re.match(r"Question \((.+)\)", m.get("title", ""))
+                    if q and m["id"] not in answered:
+                        answered.add(m["id"])
+                        self.ntfy.publish(self.c["reply_topic"], f"answer {q.group(1)} B")
+                time.sleep(0.1)
+        threading.Thread(target=phone_user, daemon=True).start()
+        pilot = driver.Pilot(self.p, args(answer_wait=60))
+        t = time.time()
+        pilot.run(now() + timedelta(hours=1))
+        took = time.time() - t
+        self.assertEqual(pilot.merged, ["T-001", "T-002"])
+        calls = [json.loads(x) for x in (self.s.tmp / "calls.jsonl").read_text().splitlines()]
+        self.assertIn("option B (blue)", [c["prompt"] for c in calls if "worker" in c["system"]][1])
+        self.assertLess(took, 50, "the run woke for the answer, not after its wait")
+        self.assertEqual(len(self.ntfy.urls), 1, self.ntfy.urls)
+        self.assertNotIn("poll=1", self.ntfy.urls[0])
+        self.assertEqual(self.waits, [], "the stream never dropped")
 
 
 if __name__ == "__main__":
