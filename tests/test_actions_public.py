@@ -48,6 +48,11 @@ class Public(unittest.TestCase):
         self.assertEqual(actions.count(self.s.root, NOW)["used"], 10 + 6)
         self.assertFalse([c for c in self.gh_calls() if "me/lib" in " ".join(c)], "a public repo's runs aren't read")
 
+    def test_a_repo_whose_visibility_gh_leaves_out_is_counted(self):
+        self.data["repos"] = [{"nameWithOwner": "me/app"}]
+        self.add("me/app", 1, [job(7 * 60)])
+        self.assertEqual(actions.count(self.s.root, NOW)["used"], 7)
+
     def test_ci_on_a_public_repo_starts_past_the_cap_and_says_why(self):
         self.repos(("me/lib", "PUBLIC"), ("me/app", "PRIVATE"))
         self.project(minutes=2000)
