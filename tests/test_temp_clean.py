@@ -14,7 +14,7 @@ from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
-from helpers import Sandbox, tmpdir
+from helpers import IN_TMPDIR, Sandbox, tmpdir
 from test_install import REPO
 from test_pipeline import args
 
@@ -67,7 +67,7 @@ class SuiteLeavesNothing(unittest.TestCase):
     def unittest_in(self, tmp, *modules, cwd=REPO / "tests"):
         env = {k: v for k, v in os.environ.items() if not k.startswith("WINDVANE_")}
         return subprocess.run([sys.executable, "-m", "unittest", "-q", *modules], cwd=cwd, capture_output=True,
-                              text=True, env={**env, "TMPDIR": str(tmp), "PYTHONPATH": str(REPO)}, timeout=600)
+                              text=True, env={**env, "TMPDIR": str(tmp), IN_TMPDIR: "1", "PYTHONPATH": str(REPO)}, timeout=600)
 
     def test_install_doctor_and_sandbox_tests_leave_their_temp_dir_empty(self):
         tmp = tmpdir(self)

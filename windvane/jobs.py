@@ -49,6 +49,7 @@ NEVER = "never started"  # `await_`'s answer for a job whose start was killed be
 NEVER_STARTED = 3  # `windvane await`'s exit then: it exits 0 for any job that ran, whatever the job's own code
 WATCH_S = 2  # seconds between a kept job's looks at its end time
 AWAIT_S = 570  # how long `await` blocks: under one tool call's 10 minutes
+AWAIT_POLL = 3  # seconds between its looks at a job still running
 SESSION_CHECK = "check"  # the bg job a session's heavy check runs as
 CHECK_LOG = "check: log "  # a check job's first line names the check's log, where its wait for the machine is said
 # A bg job's shell: it links its own pid in first, should `bg` be killed before writing it (a link: never half-written,
@@ -733,7 +734,7 @@ def await_(p, name, lines=40, limit=None):
                 break
             exit_f.write_text("1")
             break
-        time.sleep(3)
+        time.sleep(AWAIT_POLL)
     if (blocked := round(time.time() - t0)) >= 1:
         ledger(p, None, {"name": name, "seconds": blocked}, event="await")
     mins = (time.time() - int(Path(f"{base}.start").read_text())) / 60

@@ -118,7 +118,10 @@ class ReusedPass(InProject):
         self.assertIn("CHECK PASSED (reused the pass", out)
 
 
-class CutCaller(InProject):
+class Cut(InProject):
+    """A project whose `bg` caller a test kills partway: the base of the tests here and in test_bg_never_started,
+    with no tests of its own, so a module importing it doesn't run them again."""
+
     def setUp(self):
         super().setUp()
         self.project("true")
@@ -135,6 +138,8 @@ class CutCaller(InProject):
             code = jobs.await_(self.p, "j", limit=limit)
         return code, out.getvalue()
 
+
+class CutCaller(Cut):
     def test_killed_before_writing_the_pid_the_job_still_reads_as_running_and_its_exit_is_its_own(self):
         release = self.s.tmp / "release"
         self.cut("after", "sh", "-c", f"while [ ! -e {release} ]; do sleep 0.1; done; exit 7")

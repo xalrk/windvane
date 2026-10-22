@@ -1,5 +1,6 @@
 """Test helpers: a throwaway project repo with a bare remote, and an environment that can't reach the real phone
 or the real Claude (PATH holds only a fake `claude` and the system's bin dirs)."""
+import atexit
 import faulthandler
 import os
 import shutil
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import weakref
 from pathlib import Path
 
@@ -357,6 +359,43 @@ def tmpdir(test, prefix="windvane-"):
     return d
 
 
+RAM = Path("/dev/shm")  # a RAM-backed dir, where the system has one
+IN_TMPDIR = "WINDVANE_TESTS_IN_TMPDIR"  # "1": the tests' files stay in TMPDIR, for a test of what they leave there
+STALE_S = 3600  # a test process's dir there untouched this long, its process gone, was left by a killed run
+AWAIT_POLL = 0.1  # seconds between `await`'s looks at a running job in a sandbox, for its 3
+
+
+def ram_tmp():
+    """A temp dir of this process's own in RAM, where there is one. The tests mostly make and remove small files
+    (repos, worktrees, logs), and on a busy disk each of those can take milliseconds: a Sandbox took 3 s to make and
+    remove there, a tenth of that in RAM. The dir goes at this process's exit; one a killed run left goes
+    when the next run starts."""
+    if os.environ.get(IN_TMPDIR) == "1" or not (RAM.is_dir() and os.access(RAM, os.W_OK)):
+        return None
+    if os.statvfs(RAM).f_flag & getattr(os, "ST_NOEXEC", 0):  # a sandbox runs the fake claude from its bin dir
+        return None
+    if Path(os.environ.get("TMPDIR") or "/").resolve().is_relative_to(RAM.resolve()):
+        return None  # a test's own test process: its files go in its parent's dir, which outlives a kill of it
+    for old in RAM.glob("windvane-tests-*"):
+        try:
+            pid, age = int(old.name.rsplit("-", 1)[1]), time.time() - old.stat().st_mtime
+        except (ValueError, OSError):
+            continue
+        if age > STALE_S and not running(pid):  # by age too: a pid in another pid namespace looks gone
+            shutil.rmtree(old, ignore_errors=True)
+    base = RAM / f"windvane-tests-{os.getpid()}"
+    try:
+        base.mkdir(exist_ok=True)
+    except OSError:
+        return None
+    atexit.register(shutil.rmtree, str(base), True)
+    return str(base)
+
+
+if (_ram := ram_tmp()) is not None:  # this process's temp files and its subprocesses'
+    os.environ["TMPDIR"] = tempfile.tempdir = _ram
+
+
 class Sandbox:
     """A project with a bare `origin`, `.windvane/` set up for forge git, and an isolated environment."""
 
@@ -403,6 +442,9 @@ class Sandbox:
         net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage
         login.waiter, login.back_at = None, 0.0  # nor an earlier test's run, in this same process
         self.fullness, scratch.fullness = scratch.fullness, lambda path=None: (10, 10)  # nor the real disk (a full one pushes)
+        from windvane import held, jobs
+        self.await_poll, jobs.AWAIT_POLL = jobs.AWAIT_POLL, AWAIT_POLL  # an `await` here sees a job end at once
+        self.merge_wait, held.MERGE_WAIT = held.MERGE_WAIT, 0  # a fake gh's PR is as mergeable as it will get
         assert shutil.which("claude") == str(fake) and not shutil.which("notify"), "tests must not reach the real tools"
         self.git("init", "-q", "--bare", "-b", "main", str(self.remote), cwd=self.tmp)
         self.root.mkdir()
@@ -449,4 +491,7 @@ class Sandbox:
         net.probe, net.waiter = None, None
         login.waiter = None
         scratch.fullness = getattr(self, "fullness", scratch.fullness)
+        from windvane import held, jobs
+        jobs.AWAIT_POLL = getattr(self, "await_poll", jobs.AWAIT_POLL)
+        held.MERGE_WAIT = getattr(self, "merge_wait", held.MERGE_WAIT)
         phone.use(None)  # the next test's pushes name its own project

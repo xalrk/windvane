@@ -1,5 +1,5 @@
-"""Which ready ticket starts beside the running ones: related work waits, conflicts cost a slot, and a queue that
-finishes one at a time before the deadline gets no extra slot unless the usage window is under half the cap."""
+"""Which ready ticket starts beside the running ones: related work waits, and a ticket's minutes count only its
+running time. How many run at once: test_schedule_slots."""
 import json
 import os
 import sys
@@ -16,7 +16,7 @@ from windvane import driver, questions  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
-from helpers import Sandbox, no_wrap_up  # noqa: E402
+from helpers import Sandbox  # noqa: E402
 from test_parallel import args  # noqa: E402
 
 
@@ -25,7 +25,9 @@ SIDE_BY_SIDE = WORK - 1  # started this close together, the second began while t
 AFTER = WORK - 0.1  # started this far apart, the second waited for the first
 
 
-class Schedule(unittest.TestCase):
+class Base(unittest.TestCase):
+    """Tickets, a run of the driver and when each worker started: the tests here and in test_schedule_slots."""
+
     def setUp(self):
         self.s = Sandbox()
         os.environ["FAKE_WORK_S"] = str(WORK)
@@ -56,6 +58,8 @@ class Schedule(unittest.TestCase):
     def log(self):
         return (self.p.state / "autopilot.log").read_text()
 
+
+class Schedule(Base):
     def test_a_ticket_naming_a_running_tickets_file_waits_and_a_lower_one_starts(self):
         self.ticket("T-001", "windvane/critic.py")
         self.ticket("T-002", "windvane/cli.py", "Builds on the gate in windvane/critic.py.")
@@ -81,42 +85,6 @@ class Schedule(unittest.TestCase):
         self.assertEqual(pilot.clash("T-003", ["T-001"]), "names T-001, which is running")
         self.assertEqual(pilot.clash("T-004", ["T-001"]), "")
 
-    def test_two_conflict_bounces_drop_a_slot(self):
-        os.environ["FAKE_CONFLICT"] = "1"
-        os.environ["FAKE_BARRIER"] = "3"  # T-003 starting after T-001 merged would fork past it and not conflict
-        self.ticket("T-001", "a.py")
-        self.ticket("T-002", "b.py")
-        self.ticket("T-003", "c.py")
-        no_wrap_up(self)
-        pilot = self.run_pilot(minutes=15)  # 3 x 10 min one at a time would miss it: all three start
-        self.assertEqual(sorted(pilot.merged), ["T-001", "T-002", "T-003"])
-        self.assertGreaterEqual(pilot.conflicts, 2)
-        self.assertEqual(pilot.limit, 2)
-        self.assertIn("2 conflict bounces between side-by-side tickets: at most 2 at a time for the rest of the run",
-                      self.log())
-        self.assertIn("Side by side: up to 3 at once,", self.log())
-
-    def test_usage_under_half_the_cap_opens_a_slot_even_when_the_queue_fits(self):
-        self.ticket("T-001", "a.py")
-        self.ticket("T-002", "b.py")
-        pilot = self.run_pilot(minutes=600)  # 10% of the 5-hour window, cap 75: headroom to spend on speed
-        self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
-        at = self.start_times()
-        self.assertLess(abs(at["T-002"] - at["T-001"]), SIDE_BY_SIDE)
-        self.assertEqual(pilot.peak, 2)
-        self.assertNotIn("no 2nd slot", self.log())
-
-    def test_a_short_queue_with_a_far_deadline_stays_at_one_slot_past_half_the_cap(self):
-        os.environ["FAKE_FIVE"] = "0.4"  # 40% of the window, cap 75: no headroom, and one at a time fits
-        self.ticket("T-001", "a.py")
-        self.ticket("T-002", "b.py")
-        pilot = self.run_pilot(minutes=600)
-        self.assertEqual(sorted(pilot.merged), ["T-001", "T-002"])
-        at = self.start_times()
-        self.assertGreater(at["T-002"] - at["T-001"], AFTER)
-        self.assertEqual(pilot.peak, 1)
-        self.assertEqual(self.log().count("no 2nd slot: 2 tickets x 10 min fit before"), 1)
-
     def test_ticket_minutes_count_only_running_time(self):
         """A late answer to a question isn't time the ticket took: the slot gate would think tickets are slower."""
         os.environ["FAKE_WORKER"] = "question"
@@ -133,6 +101,8 @@ class Schedule(unittest.TestCase):
                     questions.give_answer(self.p, tid, "B")
             poll()
         pilot.poll_questions = answer_late
+        nap = pilot.nap  # its minute's wait for answers looks at them again only at the end: not a minute here
+        pilot.nap = lambda until, answers=False: nap(min(until, now() + timedelta(seconds=0.5)), answers)
         sleep = time.sleep
         self.addCleanup(setattr, time, "sleep", sleep)
         time.sleep = lambda sec: sleep(min(sec, 0.2))  # the idle wait for an answer polls often
