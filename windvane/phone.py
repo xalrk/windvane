@@ -968,10 +968,22 @@ def late_pass(desk=()):
 
 # ---------- `windvane phone ...` at the desk
 
+def access_help(c):
+    """The grants a deny-all server needs for windvane's two topics, and no others: the token rides in every push's
+    buttons, so whoever sees one can do what its user may. Printed at the terminal only, never pushed or logged."""
+    if not c.get("token"):
+        return
+    print("On the server, let the token's user (<user> below) read and post on windvane's two topics, and only them:")
+    for topic in (c["topic"], c["reply_topic"]):
+        print(f"  ntfy access <user> {topic} rw")
+
+
 def subscribe_help(c):
     url = f"{c['server'].rstrip('/')}/{c['topic']}"
+    access_help(c)
     if c.get("token"):
         print("Your server lets in only its users: in the ntfy app's settings, add yours first (its name and password).")
+        print("On an iPhone, pushes come only if the server's server.yml sets upstream-base-url: \"https://ntfy.sh\".")
     print("On the phone: install the ntfy app, tap +, and subscribe to this topic"
           + ("" if c["server"].rstrip("/") == SERVER else f" on server {c['server']} (\"Use another server\")") + ":")
     print(f"  {c['topic']}")
@@ -1073,10 +1085,12 @@ def setup(server=None, service=True, project=None, token=None):
         register(project)
     if shutil.which("notify"):
         print("Your own `notify` / `notify-ask` are on PATH: windvane keeps using them; this setup is the fallback.")
+    subscribe_help(c)  # first: a deny-all server takes the test push only once the topics are granted
     ok = send(c, "windvane: phone works", "Pushes and questions from windvane come here. Tap Status to try a "
               "command.", 3, "white_check_mark", ("Status=status",))
     print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
-    subscribe_help(c)
+    if not ok and c.get("token"):
+        print("Once the server grants the two topics above, `windvane phone setup` again sends the test push.")
     if service:
         install_service()
     return 0 if ok else 1
