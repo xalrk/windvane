@@ -11,7 +11,8 @@
 # fill the rest, and more only slows every module down until the ones that time their steps miss their windows. For the
 # same reason checks running at once on one machine split K among them (markers in the cache dir; `shared:` says so),
 # unless CHECK_JOBS is set. A module that fails beside the others is rerun alone once, and `rerun alone:` names it,
-# with the Pythons it was rerun on and the seconds the reruns added.
+# with the Pythons it was rerun on, what its outcome means and the seconds the reruns added; each pooled check adds a
+# line to the cache's reruns.log (its newest 500 kept), so whether reruns get rarer shows over weeks.
 cd "$(dirname "$0")/.." || exit 2
 args=("$@")
 VERSIONS="3.11 3.12 3.13 3.14"
@@ -63,8 +64,9 @@ done
 for v in $ran; do
     grep -m1 '^shared: ' "$tmp/log$v" && break
 done
-if grep -qs '^rerun alone: ' $(for v in $ran; do echo "$tmp/log$v"; done); then  # the versions' reruns, as one line
-    "$py" tools/test_pool.py --fold $(for v in $ran; do echo "$v=$tmp/log$v"; done)
+if [ ${#args[@]} -eq 0 ]; then  # the versions' reruns, as one line, and the check's line in reruns.log
+    "$py" tools/test_pool.py --fold $(for v in $ran; do echo "$v=$tmp/log$v"; done) \
+        --log "$cache/reruns.log" --check "${tmp##*/}"
 fi
 for v in $failed; do
     echo "--- python$v, the end of its output:"

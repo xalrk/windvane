@@ -22,9 +22,11 @@ from windvane.config import Project  # noqa: E402
 SCRIPT = REPO / "tools/check_pythons.sh"
 # What the script may use besides the Pythons: a PATH of only these keeps the machine's real python3.1x out.
 TOOLS = ("bash", "sh", "dirname", "mktemp", "rm", "mkdir", "ln", "grep", "tr", "tail")
-# A fake Python passes only when the run's `python3` is itself, as the tests' `windvane` and tools rely on.
+# A fake Python passes only when the run's `python3` is itself, as the tests' `windvane` and tools rely on. The
+# script's closing `--fold` (the reruns line and log) finds no reruns in a fake's log, so it prints nothing.
 FAKE_PY = """#!/bin/sh
 [ "$1" = "--version" ] && {{ echo "fake {v}"; exit 0; }}
+[ "$2" = "--fold" ] && exit 0
 [ "$(python3 --version)" = "fake {v}" ] || {{ echo "FAILED (python3 isn't me)"; exit 1; }}
 echo "args: $*"
 echo "tmp: $TMPDIR"

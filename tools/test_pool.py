@@ -2,16 +2,17 @@
 first when an earlier run's timings are known, each in its own unittest process with its own TMPDIR. Most of a test
 run is waiting on subprocesses and sleeps, not CPU, so this cuts the wall time to about that of the slowest modules.
 A module that fails beside the others is run once more alone after the pool, since a test that times its own steps
-can miss its window on a busy machine; it counts by that second run, and the `rerun alone:` line names it and the
-seconds the reruns added (they run one after another). With --share, pools of other checks running on the machine at
+can miss its window on a busy machine; it counts by that second run, and the `rerun alone:` line names it, says
+what its outcome means, and the seconds the reruns added (they run one after another). With --share, pools of other checks running on the machine at
 the same time are counted, and K is split among the checks (at least 2 each), as modules start.
 
 Prints one unittest-style summary for the lot (`Ran N tests in Xs`, then `OK` or `FAILED (...)` with the counts
 summed), then `slowest: ...` with the five slowest modules; the failed modules' output tails go to --tails.
-tools/check_pythons.sh runs it once per Python, under that Python, then `--fold` to merge the versions' rerun lines.
+tools/check_pythons.sh runs it once per Python, under that Python, then `--fold` to merge the versions' rerun lines and
+add the check's line to --log, so how often checks rerun something can be followed over weeks.
 Standard library only.
 Usage: test_pool.py --jobs K --tails FILE [--times FILE] [--share DIR --check ID] [DIR]   (DIR defaults to tests)
-       test_pool.py --fold VERSION=LOG...
+       test_pool.py --fold VERSION=LOG... [--log FILE --check ID]
 """
 import argparse
 import json
@@ -33,6 +34,9 @@ except ImportError:  # no flock (Windows): every check keeps the jobs it was giv
 TAIL = 40  # lines of a failed module's output, as the unsharded check shows of the whole run
 SHOWN = 5  # failed modules whose tails are shown; the rest are named, so a broken import can't flood the log
 RERUN = 10  # more failed modules than this is a real breakage, not a busy machine: no reruns, they'd only add time
+MEANS = {"passed": "flaky beside others, no action", "failed again": "a real failure: see below"}
+LOGGED = 500  # newest lines --log keeps: months of checks, and never a file that grows without end
+STALE = 3600  # seconds after which a half-made marker is left over whatever its pid says (pids get reused)
 KEYS = ("failures", "errors", "skipped", "expected failures", "unexpected successes")  # unittest's order
 
 running = {}  # module -> Popen, so a signal can stop every module's process group
@@ -93,6 +97,30 @@ def held(path):
     return False
 
 
+def sweep(folder):
+    """Removes the half-made markers of pools killed between creating theirs and locking it: hidden, so nothing else
+    would ever see or remove them. One goes when its pid is dead, or after STALE whatever the pid says, and only when
+    no live pool holds its lock."""
+    for f in folder.glob(".*"):
+        pid = f.name.rpartition(".")[2]
+        try:
+            old = time.time() - f.stat().st_mtime > STALE
+        except OSError:
+            continue
+        if (old or (pid.isdigit() and not alive(int(pid)))) and not held(f):
+            f.unlink(missing_ok=True)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # someone else's process
+        pass
+    return True
+
+
 class Share:
     """The checks running on this machine, so two at once split the CPUs instead of each taking them all and pushing
     the tests that time their own steps past their windows. Each pool holds a shared lock on a marker named after its
@@ -102,11 +130,17 @@ class Share:
     def __init__(self, folder, check, jobs):
         self.folder, self.jobs, self.least, self.most = folder, jobs, jobs, 1
         folder.mkdir(parents=True, exist_ok=True)
+        sweep(folder)
         self.name = f"{check}.{os.getpid()}"
         new = folder / f".{self.name}"
-        self.mine = open(new, "w")
-        fcntl.flock(self.mine, fcntl.LOCK_SH)
-        os.replace(new, folder / self.name)  # visible only once locked, so no one takes it for a dead check
+        for _ in range(3):  # another pool's sweep can take it in the instant before it is locked, if it can't see our pid
+            self.mine = open(new, "w")
+            fcntl.flock(self.mine, fcntl.LOCK_SH)
+            try:
+                os.replace(new, folder / self.name)  # visible only once locked, so no one takes it for a dead check
+                break
+            except FileNotFoundError:
+                self.mine.close()
 
     def checks(self):
         live = {f.name.rpartition(".")[0] for f in self.folder.iterdir()
@@ -129,9 +163,10 @@ class Share:
 
 def fold(logs):
     """One `rerun alone:` line for every version's pool: each module and outcome once, with the versions it happened
-    on, and the most seconds any version's reruns added. The versions run side by side, so that's about what the
-    check's wall time grew by."""
-    seen, added = {}, 0
+    on and what the outcome means, and the most seconds any version's reruns added. The versions run side by side, so
+    that's about what the check's wall time grew by. Also the same without the meanings, for the log; (None, None)
+    when nothing reran."""
+    seen, added, logs = {}, 0, list(logs)
     for version, log in logs:
         try:
             line = next((l for l in Path(log).read_text(errors="replace").splitlines()
@@ -143,12 +178,36 @@ def fold(logs):
         reruns, _, secs = line[len("rerun alone: "):].partition("; added ")
         secs = secs.removesuffix("s")
         added = max(added, int(secs) if secs.isdigit() else 0)
-        for item in filter(None, reruns.split(", ")):
+        for item in re.findall(r"[\w.]+ (?:passed|failed again)\b", reruns):
             seen.setdefault(item, []).append(version)
     if not seen:
-        return None
-    return ("rerun alone: " + ", ".join(f"{item} ({', '.join(vs)})" for item, vs in seen.items())
-            + f"; added {added}s")
+        return None, None
+    end = f"; added {added}s"
+    def on(vs):  # four versions read as one phrase
+        return "every Python" if len(logs) > 1 and len(vs) == len(logs) else ", ".join(vs)
+    line = ", ".join(f"{item} on {on(vs)} ({MEANS[item.split(' ', 1)[1]]})" for item, vs in seen.items())
+    return "rerun alone: " + line + end, ", ".join(f"{item} ({', '.join(vs)})" for item, vs in seen.items()) + end
+
+
+def log_check(path, check, reruns):
+    """One line a check: when, which, and what reran (or `no reruns`), so whether reruns get rarer shows over weeks.
+    Locked, as two checks can end at once, and cut to the newest LOGGED lines."""
+    line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {check} {reruns or 'no reruns'}\n"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a+") as f:
+            if fcntl:
+                fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            lines = f.readlines()
+            if len(lines) < LOGGED:
+                f.write(line)
+            else:
+                f.seek(0)
+                f.truncate()
+                f.writelines([*lines[len(lines) - LOGGED + 1:], line])
+    except OSError:
+        pass
 
 
 def stop(signum, _frame):
@@ -170,12 +229,15 @@ def main(argv=None):
     p.add_argument("--share", type=Path, help="the folder where running checks leave their markers")
     p.add_argument("--check", default=str(os.getpid()), help="this check's id: one per check, not per Python")
     p.add_argument("--fold", nargs="+", metavar="VERSION=LOG", help="print one rerun line for these pools' logs")
+    p.add_argument("--log", type=Path, help="with --fold: the file that keeps one line a check")
     p.add_argument("dir", nargs="?", default="tests")
     a = p.parse_args(argv)
     if a.fold:
-        line = fold(arg.partition("=")[::2] for arg in a.fold)
+        line, logged = fold(arg.partition("=")[::2] for arg in a.fold)
         if line:
             print(line)
+        if a.log:
+            log_check(a.log, a.check, logged)
         return 0
     if not a.tails:
         p.error("--tails is required")
@@ -231,7 +293,8 @@ def pool(a, tests, todo, logdir, tmpbase, share):
         code = run_module(module, len(todo) + 1, tests, log, tmpbase)[1]
         outs[module] = log.read_text(errors="replace")
         results[module] = results[module][0], code
-        reruns.append(f"{module} {'passed' if parse(outs[module])[2] and code == 0 else 'failed again'}")
+        outcome = "passed" if parse(outs[module])[2] and code == 0 else "failed again"
+        reruns.append(f"{module} {outcome} ({MEANS[outcome]})")
     wall = time.monotonic() - start
 
     total, counts, failed = 0, dict.fromkeys(KEYS, 0), []
