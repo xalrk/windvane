@@ -244,6 +244,7 @@ def limit_name(e):
 
 
 BAD_TOKEN = "the token in phone.toml isn't plain text: windvane phone setup --token -"
+UNGRANTED = "the server hasn't let the token's user use windvane's topics (403)"
 
 
 def refused(code, c):
@@ -252,8 +253,7 @@ def refused(code, c):
     if not c.get("token"):
         return f"the server asks for a token ({code}): windvane phone setup --token -"
     if code == 403:
-        return "the server hasn't let the token's user use windvane's topics (403): run the two `ntfy access` lines " \
-               "`windvane phone setup` prints"
+        return f"{UNGRANTED}: run the two `ntfy access` lines `windvane phone setup` prints"
     return f"the server refused the token ({code}): windvane phone setup --token -"
 
 
@@ -985,19 +985,44 @@ def late_pass(desk=()):
 
 # ---------- `windvane phone ...` at the desk
 
-def access_help(c):
+def account(c):
+    """The name of the token's user, as the server's /v1/account gives it, so the grant lines can be pasted as they
+    are; None when it can't say (an older server, the network, an anonymous account). The answer is never shown."""
+    req = urllib.request.Request(f"{c.get('server', SERVER).rstrip('/')}/v1/account", headers=auth(c))
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            got = json.loads(r.read(1 << 16))
+    except (OSError, ValueError) as e:  # an HTTPError, a timeout, not JSON, a token unfit for a header
+        if isinstance(e, urllib.error.HTTPError):
+            e.close()
+        return None
+    name = got.get("username") if isinstance(got, dict) else None
+    return name if isinstance(name, str) and re.fullmatch(r"[-_.+@a-zA-Z0-9]+", name) else None  # "*": anonymous
+
+
+def access_help(c, old=()):
     """The grants a deny-all server needs for windvane's two topics, and no others: the token rides in every push's
-    buttons, so whoever sees one can do what its user may. Printed at the terminal only, never pushed or logged."""
+    buttons, so whoever sees one can do what its user may. `old`: the topics a rotate left, taken back first, since
+    every old push still carries the token. Printed at the terminal only, never pushed or logged."""
     if not c.get("token"):
         return
-    print("On the server, let the token's user (<user> below) read and post on windvane's two topics, and only them:")
+    user = account(c)
+    who = "the token's user" + ("" if user else " (<user> below: the server didn't say its name)")
+    user = user or "<user>"
+    if old:
+        print(f"On the server, take the old topics back from {who}, as every old push's buttons carry the token, "
+              "then let it read and post on the two new ones, and only them:")
+        for topic in old:
+            print(f"  ntfy access --reset {user} {topic}")
+    else:
+        print(f"On the server, let {who} read and post on windvane's two topics, and only them:")
     for topic in (c["topic"], c["reply_topic"]):
-        print(f"  ntfy access <user> {topic} rw")
+        print(f"  ntfy access {user} {topic} rw")
 
 
-def subscribe_help(c):
+def subscribe_help(c, old=()):
     url = f"{c['server'].rstrip('/')}/{c['topic']}"
-    access_help(c)
+    access_help(c, old)
     if c.get("token"):
         print("Your server lets in only its users: in the ntfy app's settings, add yours first (its name and password).")
         print("On an iPhone, pushes come only if the server's server.yml sets upstream-base-url: \"https://ntfy.sh\".")
@@ -1106,22 +1131,18 @@ def setup(server=None, service=True, project=None, token=None):
     ok = send(c, "windvane: phone works", "Pushes and questions from windvane come here. Tap Status to try a "
               "command.", 3, "white_check_mark", ("Status=status",))
     print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
-    grant_then_retry(c, ok)
     if service:
         install_service()
     return 0 if ok else 1
 
 
 def why_failed(c):
-    """Why setup's test push failed, as far as windvane can tell."""
+    """Why setup's test push failed, as far as windvane can tell, with its fix in the same line."""
+    if _refused == 403 and c.get("token"):  # access_help's lines are just above
+        return f"{UNGRANTED}: once the `ntfy access` lines above have run on the server, `windvane phone setup` " \
+            "sends it again"
     return BAD_TOKEN if _refused == -1 else refused(_refused, c) if _refused else \
         "check the server address and the network"
-
-
-def grant_then_retry(c, ok):
-    """After a test push the server refused for want of the grants access_help printed: the next step."""
-    if not ok and c.get("token") and _refused == 403:
-        print("Once they have run on the server, `windvane phone setup` again sends the test push.")
 
 
 def off():
@@ -1139,16 +1160,16 @@ def rotate():
     c = conf()
     if not c.get("topic"):
         raise SystemExit("windvane phone: not set up yet (windvane phone setup)")
+    old = c["topic"], c["reply_topic"]
     c["topic"], c["reply_topic"] = new_topic(), new_topic()
     save_conf(c)
     mark_now()
     restart_service()
     print("New topics made: the old ones get nothing more. In the ntfy app, unsubscribe the old topic, then:")
-    subscribe_help(c)
+    subscribe_help(c, old)
     if on(c):
         ok = send(c, "windvane: new topic works", "Pushes come here from now on.", 3, "white_check_mark")
         print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
-        grant_then_retry(c, ok)
 
 
 def main(a, project=None):

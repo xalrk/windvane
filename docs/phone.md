@@ -59,16 +59,21 @@ windvane's two topics and nothing more:
 ntfy user add me                       # asks for a password: the phone app logs in with it
 ntfy token add me                      # prints tk_...
 windvane phone setup --server https://ntfy.example.com --token -   # paste the token; prints the two lines below
-ntfy access me <push topic> rw         # the two lines setup printed, with <user> as me
+ntfy access me <push topic> rw         # the two lines setup printed, pasted as they are
 ntfy access me <reply topic> rw
 windvane phone setup                   # again, now that the server takes them: sends the test push
 ```
 
 Grant only those two topics, never `"*"`: the token rides in every push's buttons, so whoever sees one push's buttons
 can read and post wherever its user may. A user given `"*"` before drops it with `ntfy access --reset me`, then
-gets the two lines `windvane phone setup` prints. Setup prints the topics in the terminal only, and
-`windvane phone rotate` prints the grants for its new topics the same way. A topic of your own on the same server
-can be granted to the same user too; the token then reaches it as well.
+gets the two lines `windvane phone setup` prints. Setup asks the server who the token's user is
+(`/v1/account`) and puts that name in the lines; a server that can't say (an older one) leaves `<user>` there for
+you to fill in. It prints the topics in the terminal only. `windvane phone rotate` prints the grants for its new
+topics the same way, after an `ntfy access --reset <user> <old topic>` line for each old one: every old push's buttons
+carry the token, so the old topics are taken back from its user rather than left open. A topic of your own on the
+same server can be granted to the same user too; the token then reaches it as well. A test push the server refuses
+for want of the grants says so in its own line: `test push: FAILED (… (403): once the `ntfy access` lines above have
+run on the server, `windvane phone setup` sends it again)`.
 
 `--token -` asks for the token without showing it, so it stays out of your shell's history; `--token TOKEN` works too,
 and `windvane phone setup --token -` later changes it without touching the topics (`--token ""` removes it). It is
