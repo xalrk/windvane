@@ -35,7 +35,10 @@ python3 -m unittest discover -s tests -q
 It runs the whole driver end to end, so it takes a while. `tools/check_pythons.sh` runs it on every Python from
 3.11 up that you have installed, the test modules side by side (slowest first, once it has timed them), reruns a
 failed module once on its own and names it (a test that times its steps can miss on a busy machine), and prints the
-five slowest modules; give it unittest arguments and it runs just those, in one process per Python. The CI workflow
+five slowest modules; give it unittest arguments and it runs just those, in one process per Python. In its
+`rerun alone:` line, `passed` means the module was only flaky beside the others and needs nothing from you, and
+`failed again` is a real failure whose output tail is printed below; every check also adds a line to
+`~/.cache/windvane-check/reruns.log`, so you can see how often reruns happen over time. The CI workflow
 (`.github/workflows/test.yml`) runs it on Linux and macOS; it is started by hand, so a maintainer runs it on your pull
 request before merging.
 
