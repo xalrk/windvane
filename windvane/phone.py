@@ -246,9 +246,14 @@ BAD_TOKEN = "the token in phone.toml isn't plain text: windvane phone setup --to
 
 
 def refused(code, c):
-    """What a 401 or 403 means for the user: a token to set or change. Never the token itself."""
-    what = "refused the token" if c.get("token") else "asks for a token"
-    return f"the server {what} ({code}): windvane phone setup --token -"
+    """What a 401 or 403 means for the user: a token to set or change, or, with a token ntfy knows (it answers 401
+    to one it doesn't), topics its user hasn't been granted. Never the token itself."""
+    if not c.get("token"):
+        return f"the server asks for a token ({code}): windvane phone setup --token -"
+    if code == 403:
+        return "the server hasn't let the token's user use windvane's topics (403): run the two `ntfy access` lines " \
+               "`windvane phone setup` prints"
+    return f"the server refused the token ({code}): windvane phone setup --token -"
 
 
 def tell(line):
@@ -1089,8 +1094,7 @@ def setup(server=None, service=True, project=None, token=None):
     ok = send(c, "windvane: phone works", "Pushes and questions from windvane come here. Tap Status to try a "
               "command.", 3, "white_check_mark", ("Status=status",))
     print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
-    if not ok and c.get("token"):
-        print("Once the server grants the two topics above, `windvane phone setup` again sends the test push.")
+    grant_then_retry(c, ok)
     if service:
         install_service()
     return 0 if ok else 1
@@ -1100,6 +1104,13 @@ def why_failed(c):
     """Why setup's test push failed, as far as windvane can tell."""
     return BAD_TOKEN if _refused == -1 else refused(_refused, c) if _refused else \
         "check the server address and the network"
+
+
+def grant_then_retry(c, ok):
+    """After a test push the server refused for want of the grants access_help printed: the next step."""
+    if not ok and c.get("token") and _refused == 403:
+        print("Run the two `ntfy access` lines above on the server, then `windvane phone setup` again for the test "
+              "push.")
 
 
 def off():
@@ -1126,6 +1137,7 @@ def rotate():
     if on(c):
         ok = send(c, "windvane: new topic works", "Pushes come here from now on.", 3, "white_check_mark")
         print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
+        grant_then_retry(c, ok)
 
 
 def main(a, project=None):

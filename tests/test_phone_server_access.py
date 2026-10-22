@@ -14,6 +14,11 @@ from windvane import phone  # noqa: E402
 import test_phone_server as server  # noqa: E402
 
 
+UNGRANTED = ("the server hasn't let the token's user use windvane's topics (403): run the two `ntfy access` lines "
+             "`windvane phone setup` prints")
+RETRY = "Run the two `ntfy access` lines above on the server, then `windvane phone setup` again for the test push."
+
+
 class Access(server.Base):
     token = None
     setup_cli = server.Setup.setup_cli
@@ -46,10 +51,23 @@ class Access(server.Base):
     def test_a_test_push_the_server_refuses_says_to_grant_and_run_setup_again(self):
         self.ntfy.token = "tk_notgrantedyet00000000000000000"  # the topics aren't the token's yet
         out = self.setup_cli("--token", server.TOKEN)
-        self.assertIn("test push: FAILED", out)
-        self.assertIn("Once the server grants the two topics above, `windvane phone setup` again sends the test push.",
-                      out)
+        self.assertIn(f"test push: FAILED ({UNGRANTED})\n{RETRY}\n", out)
+        self.assertNotIn("--token", out, "the token is fine: nothing says to change it")
         self.assert_topics_unsent(phone.conf())
+
+    def test_rotate_refused_for_its_new_topics_says_to_grant_them(self):
+        self.setup_cli("--token", server.TOKEN)
+        self.ntfy.token = "tk_notgrantedyet00000000000000000"  # the new topics aren't granted yet
+        with contextlib.redirect_stdout(io.StringIO()) as rotated:
+            phone.rotate()
+        out = rotated.getvalue()
+        self.assertIn(f"test push: FAILED ({UNGRANTED})\n{RETRY}\n", out)
+        self.assertLess(out.index("ntfy access"), out.index("test push:"))
+
+    def test_a_token_the_server_doesnt_know_still_says_to_change_it(self):
+        self.assertEqual(phone.refused(401, {"token": server.TOKEN}),
+                         "the server refused the token (401): windvane phone setup --token -")
+        self.assertEqual(phone.refused(403, {}), "the server asks for a token (403): windvane phone setup --token -")
 
     def test_rotate_prints_the_grants_for_the_new_topics(self):
         self.setup_cli("--token", server.TOKEN)

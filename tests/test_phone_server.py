@@ -164,8 +164,8 @@ class WrongToken(Base):
         self.assertFalse(phone.push("Done: T-002", "merged"))
         lines = self.log().splitlines()
         self.assertEqual(len(lines), 1, lines)
-        self.assertIn("windvane phone: the server refused the token (403): windvane phone setup --token -",
-                      lines[0])
+        self.assertIn("windvane phone: the server hasn't let the token's user use windvane's topics (403): run the two "
+                      "`ntfy access` lines `windvane phone setup` prints", lines[0])
         self.assertNotIn(self.token, self.log())
         self.ntfy.token = self.token  # the server takes it again (or the user set the right one)
         self.assertTrue(phone.push("Done: T-003", "merged"))
@@ -175,8 +175,8 @@ class WrongToken(Base):
         phone.listen(until=lambda: len(self.waits) >= 3)
         lines = self.log().splitlines()
         self.assertEqual(len(lines), 1, lines)
-        self.assertIn("the server refused the token (403): windvane phone setup --token -; reconnecting, next "
-                      "try in 10 s", lines[0])
+        self.assertIn("the server hasn't let the token's user use windvane's topics (403): run the two `ntfy access` "
+                      "lines `windvane phone setup` prints; reconnecting, next try in 10 s", lines[0])
         self.assertEqual(self.waits, [10, 20, 40])
 
 
@@ -247,8 +247,7 @@ class Setup(Base):
         self.assertIn("test push: FAILED (the server asks for a token (401): windvane phone setup --token -)",
                       out)
         out = self.setup_cli("--token", "tk_wrong0000000000000000000000000")
-        self.assertIn("test push: FAILED (the server refused the token (403): windvane phone setup --token -)",
-                      out)
+        self.assertIn("test push: FAILED (the server hasn't let the token's user use windvane's topics (403)", out)
 
 
 if __name__ == "__main__":

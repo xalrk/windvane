@@ -76,7 +76,9 @@ kept in `phone.toml` with the topics, censored from every push like them, and ne
 `windvane doctor` says "own server, token set". Every request windvane makes carries it, and so do the buttons of
 each push, so a tap on the phone reaches the reply topic: anyone who can read your push topic can see it, which on
 a `deny-all` server is only you. If the server refuses the token, the log says so once: "the server refused the
-token (403): windvane phone setup --token -"; the run carries on without the phone.
+token (401): windvane phone setup --token -", or, when its user hasn't been granted the topics, "the server hasn't
+let the token's user use windvane's topics (403): run the two `ntfy access` lines `windvane phone setup` prints";
+the run carries on without the phone.
 
 In the app's settings, add your server's user first (its name and password), then tap **+**, choose "Use another
 server", enter your server's address and the topic `setup` shows.
