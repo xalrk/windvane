@@ -196,8 +196,10 @@ to the right server, if you use your own). `windvane phone setup` again sends a 
 
 **The log says "the server's stream opened but brought nothing".**
 Something between you and the ntfy server holds long requests back: an HTTPS proxy (`HTTPS_PROXY`), a VPN or a
-company gateway that buffers a response until it ends. The phone still works, asking every 15 s, and tries a stream
-again every 30 minutes; it says "gets through again" once one does. Outside a run the line is in the service's
+company gateway that buffers a response until it ends. The listener says so when a stream brings nothing, not even
+the server's keepalive, for 90 s (twice in a row if streams worked before, so a VPN joined later is caught too). The
+phone still works: it asks every 15 s, and every 30 minutes tries a stream for up to 50 s; it says "gets through
+again" once one does. Outside a run the line is in the service's
 journal (`journalctl --user -u windvane-phone`). To stream again, let the ntfy server's address bypass the proxy
 (`NO_PROXY`) or use [a server of your own](phone.md#your-own-server) the network doesn't hold back.
 

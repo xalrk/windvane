@@ -36,7 +36,7 @@ One install costs the server one open stream (the listener's, or without it a ru
 request per push, reconnecting after a drop with a wait that doubles from 10 s to 5 minutes and waiting out any
 `429 Too Many Requests` it gets. That keeps it well inside ntfy.sh's budget for each address: 60 requests, refilled
 one every 5 s, 30 open connections and 250 messages a day. Where a proxy or VPN buffers long requests, a stream
-opens but brings nothing; the listener then asks every 15 s instead and tries a stream again every 30 minutes (see
+opens but brings nothing, and the listener asks the server at intervals instead (how often:
 [Troubleshooting](troubleshooting.md)).
 
 ## Your own server
