@@ -1,6 +1,7 @@
 """tools/check_pythons.sh's pool: with no arguments it runs each test module in a process of its own, side by side,
 and still prints one summary per version; with arguments it runs them as one unittest call, as before. Runs the real
 script and tools/test_pool.py on a tiny fake tests/ under this test's own Python."""
+import fcntl
 import json
 import os
 import re
@@ -62,6 +63,14 @@ class Busy(unittest.TestCase):
             mark.write_text("")
             self.fail("missed its window beside the others")
 """
+SLEEPY = """import os, time, unittest
+from pathlib import Path
+class S(unittest.TestCase):
+    def test_sleep(self):
+        start = time.time()
+        time.sleep(1)
+        Path(os.environ["POOL_SEEN"], str(os.getpid())).write_text(f"{start} {time.time()}")
+"""
 
 
 class CheckPool(unittest.TestCase):
@@ -83,15 +92,19 @@ class CheckPool(unittest.TestCase):
         for d in ("seen", "tmp", "home"):
             (self.root / d).mkdir()
 
-    def run_script(self, *args):
+    def start_script(self, *args, jobs="3"):
+        env = {"PATH": str(self.bin), "HOME": str(self.root / "home"), "TMPDIR": str(self.root / "tmp"),
+               "POOL_SEEN": str(self.seen), **({"CHECK_JOBS": jobs} if jobs else {})}
+        return subprocess.Popen([str(self.root / "tools/check_pythons.sh"), *args], stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, env=env)
+
+    def run_script(self, *args, jobs="3"):
         self.seen = self.root / "seen"
         for f in self.seen.iterdir():
             f.unlink()
-        env = {"PATH": str(self.bin), "HOME": str(self.root / "home"), "TMPDIR": str(self.root / "tmp"),
-               "POOL_SEEN": str(self.seen), "CHECK_JOBS": "3"}
-        r = subprocess.run([str(self.root / "tools/check_pythons.sh"), *args], capture_output=True, text=True,
-                           timeout=120, env=env)
-        return r.stdout + r.stderr, r.returncode
+        proc = self.start_script(*args, jobs=jobs)
+        out = proc.communicate(timeout=120)[0]
+        return out, proc.returncode
 
     def processes(self):
         return {f.name: f.read_text().split(" ", 1) for f in self.seen.iterdir()}
@@ -104,7 +117,7 @@ class CheckPool(unittest.TestCase):
         self.assertIn("AssertionError: boom from test_fail", out)
         self.assertNotIn("loud line", out, "a passing module's output stays out of the log")
         self.assertTrue(out.endswith(f"FAILED on: python{V}\n"), out)
-        self.assertIn(f"rerun alone on python{V}: test_fail failed again\n", out)
+        self.assertRegex(out, rf"\nrerun alone: test_fail failed again \({V}\); added \d+s\n")
         slowest = re.search(rf"^slowest on python{V}: (.*)$", out, re.M).group(1)
         self.assertEqual(sorted(re.findall(r"(test_\w+) \d+s", slowest)), sorted(MODULES))
         seen = self.processes()
@@ -130,8 +143,60 @@ class CheckPool(unittest.TestCase):
         out, code = self.run_script()
         self.assertEqual(code, 0, out)
         self.assertRegex(out, rf"python{V}: Ran 6 tests in [\d.]+s OK \(skipped=1\)\n", "counted once, by the rerun")
-        self.assertIn(f"rerun alone on python{V}: test_flaky passed\n", out)
+        self.assertRegex(out, rf"\nrerun alone: test_flaky passed \({V}\); added \d+s\n")
         self.assertTrue(out.endswith(f"passed on: python{V}\n"), out)
+
+    def sleepers(self, n):
+        """n modules of one test that sleeps a second and records when it ran, on a machine of 8 CPUs."""
+        for f in (self.root / "tests").iterdir():
+            f.unlink()
+        for i in range(n):
+            (self.root / "tests" / f"test_sleep_{i:02}.py").write_text(SLEEPY)
+        (self.bin / "nproc").unlink(missing_ok=True)
+        (self.bin / "nproc").write_text("#!/bin/sh\necho 8\n")
+        (self.bin / "nproc").chmod(0o755)
+        self.markers = self.root / "home/.cache/windvane-check/running"
+        self.markers.mkdir(parents=True)
+
+    def most_at_once(self):
+        spans = [tuple(map(float, f.read_text().split())) for f in self.seen.iterdir()]
+        return max(sum(1 for s, e in spans if s <= t < e) for t, _ in spans)
+
+    def test_two_checks_started_together_each_get_half_the_jobs(self):
+        self.sleepers(12)
+        self.seen = self.root / "seen"
+        procs = [self.start_script(jobs=None) for _ in range(2)]
+        outs = [p.communicate(timeout=120)[0] for p in procs]
+        for proc, out in zip(procs, outs):
+            self.assertEqual(proc.returncode, 0, out)
+            self.assertIn("\nshared: 4 of 8 jobs at once while 2 checks ran\n", out)
+        self.assertEqual(list(self.markers.iterdir()), [], "each check takes its marker away")
+
+    def test_a_running_check_halves_the_jobs_until_it_ends(self):
+        self.sleepers(12)
+        with open(self.markers / "windvane-check-other.1", "w") as other:
+            fcntl.flock(other, fcntl.LOCK_SH)  # a check that is running
+            out, code = self.run_script(jobs=None)
+        self.assertEqual(code, 0, out)
+        self.assertIn("\nshared: 4 of 8 jobs at once while 2 checks ran\n", out)
+        self.assertLessEqual(self.most_at_once(), 4, out)
+
+    def test_a_dead_check_s_marker_does_not_count(self):
+        self.sleepers(12)
+        (self.markers / "windvane-check-killed.1").write_text("")  # SIGKILLed: its lock went with it
+        out, code = self.run_script(jobs=None)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("shared:", out)
+        self.assertGreater(self.most_at_once(), 4, out)
+        self.assertEqual(list(self.markers.iterdir()), [], "whoever found it removed it")
+
+    def test_check_jobs_overrides_the_sharing(self):
+        self.sleepers(4)
+        with open(self.markers / "windvane-check-other.1", "w") as other:
+            fcntl.flock(other, fcntl.LOCK_SH)
+            out, code = self.run_script(jobs="4")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("shared:", out)
 
     def test_explicit_arguments_run_as_one_unittest_call(self):
         out, code = self.run_script("discover", "-s", "tests", "-q")
@@ -153,6 +218,37 @@ class Pool(unittest.TestCase):
                          (4, {"failures": 1, "errors": 2, "skipped": 1}, False))
         self.assertEqual(test_pool.parse("Ran 1 test in 0.0s\n\nOK\n"), (1, {}, True))
         self.assertEqual(test_pool.parse("Traceback ...\nKilled\n"), (None, {}, False), "a crash has no summary")
+
+    def test_reruns_fold_into_one_line_across_versions_with_the_time_they_added(self):
+        with tempfile.TemporaryDirectory(prefix="windvane-pool-") as d:
+            logs = {"3.11": "Ran 3 tests in 1s\n\nOK\nslowest: test_a 1s\n",
+                    "3.12": "OK\nrerun alone: test_bg_keep passed; added 12s\n",
+                    "3.14": "OK\nrerun alone: test_bg_keep passed, test_x failed again; added 41s\n"}
+            for v, text in logs.items():
+                Path(d, v).write_text(text)
+            self.assertEqual(test_pool.fold((v, Path(d, v)) for v in [*logs, "3.13"]),
+                             "rerun alone: test_bg_keep passed (3.12, 3.14), test_x failed again (3.14); added 41s")
+            self.assertIsNone(test_pool.fold([("3.11", Path(d, "3.11"))]), "no reruns, no line")
+
+    def test_checks_count_by_their_held_markers_once_each(self):
+        with tempfile.TemporaryDirectory(prefix="windvane-pool-") as d:
+            folder = Path(d)
+            first = test_pool.Share(folder, "check-a", 8)
+            self.addCleanup(first.close)
+            self.assertEqual(first.jobs_now(), 8, "alone, it keeps them all")
+            same = test_pool.Share(folder, "check-a", 8)  # the same check's pool for another Python
+            self.addCleanup(same.close)
+            self.assertEqual(first.jobs_now(), 8)
+            (folder / "check-dead.99").write_text("")
+            self.assertEqual(first.jobs_now(), 8, "a marker nobody holds is a dead check")
+            self.assertFalse((folder / "check-dead.99").exists())
+            others = [test_pool.Share(folder, check, 8) for check in ("check-b", "check-c", "check-d", "check-e")]
+            self.assertEqual(first.jobs_now(), 2, "8 among 5 is at least 2 each")
+            self.assertEqual(others[0].jobs_now(), 2)
+            for other in others:
+                other.close()
+            self.assertEqual(first.jobs_now(), 8, "and when they end it takes the jobs back")
+            self.assertEqual((first.least, first.most), (2, 5))
 
     def test_a_module_that_dies_without_a_summary_is_an_error(self):
         with tempfile.TemporaryDirectory(prefix="windvane-pool-") as d:
