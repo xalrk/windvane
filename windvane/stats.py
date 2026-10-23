@@ -1,5 +1,6 @@
 """`windvane stats`: what the runs cost, from the ledger (tokens per role or ticket, checks, the gh guard's refusals,
 periodic scores), and how the critic's scores spread (`--critic`)."""
+import json
 import re
 import sys
 import textwrap
@@ -479,20 +480,16 @@ def answered(recs):
     return yes, asked
 
 
-def stream_rounds(p, tid):
-    """The worker's revision rounds on `tid`, in order: [(turns, weighted tokens)], each from a `CRITIC STEP: revise`
+def stream_rounds(p, runs):
+    """The worker's revision rounds on a ticket, from its worker runs' ledger rows `runs`, in order: [(turns, weighted tokens)], each from a `CRITIC STEP: revise`
     (or rethink) the critic call printed to the next `windvane critic` call, across the ticket's worker runs (a run
     cut off mid-round carries on in the next). A turn's input and cache tokens are its own, from the stream; its
     output isn't in the stream (each turn's usage there is a partial count), so a round gets the run's output in
     proportion to its turns."""
     rounds, cur = [], None
-    for row in read_jsonl(p.state / "ledger.jsonl"):
-        if row.get("role") != "worker" or row.get("event") or row.get("ticket") != tid or not row.get("stream"):
-            continue
+    for row in runs:
         seen = {}  # every turn of the run, by message id
-        for ev in read_jsonl(p.state / "runs" / row["stream"]):
-            if not isinstance(ev, dict):
-                continue
+        for ev in turns_and_steps(p.state / "runs" / row["stream"]):
             msg = ev.get("message") or {}
             if ev.get("type") == "assistant":
                 mid = msg.get("id") or len(seen)
@@ -514,6 +511,24 @@ def stream_rounds(p, tid):
             for r in rounds]
 
 
+def turns_and_steps(path):
+    """A stream's assistant turns and the tool results that hold a critic step, parsed: only those lines are, since
+    the rest (tool output, mostly) is most of a stream's size, and `stats` reads every worker stream in the window."""
+    try:
+        lines = Path(path).read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        if '"assistant"' in line[:40] or "CRITIC STEP" in line:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            out += [ev] * isinstance(ev, dict)
+    return out
+
+
 def tool_uses(msg):
     content = msg.get("content")
     return [c for c in content if isinstance(c, dict) and c.get("type") == "tool_use"] if isinstance(content, list) else []
@@ -530,9 +545,13 @@ def rounds_line(p, by, backs):
     if not backs:
         return
     total, split, unmatched = [0, 0, 0], {}, 0
+    runs = {}
+    for row in read_jsonl(p.state / "ledger.jsonl"):
+        if row.get("role") == "worker" and not row.get("event") and row.get("ticket") in by and row.get("stream"):
+            runs.setdefault(row["ticket"], []).append(row)
     for t in by:
         verdicts = [(r, nxt) for u, r, nxt in backs if u == t]
-        rounds = stream_rounds(p, t)
+        rounds = stream_rounds(p, runs.get(t, []))
         for turns, w in rounds:
             total[0] += 1
             total[1] += turns
