@@ -11,7 +11,7 @@ A desk count done this way matched GitHub's own figure. A running job counts up 
 Off unless `.windvane/config.toml` sets `actions_minutes` (the plan's monthly minutes); `actions_cap` (0.9) is the
 share of them windvane never goes past: `windvane ci` refuses a workflow whose estimate would, and at or over it the
 driver adds `[skip ci]` to the commits it pushes, and so do the workers' own (`worker_git`, decided at
-each commit from the cached count).
+each commit from the cached count). A public project's commits never carry it: its own workflows cost nothing.
 """
 import fcntl
 import json
@@ -189,7 +189,7 @@ def load(now):
     """This month's cache: finished runs' minutes, the last total, the month a push said "at the cap"."""
     cache = load_json(cache_file(), {})
     if cache.get("month") != month(now):
-        cache = {"month": month(now), "runs": {}, "warned": cache.get("warned", "")}
+        cache = {"month": month(now), "runs": {}, "warned": cache.get("warned", ""), "public": cache.get("public", {})}
     return cache
 
 
@@ -350,6 +350,7 @@ def refresh_now(p):
     (logged out, then offline) or comes back after a recount worked. One held up by another driver's count isn't a
     failure."""
     try:
+        public(p)  # before the count, which may wait on another driver's: worker starts read it from the cache
         if recount(p.root):
             recount_said.pop(p.name, None)
     except GhFailed as e:
@@ -390,10 +391,38 @@ def say_stale(p):
            f"workers' commits carry {SKIP}")
 
 
+def public(p, cd=None):
+    """Whether the project's GitHub repo is public, read once a run through gh and kept in the cache, where worker
+    starts and their commit hook read it without gh. One gh can't tell counts as private, as `billable` does, so a
+    doubt keeps `[skip ci]`."""
+    key = str(p.root)
+    if key not in visibility:
+        r = net.call(["gh", "repo", "view", "--json", "visibility"], cd or p.root)
+        try:
+            here = json.loads(r.stdout or "{}") if r.returncode == 0 else {}
+        except ValueError:
+            here = {}
+        visibility[key] = isinstance(here, dict) and not billable(here)
+    if key not in kept:
+        with locked(wait=2) as got:  # under the count's lock, as `tag` writes; a count in flight isn't waited out
+            if got:  # else kept at the next call, with no new gh call
+                cache = load(None)
+                if cache.get("public", {}).get(key) != visibility[key]:
+                    cache.setdefault("public", {})[key] = visibility[key]
+                    save_json(cache_file(), cache)
+                kept.add(key)
+    return visibility[key]
+
+
+def cached_public(p):
+    return load_json(cache_file(), {}).get("public", {}).get(str(p.root)) is True
+
+
 def over_cap(p, cd=None):
-    """Whether the month's minutes are at or over the cap. A count that fails falls back on the last one, and with
-    none at all says no: workflows run only by hand (`windvane ci`), so `[skip ci]` is a backstop, not the guard."""
-    if not budget(p):
+    """Whether the month's minutes are at or over the cap, for this project: never for a public one, whose workflows
+    run free. A count that fails falls back on the last one, and with none at all says no: workflows run only by hand
+    (`windvane ci`), so `[skip ci]` is a backstop, not the guard."""
+    if not budget(p) or public(p, cd):
         return False
     total = count(cd or p.root) or cached()
     return bool(total) and total["used"] >= cap_minutes(p)
@@ -403,6 +432,8 @@ logged = set()  # the projects whose log has said "at the cap" in this process: 
 asked = set()  # the projects whose log has said their workers are asked for [skip ci], their hooks being their own
 stale_logged = set()  # the projects whose log has said their count is too old to trust
 recount_said = {}  # project: the cause its log last said its recount failed for, until one works
+visibility = {}  # project root: whether its repo is public, as this process read it (once a run)
+kept = set()  # the project roots whose visibility this process has written to the cache
 
 
 def tag(p, msg, cd=None):
@@ -431,8 +462,9 @@ def worker_git(p, wd):
     user's checkout shares it), that adds `[skip ci]` when the cached total is at the cap at the time of each commit: a
     session runs for hours and the month's count can cross the cap meanwhile. A project with its own core.hooksPath
     keeps it, and the prompt asks for the tag instead when the cache says the cap is reached at the session's start.
-    Never counts: starts don't wait on gh."""
-    if not budget(p):
+    Never counts: starts don't wait on gh. A project the cache says is public gets neither; one whose visibility is
+    read only later in the run (`refresh`) gets the hook, which reads it again at each commit."""
+    if not budget(p) or cached_public(p):
         return {}, ""
     say_stale(p)
     if run(["git", "config", "core.hooksPath"], wd).stdout.strip():
@@ -446,13 +478,14 @@ def worker_git(p, wd):
     return hooks_env(wd, skip_hooks(p, wd)), ""
 
 
-# The hook's test of the cache: exit 0 (no tag) only when this month's cached total is under the cap (argv 2) and
-# no older than STALE_S (argv 3).
+# The hook's test of the cache: exit 0 (no tag) when the project (argv 4) is known public, or when this month's cached
+# total is under the cap (argv 2) and no older than STALE_S (argv 3).
 UNDER = ("import json, sys, time\n"
          "try:\n    c = json.load(open(sys.argv[1]))\nexcept (OSError, ValueError):\n    c = {}\n"
          "t = c.get('total') or {}\n"
          "ok = c.get('month') == time.strftime('%Y-%m', time.gmtime()) and t.get('used', 1e9) < int(sys.argv[2])\n"
          "ok = ok and time.time() - t.get('at', 0) <= int(sys.argv[3])\n"
+         "ok = ok or (c.get('public') or {}).get(sys.argv[4]) is True\n"
          "sys.exit(0 if ok else 1)\n")
 
 
@@ -481,7 +514,7 @@ def skip_hooks(p, wd):
     script.write_text("#!/bin/sh\n# windvane: [skip ci] while the month's GitHub Actions minutes are at the cap\n"
                       + (f'{shlex.quote(str(first))} "$@" || exit $?\n' if os.access(first, os.X_OK) else "")
                       + f"python3 -c {shlex.quote(UNDER)} {shlex.quote(str(cache_file()))} {cap_minutes(p)} {STALE_S} "
-                      "2>/dev/null && exit 0\n"
+                      f"{shlex.quote(str(p.root))} 2>/dev/null && exit 0\n"
                       f"grep -qF '{SKIP}' \"$1\" && exit 0\n"
                       f"{{ printf '%s {SKIP}\\n' \"$(sed -n 1p \"$1\")\"; sed 1d \"$1\"; }} > \"$1.windvane\" "
                       '&& mv "$1.windvane" "$1"\n')
@@ -788,7 +821,7 @@ def ci(p, name="", ref="", dry=False):
         print("windvane ci: no GitHub repo here (or gh is missing, logged out or offline)")
         return 1
     b = billable(here) and budget(p)
-    if not billable(here):
+    if budget(p) and not billable(here):
         print(f"{repo} is public: GitHub runs its workflows on standard runners for free, so no estimate or cap.")
     total = b and count(cd, max_age=60)
     if b and not total:
@@ -828,7 +861,8 @@ def ci(p, name="", ref="", dry=False):
         return 0
     r = net.call([real_gh() or "gh", *cmd[1:]], cd)
     if r.returncode:
-        print(f"windvane ci: gh workflow run failed: {' '.join((r.stderr or r.stdout).split())[:300]}")
+        why = " ".join((r.stderr or r.stdout).split())[:300] or f"exit {r.returncode}"
+        print(f"windvane ci: gh workflow run failed: {why}{cause(why)[1]}")
         return 1
     print(f"Started {file} on {ref or 'the default branch'}.")
     return 0
