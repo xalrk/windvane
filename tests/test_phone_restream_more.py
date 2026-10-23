@@ -119,7 +119,6 @@ class ProxyLineAsService(Base):
     def proxy_line(self, env):
         self.ntfy.gets = ["silent", "deliver"]
         with mock.patch.object(phone, "STREAM_WAIT", 0.3), mock.patch.dict(os.environ, env):
-            os.environ.pop("INVOCATION_ID", None) if not env else None
             self.listen_until(1)
         return next(x for x in self.log() if "brought nothing" in x)
 

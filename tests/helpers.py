@@ -21,6 +21,8 @@ for _k in ("CLAUDECODE", "CLAUDE_TMPDIR", "CLAUDE_CODE_TMPDIR"):
     os.environ.pop(_k, None)
 # The suite run on a CI service: CI turns off the scans' user and host rules, which the tests expect on
 os.environ.pop("CI", None)
+# The suite run under a systemd unit (a background job): the phone listener would take itself for its service
+os.environ.pop("INVOCATION_ID", None)
 PROC = Path("/proc")  # running() reads it; a test points it at an empty dir to take the macOS branch
 # A test still in its sandbox after this long is stuck (the slowest takes seconds): it prints every thread's stack and
 # ends the run, which names the hang instead of letting it use up a CI job's time limit in silence.
