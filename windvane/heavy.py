@@ -889,8 +889,10 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
         n = 0 if turn else len(line)
         key = "memory" if low else "load" if hot else f"held by {lead.name}" if held else why or (
             info.get("pid"), info.get("since"), n)
-        if key[:1] == (None,) and isinstance(said, tuple) and said[2] == n:  # a holder gone, the next yet to claim
-            key = said  # it (it looks once a second): an empty line for that moment says nothing new
+        # A holder gone, the next yet to claim it (it looks once a second), or the measurement it waited behind taking
+        # the lock and yet to write itself in: an empty line for that moment says nothing new.
+        if key[:1] == (None,) and (isinstance(said, tuple) and said[2] == n or str(said).startswith("held by ")):
+            key = said
         if too and key == said:
             say("heavy: " + too)
             too = None

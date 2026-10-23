@@ -73,6 +73,7 @@ class ManyMeasurements(Fixture):
         self.assertEqual(self.ran(), ["early", "first", "second", "third", "plain"])
         for tag in ("second", "third"):
             self.assertFalse(self.holding(tag), "no hold of its own")
+            self.assertNotIn("held by another heavy job", "\n".join(self.said(tag)), "the holder ahead taking the lock")
             self.assertEqual(sum(heavy.HOLDING_TOO.split(",")[0] in line for line in self.said(tag)), 1)
 
     def test_one_that_comes_while_a_holder_runs_holds_at_once(self):
