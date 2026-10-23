@@ -71,7 +71,9 @@ server that can't say leaves `<user>` for you to replace. The lines are printed 
 `windvane phone rotate` prints the same for its new topics, after an `ntfy access --reset` line for each old one,
 since every old push's buttons still carry the token. It keeps the old topics in `phone.toml` (`revoke = [...]`), and
 every `windvane phone setup` prints their `--reset` lines again, so a closed terminal can't leave them granted with
-nothing to name them; once the lines have run, `windvane phone setup --revoked` drops them. A topic of your own on
+nothing to name them; once the lines have run, `windvane phone setup --revoked` asks the server about each one and
+drops those it now refuses (403). One it still lets the token read stays, with its `--reset` line printed again, and
+if the server can't be reached they all stay, since a dropped topic can't be named again. A topic of your own on
 the same server can be granted to the same user too; the token then reaches it as well. Beside the test push, setup
 checks that the token's user may read the reply topic, which the listener needs. With both topics refused, setup ends
 with ``test push: FAILED (… (403): once the `ntfy access` lines above have run on the server, `windvane phone setup`

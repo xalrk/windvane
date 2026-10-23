@@ -29,6 +29,22 @@ class Old(server.Base):
         self.old = self.c["topic"], self.c["reply_topic"]
         self.resets = [f"  ntfy access --reset ann {t}" for t in self.old]
 
+    def refuse(self, *topics):
+        """`ntfy access --reset` has run for `topics`: the server answers 403 to the token's reads on them."""
+        allowed = self.ntfy.httpd.RequestHandlerClass.allowed
+
+        def reset(handler):
+            if handler.command == "GET" and handler.path.split("/")[1] in topics:
+                handler.send_response(403)
+                handler.end_headers()
+                handler.wfile.write(b'{"code":40301,"http":403,"error":"forbidden"}')
+                return False
+            return allowed(handler)
+
+        patch = mock.patch.object(self.ntfy.httpd.RequestHandlerClass, "allowed", reset)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def killed_rotate(self):
         with mock.patch.object(phone, "access_help", side_effect=Killed), \
                 contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(Killed):
@@ -56,6 +72,7 @@ class Old(server.Base):
         out = self.setup_cli()
         self.assertEqual([line for line in out.splitlines() if "--reset" in line], self.resets, "every setup, again")
 
+        self.refuse(*self.old)
         out = self.setup_cli("--revoked")
         self.assertNotIn("--reset", out)
         self.assertNotIn("revoke", phone.conf())

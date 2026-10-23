@@ -12,6 +12,7 @@ fixed commands, or a letter choosing among the options windvane itself wrote for
 
 The user's own `notify` / `notify-ask` scripts, when on PATH, are used instead (detection first, built-in second).
 """
+import contextlib
 import fcntl
 import functools
 import itertools
@@ -25,6 +26,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import threading
 import tomllib
@@ -132,12 +134,26 @@ def save_conf(c):
              *([f'revoke = {json.dumps(c["revoke"])}  # old topics still granted on the server: see `phone setup`']
                if c.get("revoke") else []),
              f'redact = {json.dumps(c.get("redact", []))}  # extra words to censor: names, hosts, projects']
-    tmp = f.with_suffix(".tmp")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as out:
-        out.write("\n".join(lines) + "\n")
-    tmp.replace(f)
+    fd, tmp = tempfile.mkstemp(prefix=f.name + ".", suffix=".tmp", dir=f.parent)  # this writer's own, mode 600
+    try:
+        with os.fdopen(fd, "w") as out:
+            out.write("\n".join(lines) + "\n")
+        os.replace(tmp, f)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
+@contextlib.contextmanager
+def conf_lock():
+    """phone.toml read for an edit, under a lock held until its `save_conf`: a rotate in one terminal while a setup
+    runs in another must not write back a phone.toml read before the other's write, losing the old topics it was
+    told to keep (`revoke`). The network calls stay outside it."""
+    f = conf_path()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    with open(f.with_name(f.name + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield conf()
 
 
 def auth(c):
@@ -1131,17 +1147,25 @@ def revoke(c):
 def setup(server=None, service=True, project=None, token=None, revoked=False):
     """Turn the phone on, keeping the topics (and the token) it had. `token`: set ("" removes) the one a server of
     your own demands; a setup with only it changes nothing else. `revoked`: the old topics' `--reset` lines have
-    run, so they're dropped and no longer printed."""
-    c = conf()
-    if revoked:
-        c.pop("revoke", None)
-    c["server"] = (server or c.get("server") or SERVER).rstrip("/")
+    run, so the ones the server now refuses are dropped and no longer printed."""
     if token is not None:
-        c["token"] = read_token(token)
-    c.setdefault("topic", new_topic())
-    c.setdefault("reply_topic", new_topic())
-    c["enabled"] = True
-    save_conf(c)
+        token = read_token(token)
+
+    def edit(c):
+        c["server"] = (server or c.get("server") or SERVER).rstrip("/")
+        if token is not None:
+            c["token"] = token
+        return c
+
+    gone, served, said = taken_back(edit(conf())) if revoked else (set(), [], [])  # polled outside the lock
+    with conf_lock() as c:
+        edit(c)
+        if revoked:
+            c["revoke"] = [t for t in revoke(c) if t not in gone]  # a rotate meanwhile added topics: they stay
+        c.setdefault("topic", new_topic())
+        c.setdefault("reply_topic", new_topic())
+        c["enabled"] = True
+        save_conf(c)
     mark_now()
     if token is not None:
         restart_service()  # a listener's open stream still sends the old token
@@ -1149,7 +1173,11 @@ def setup(server=None, service=True, project=None, token=None, revoked=False):
         register(project)
     if shutil.which("notify"):
         print("Your own `notify` / `notify-ask` are on PATH: windvane keeps using them; this setup is the fallback.")
-    subscribe_help(c, revoke(c))  # first: a deny-all server takes the test push only once the topics are granted
+    for line in said:
+        print(line)
+    # first: a deny-all server takes the test push only once the topics are granted (`served`: their `--reset` lines
+    # were just said)
+    subscribe_help(c, [t for t in revoke(c) if t not in served])
     ok = send(c, "windvane: phone works", "Pushes and questions from windvane come here. Tap Status to try a "
               "command.", 3, "white_check_mark", ("Status=status",))
     line, ok = tested(c, ok)
@@ -1159,22 +1187,57 @@ def setup(server=None, service=True, project=None, token=None, revoked=False):
     return 0 if ok else 1
 
 
-def readable(c, topic):
-    """Whether the token's user may read `topic`, by one poll that asks only for messages from now on: a missing
-    grant on the reply topic shows at setup, not later as the listener's 403 in the journal. Only a 403 says no;
-    anything else (no token, the network) is for the test push to tell."""
+def taken_back(c):
+    """`setup --revoked`: (the old topics to drop, those the server still serves, the lines to print). Each is
+    polled with the token, and only a 403 says its grant was taken back; one the server still serves, or that it
+    couldn't be asked about, stays in `revoke`, as dropping it can't be undone. Without a token (ntfy.sh) there is no
+    grant to check."""
     if not c.get("token"):
-        return True
+        return set(revoke(c)), [], []
+    gone, served, unsure, why = set(), [], [], ""
+    for topic in revoke(c):
+        code = None if why else poll(c, topic)  # after one without an answer, five seconds more each tell nothing
+        if code == 403:
+            gone.add(topic)
+        elif code is not None and code < 300:
+            served.append(topic)
+        else:
+            unsure.append(topic)
+            why = why or (f"it answered {code}" if code else "no answer")
+    said = []
+    if served:
+        user = account(c) or "<user>"
+        said.append(f"old topics: the server still lets {user} read {len(served)} of them, kept in phone.toml "
+                    f"until taken back: {'; '.join(f'`ntfy access --reset {user} {t}`' for t in served)}, then "
+                    "`windvane phone setup --revoked` again")
+    if unsure:
+        said.append(f"old topics: {len(unsure)} kept in phone.toml, as the server couldn't say they were taken "
+                    f"back ({why}): `windvane phone setup --revoked` checks again")
+    if gone:
+        said.append(f"old topics: {len(gone)} taken back on the server (403), dropped from phone.toml")
+    return gone, served, said
+
+
+def poll(c, topic):
+    """The HTTP status of one poll on `topic` with the token, asking only for messages from now on; None when the
+    server can't be reached or doesn't answer in time."""
     url = f"{c.get('server', SERVER).rstrip('/')}/{topic}/json?poll=1&since={int(time.time())}"
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers=auth(c)), timeout=5) as r:
             r.read(1 << 16)
+            return r.status
     except urllib.error.HTTPError as e:
         e.close()
-        return e.code != 403
+        return e.code
     except (OSError, ValueError, UnicodeError, http.client.HTTPException):
-        pass
-    return True
+        return None
+
+
+def readable(c, topic):
+    """Whether the token's user may read `topic`: a missing grant on the reply topic shows at setup, not later as
+    the listener's 403 in the journal. Only a 403 says no; anything else (no token, the network) is for the test push
+    to tell."""
+    return not c.get("token") or poll(c, topic) != 403
 
 
 def tested(c, ok):
@@ -1208,24 +1271,24 @@ def why_failed(c, reply=True):
 
 
 def off():
-    c = conf()
-    if not c:
-        return print("the phone is off (never set up)")
-    c["enabled"] = False
-    save_conf(c)
+    with conf_lock() as c:
+        if not c:
+            return print("the phone is off (never set up)")
+        c["enabled"] = False
+        save_conf(c)
     remove_service()
     print("the phone is off: questions wait for `windvane answer`. `windvane phone setup` turns it on again "
           "(same topics).")
 
 
 def rotate():
-    c = conf()
-    if not c.get("topic"):
-        raise SystemExit("windvane phone: not set up yet (windvane phone setup)")
-    if c.get("token"):  # a server of your own keeps the old topics granted until they're reset: see revoke
-        c["revoke"] = list(dict.fromkeys([*revoke(c), c["topic"], c["reply_topic"]]))
-    c["topic"], c["reply_topic"] = new_topic(), new_topic()
-    save_conf(c)  # the old topics and the new in one write: a Ctrl-C after it loses neither
+    with conf_lock() as c:
+        if not c.get("topic"):
+            raise SystemExit("windvane phone: not set up yet (windvane phone setup)")
+        if c.get("token"):  # a server of your own keeps the old topics granted until they're reset: see revoke
+            c["revoke"] = list(dict.fromkeys([*revoke(c), c["topic"], c["reply_topic"]]))
+        c["topic"], c["reply_topic"] = new_topic(), new_topic()
+        save_conf(c)  # the old topics and the new in one write: a Ctrl-C after it loses neither
     mark_now()
     restart_service()
     print("New topics made: the old ones get nothing more. In the ntfy app, unsubscribe the old topic, then:")
