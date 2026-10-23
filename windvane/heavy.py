@@ -472,20 +472,28 @@ def entry_pid(name):
         return None
 
 
-def need_of(path, field="mem"):
-    """A waiter's memory need in GB (or with `field="load"` a measurement's load limit), from its queue entry; None
-    when it can't be read (an older windvane's entry) or it has none."""
+def need_of(path):
+    """A waiter's memory need in GB, from its queue entry; None when it can't be read (an older windvane's entry)."""
+    return entry_number(path, "mem")
+
+
+def limit_of(path):
+    """A measurement's load limit, from its queue entry; None for a job that isn't one."""
+    return entry_number(path, "load")
+
+
+def entry_number(path, field):
     try:
-        need = json.loads(Path(path).read_text() or "{}").get(field)
+        n = json.loads(Path(path).read_text() or "{}").get(field)
     except (OSError, ValueError, AttributeError):
         return None
-    return need if isinstance(need, (int, float)) and not isinstance(need, bool) else None
+    return n if isinstance(n, (int, float)) and not isinstance(n, bool) else None
 
 
 def held_up(path, mem, load):
     """Why the waiter whose queue entry is `path` can't start now, with `mem` GB free and a load of `load`: short of
     memory (`short`) or, for a measurement, of a quiet CPU (`too_busy`); None when it can."""
-    return short(need_of(path), mem) or too_busy(need_of(path, "load"), load)
+    return short(need_of(path), mem) or too_busy(limit_of(path), load)
 
 
 def job_of(path):
@@ -941,7 +949,7 @@ def status(reuse=None):
         if name.startswith(".") or not pid or not alive(q / name):
             continue
         since = time.strftime("%H:%M", time.localtime(int(name.split("-")[0]) / 1e9))
-        limit = need_of(q / name, "load")
+        limit = limit_of(q / name)
         line = f"waiting: pid {pid}, since {since}" + (", measuring" if limit is not None else "")
         big = []
         if paused(pid):

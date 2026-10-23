@@ -116,7 +116,7 @@ class RowsWritten(unittest.TestCase):
         threading.Timer(1.5, (self.d / "release").touch).start()
         ok, _, log = jobs.check(self.p, self.d / "work")
         self.assertIs(ok, True)
-        self.assertRegex(log.read_text(), r"heavy: waited \d+ s for the machine\nchecked\n")
+        self.assertRegex(log.read_text(), r"heavy: waited \d+ s for the machine\nheavy: load \S+ at start\nchecked\n")
         [end] = self.ends()
         self.assertEqual(end["role"], "worker")
         self.assertGreaterEqual(end["waited_s"], 1)
