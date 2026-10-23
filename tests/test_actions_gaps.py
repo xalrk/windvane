@@ -114,7 +114,7 @@ class Gaps(unittest.TestCase):
             self.assertIsNone(actions.count(self.s.root))
             self.assertLess(time.time() - started, 2)
             self.assertTrue(actions.over_cap(p))  # 95 of 100 counted before, cap 90
-        self.assertEqual(self.gh_calls(), [])
+        self.assertEqual([c for c in self.gh_calls() if c[:2] != ["repo", "view"]], [])  # the visibility's read only
         self.assertFalse(actions.over_cap(p))  # with the lock free, it counts again: 1 min
 
     # Workers
