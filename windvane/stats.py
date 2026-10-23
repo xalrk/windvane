@@ -565,8 +565,9 @@ def rounds_line(p, by, backs):
     if not total[0]:
         print("revision rounds: none found in the worker streams")
         return
-    parts = [f"{what} {s[0]}: {plural(s[1], 'turn')}, {k(s[2])}" for key, what in
-             (("tree", "tree"), ("pack", "pack only"), ("none", "not asked again")) if (s := split.get(key))]
+    parts = [f"{s[0]} {what}: {plural(s[1], 'turn')}, {k(s[2])}" for key, what in
+             (("tree", "changed the tree"), ("pack", "only the pack"), ("none", "not asked again"))
+             if (s := split.get(key))]
     parts += [f"{unmatched} not matched to a verdict"] * bool(unmatched)
     note(f"revision rounds in the worker streams: {plural(total[0], 'round')}, {plural(total[1], 'turn')}, "
          f"{k(total[2])} weighted tokens" + (f" ({'; '.join(parts)})" if parts else "")

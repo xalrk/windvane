@@ -102,8 +102,8 @@ class CriticValue(unittest.TestCase):
                                 ["quoted", "4/6", "1", "1", "1", "1"], ["saving", "0/6", "0", "0", "0", "0"]])
         # T-001: m2 (counted once) and m3, 1,000 fresh tokens each and no output; T-002: n2 (3,000 plus half of its
         # run's 400 output tokens at 5x) and o1 (2,000)
-        self.assertIn("revision rounds in the worker streams: 2 rounds, 4 turns, 8k weighted tokens (tree 1: 2 turns, "
-                      "6k; pack only 1: 2 turns, 2k); a round's output tokens are its run's, shared out by turns", flat)
+        self.assertIn("revision rounds in the worker streams: 2 rounds, 4 turns, 8k weighted tokens (1 changed the tree: "
+                      "2 turns, 6k; 1 only the pack: 2 turns, 2k); a round's output tokens are its run's, shared out by turns", flat)
         self.assertIn("critic misses: 1 of 4 reviews after a critic pass asked for changes:\n"
                       "  T-002    2026-10-20 10:40  the retry clock isn't cleared on the error path\n", text)
         self.assertIn("decided nothing: always yes: shown 6/6; never yes over the pass mark: saving 0/6", flat)
@@ -117,13 +117,14 @@ class CriticValue(unittest.TestCase):
         self.assertIn("critic misses: none of 2 reviews after a critic pass asked for changes", flat)
 
     def test_rounds_that_dont_line_up_are_counted_not_split(self):
-        (self.p.state / "runs" / "T-001-0.jsonl").write_text("")  # T-001's stream lost: no round to pair
+        (self.p.state / "runs" / "T-001-0.jsonl").unlink()  # T-001's stream pruned: no round to pair
         flat = " ".join(self.out().split())
-        self.assertIn("1 round, 2 turns, 6k weighted tokens (tree 1: 2 turns, 6k)", flat)
+        self.assertIn("1 round, 2 turns, 6k weighted tokens (1 changed the tree: 2 turns, 6k)", flat)
         (self.p.state / "runs" / "T-003-3.jsonl").write_text(
-            json.dumps(result("q0", "revise")) + "\n" + json.dumps(turn("q1", fresh(9000))) + "\n")
+            json.dumps(result("q0", "revise")) + "\n" + json.dumps(turn("q1", fresh(9000))) + "\n"
+            + json.dumps(turn("q2", fresh(4000)))[:30])  # a live run's last line, half written: not a turn yet
         flat = " ".join(self.out().split())
-        self.assertIn("2 rounds, 3 turns, 15k weighted tokens (tree 1: 2 turns, 6k; 1 not matched to a verdict)", flat)
+        self.assertIn("2 rounds, 3 turns, 15k weighted tokens (1 changed the tree: 2 turns, 6k; 1 not matched to a verdict)", flat)
 
 
 if __name__ == "__main__":
