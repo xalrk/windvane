@@ -75,7 +75,8 @@ nothing to name them; once the lines have run, `windvane phone setup --revoked` 
 the same server can be granted to the same user too; the token then reaches it as well. Beside the test push, setup
 checks that the token's user may read the reply topic, which the listener needs. With both topics refused, setup ends
 with ``test push: FAILED (… (403): once the `ntfy access` lines above have run on the server, `windvane phone setup`
-sends it again)``; with one, that line names the one `ntfy access` line still to run.
+sends it again)``; with one, that line names the one `ntfy access` line still to run, as in ``test push: sent;
+reply topic: FAILED (the server hasn't let the token's user read it (403), …)``.
 
 `--token -` asks for the token without showing it, so it stays out of your shell's history; `--token TOKEN` works too,
 and `windvane phone setup --token -` later changes it without touching the topics (`--token ""` removes it). It is

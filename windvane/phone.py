@@ -1172,23 +1172,31 @@ def readable(c, topic):
 
 
 def tested(c, ok):
-    """The test push's one line, with the reply topic's read grant checked beside it: (line, both went through)."""
+    """The test's one line, the reply topic's read grant checked beside the push: (line, both went through). A push
+    that went through says so, whatever the reply topic says: the phone has just shown it."""
     reply = readable(c, c["reply_topic"])
-    return f"test push: {'sent' if ok and reply else f'FAILED ({why_failed(c, reply)})'}", ok and reply
+    line = "test push: " + ("sent" if ok else f"FAILED ({why_failed(c, reply)})")
+    if not reply and (ok or _refused != 403):  # with both refused, why_failed has said so
+        line += f"; reply topic: FAILED ({unread(c)})"
+    return line, ok and reply
+
+
+def unread(c):
+    return "the server hasn't let the token's user read it (403), so no answer or command from the phone reaches " \
+        f"windvane: once `ntfy access {account(c) or '<user>'} {c['reply_topic']} rw` has run on the server, " \
+        "`windvane phone setup` checks again"
 
 
 def why_failed(c, reply=True):
-    """Why setup's test failed, as far as windvane can tell, with its fix in the same line: with one of the two
-    topics refused (403), the one `ntfy access` line that hasn't run yet. `reply`: the reply topic could be read."""
-    push = _refused == 403
-    if c.get("token") and push and not reply:  # access_help's lines are just above
+    """Why setup's test push failed, as far as windvane can tell, with its fix in the same line: with only the push
+    topic refused (403), the one `ntfy access` line that hasn't run yet. `reply`: the reply topic could be read."""
+    if _refused == 403 and c.get("token") and not reply:  # access_help's lines are just above
         return f"{UNGRANTED}: once the `ntfy access` lines above have run on the server, `windvane phone setup` " \
             "sends it again"
-    if c.get("token") and (push or not reply):
-        topic, what = (c["topic"], "post on the push topic") if push else \
-            (c["reply_topic"], "read the reply topic, so no answer or command from the phone reaches windvane")
-        return f"the server hasn't let the token's user {what} (403): once `ntfy access {account(c) or '<user>'} " \
-            f"{topic} rw` has run on the server, `windvane phone setup` tries again"
+    if _refused == 403 and c.get("token"):
+        return "the server hasn't let the token's user post on the push topic (403): once " \
+            f"`ntfy access {account(c) or '<user>'} {c['topic']} rw` has run on the server, `windvane phone setup` " \
+            "sends it again"
     return BAD_TOKEN if _refused == -1 else refused(_refused, c) if _refused else \
         "check the server address and the network"
 

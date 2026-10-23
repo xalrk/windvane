@@ -109,11 +109,12 @@ class ReplyGrant(server.Base):
         tail = out.split("test push: ", 1)[1].splitlines()
         self.assertEqual(len(tail), 1, out)
         failed = tail[0]
-        self.assertTrue(failed.startswith("FAILED ("), failed)
+        self.assertTrue(failed.startswith("sent; reply topic: FAILED ("), "the push went through and says so")
+        self.assertEqual(failed.count("FAILED"), 1, failed)
         line = f"`ntfy access ann {self.c['reply_topic']} rw`"
         self.assertEqual(failed.count(line), 1, failed)
         self.assertNotIn(self.c["topic"], failed, "the push topic is granted: not named")
-        self.assertIn("read the reply topic", failed)
+        self.assertIn("read it (403)", failed)
         polls = [p for m, p, _ in self.ntfy.seen if m == "GET" and p.startswith(f"/{self.c['reply_topic']}/")]
         self.assertEqual(len(polls), 1, self.ntfy.seen)
         self.assertIn("poll=1", polls[0])
