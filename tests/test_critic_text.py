@@ -111,6 +111,25 @@ class CriticReadsText(unittest.TestCase):
         self.assertIn("the biggest, of docs/big.md (1). Read those files for the rest.", diff)
         self.assertTrue(last.startswith("CRITIC STEP: pass"), last)
 
+    def test_a_cut_hunk_in_a_file_git_quotes_is_named_by_its_path(self):
+        odd = 'docs/say "hi"\tnow.md'  # git's headers quote this name: the cut note mustn't read it from them
+        self.change({odd: "y" * (critic.TEXT_CAP + 10) + "\n",
+                     "CHANGELOG.md": "# Changelog\n\n## Unreleased\n- The sync now keeps your edits.\n"})
+        last, prompt = self.critic()
+        diff = self.section(prompt)
+        self.assertIn(f"the biggest, of {odd} (1). Read those files for the rest.", diff)
+        self.assertIn("+- The sync now keeps your edits.", diff)
+        self.assertTrue(last.startswith("CRITIC STEP: pass"), last)
+
+    def test_code_fences_in_the_docs_dont_close_the_section(self):
+        self.change({"docs/x.md": "# X\n\n```\nThe sync now keeps your edits.\n```\n\nKeep this.\n"})
+        last, prompt = self.critic()
+        diff = self.section(prompt)
+        self.assertTrue(diff.startswith("````diff\n"), diff[:20])
+        self.assertTrue(diff.rstrip().endswith("\n````"), diff[-20:])
+        self.assertIn("+```\n+The sync now keeps your edits.\n+```", diff)
+        self.assertTrue(last.startswith("CRITIC STEP: pass"), last)
+
     def test_a_bad_text_setting_is_refused_at_load(self):
         self.s.write(".windvane/config.toml", self.s.root.joinpath(".windvane/config.toml").read_text()
                      .replace('text = ["src/messages/*.json"]', 'text = "src/messages/*.json"'))

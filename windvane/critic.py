@@ -633,10 +633,13 @@ def text_diff(p, cwd, rev, cap=TEXT_CAP):
     paths = text_paths(p, cwd, rev)
     if not paths:
         return ""
-    diff = gout(cwd, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "-U1",
-                f"{p.upstream}...{rev}", "--", *(f":(literal){f}" for f in paths))
-    files = [f for f in re.split(r"^(?=diff --git )", diff, flags=re.M) if f.strip()]
-    parts = [HUNK_RE.split(f) for f in files]  # [header, hunk, hunk, ...] per file
+    # One diff per path, so what is cut is named by the path itself: git's headers quote an odd name (a `"`, a tab)
+    diffs = [(f, gout(cwd, "diff", "--no-color", "--no-ext-diff", "-U1", f"{p.upstream}...{rev}", "--",
+                      f":(literal){f}")) for f in paths]
+    pairs = [(f, HUNK_RE.split(d + "\n")) for f, d in diffs if d]  # (path, [header, hunk, hunk, ...])
+    if not pairs:
+        return ""
+    names, parts = zip(*pairs)
     taken, opened, used = set(), set(), 0
     for size, i, j in sorted((len(h), i, j) for i, f in enumerate(parts) for j, h in enumerate(f[1:], 1)):
         cost = size + (0 if i in opened else len(parts[i][0]))
@@ -650,9 +653,7 @@ def text_diff(p, cwd, rev, cap=TEXT_CAP):
         if keep or len(f) == 1:  # a file with no hunks (binary, a mode change) is its header alone
             out.append(f[0] + "".join(keep))
         if len(keep) < len(f) - 1:
-            path = (re.search(r"^\+\+\+ b/(.*)$", f[0], re.M) or re.search(r"^--- a/(.*)$", f[0], re.M)
-                    or re.search(r"^diff --git a/(\S+)", f[0])).group(1)
-            dropped[path] = len(f) - 1 - len(keep)
+            dropped[names[i]] = len(f) - 1 - len(keep)
             gone += sum(len(h) for j, h in enumerate(f[1:], 1) if (i, j) not in taken)
     text = "".join(out).rstrip("\n")
     fence = "`" * max(3, max(map(len, re.findall(r"`+", text)), default=0) + 1)
