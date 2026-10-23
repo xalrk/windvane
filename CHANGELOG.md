@@ -54,11 +54,19 @@ release on the same day adds a number (`2026.10.9.1`).
 - A pushed driver branch with no PR (the desk answers' line, and `status` for one pushed by hand) names the commands
   that land it: `gh pr create --head <branch> --base main --fill`, then `gh pr merge`; off GitHub,
   `git merge <remote>/<branch>` on main.
+- A repo made private between runs gets `[skip ci]` on its workers' commits at the Actions cap from the run's first
+  worker: each run reads the repo's visibility afresh as it starts, instead of trusting the last run's.
+- A 403 from a token without Actions access names the missing permission (Actions: read to count, read and write
+  to start a workflow) in `windvane ci` and the recount's log line, not `gh auth status`. `windvane ci` says why its
+  count failed too.
 - A session's hooks (the push scan, and `[skip ci]` at the Actions cap) apply to its own worktree only. They used to
   become the hooks of every repository a check clones or inits, so `git lfs install` in a test's clone failed under
   `windvane check` and a test's own hooks never ran.
 - A session's push from a git submodule in its worktree is scanned against what that submodule's own remote already
-  has, not the project's main branch, and the submodule's own hooks run there instead of the project's.
+  has, not the project's main branch, and the submodule's own hooks run there instead of the project's. That
+  includes a submodule cloned in place with its own `.git` folder, as `.gitmodules` names it when the session starts.
+- A driver stopped while it rebuilt a session's hooks folder no longer leaves it empty or half-written, which let
+  a session already running in that worktree push without the scan: each folder is built beside it and swapped in.
 - A kept job (`bg --heavy --keep`) that its own watch ended at the run's stop, before the run had wound down to it, is
   now listed under "Kept jobs killed at the stop" in the run's summary, and its log says the run's stop killed it. On
   a slow machine the run used to miss it.

@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import shutil
+import tempfile
 from datetime import timedelta
 from pathlib import Path
 
@@ -93,15 +94,14 @@ def guard_pushes(p, path):
     moment it's pushed."""
     folder = hooks_folder(p, path)
     theirs = their_hooks(path)
-    shutil.rmtree(folder, ignore_errors=True)
-    folder.mkdir(parents=True)
-    for hook in theirs.iterdir() if theirs.is_dir() else ():
-        if hook.suffix != ".sample" and hook.name != "pre-push" and os.access(hook, os.X_OK):
-            (folder / hook.name).symlink_to(hook)
-    script = folder / "pre-push"
     own = theirs / "pre-push"
-    script.write_text(privacy.hook_script(p.root, p.upstream, str(own) if os.access(own, os.X_OK) else ""))
-    script.chmod(0o755)
+    with rebuild(folder) as new:
+        for hook in theirs.iterdir() if theirs.is_dir() else ():
+            if hook.suffix != ".sample" and hook.name != "pre-push" and os.access(hook, os.X_OK):
+                (new / hook.name).symlink_to(hook)
+        script = new / "pre-push"
+        script.write_text(privacy.hook_script(p.root, p.upstream, str(own) if os.access(own, os.X_OK) else ""))
+        script.chmod(0o755)
     return hooks_env(path, folder, submodule_hooks(p, path))
 
 
@@ -129,16 +129,15 @@ def submodule_hooks(p, path):
     `own_remote`). One folder serves them all, so each hook finds the submodule's own when it runs (OWN_HOOK), even
     for a submodule the session itself adds."""
     folder = submodule_folder(p, path)
-    shutil.rmtree(folder, ignore_errors=True)
-    folder.mkdir(parents=True)
-    (folder / "own-hook").write_text(OWN_HOOK)
     own = shlex.quote(str(folder / "own-hook"))
     scripts = {name: f'#!/bin/sh\n# windvane: runs this submodule\'s own {name} hook\nexec sh {own} {name} "$@"\n'
                for name in CLIENT_HOOKS}
     scripts["pre-push"] = privacy.hook_script(p.root, "", "", own_remote=True)
-    for name, text in scripts.items():
-        (folder / name).write_text(text)
-        (folder / name).chmod(0o755)
+    with rebuild(folder) as new:
+        (new / "own-hook").write_text(OWN_HOOK)
+        for name, text in scripts.items():
+            (new / name).write_text(text)
+            (new / name).chmod(0o755)
     return folder
 
 
@@ -155,17 +154,121 @@ def hooks_env(path, folder, modules=None):
     every repo a test clones or inits (`git lfs install` there refuses windvane's pre-push, a test's own hooks never
     run). The setting sits in a file in `folder`, included only where the git dir is `path`'s; no repo config is
     written. An included file reads as scope `command`, so `their_hooks` still skips it. `modules`: the hooks folder
-    of `path`'s submodules, whose git dirs git keeps under `path`'s own (`modules/<name>`, nested ones further down)."""
+    of `path`'s submodules, whose git dirs git keeps under `path`'s own (`modules/<name>`, nested ones further down),
+    or in their own checkout (`in_place_submodules`), each named on its own: never a pattern for all of `path`."""
     gitdir = git(path, "rev-parse", "--absolute-git-dir").stdout.strip()
-    pattern = re.sub(r"([][*?\\])", r"\\\1", gitdir)  # a glob to git: a `[` or `*` in the path matches only itself
+    places = [(glob_escape(gitdir), folder)]
+    if modules:
+        for where in [gitdir, *(str(sub / ".git") for sub in in_place_submodules(path))]:
+            places += [(f"{glob_escape(where)}/modules/**", modules)]
+            if where != gitdir:
+                places += [(glob_escape(where), modules)]
     env, n = {}, int(os.environ.get("GIT_CONFIG_COUNT") or 0)
-    for where, hooks in ((pattern, folder), (f"{pattern}/modules/**", modules)):
-        if hooks:
-            conf = Path(hooks, HOOKS_CONFIG)
-            conf.write_text(f"[core]\n\thooksPath = {quote_config(str(hooks))}\n")
-            env |= {f"GIT_CONFIG_KEY_{n}": f"includeIf.gitdir:{where}.path", f"GIT_CONFIG_VALUE_{n}": str(conf)}
-            n += 1
+    for where, hooks in places:
+        write_config(hooks)
+        env |= {f"GIT_CONFIG_KEY_{n}": f"includeIf.gitdir:{where}.path",
+                f"GIT_CONFIG_VALUE_{n}": str(Path(hooks, HOOKS_CONFIG))}
+        n += 1
     return {"GIT_CONFIG_COUNT": str(n), **env}
+
+
+def glob_escape(path):
+    """`path` as a glob to git, where a `[` or `*` in it matches only itself."""
+    return re.sub(r"([][*?\\])", r"\\\1", path)
+
+
+def in_place_submodules(path):
+    """The submodules `path`'s `.gitmodules` names whose git dir is a `.git` folder in their own checkout (a clone
+    registered with `git submodule add <url> <path>`, a checkout from before git kept them in its own git dir), as
+    resolved paths inside `path`. Read as the session starts: one cloned in place later isn't among them."""
+    top = Path(path).resolve()
+    if not (top / ".gitmodules").is_file():
+        return []
+    out = git(top, "config", "-z", "-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$").stdout
+    subs = []
+    for entry in filter(None, out.split("\0")):
+        sub = (top / entry.partition("\n")[2]).resolve()
+        if sub != top and sub.is_relative_to(top) and (sub / ".git").is_dir() and sub not in subs:
+            subs.append(sub)
+    return subs
+
+
+def write_config(folder, into=None):
+    """`folder`'s HOOKS_CONFIG, giving it as core.hooksPath, in `into` (a build of it, `rebuild`) or in `folder`: only
+    when its text differs, and by a rename, so a git reading it meanwhile never finds half of it."""
+    conf = Path(into or folder, HOOKS_CONFIG)
+    text = f"[core]\n\thooksPath = {quote_config(str(folder))}\n"
+    with contextlib.suppress(OSError):
+        if conf.read_text() == text:
+            return
+    part = conf.with_name(f"{HOOKS_CONFIG}.{os.getpid()}")
+    part.write_text(text)
+    os.replace(part, conf)
+
+
+@contextlib.contextmanager
+def rebuild(folder):
+    """A new `folder`, filled in the `with` block in a build folder beside it, then swapped in (`swap`): a session
+    already running in the worktree pushes through it meanwhile, and a driver killed halfway must leave a working
+    pre-push, so `folder` is always the old build or the new one, never missing or half-written. The builds a killed
+    driver left are cleared first."""
+    folder = Path(folder)
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    clear_leftovers(folder)
+    new = Path(tempfile.mkdtemp(prefix=f".{folder.name}.{os.getpid()}.", dir=folder.parent))
+    try:
+        yield new
+        write_config(folder, new)
+        swap(folder, new)
+    except BaseException:
+        shutil.rmtree(new, ignore_errors=True)  # swap raises only before `folder` links to it
+        raise
+
+
+def swap(folder, new):
+    """Makes `folder` a link to the build `new` with one rename, then removes the build it linked to. A plain folder
+    (from before builds were swapped in) is moved aside first: the one moment it's missing, once. A failure leaves
+    `folder` as it was."""
+    link, aside = new.with_name(new.name + "_link"), None
+    try:
+        link.symlink_to(new.name)
+        old = folder.parent / os.readlink(folder) if folder.is_symlink() else None
+        if old is None and folder.is_dir():
+            old = aside = new.with_name(new.name + "_old")
+            os.rename(folder, aside)
+        os.replace(link, folder)
+    except BaseException:
+        if aside and not folder.exists():
+            os.rename(aside, folder)
+        link.unlink(missing_ok=True)
+        raise
+    if old:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def clear_leftovers(folder):
+    """Removes the builds and links beside `folder` of a process that has ended (a driver killed in `rebuild`), never
+    the build `folder` links to, nor one a live driver is making."""
+    current = os.readlink(folder) if folder.is_symlink() else None
+    pattern = re.compile(rf"\.{re.escape(folder.name)}\.(\d+)\.[a-z0-9_]+")
+    for entry in folder.parent.iterdir():
+        m = pattern.fullmatch(entry.name)
+        if not m or entry.name == current or alive(int(m[1])):
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
 
 
 def quote_config(value):
