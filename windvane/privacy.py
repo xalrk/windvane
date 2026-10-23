@@ -263,19 +263,13 @@ def censor(text):
 
 def hook_script(root, upstream, theirs, own_remote=False):
     """The pre-push hook windvane puts in its own worktrees: `pre_push` for the project at `root`, then the repo's own
-    pre-push (`theirs`), if it has one. `own_remote`: the one for the submodules in a worktree (see `pre_push`)."""
-    return python_hook("refuses a push that would make a secret public (windvane/privacy.py)", "privacy",
-                       f"pre_push(sys.argv[1:], {str(root)!r}, {upstream!r}, {theirs!r}, {own_remote!r})")
-
-
-def python_hook(what, module, call):
-    """A git hook that runs `module.call` of this package, `what` it does in its comment. sh starts it with this
-    python, as a shebang can't hold every path; it imports this package from where it is now."""
+    pre-push (`theirs`), if it has one; `own_remote` for the submodules in them. sh starts it with this python, as a
+    shebang can't hold every path; it imports this package from where it is now."""
     return (f"#!/bin/sh\n''''exec {shlex.quote(sys.executable)} \"$0\" \"$@\" # '''\n"
-            f"# windvane: {what}\n"
+            "# windvane: refuses a push that would make a secret public (windvane/privacy.py)\n"
             f"import sys\nsys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})\n"
-            f"from windvane import {module}\n"
-            f"sys.exit({module}.{call})\n")
+            "from windvane import privacy\n"
+            f"sys.exit(privacy.pre_push(sys.argv[1:], {str(root)!r}, {upstream!r}, {theirs!r}, {own_remote!r}))\n")
 
 
 def pre_push(args, root, upstream, theirs="", own_remote=False):

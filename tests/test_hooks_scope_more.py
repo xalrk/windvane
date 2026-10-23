@@ -159,6 +159,15 @@ class Submodule(Base):
         self.assertNotIn("old.txt", r.stderr)
         self.assertEqual(self.ran(), ["pre-commit", "pre-push", "pre-commit"])  # refused before its own pre-push
 
+    def test_a_submodule_with_a_core_hooks_path_of_its_own_still_runs_those_hooks(self):
+        env, _ = self.session()
+        self.git(None, self.sub, "config", "core.hooksPath", ".githooks")  # the submodule's own config
+        self.own_hook(self.sub / ".githooks", "commit-msg")
+        self.commit(env, self.sub, "a.txt", "a\n")
+        self.assertEqual(self.ran(), ["commit-msg"])
+        self.assertEqual(self.git(env, self.sub, "config", "core.hooksPath").stdout.strip(),
+                         str(submodule_folder(self.p, self.wt)))  # the session's include still comes last
+
     def test_at_the_cap_a_submodules_push_is_still_scanned_and_its_commits_get_no_skip_ci(self):
         env, _ = self.session(budget=True)
         self.commit(env, self.sub, "b.txt", TOKEN + "\n")

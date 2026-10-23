@@ -3,8 +3,8 @@ driver, the plan run and held-back pushes, so neither of those imports the drive
 import contextlib
 import os
 import re
+import shlex
 import shutil
-import subprocess
 from datetime import timedelta
 from pathlib import Path
 
@@ -107,22 +107,34 @@ def guard_pushes(p, path):
 
 SUBMODULE_HOOKS = "submodule-hooks"  # under the state dir: the hooks of the submodules in a worktree a session uses
 # The client-side hooks a submodule's own hooks folder may hold, which windvane's core.hooksPath there would hide. Not
-# reference-transaction and the like, which git runs on every ref update: a python start each time.
+# reference-transaction and the like, which git runs on every ref update.
 CLIENT_HOOKS = ("applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit",
                 "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge",
                 "post-rewrite", "pre-auto-gc")
+# A stand-in for the submodule's own hook (argv 1): found as `their_hooks` finds it, in sh, as a python start on each
+# commit and checkout would make them ten times slower.
+OWN_HOOK = """d=$(git config --show-scope --get-all core.hooksPath |
+    awk -F '\t' '$1 != "command" && $2 != "" { d = $2 } END { print d }')
+case $d in "") d=$(git rev-parse --git-common-dir)/hooks ;; "~/"*) d=$HOME/${d#"~/"} ;; esac
+h=$d/$1
+shift
+[ -f "$h" ] && [ -x "$h" ] || exit 0
+exec "$h" "$@"
+"""
 
 
 def submodule_hooks(p, path):
     """The hooks folder of the submodules in `path`, (re)built: a submodule is a repo of its own, and its remote may
     be public too, so a session's push from one is scanned as well, against that remote (`privacy.pre_push`'s
-    `own_remote`). One folder serves them all, so the submodule's own hooks are found when they run (`run_own_hook`),
-    even for a submodule the session itself adds."""
+    `own_remote`). One folder serves them all, so each hook finds the submodule's own when it runs (OWN_HOOK), even
+    for a submodule the session itself adds."""
     folder = submodule_folder(p, path)
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
-    scripts = {name: privacy.python_hook(f"runs this submodule's own {name} hook", "worktree",
-                                         f"run_own_hook({name!r}, sys.argv[1:])") for name in CLIENT_HOOKS}
+    (folder / "own-hook").write_text(OWN_HOOK)
+    own = shlex.quote(str(folder / "own-hook"))
+    scripts = {name: f'#!/bin/sh\n# windvane: runs this submodule\'s own {name} hook\nexec sh {own} {name} "$@"\n'
+               for name in CLIENT_HOOKS}
     scripts["pre-push"] = privacy.hook_script(p.root, "", "", own_remote=True)
     for name, text in scripts.items():
         (folder / name).write_text(text)
@@ -132,13 +144,6 @@ def submodule_hooks(p, path):
 
 def submodule_folder(p, path):
     return p.state / SUBMODULE_HOOKS / Path(path).resolve().name
-
-
-def run_own_hook(name, args):
-    """The repo's own `name` hook (`their_hooks`), run here with git's arguments and input, as git would have run it
-    without windvane's core.hooksPath; 0 when it has none."""
-    hook = their_hooks(".") / name
-    return subprocess.run([str(hook), *args]).returncode if os.access(hook, os.X_OK) and hook.is_file() else 0
 
 
 HOOKS_CONFIG = ".gitconfig"  # in a hooks folder: the core.hooksPath its session's worktree includes
