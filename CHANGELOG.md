@@ -23,7 +23,9 @@ release on the same day adds a number (`2026.10.9.1`).
   [phone docs](docs/phone.md#your-own-server) now explain how to run your own server, including the setting an
   iPhone needs.
   Setup prints the `ntfy access` lines that grant the token's user windvane's two topics with that user's name
-  filled in, and `windvane phone rotate` adds the lines that take the old topics back.
+  filled in, and `windvane phone rotate` adds the lines that take the old topics back. Those old topics stay in
+  `phone.toml`, and every setup prints their lines again until `windvane phone setup --revoked`. Setup also checks
+  that the token's user may read the reply topic, and a refused test names the one `ntfy access` line still to run.
 
 ### Changed
 - A dropped late answer's line in `windvane status` says whether its ticket has merged, so you know whether

@@ -792,6 +792,8 @@ def main(argv=None):
     s.add_argument("--token", help="setup: the access token your own server demands (- reads it from stdin, \"\" "
                    "removes it)")
     s.add_argument("--no-service", action="store_true", help="setup: don't install the background listener service")
+    s.add_argument("--revoked", action="store_true", help="setup: the old topics a rotate left have been taken "
+                   "back on the server: stop printing their lines")
     s = sub.add_parser("run", help="work the tickets until a deadline")
     g = s.add_mutually_exclusive_group()
     g.add_argument("--until", help="HH:MM or 'YYYY-MM-DD HH:MM'")
