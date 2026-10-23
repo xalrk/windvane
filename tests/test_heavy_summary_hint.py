@@ -28,7 +28,7 @@ def hint(label, word, gb):
 
 def waited(seconds, *hints, default=True):
     """A heavy job's log head as `take` and `run` write it: the wait on memory with its hints, then its wait."""
-    clauses = [*hints, *([heavy.DEFAULT_NEED.format("6")] if default else [])]
+    clauses = [*hints, *([heavy.DEFAULT_NEED.format("6", "/home/me/.config/windvane/machine.toml")] if default else [])]
     return (f"heavy: waiting: needs 6 GB free, 2.4 GB free; largest: 4123 java 2.6 GB (proj)"
             + "".join(f"; {c}" for c in clauses) + "\n" + heavy.WAITED.format(seconds) + "\n")
 
