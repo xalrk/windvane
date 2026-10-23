@@ -69,10 +69,13 @@ can read and post wherever its user may. A user given `"*"` before drops it with
 gets the two lines `windvane phone setup` prints. Setup fills in the user's name from the server's `/v1/account`; a
 server that can't say leaves `<user>` for you to replace. The lines are printed in the terminal only.
 `windvane phone rotate` prints the same for its new topics, after an `ntfy access --reset` line for each old one,
-since every old push's buttons still carry the token. A topic of your own on the same server can be granted to the
-same user too; the token then reaches it as well. A test push refused for want of the grants ends setup with
-``test push: FAILED (… (403): once the `ntfy access` lines above have run on the server, `windvane phone setup`
-sends it again)``.
+since every old push's buttons still carry the token. It keeps the old topics in `phone.toml` (`revoke = [...]`), and
+every `windvane phone setup` prints their `--reset` lines again, so a closed terminal can't leave them granted with
+nothing to name them; once the lines have run, `windvane phone setup --revoked` drops them. A topic of your own on
+the same server can be granted to the same user too; the token then reaches it as well. Beside the test push, setup
+checks that the token's user may read the reply topic, which the listener needs. With both topics refused, setup ends
+with ``test push: FAILED (… (403): once the `ntfy access` lines above have run on the server, `windvane phone setup`
+sends it again)``; with one, that line names the one `ntfy access` line still to run.
 
 `--token -` asks for the token without showing it, so it stays out of your shell's history; `--token TOKEN` works too,
 and `windvane phone setup --token -` later changes it without touching the topics (`--token ""` removes it). It is

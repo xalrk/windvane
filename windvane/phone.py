@@ -127,6 +127,8 @@ def save_conf(c):
              f'enabled = {"true" if c.get("enabled") else "false"}', f'server = {json.dumps(c["server"])}',
              f'topic = {json.dumps(c["topic"])}', f'reply_topic = {json.dumps(c["reply_topic"])}',
              *([f'token = {json.dumps(c["token"])}'] if c.get("token") else []),
+             *([f'revoke = {json.dumps(c["revoke"])}  # old topics still granted on the server: see `phone setup`']
+               if c.get("revoke") else []),
              f'redact = {json.dumps(c.get("redact", []))}  # extra words to censor: names, hosts, projects']
     tmp = f.with_suffix(".tmp")
     tmp.unlink(missing_ok=True)
@@ -1015,6 +1017,8 @@ def access_help(c, old=()):
               "then let it read and post on the two new ones, and only them:")
         for topic in old:
             print(f"  ntfy access --reset {user} {topic}")
+        print("Once the old topics are taken back: `windvane phone setup --revoked`; until then every setup prints "
+              "them again.")
     else:
         print(f"On the server, let {who} read and post on windvane's two topics, and only them:")
     for topic in (c["topic"], c["reply_topic"]):
@@ -1110,10 +1114,20 @@ def read_token(token):
     return token
 
 
-def setup(server=None, service=True, project=None, token=None):
+def revoke(c):
+    """The old topics a rotate left granted on a server of your own, kept in phone.toml until the user says the
+    `--reset` lines ran: a lost terminal must not leave them granted with nothing to name them again."""
+    old = c.get("revoke")
+    return [t for t in old if isinstance(t, str)] if isinstance(old, list) else []
+
+
+def setup(server=None, service=True, project=None, token=None, revoked=False):
     """Turn the phone on, keeping the topics (and the token) it had. `token`: set ("" removes) the one a server of
-    your own demands; a setup with only it changes nothing else."""
+    your own demands; a setup with only it changes nothing else. `revoked`: the old topics' `--reset` lines have
+    run, so they're dropped and no longer printed."""
     c = conf()
+    if revoked:
+        c.pop("revoke", None)
     c["server"] = (server or c.get("server") or SERVER).rstrip("/")
     if token is not None:
         c["token"] = read_token(token)
@@ -1128,20 +1142,52 @@ def setup(server=None, service=True, project=None, token=None):
         register(project)
     if shutil.which("notify"):
         print("Your own `notify` / `notify-ask` are on PATH: windvane keeps using them; this setup is the fallback.")
-    subscribe_help(c)  # first: a deny-all server takes the test push only once the topics are granted
+    subscribe_help(c, revoke(c))  # first: a deny-all server takes the test push only once the topics are granted
     ok = send(c, "windvane: phone works", "Pushes and questions from windvane come here. Tap Status to try a "
               "command.", 3, "white_check_mark", ("Status=status",))
-    print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
+    line, ok = tested(c, ok)
+    print(line)
     if service:
         install_service()
     return 0 if ok else 1
 
 
-def why_failed(c):
-    """Why setup's test push failed, as far as windvane can tell, with its fix in the same line."""
-    if _refused == 403 and c.get("token"):  # access_help's lines are just above
+def readable(c, topic):
+    """Whether the token's user may read `topic`, by one poll that asks only for messages from now on: a missing
+    grant on the reply topic shows at setup, not later as the listener's 403 in the journal. Only a 403 says no;
+    anything else (no token, the network) is for the test push to tell."""
+    if not c.get("token"):
+        return True
+    url = f"{c.get('server', SERVER).rstrip('/')}/{topic}/json?poll=1&since={int(time.time())}"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=auth(c)), timeout=5) as r:
+            r.read(1 << 16)
+    except urllib.error.HTTPError as e:
+        e.close()
+        return e.code != 403
+    except (OSError, ValueError, UnicodeError, http.client.HTTPException):
+        pass
+    return True
+
+
+def tested(c, ok):
+    """The test push's one line, with the reply topic's read grant checked beside it: (line, both went through)."""
+    reply = readable(c, c["reply_topic"])
+    return f"test push: {'sent' if ok and reply else f'FAILED ({why_failed(c, reply)})'}", ok and reply
+
+
+def why_failed(c, reply=True):
+    """Why setup's test failed, as far as windvane can tell, with its fix in the same line: with one of the two
+    topics refused (403), the one `ntfy access` line that hasn't run yet. `reply`: the reply topic could be read."""
+    push = _refused == 403
+    if c.get("token") and push and not reply:  # access_help's lines are just above
         return f"{UNGRANTED}: once the `ntfy access` lines above have run on the server, `windvane phone setup` " \
             "sends it again"
+    if c.get("token") and (push or not reply):
+        topic, what = (c["topic"], "post on the push topic") if push else \
+            (c["reply_topic"], "read the reply topic, so no answer or command from the phone reaches windvane")
+        return f"the server hasn't let the token's user {what} (403): once `ntfy access {account(c) or '<user>'} " \
+            f"{topic} rw` has run on the server, `windvane phone setup` tries again"
     return BAD_TOKEN if _refused == -1 else refused(_refused, c) if _refused else \
         "check the server address and the network"
 
@@ -1161,21 +1207,22 @@ def rotate():
     c = conf()
     if not c.get("topic"):
         raise SystemExit("windvane phone: not set up yet (windvane phone setup)")
-    old = c["topic"], c["reply_topic"]
+    if c.get("token"):  # a server of your own keeps the old topics granted until they're reset: see revoke
+        c["revoke"] = list(dict.fromkeys([*revoke(c), c["topic"], c["reply_topic"]]))
     c["topic"], c["reply_topic"] = new_topic(), new_topic()
-    save_conf(c)
+    save_conf(c)  # the old topics and the new in one write: a Ctrl-C after it loses neither
     mark_now()
     restart_service()
     print("New topics made: the old ones get nothing more. In the ntfy app, unsubscribe the old topic, then:")
-    subscribe_help(c, old)
+    subscribe_help(c, revoke(c))
     if on(c):
         ok = send(c, "windvane: new topic works", "Pushes come here from now on.", 3, "white_check_mark")
-        print(f"test push: {'sent' if ok else f'FAILED ({why_failed(c)})'}")
+        print(tested(c, ok)[0])
 
 
 def main(a, project=None):
     if a.action == "setup":
-        return setup(a.server, not a.no_service, project, a.token)
+        return setup(a.server, not a.no_service, project, a.token, getattr(a, "revoked", False))
     if a.action == "off":
         return off()
     if a.action == "rotate":
