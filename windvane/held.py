@@ -47,30 +47,21 @@ def push_branch(p, cd, branch, tries=2, fresh=False):
             return branch
         if fresh and NAME_TAKEN.search(res.stderr):  # the same name is refused the same way
             break
-    why = ""
     if fresh and NAME_TAKEN.search(res.stderr):
         taken, branch = branch, next_name(p, cd, branch)
         log(p, f"{taken} was pushed from elsewhere meanwhile; pushing to {branch}")
         res = push_head(p, cd, branch)
         if res.returncode == 0:
             return branch
-        if NAME_TAKEN.search(res.stderr):
-            why = (f"refused: {taken} and {branch} were both taken on the remote meanwhile; push it by hand with "
-                   f"`git push {p.remote} {branch}:{branch}-b` and "
-                   + THEN.get(p.cfg["forge"], THEN["git"]).format(main=p.main))
     git(cd, "branch", "-f", branch, "HEAD")
     log(p, f"push to {branch} refused ({cut(' '.join(res.stderr.split()))}); kept only locally on {branch}")
-    why = why or push_refusal(res.stderr, p.cfg["forge"], branch, p.remote, p.main)
+    why = push_refusal(res.stderr, p.cfg["forge"], branch, p.remote, p.main)
     hold(p, branch, "push", why)
     return f"the local branch {branch} ({why})"
 
 
 def push_head(p, cd, branch):
     return net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
-
-
-# A push refused because the branch already holds commits this one doesn't build on: another machine pushed that name.
-NAME_TAKEN = re.compile(r"non-fast-forward|fetch first", re.I)
 
 
 def next_name(p, cd, taken):
@@ -135,10 +126,14 @@ def edit_held(p, change):
         save_json(p.state / "held_why.json", {b: w for b, w in reasons.items() if b in held})
 
 
+# A push refused because the branch already holds commits this one doesn't build on: another machine pushed that name.
+NAME_TAKEN = re.compile(r"non-fast-forward|fetch first", re.I)
+
 # What a refused push's stderr says, first match wins, with its next step: a secret by taking it out of the commit
 # (GitHub's push protection is a GH013 rule too, but no rule change or other name gets past it), a login problem by
 # logging in, a hook or branch protection by changing the rule or the branch (pushing again alone fails the same way),
-# the network by waiting: the next run pushes what was held back (`push_held`).
+# a name another machine pushed meanwhile by pushing under another (a fresh one already tried the next suffix), the
+# network by waiting: the next run pushes what was held back (`push_held`).
 REFUSALS = (
     ("refused: it holds a secret{where} (GitHub push protection); remove it from the branch's commit "
      "(`git commit --amend` on `{branch}`), then the next run pushes it{allow}",
@@ -151,6 +146,8 @@ REFUSALS = (
     ("refused by a hook or branch rule; change the rule, or push it by hand with `git push {remote} {branch}:{branch}-b` "
      "and {then}",
      re.compile(r"hook declined|protected branch|GH00\d|GH013|rule violation|remote rejected", re.I)),
+    ("refused: the name {branch} was taken on the remote meanwhile; push it by hand with "
+     "`git push {remote} {branch}:{branch}-b` and {land}", NAME_TAKEN),
     ("network down; the next run pushes it again",
      re.compile(r"could not resolve|timed out|connection (refused|reset)|network is unreachable|unable to access|"
                 r"early eof|could not read from remote", re.I)),
@@ -170,7 +167,8 @@ def push_refusal(stderr, forge="git", branch="BRANCH", remote="origin", main="ma
     for why, pattern in REFUSALS:
         if pattern.search(stderr):
             return why.format(login=LOGIN.get(forge, LOGIN["git"]), branch=branch, remote=remote,
-                              then=THEN.get(forge, THEN["git"]).format(main=main), **secret_at(stderr))
+                              then=THEN.get(forge, THEN["git"]).format(main=main),
+                              land=merge_words(forge, remote, f"{branch}-b", main), **secret_at(stderr))
     return "push failed; see the windvane log"
 
 
@@ -247,9 +245,13 @@ def landing_step(p, where):
 def merge_step(p, branch):
     """The commands that land `branch`, pushed but not merged (on github, through a PR): one wording for `status`
     and the desk answers, so the two read the same."""
-    if p.cfg["forge"] == "github":
-        return f"open a PR from it and merge it: `gh pr create --head {branch} --base {p.main} --fill`, then `gh pr merge`"
-    return f"merge it into {p.main}: `git merge {p.remote}/{branch}` on {p.main}, then push it"
+    return merge_words(p.cfg["forge"], p.remote, branch, p.main)
+
+
+def merge_words(forge, remote, branch, main):
+    if forge == "github":
+        return f"open a PR from it and merge it: `gh pr create --head {branch} --base {main} --fill`, then `gh pr merge`"
+    return f"merge it into {main}: `git merge {remote}/{branch}` on {main}, then push it"
 
 
 def kept_secret(p, cd, branch, title, found):

@@ -90,10 +90,21 @@ class TakenMeanwhile(Base):
         with mock.patch.object(held, "remote_heads", lambda *a: set()):  # -2 pushed after the remote was asked too
             self.assertEqual(self.plan(NAME, f"{NAME}-2")[0], 0)
         self.assertEqual(held.load_json(self.p.state / "held.json", {}), {f"{NAME}-2": "push"})
-        why = held.load_json(self.p.state / "held_why.json", {})[f"{NAME}-2"]["why"]
-        self.assertIn(f"{NAME} and {NAME}-2 were both taken on the remote meanwhile", why)
-        self.assertIn(f"`git push origin {NAME}-2:{NAME}-2-b`", why)
-        self.assertNotIn("see the windvane log", why)
+        self.assertEqual(self.why(), f"refused: the name {NAME}-2 was taken on the remote meanwhile; push it by hand "
+                                     f"with `git push origin {NAME}-2:{NAME}-2-b` and merge it into main: "
+                                     f"`git merge origin/{NAME}-2-b` on main, then push it")
+        self.assertEqual(held.push_held(self.p), 0)  # the next run's push is refused the same way, and says so again
+        self.assertIn(f"refused: the name {NAME}-2 was taken on the remote meanwhile", self.why())
+        self.assertEqual(held.load_json(self.p.state / "held.json", {}), {f"{NAME}-2": "push"})
+
+    def why(self):
+        return held.load_json(self.p.state / "held_why.json", {})[f"{NAME}-2"]["why"]
+
+    def test_on_github_the_hand_push_step_names_the_pr_command(self):
+        why = held.push_refusal(" ! [rejected]        HEAD -> x (fetch first)", "github", "x", "up", "trunk")
+        self.assertEqual(why, "refused: the name x was taken on the remote meanwhile; push it by hand with "
+                              "`git push up x:x-b` and open a PR from it and merge it: "
+                              "`gh pr create --head x-b --base trunk --fill`, then `gh pr merge`")
 
     def test_a_held_branch_pushed_again_keeps_its_name(self):
         """No `fresh`: the user may have been told its name, so it isn't moved."""

@@ -118,9 +118,11 @@ why and what to do:
   Pushing it by hand under another name fails the same way. In your checkout, `git switch` to that branch, take the
   secret out, `git commit --amend -a`, and `git switch -` back; the next run pushes the cleaned commit. A false
   positive (a test fixture, an example key): open the URL, allow it, and the next run pushes the branch as it is.
-- "refused: plan-20261005-040000 and plan-20261005-040000-2 were both taken on the remote meanwhile; ...": another
-  machine pushed a branch of the same name twice between windvane naming it and pushing it (once, it just takes the
-  next suffix). Push it by hand under the name the reason gives.
+- "refused: the name plan-20261005-040000-2 was taken on the remote meanwhile; push it by hand with
+  `git push origin plan-20261005-040000-2:plan-20261005-040000-2-b` and open a PR from it and merge it: ..." (the
+  command to open and merge the PR follows; off GitHub, the `git merge`): another machine pushed a branch of the same
+  name. A branch windvane has just named already moves to the next suffix by itself, so this one clashed twice, or was
+  held before. Run the commands it names in your checkout.
 - "login refused; run `gh auth login` and the next run pushes it" (off GitHub: "check your login to the remote"):
   once you're logged in, the next run or `windvane plan` pushes it.
 - "refused by a hook or branch rule; change the rule, or push it by hand with

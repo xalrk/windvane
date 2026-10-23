@@ -49,7 +49,8 @@ release on the same day adds a number (`2026.10.9.1`).
 ### Fixed
 - A plan, periodic or desk-answers branch that another machine pushed under the same name between windvane naming
   it and pushing it goes to the next free suffix (`-2`) instead of being held back with "see the windvane log". A
-  second clash is held with a reason that says the name was taken.
+  push refused because its branch name was taken (a second clash, or a branch held before) says so, with the hand
+  push and the commands that land it.
 - A pushed driver branch with no PR (the desk answers' line, and `status` for one pushed by hand) names the commands
   that land it: `gh pr create --head <branch> --base main --fill`, then `gh pr merge`; off GitHub,
   `git merge <remote>/<branch>` on main.
