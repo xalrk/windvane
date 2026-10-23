@@ -3,6 +3,7 @@ driver, the plan run and held-back pushes, so neither of those imports the drive
 import contextlib
 import os
 import re
+import shlex
 import shutil
 from datetime import timedelta
 from pathlib import Path
@@ -101,25 +102,70 @@ def guard_pushes(p, path):
     own = theirs / "pre-push"
     script.write_text(privacy.hook_script(p.root, p.upstream, str(own) if os.access(own, os.X_OK) else ""))
     script.chmod(0o755)
-    return hooks_env(path, folder)
+    return hooks_env(path, folder, submodule_hooks(p, path))
+
+
+SUBMODULE_HOOKS = "submodule-hooks"  # under the state dir: the hooks of the submodules in a worktree a session uses
+# The client-side hooks a submodule's own hooks folder may hold, which windvane's core.hooksPath there would hide. Not
+# reference-transaction and the like, which git runs on every ref update.
+CLIENT_HOOKS = ("applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit",
+                "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge",
+                "post-rewrite", "pre-auto-gc")
+# A stand-in for the submodule's own hook (argv 1): found as `their_hooks` finds it, in sh, as a python start on each
+# commit and checkout would make them ten times slower.
+OWN_HOOK = """d=$(git config --show-scope --get-all core.hooksPath |
+    awk -F '\t' '$1 != "command" && $2 != "" { d = $2 } END { print d }')
+case $d in "") d=$(git rev-parse --git-common-dir)/hooks ;; "~/"*) d=$HOME/${d#"~/"} ;; esac
+h=$d/$1
+shift
+[ -f "$h" ] && [ -x "$h" ] || exit 0
+exec "$h" "$@"
+"""
+
+
+def submodule_hooks(p, path):
+    """The hooks folder of the submodules in `path`, (re)built: a submodule is a repo of its own, and its remote may
+    be public too, so a session's push from one is scanned as well, against that remote (`privacy.pre_push`'s
+    `own_remote`). One folder serves them all, so each hook finds the submodule's own when it runs (OWN_HOOK), even
+    for a submodule the session itself adds."""
+    folder = submodule_folder(p, path)
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    (folder / "own-hook").write_text(OWN_HOOK)
+    own = shlex.quote(str(folder / "own-hook"))
+    scripts = {name: f'#!/bin/sh\n# windvane: runs this submodule\'s own {name} hook\nexec sh {own} {name} "$@"\n'
+               for name in CLIENT_HOOKS}
+    scripts["pre-push"] = privacy.hook_script(p.root, "", "", own_remote=True)
+    for name, text in scripts.items():
+        (folder / name).write_text(text)
+        (folder / name).chmod(0o755)
+    return folder
+
+
+def submodule_folder(p, path):
+    return p.state / SUBMODULE_HOOKS / Path(path).resolve().name
 
 
 HOOKS_CONFIG = ".gitconfig"  # in a hooks folder: the core.hooksPath its session's worktree includes
 
 
-def hooks_env(path, folder):
+def hooks_env(path, folder, modules=None):
     """Environment config giving `path`'s repo `folder` as its core.hooksPath, and no other repo: a session's git
     environment reaches every git it runs, its check's included, so a plain core.hooksPath would also be the hooks of
     every repo a test clones or inits (`git lfs install` there refuses windvane's pre-push, a test's own hooks never
     run). The setting sits in a file in `folder`, included only where the git dir is `path`'s; no repo config is
-    written. An included file reads as scope `command`, so `their_hooks` still skips it."""
+    written. An included file reads as scope `command`, so `their_hooks` still skips it. `modules`: the hooks folder
+    of `path`'s submodules, whose git dirs git keeps under `path`'s own (`modules/<name>`, nested ones further down)."""
     gitdir = git(path, "rev-parse", "--absolute-git-dir").stdout.strip()
     pattern = re.sub(r"([][*?\\])", r"\\\1", gitdir)  # a glob to git: a `[` or `*` in the path matches only itself
-    conf = Path(folder, HOOKS_CONFIG)
-    conf.write_text(f"[core]\n\thooksPath = {quote_config(str(folder))}\n")
-    n = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
-    return {"GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": f"includeIf.gitdir:{pattern}.path",
-            f"GIT_CONFIG_VALUE_{n}": str(conf)}
+    env, n = {}, int(os.environ.get("GIT_CONFIG_COUNT") or 0)
+    for where, hooks in ((pattern, folder), (f"{pattern}/modules/**", modules)):
+        if hooks:
+            conf = Path(hooks, HOOKS_CONFIG)
+            conf.write_text(f"[core]\n\thooksPath = {quote_config(str(hooks))}\n")
+            env |= {f"GIT_CONFIG_KEY_{n}": f"includeIf.gitdir:{where}.path", f"GIT_CONFIG_VALUE_{n}": str(conf)}
+            n += 1
+    return {"GIT_CONFIG_COUNT": str(n), **env}
 
 
 def quote_config(value):

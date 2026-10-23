@@ -261,22 +261,36 @@ def censor(text):
     return text
 
 
-def hook_script(root, upstream, theirs):
+def hook_script(root, upstream, theirs, own_remote=False):
     """The pre-push hook windvane puts in its own worktrees: `pre_push` for the project at `root`, then the repo's own
-    pre-push (`theirs`), if it has one. sh starts it with this python, as a shebang can't hold every path; it imports
-    this package from where it is now."""
+    pre-push (`theirs`), if it has one; `own_remote` for the submodules in them. sh starts it with this python, as a
+    shebang can't hold every path; it imports this package from where it is now."""
     return (f"#!/bin/sh\n''''exec {shlex.quote(sys.executable)} \"$0\" \"$@\" # '''\n"
             "# windvane: refuses a push that would make a secret public (windvane/privacy.py)\n"
             f"import sys\nsys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})\n"
             "from windvane import privacy\n"
-            f"sys.exit(privacy.pre_push(sys.argv[1:], {str(root)!r}, {upstream!r}, {theirs!r}))\n")
+            f"sys.exit(privacy.pre_push(sys.argv[1:], {str(root)!r}, {upstream!r}, {theirs!r}, {own_remote!r}))\n")
 
 
-def pre_push(args, root, upstream, theirs=""):
+def remote_named(args):
+    """The remote a pre-push's arguments (name, URL) push to, by name or by its URL; "" for one this repo doesn't
+    have, whose refs it can't know."""
+    out = subprocess.run(["git", "config", "--get-regexp", r"^remote\..*\.(push)?url$"], capture_output=True,
+                         text=True).stdout
+    urls = {}
+    for key, _, url in (line.partition(" ") for line in out.splitlines()):
+        urls.setdefault(key[len("remote."):key.rindex(".")], set()).add(url)
+    name, url = (args + ["", ""])[:2]
+    return name if name in urls else next((n for n, have in urls.items() if url in have), "")
+
+
+def pre_push(args, root, upstream, theirs="", own_remote=False):
     """git's pre-push hook: scan what each pushed ref adds beyond upstream and what the remote already has, with the
     kinds the project's config refuses now (`scan_allow` may change while a session runs), and refuse with kinds and
     places only (the refusal reaches a session's transcript and a log). Then the repo's own pre-push, given the same
-    arguments and refs. A config that can't be read refuses every kind: a push is no time to guess."""
+    arguments and refs. A config that can't be read refuses every kind: a push is no time to guess. `own_remote`, for a
+    submodule's push: its remote is another repo, so what that remote is known to have (its remote-tracking refs, its
+    default branch for lines already there) stands in for the project's upstream, and its own pre-push is found here."""
     from .config import Project
     try:
         p = Project(root)
@@ -286,14 +300,23 @@ def pre_push(args, root, upstream, theirs=""):
     refs = sys.stdin.read()
     have = lambda rev: subprocess.run(["git", "rev-parse", "-q", "--verify", f"{rev}^{{commit}}"],
                                       capture_output=True).returncode == 0
-    base = upstream if have(upstream) else ""
+    known = []  # what the remote has, beyond each ref's value there
+    if own_remote:
+        from .worktree import their_hooks
+        theirs, remote = str(their_hooks(".") / "pre-push"), remote_named(args)
+        upstream = ""  # a remote this repo doesn't track: only each ref's value there is known
+        if remote:
+            upstream = f"refs/remotes/{remote}/HEAD"
+            known = subprocess.run(["git", "for-each-ref", "--format=%(objectname)", f"refs/remotes/{remote}/"],
+                                   capture_output=True, text=True).stdout.split()
+    base = upstream if upstream and have(upstream) else ""
     found, fix = [], ""
     for line in refs.splitlines():
         parts = line.split()
         if len(parts) != 4 or not parts[1].strip("0"):  # a deletion pushes nothing
             continue
         head, there = parts[1], parts[3] if parts[3].strip("0") and have(parts[3]) else ""
-        new = pushed(".", base, [head, *[f"^{r}" for r in (base, there) if r]], kinds)
+        new = pushed(".", base, [head, *[f"^{r}" for r in (base, there, *known) if r]], kinds)
         if new:
             found += new
             fix = fix or there or (base and subprocess.run(["git", "merge-base", head, base], capture_output=True,

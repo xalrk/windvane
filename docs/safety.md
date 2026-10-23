@@ -271,9 +271,14 @@ leaves the machine at three points:
   refuses a push whose new lines hold a token or a private key, an ntfy URL or this machine's topic, a personal email
   or a word from `private-terms.txt`, or that adds a file named like a secret: `.env` and `.env.*` (not
   `.env.example`), `*.pem`, `*.key`, `id_rsa*`, `credentials*.json`, `*.p12`. The refusal names the kind and the file
-  and line, never the text. Lines already on main don't count, and `scan_allow` lets a kind through here too. The
-  hook belongs to the session's own worktree only: a repository that a test in your check clones or creates keeps its
-  own hooks, so `git lfs install` works there and the test's own hooks run.
+  and line, never the text. Lines already on main don't count, and `scan_allow` lets a kind through here too. The hook
+  belongs to the session's own worktree and its submodules only: a repository that a test in your check clones or
+  creates keeps its own hooks, so `git lfs install` works there and the test's own hooks run. A git submodule in that
+  worktree is a repository of its own, whose remote may be public too: a push from it is scanned the same way, except
+  that what this clone knows that remote has doesn't count, and the submodule's own hooks still run (not
+  `reference-transaction` and the other hooks git runs on every ref change). That holds for the submodules git keeps
+  in the worktree's git dir, as `git submodule add <url>` and `git submodule update` make them, not for a repository
+  added in place with its own `.git` folder.
 - **Every merge.** Before it merges a ticket or a desk PR, the driver scans the branch's commits again, for a push that
   got past the hook (`--no-verify`, or one made elsewhere). A ticket goes back to its worker, who takes it out with a
   commit on top; windvane then merges the branch as one commit, so the commit that added it stays out of main's
