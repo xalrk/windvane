@@ -123,7 +123,7 @@ class Land(Base):
         f = cd / ".windvane/IDEAS.md"
         f.write_text(("" if replace or not f.exists() else f.read_text()) + text + "\n")
         git(cd, "add", "-A", ".windvane")
-        return held.land(self.p, cd, "ideas-x", "Ideas", "body")
+        return held.land(self.p, cd, "periodic-x", "Ideas", "body")
 
     def on_main(self):
         self.s.git("fetch", "-q", "origin")
@@ -132,8 +132,8 @@ class Land(Base):
     def assert_held(self, ok, kind):
         self.assertFalse(ok)
         self.assertEqual(self.git_pushes, 0)
-        self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {"ideas-x": "land"})
-        why = json.loads((self.p.state / "held_why.json").read_text())["ideas-x"]["why"]
+        self.assertEqual(json.loads((self.p.state / "held.json").read_text()), {"periodic-x": "land"})
+        why = json.loads((self.p.state / "held_why.json").read_text())["periodic-x"]["why"]
         self.assertTrue(why.startswith(f"its .windvane/ lines hold {kind} at .windvane/IDEAS.md:1 in "), why)
         [(title, msg)] = self.pushes
         self.assertEqual(title, "Not pushed: Ideas")
@@ -144,12 +144,12 @@ class Land(Base):
         ok, where = self.land(f"try {TOKEN}")
         why, msg = self.assert_held(ok, "a token")
         self.assertNotIn(TOKEN, why + msg + where + self.log())
-        self.assertIn("(`git switch ideas-x`, edit, `git commit -a --amend`), then the next run pushes it.", msg)
+        self.assertIn("(`git switch periodic-x`, edit, `git commit -a --amend`), then the next run pushes it.", msg)
         self.assertEqual(held.push_held(self.p), 0)  # the next run scans it again: still held, no second alert
         self.assertEqual((self.git_pushes, len(self.pushes)), (0, 1))
-        self.assertIn("held back for under an hour, not pushed: ideas-x (Ideas): its .windvane/ lines hold a token",
+        self.assertIn("held back for under an hour, not pushed: periodic-x (Ideas): its .windvane/ lines hold a token",
                       held.held_lines(self.p)[0])
-        self.s.git("switch", "-q", "ideas-x")  # the fix the push gives, as the user would do it
+        self.s.git("switch", "-q", "periodic-x")  # the fix the push gives, as the user would do it
         (self.s.root / ".windvane/IDEAS.md").write_text("try the key from the vault\n")
         self.s.git("commit", "-qa", "--amend", "--no-edit")
         self.s.git("switch", "-q", "main")
@@ -178,7 +178,7 @@ class Land(Base):
         self.p = Project(self.s.root)
         self.assertEqual(privacy.guarded(self.p), ("token", "private-key", "ntfy-url", "ntfy-topic", "email",
                                                    "secret-file"))
-        self.assertEqual(held.land(self.p, self.p.plan_dir, "ideas-x", "Ideas", "body", commit=False)[0], True)
+        self.assertEqual(held.land(self.p, self.p.plan_dir, "periodic-x", "Ideas", "body", commit=False)[0], True)
 
     def test_a_home_path_is_pushed(self):
         ok, where = self.land(f"the build writes to {Path.home()}/out")

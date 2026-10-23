@@ -15,6 +15,19 @@ from .util import git, gout, load_json, locked, log, push, save_json
 from .worktree import clean_detach, ensure_worktree
 
 
+# The branches the driver lands its own tickets on: a plan's, a periodic chain's, the desk answers' (whose follow-up
+# tickets change a provisional answer). Until one merges its ticket ids are taken (`planner.pending_ids` counts only
+# these), so a new kind of branch that can carry tickets goes here too, or its ids are handed out again.
+OWN_BRANCHES = ("plan-", "periodic-", "answers-")
+
+
+def own_branch(branch):
+    """Refuse a branch `land` or `push_branch` was handed that isn't one of `OWN_BRANCHES`: a caller that named its own
+    would push tickets whose ids no picker counts, and the next ticket written gets the same id."""
+    if not branch.startswith(OWN_BRANCHES):
+        raise ValueError(f"{branch}: not one of the driver's own branches {OWN_BRANCHES}")
+
+
 def author_ident(p):
     """`-c user.name/email` for the driver's own commits when the config names an author."""
     name, email = author(p)
@@ -25,6 +38,7 @@ def push_branch(p, cd, branch, tries=2):
     """Push `cd`'s HEAD to `branch`, trying twice (or `tries` times). When all fail, the commit stays on a local branch of that name, so
     the next run's reset of `cd` can't lose paid-for work. Returns where it is: `branch`, or "the local branch ...
     (why the push was refused and what to do)", so every push that names the place also says the next step."""
+    own_branch(branch)
     for _ in range(tries):
         res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
         if res.returncode == 0:
@@ -142,6 +156,7 @@ def land(p, cd, branch, title, body, commit=True, tries=2, close=False):
     github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is). One kept on a local
     branch, or whose PR can't merge, is noted as one to land; with `close`, a PR that can't merge is closed instead
     and the result is (None, why)."""
+    own_branch(branch)
     title, body = actions.tag(p, privacy.censor(title), cd), privacy.censor(body)  # a periodic or plan session's reply
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
@@ -151,6 +166,19 @@ def land(p, cd, branch, title, body, commit=True, tries=2, close=False):
     if is_local(where):
         hold(p, branch, "land")
     return ok, where
+
+
+def landing_step(p, where):
+    """What lands a change `land` left unmerged at `where`, as words to follow "until you": its PR's merge command, or
+    the merge `status` names for a branch pushed but not merged; "" for a local branch (`where` says why, and what to
+    do)."""
+    if is_local(where):
+        return ""
+    pr = re.search(r"/pull/(\d+)/?$", where)
+    if pr:
+        return f"merge it: `gh pr merge {pr[1]} --merge`"
+    forge = p.cfg["forge"]
+    return THEN.get(forge, THEN["git"]).format(main=p.main) + " and merge it" * (forge == "github")
 
 
 def kept_secret(p, cd, branch, title, found):
@@ -547,8 +575,9 @@ def held_push(pushed):
 
 
 def push_one_held(p, cd, branch, how):
-    """Where `branch` went, as a line for the phone and whether it needs the user; "" when it stays local."""
-    if not clean_detach(p, cd, branch):
+    """Where `branch` went, as a line for the phone and whether it needs the user; "" when it stays local (one not
+    of `OWN_BRANCHES`, which `hold` never notes, too: `land` would refuse it)."""
+    if not branch.startswith(OWN_BRANCHES) or not clean_detach(p, cd, branch):
         return ""
     title, body = gout(cd, "log", "-1", "--format=%s"), gout(cd, "log", "-1", "--format=%b")
     to_land = how == "land"  # a desk plan without --merge only pushes
