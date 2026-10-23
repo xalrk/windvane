@@ -396,22 +396,22 @@ def public(p, cd=None):
     starts and their commit hook read it without gh. One gh can't tell counts as private, as `billable` does, so a
     doubt keeps `[skip ci]`."""
     key = str(p.root)
-    if key in visibility:
-        return visibility[key]
-    r = net.call(["gh", "repo", "view", "--json", "visibility"], cd or p.root)
-    try:
-        here = json.loads(r.stdout or "{}") if r.returncode == 0 else {}
-    except ValueError:
-        here = {}
-    seen = isinstance(here, dict) and not billable(here)
-    with locked(wait=2) as got:  # under the count's lock, as `tag` writes; a count in flight isn't waited out
-        if got:  # else read again next time, so the cache gets it this run
-            cache = load(None)
-            if cache.get("public", {}).get(key) != seen:
-                cache.setdefault("public", {})[key] = seen
-                save_json(cache_file(), cache)
-            visibility[key] = seen
-    return seen
+    if key not in visibility:
+        r = net.call(["gh", "repo", "view", "--json", "visibility"], cd or p.root)
+        try:
+            here = json.loads(r.stdout or "{}") if r.returncode == 0 else {}
+        except ValueError:
+            here = {}
+        visibility[key] = isinstance(here, dict) and not billable(here)
+    if key not in kept:
+        with locked(wait=2) as got:  # under the count's lock, as `tag` writes; a count in flight isn't waited out
+            if got:  # else kept at the next call, with no new gh call
+                cache = load(None)
+                if cache.get("public", {}).get(key) != visibility[key]:
+                    cache.setdefault("public", {})[key] = visibility[key]
+                    save_json(cache_file(), cache)
+                kept.add(key)
+    return visibility[key]
 
 
 def cached_public(p):
@@ -433,6 +433,7 @@ asked = set()  # the projects whose log has said their workers are asked for [sk
 stale_logged = set()  # the projects whose log has said their count is too old to trust
 recount_said = {}  # project: the cause its log last said its recount failed for, until one works
 visibility = {}  # project root: whether its repo is public, as this process read it (once a run)
+kept = set()  # the project roots whose visibility this process has written to the cache
 
 
 def tag(p, msg, cd=None):
@@ -861,7 +862,7 @@ def ci(p, name="", ref="", dry=False):
     r = net.call([real_gh() or "gh", *cmd[1:]], cd)
     if r.returncode:
         why = " ".join((r.stderr or r.stdout).split())[:300] or f"exit {r.returncode}"
-        print(f"windvane ci: gh workflow run failed: {why}")
+        print(f"windvane ci: gh workflow run failed: {why}{cause(why)[1]}")
         return 1
     print(f"Started {file} on {ref or 'the default branch'}.")
     return 0
