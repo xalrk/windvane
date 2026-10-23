@@ -68,11 +68,15 @@ DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch
 # it (`restore`), the ticket critic's is a throwaway copy (`worktree.trial`)
 PROJECT_DENY = DENY[1:] + ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
                            "Bash(git reset *)", "Bash(git stash *)", "Bash(gh *)"]
-# What `windvane` lets a critic run on the live state dir (`refused`): the heavy lock and what only reads. Never what
-# drives the autopilot (run, stop, critic, check, ci, bg...): its copy shares that dir, so a "restart midway" tried there
-# would stop the user's run. On scratch state (another XDG_STATE_HOME) it runs anything, so no deny rule names these:
-# one would also turn away the scratch form, and the env check catches every spelling (`bin/windvane` too).
+# What `windvane` lets a critic run (`refused`): the heavy lock and what only reads. Its copy shares the live state
+# dir, so a "restart midway" tried there would stop the user's run; on scratch state (another XDG_STATE_HOME) it may
+# also run SCRATCH_RUN, which changes nothing but that dir. Scratch state moves only the state dir: the repo, its
+# remote, the GitHub token, real `claude` and `gh`, ~/.config and tmux stay shared, so what reaches them (run, plan,
+# ci, critic, phone, answer's landing on main, bg's jobs that outlive the copy, check and new in any checkout...) is
+# refused on every root. No deny rule names these: one would also turn away the scratch form, and the env check
+# catches every spelling (`bin/windvane` too).
 MAY_RUN = ("heavy", "status", "stats", "queue", "overview", "mode", "quiet", "doctor", "watch", "public-check")
+SCRATCH_RUN = ("stop", "deadline", "retry", "await", "doctor --clean")
 TRIAL_DENY = PROJECT_DENY + ["Bash(windvane request *)"]
 TRIAL_UP = "trial time"  # why a ticket critic's session was stopped at `trial_minutes`: it then answers on what it saw
 PROJECT = "PROJECT"  # critic.jsonl's ticket for a verdict on the whole project
@@ -748,8 +752,9 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
                                          usage=usage, stop_if=stop, ticket=tid, session=session, extra_env=git_env)
         if not error or not retry or not retry(error):
             break
-    if killed == TRIAL_UP and session.get("id"):
+    if killed == TRIAL_UP:  # recorded with or without a session to ask: the stream may end before its id
         out["trial"] = "timed out"
+    if killed == TRIAL_UP and session.get("id"):
         text, killed, error = run_claude(p, "critic", f"{tid}-critic-time", time_up(tid, p.critic["trial_minutes"]),
                                          system, where, deny=DENY, usage=usage, stop_if=stop_if, ticket=tid,
                                          resume=session["id"], extra_env=git_env)
@@ -768,7 +773,7 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
         else:
             text, why, asked = again, unread(p, tid, lad, again), {"reasked": True}
     if why:
-        return none(p, tid, text, why, **asked)
+        return none(p, tid, text, why, **asked, **out)
     _, dims, fixes, gist = verdict(text)
     saved = {"reasked": True} if asked else {}  # the re-ask saved this verdict: `stats --critic` counts it
     saved |= out
@@ -797,16 +802,20 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
 
 def refused(cmd, role, live):
     """Why `windvane <cmd>` is refused in a critic's session, or "": `role` and `live` (the state root its driver runs
-    on, LIVE) come from the environment. A command whose state root is elsewhere can't reach the user's run; without
-    `live` (an older driver) every state root counts as the live one."""
+    on, LIVE) come from the environment. Only SCRATCH_RUN goes by the state root, as only it touches nothing but the
+    state dir; without `live` (an older driver) every state root counts as the live one."""
     if role.split(":")[0] != "critic" or not cmd or cmd in MAY_RUN or cmd == "request":  # it refuses with its own rule
         return ""
     here = user_dir("XDG_STATE_HOME", ".local/state").resolve()
-    if live and here != Path(live).resolve():
+    if cmd in SCRATCH_RUN and live and here != Path(live).resolve():
         return ""
-    return (f"windvane: a critic never drives the autopilot: `windvane {cmd}` is refused on the live state (it may run "
-            f"{', '.join(f'`{c}`' for c in MAY_RUN)}). Anything runs on scratch state: "
-            f"`XDG_STATE_HOME=$TMPDIR/state windvane {cmd} ...`.")
+    may = ", ".join(f"`{c}`" for c in MAY_RUN)
+    if cmd in SCRATCH_RUN:
+        return (f"windvane: a critic never drives the autopilot: `windvane {cmd}` is refused on the live state (it may "
+                f"run {may}). It runs on scratch state: `XDG_STATE_HOME=$TMPDIR/state windvane {cmd} ...`.")
+    return (f"windvane: a critic never drives the autopilot: `windvane {cmd}` is refused on every state root, as it "
+            f"reaches past the state dir (the repo, GitHub, paid sessions or your config). It may run {may}, and on "
+            f"scratch state (`XDG_STATE_HOME=$TMPDIR/state`) also {', '.join(f'`{c}`' for c in SCRATCH_RUN)}.")
 
 
 def time_up(tid, minutes):
@@ -872,14 +881,15 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None):
     return entry, critique
 
 
-def none(p, tid, text, why, rerun=True, reasked=False, reask_failed=None):
+def none(p, tid, text, why, rerun=True, reasked=False, reask_failed=None, trial=None):
     """judge's (None, reply) when there's no verdict, the reply ending in the step that says why. Only a missing pack
     is the worker's to fix: a reply the driver can't read is the critic's slip, and "fix the pack" sent a worker with
     a sound pack to pay for a second run (R-001). Logged as `step: none`, so `windvane stats` can count what no
     verdict costs: `reasked` only when the same-session re-ask replied, `reask_failed` why one didn't (an API error,
-    the deadline). `history()` leaves these lines out."""
+    the deadline), `trial` how its tries went. `history()` leaves these lines out."""
     append_jsonl(p.state / "critic.jsonl", {"ticket": tid, "step": "none", "why": why, "reasked": reasked,
-                                            **({"reask_failed": reask_failed} if reask_failed else {})})
+                                            **({"reask_failed": reask_failed} if reask_failed else {}),
+                                            **({"trial": trial} if trial else {})})
     todo = (f" Your pack isn't the problem: run `windvane critic {tid}` again; if the critic keeps failing, go on."
             if rerun else "")
     return None, f"{text}\n\nCRITIC STEP: none. No verdict: {why}{todo}".lstrip()

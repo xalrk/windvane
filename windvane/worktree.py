@@ -419,8 +419,27 @@ def drop_trial(cwd, path):
 
 
 def sweep_trials(cwd, root):
-    """Removes the trials of processes that have ended (a driver or a `windvane critic` killed outright)."""
+    """Removes the trials of processes that have ended (a driver or a `windvane critic` killed outright), and of a pid
+    reused since: its process started after the copy was last changed, which its owner can't have."""
     for entry in list(root.iterdir()):
         m = re.fullmatch(r"(.+\.(\d+))(?:\.hooks)?", entry.name)
-        if m and not alive(int(m[2])):
+        if not m:
+            continue
+        pid, start = int(m[2]), started(int(m[2]))
+        try:
+            changed = entry.stat().st_mtime
+        except OSError:  # removed meanwhile, with its twin
+            continue
+        if not alive(pid) or start is not None and start > changed + 1:
             drop_trial(cwd, root / m[1])
+
+
+def started(pid):
+    """When process `pid` started (epoch seconds), from /proc; None where there's none (macOS) or it has ended."""
+    try:
+        ticks = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+        boot = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
+                    if line.startswith("btime "))
+        return boot + ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None

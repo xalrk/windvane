@@ -140,13 +140,14 @@ class CriticTrial(unittest.TestCase):
 
     def test_it_never_drives_the_autopilot(self):
         self.env("FAKE_CRITIC_TRY", "windvane stop; echo stop=$?; bin=$(command -v windvane); "
-                                    "python3 $(dirname $(readlink -f $bin))/windvane run --hours 1; echo run=$?; "
+                                    "$(readlink -f $bin) run --for 1h; echo run=$?; "
                                     "windvane quiet; echo quiet=$?")
         self.critic()
         [seen] = self.tried()
         self.assertIn("stop=1", seen["out"])
         self.assertIn("run=1", seen["out"])  # its own copy of the CLI too: the role is in its environment
         self.assertIn("a critic never drives the autopilot: `windvane stop` is refused", seen["out"])
+        self.assertIn("`windvane run` is refused on every state root", seen["out"])
         self.assertIn("quiet=0", seen["out"])  # what only reads still runs
         [call] = self.calls()
         self.assertNotIn("Bash(windvane stop *)", call["deny"])  # it would turn away the scratch form too
@@ -159,10 +160,22 @@ class CriticTrial(unittest.TestCase):
         [seen] = self.tried()
         self.assertIn("stop=0", seen["out"])
         self.assertIn("/STOP\n", seen["out"])  # the scratch run's stop file
-        self.assertIn("`windvane doctor --clean` is refused on the live state", seen["out"])
+        self.assertIn("`windvane doctor --clean` is refused on the live state", seen["out"])  # it names the scratch form
         self.assertIn("`XDG_STATE_HOME=$TMPDIR/state windvane doctor --clean ...`", seen["out"])
         self.assertIn("clean=1", seen["out"])
         self.assertFalse((self.p.state / "STOP").exists())
+
+    def test_what_reaches_past_the_state_dir_is_refused_on_scratch_state_too(self):
+        # scratch state moves only the state dir: a run there would still push, open PRs and merge on the real remote
+        self.env("FAKE_CRITIC_TRY", "export XDG_STATE_HOME=$TMPDIR/state; windvane run --for 1h; echo run=$?; "
+                                    "windvane ci; echo ci=$?; windvane answer T-001 A; echo answer=$?")
+        self.critic()
+        [seen] = self.tried()
+        for cmd in ("run", "ci", "answer"):
+            self.assertIn(f"{cmd}=1", seen["out"])
+            self.assertIn(f"`windvane {cmd}` is refused on every state root", seen["out"])
+        self.assertNotIn("XDG_STATE_HOME=$TMPDIR/state windvane run", seen["out"])  # no form that would run it
+        self.assertEqual(1, len(self.calls()))  # the critic's own session: no worker or reviewer started
 
     def test_a_retry_gets_its_own_time_box(self):
         self.s.write(".windvane/config.toml", self.s.root.joinpath(".windvane/config.toml").read_text()
@@ -210,6 +223,18 @@ class CriticTrial(unittest.TestCase):
         self.assertEqual(critic.TRIAL_UP, rows[0]["killed"])
         self.assertGone()
 
+    def test_out_of_time_before_its_session_starts_the_record_says_so(self):
+        self.s.write(".windvane/config.toml", self.s.root.joinpath(".windvane/config.toml").read_text()
+                     .replace("enabled = true", "enabled = true\ntrial_minutes = 0.02"))
+        self.p = Project(self.s.root)
+        self.env("FAKE_CRITIC_PID", str(self.s.tmp / "critic.pid"))  # sleeps before any event: no session id
+        out = self.critic()
+        self.assertIn("CRITIC STEP: none", out)
+        self.assertEqual(1, len(self.calls()))  # nothing to resume
+        last = [r for r in read_jsonl(self.p.state / "critic.jsonl") if r.get("ticket") == "T-001"][-1]
+        self.assertEqual(("none", "timed out"), (last["step"], last["trial"]))
+        self.assertGone()
+
     def test_gone_when_stopped_by_the_run(self):
         self.env("FAKE_CRITIC_SLOW", "30")
         before = files(self.s.root)
@@ -246,6 +271,19 @@ class CriticTrial(unittest.TestCase):
         with worktree.trial(self.p, str(self.s.root), "HEAD", "T-001"):
             self.assertFalse(left.exists())
         self.assertGone()
+
+    def test_a_copy_whose_pid_was_reused_goes_too(self):
+        trials = self.p.state / worktree.TRIALS
+        mine = worktree.started(os.getpid())
+        if mine is None:
+            self.skipTest("no /proc here: a reused pid's copy waits for that process to end")
+        old, new = trials / f"T-008.{os.getpid()}", trials / f"T-007.{os.getpid()}"
+        for left in (old, new):
+            self.s.git("worktree", "add", "-q", "--detach", str(left), "HEAD")
+        os.utime(old, (mine - 60, mine - 60))  # made by an earlier process with this pid
+        worktree.sweep_trials(str(self.s.root), trials)
+        self.assertEqual((False, True), (old.exists(), new.exists()))  # this process's own copy stays
+        worktree.drop_trial(str(self.s.root), new)
 
     def test_off_it_reads_the_worker_tree_with_bash_denied(self):
         self.s.write(".windvane/config.toml", self.s.root.joinpath(".windvane/config.toml").read_text()

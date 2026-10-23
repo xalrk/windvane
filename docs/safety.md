@@ -43,7 +43,7 @@ per role:
 | Role | May | May not |
 |---|---|---|
 | **Worker** | edit files in its worktree, run commands, commit, push its ticket branch, open and edit its pull request, run `windvane` helper commands, file up to 2 `windvane request`s | push to `main` (in any form), force-push, `reset --hard`, check out or switch to `main`, manage worktrees, merge pull requests, spawn subagents (unless `subagents = true`), edit windvane's own files or its request inbox |
-| **Critic** | read files and the evidence pack; run commands (the tests, the project's own CLI or app, small probe scripts) in a throwaway copy of the ticket's head, for up to `[critic] trial_minutes` | commit, push, switch branches, reset, stash, use `gh`, drive the live autopilot with `windvane` (scratch state only), edit files with its tools, fetch from the web, spawn agents |
+| **Critic** | read files and the evidence pack; run commands (the tests, the project's own CLI or app, small probe scripts) in a throwaway copy of the ticket's head, for up to `[critic] trial_minutes` | commit, push, switch branches, reset, stash, use `gh`, drive the autopilot with `windvane` (a few state-only commands on scratch state), edit files with its tools, fetch from the web, spawn agents |
 | **Reviewer** | read files, run commands such as `git diff`, `git log`, `git show` | edit or write files, commit, push, switch branches, reset, merge, comment on or close pull requests |
 | **Planner** | write ticket files in its own worktree | commit, push, switch branches, spawn agents: the driver commits its tickets and opens the pull request (or merges, with `--merge`) |
 | **Periodic** | run commands and edit files on a detached `ci/` tree between tickets | commit, push, switch branches, reset, use `gh`, spawn agents: the driver keeps only new tickets, lines added at the end of open tickets and added `QUEUE.md` lines, lands them, and discards the rest |
@@ -54,8 +54,11 @@ the ticket's committed head under the state dir (`trials/<ticket>.<pid>`), runs 
 the critic in it with git's hooks for that copy alone refusing every commit and push, behind its deny rules. On the live
 state dir, `windvane` itself refuses a critic every command but `heavy` and those that only read (`status`, `stats`,
 `queue`, `overview`, `mode`, `quiet`, `doctor` without `--clean`, `watch`, `public-check`), whichever copy of it runs: a
-`windvane stop` tried there would stop your run. On scratch state (`XDG_STATE_HOME=$TMPDIR/state windvane ...`) it may
-run any command, so a critic can try a restart midway without touching yours. What it builds or breaks stays in the
+`windvane stop` tried there would stop your run. Scratch state (`XDG_STATE_HOME=$TMPDIR/state windvane ...`) moves only
+the state dir, so there it may also run what changes nothing else (`stop`, `deadline`, `retry`, `await`, `doctor
+--clean`): enough to try a stop midway without touching yours. The repo, its remote, your GitHub token, `claude`, `gh`
+and your config stay shared, so what reaches them (`run`, `plan`, `ci`, `critic`, `preflight`, `periodic`, `phone`,
+`answer`, `check`, `bg`, `new`, `init`, `install`, `uninstall`) is refused on every state root. What it builds or breaks stays in the
 copy, which is removed when the critique ends, however it ends; a copy left by a process killed outright is removed by
 the next critique. Its commands run in Claude Code's sandbox as any session's do (`git` and `windvane` outside it, as
 below), and its rules send machine-heavy ones through the heavy lock. At `trial_minutes` the session is stopped (its
