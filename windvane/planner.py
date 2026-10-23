@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import actions, critic, login, net, privacy, requests
-from .held import OWN_BRANCHES, author_ident, is_local, land, local_push, n_tickets, push_branch
+from .held import OWN_BRANCHES, author_ident, free_name, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
 from .queue import Queue, folder_ids, id_after, ref_ids
 from .runner import NO_REQUEST, rules, run_claude
@@ -61,22 +61,7 @@ def branch_name(p, cd, kind):
     would hand its tickets' ids out again."""
     if f"{kind}-" not in OWN_BRANCHES:
         raise ValueError(f"{kind}: not one of the driver's own branches {OWN_BRANCHES}")
-    base = name = f"{kind}-{now():%Y%m%d-%H%M%S}"
-    theirs = remote_heads(p, cd, f"{base}*")
-    n = 1
-    while name in theirs or any(git(cd, "rev-parse", "-q", "--verify", ref).returncode == 0
-                                for ref in (f"refs/heads/{name}", f"refs/remotes/{p.remote}/{name}")):
-        n += 1
-        name = f"{base}-{n}"
-    return name
-
-
-def remote_heads(p, cd, pattern):
-    """The remote's branch names matching `pattern`, asked once (another machine may have pushed one since the last
-    fetch, and pushing to it would be refused); none when it can't be asked: the local refs still count."""
-    res = net.git(cd, "ls-remote", "--heads", p.remote, pattern)
-    return {line.split("refs/heads/", 1)[1] for line in res.stdout.splitlines() if "\trefs/heads/" in line} \
-        if res.returncode == 0 else set()
+    return free_name(p, cd, f"{kind}-{now():%Y%m%d-%H%M%S}")
 
 
 def pending_ids(p, ask_forge=True):
@@ -291,12 +276,13 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
         from .util import append_jsonl
         append_jsonl(p.state / "critic.jsonl", {"ticket": "PLAN", "step": "plan", "notes": len(notes)})
     if merge:
-        ok, where = land(p, cd, branch, f"Plan: {n_tickets(n, 'new ')}", text.strip()[-6000:], commit=False)
+        ok, where = land(p, cd, branch, f"Plan: {n_tickets(n, 'new ')}", text.strip()[-6000:], commit=False,
+                          fresh=True)
         if not ok:
             return unmerged(p, n, where)
         log(p, f"plan: {n_tickets(n)} on {where} (merged)")
     else:
-        where = push_branch(p, cd, branch)
+        where = push_branch(p, cd, branch, fresh=True)
         if is_local(where):
             clean_detach(p, cd, p.upstream)
             kept = f"{n_tickets(n)} kept only locally on {where.removeprefix('the local branch ')}"
@@ -304,6 +290,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
             push("plan not pushed", local_push(where, f"{n_tickets(n)} kept only locally on", lambda m: log(p, m)),
                  4, "warning")
             return 0
+        branch = where
         if p.cfg["forge"] == "github":
             pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title",
                         f"Plan: {n_tickets(n, 'new ')}", "--body", text.strip()[-6000:])

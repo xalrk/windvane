@@ -58,7 +58,7 @@ class Notes(Base):
         self.assertEqual(reply[-2:], ["… (125 lines cut)", "PERIODIC: wrote a ticket"])
 
     def test_a_notes_only_round_that_does_not_merge_says_so(self):
-        with mock.patch.object(held, "land", return_value=(False, "periodic-x")), \
+        with mock.patch.object(held, "land", return_value=held.Landed(False, "periodic-x", "periodic-x")), \
                 mock.patch("windvane.periodic.push") as push:
             self.round("APPEND_NOTE=T-001")
         self.assertEqual(push.call_args[0][:2], ("periodic change not merged",

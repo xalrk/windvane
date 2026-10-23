@@ -47,6 +47,12 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A plan, periodic or desk-answers branch that another machine pushed under the same name between windvane naming
+  it and pushing it goes to the next free suffix (`-2`) instead of being held back with "see the windvane log". A
+  second clash is held with a reason that says the name was taken.
+- A pushed driver branch with no PR (the desk answers' line, and `status` for one pushed by hand) names the commands
+  that land it: `gh pr create --head <branch> --base main --fill`, then `gh pr merge`; off GitHub,
+  `git merge <remote>/<branch>` on main.
 - A session's hooks (the push scan, and `[skip ci]` at the Actions cap) apply to its own worktree only. They used to
   become the hooks of every repository a check clones or inits, so `git lfs install` in a test's clone failed under
   `windvane check` and a test's own hooks never ran.

@@ -93,7 +93,8 @@ class HeldSecret(Base):
         branch = self.hand_pushed_land()
         status = self.windvane("status")
         self.assertIn(f"held back for under an hour, pushed to origin/{branch}-b, not merged: {branch} (Plan: ", status)
-        self.assertIn(": merge it into main\n  (listed until main has them)\n", status)  # no retry promised
+        self.assertIn(f": merge it into main: `git merge origin/{branch}-b` on main, then push it\n"
+                      "  (listed until main has them)\n", status)  # no retry promised
         self.assertNotIn("tries these again", status)
         self.assertIn(f"Held back for under an hour, pushed to origin/{branch}-b, not merged", self.windvane("overview"))
         self.assertTrue(self.windvane("status", "--line").endswith(

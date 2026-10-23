@@ -118,6 +118,9 @@ why and what to do:
   Pushing it by hand under another name fails the same way. In your checkout, `git switch` to that branch, take the
   secret out, `git commit --amend -a`, and `git switch -` back; the next run pushes the cleaned commit. A false
   positive (a test fixture, an example key): open the URL, allow it, and the next run pushes the branch as it is.
+- "refused: plan-20261005-040000 and plan-20261005-040000-2 were both taken on the remote meanwhile; ...": another
+  machine pushed a branch of the same name twice between windvane naming it and pushing it (once, it just takes the
+  next suffix). Push it by hand under the name the reason gives.
 - "login refused; run `gh auth login` and the next run pushes it" (off GitHub: "check your login to the remote"):
   once you're logged in, the next run or `windvane plan` pushes it.
 - "refused by a hook or branch rule; change the rule, or push it by hand with
@@ -125,8 +128,9 @@ why and what to do:
   main"): the command names your branch and remote; run it in your checkout. Pushed under another name counts as
   pushed, so windvane stops pushing it: landing it (the PR, or the merge) is then yours. A change meant to land on
   main (a periodic report, a plan run with `--merge`) stays listed as "pushed to origin/plan-...-b, not merged: ...:
-  open a PR from it and merge it" (off GitHub: "merge it into main") until main has it (or, on GitHub, its PR is
-  closed); a plain plan goes from the list at once. Any merge counts, a squash or rebase merge too: once main holds
+  open a PR from it and merge it: `gh pr create --head plan-...-b --base main --fill`, then `gh pr merge`" (off
+  GitHub: "merge it into main: `git merge origin/plan-...-b` on main, then push it") until main has it (or, on GitHub,
+  its PR is closed); a plain plan goes from the list at once. Any merge counts, a squash or rebase merge too: once main holds
   the change, it drops off by itself, and `windvane status` fetches first while such a change is listed, so it goes
   as soon as the merge is on the remote. Without either, pushing
   again fails the same way until the rule changes.
