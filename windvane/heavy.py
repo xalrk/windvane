@@ -8,6 +8,7 @@ that tool, waiting on its own lock); instead it waits until no process matching 
     busy = ["UnrealEditor", "ShaderCompile", "blender"]   # process-name regexes (pgrep) of heavy work started elsewhere
     min_free_gb = 6                                           # wait for this much MemAvailable before starting
     heavy_wait = 60                                           # minutes a command run by hand waits before giving up
+    measure_load = 4                                          # a --measure job waits for a 1-minute load this low
 
 A job's own `--mem`, or its project's `heavy_mem`, replaces `min_free_gb` for it. Its project's `heavy_reuses` names
 helpers its heavy jobs reuse (an emulator, a build daemon): the memory theirs hold counts as free for it. Free memory
@@ -15,6 +16,11 @@ comes from Linux's /proc; elsewhere (macOS) it isn't known, and only `busy` is w
 
 Each job's run time is kept (`times_file`), so a waiter can say how much work is ahead of it and whether it likely
 starts after its session's wrap-up; one waiting on memory names the processes that hold the most.
+
+A job that measures timing (`--measure`) also waits for a quiet CPU: a 1-minute load average at or under
+`measure_load` (default a quarter of the CPU count), since another project's ordinary work (an emulator, a build
+daemon) slows its CPU-side times without being heavy. Every job's log says the load at its start, end and peak, so a
+contended run shows in it. windvane never pauses or signals processes it didn't start to get a quiet CPU.
 """
 import fcntl
 import json
@@ -45,6 +51,15 @@ STOP_ENV, STOPPED = "WINDVANE_HEAVY_STOP", "heavy: stopped while waiting for the
 # ledger row, so `stats` can tell the minutes a check queued from the minutes it ran.
 WAITED = "heavy: waited {} s for the machine"
 WAITED_RE = re.compile("^" + re.escape(WAITED).replace(r"\{\}", r"(\d+)") + "$", re.M)
+# Said by every job once it has the machine (after WAITED), and after its command ends: how busy the machine was, so
+# a timing run made on a contended machine shows as one. The peak is sampled every LOAD_EVERY seconds while it runs.
+LOAD_START, LOAD_END, LOAD_EVERY = "heavy: load {} at start", "heavy: load {} at end, {} peak", 5
+LOAD_START_RE = re.compile("^" + re.escape(LOAD_START).replace(r"\{\}", r"\S+") + "$", re.M)
+NO_LOAD = "heavy: no load average on this machine: --measure doesn't wait for a quiet CPU"
+# Said once in a measurement's wait on load, as DEFAULT_NEED is for memory: where its limit comes from.
+LOAD_LIMIT = ("the {} is machine.toml's measure_load (default: a quarter of the CPU count): raise it there if this "
+              "machine is never that quiet")
+BAD_LIMIT = "heavy: machine.toml's measure_load isn't a number: waiting for the default, {}"
 # A wait on memory with no need of its own (no `--mem`, no `heavy_mem`): the line says once where the need comes from,
 # since a small job may sit for an hour behind a default sized for a big build.
 DEFAULT_NEED = ("the {} GB is machine.toml's min_free_gb: if this job needs less, give it --mem <GB> "
@@ -67,11 +82,17 @@ def machine_file():
     return user_dir("XDG_CONFIG_HOME", ".config") / "machine.toml"
 
 
+def default_load():
+    """`measure_load` when machine.toml doesn't set it: a quarter of the CPUs busy leaves a measurement its own."""
+    return 0.25 * (os.cpu_count() or 1)
+
+
 def machine():
+    base = {**DEFAULTS, "measure_load": default_load()}
     try:
-        return {**DEFAULTS, **tomllib.loads(machine_file().read_text())}
+        return {**base, **tomllib.loads(machine_file().read_text())}
     except (OSError, ValueError):
-        return dict(DEFAULTS)
+        return base
 
 
 def lock_path():
@@ -86,25 +107,81 @@ def free_gb():
         return None
 
 
+def load_avg():
+    """The 1-minute load average: from /proc (`util.PROC`), else `os.getloadavg`, else None (no way to tell)."""
+    try:
+        return float((util.PROC / "loadavg").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        return os.getloadavg()[0]
+    except (OSError, AttributeError):
+        return None
+
+
+def loadf(x):
+    """A load average as said: two decimals at most, "9.5" or "4.04", so one just over the limit never reads as it."""
+    return f"{x:.2f}".rstrip("0").rstrip(".")
+
+
+def too_busy(limit, load):
+    """Why a measurement wanting a load of at most `limit` can't start at `load`, or None: also when either is unknown
+    (no load source, a waiter that isn't a measurement or is from an older windvane)."""
+    if isinstance(limit, (int, float)) and not isinstance(limit, bool) and load is not None and load > limit:
+        return f"load {loadf(load)} (want ≤ {limit:.10g})"
+    return None
+
+
+def cpu_times():
+    """{pid: CPU seconds used so far (user + system)} from /proc's stat files; {} without /proc."""
+    out, tick = {}, os.sysconf("SC_CLK_TCK")
+    for d in os.listdir(util.PROC) if util.PROC.is_dir() else []:
+        if d.isdigit():
+            try:
+                f = (util.PROC / d / "stat").read_text().rsplit(")", 1)[1].split()
+                out[int(d)] = (int(f[11]) + int(f[12])) / tick
+            except (OSError, IndexError, ValueError):
+                pass
+    return out
+
+
+def busiest(n=3, gap=1):
+    """The `n` processes using the most CPU over `gap` seconds (two samples), as "pid 412 qemu-system-x86 310% in
+    emu/slot-1" (% of one CPU, as `top` says it): a measurement waiting on load says who makes it. Empty without
+    /proc."""
+    first = cpu_times()
+    if not first:
+        return []
+    t0 = time.monotonic()
+    time.sleep(gap)
+    took = max(time.monotonic() - t0, 0.01)
+    used = sorted(((t - first[pid], pid) for pid, t in cpu_times().items() if pid in first), reverse=True)
+    return [f"pid {pid} {comm(pid)} {s / took * 100:.0f}% " + (f"in {w}" if (w := folder(pid)) else "(folder unreadable)")
+            for s, pid in used[:n] if s > 0]
+
+
+def comm(pid):
+    try:
+        return (util.PROC / str(pid) / "comm").read_text().strip()
+    except OSError:
+        return "?"
+
+
+def folder(pid):
+    """The last two parts of process `pid`'s working directory, or None when it can't be read (someone else's)."""
+    try:
+        return "/".join(Path(os.readlink(util.PROC / str(pid) / "cwd")).parts[-2:])
+    except OSError:
+        return None
+
+
 def holders(n=3):
     """The `n` processes holding the most memory, as (pid, name, GB, the last two parts of the working directory, or
     None when it can't be read). Empty without /proc."""
     if not util.PROC.is_dir():
         return []
     rss = [(status_field(int(d), "VmRSS") or 0, int(d)) for d in os.listdir(util.PROC) if d.isdigit()]
-    out = []
-    for kb, pid in sorted(rss, reverse=True)[:n]:
-        try:
-            name = (util.PROC / str(pid) / "comm").read_text().strip()
-        except OSError:
-            name = "?"
-        try:
-            where = "/".join(Path(os.readlink(util.PROC / str(pid) / "cwd")).parts[-2:])
-        except OSError:  # someone else's: its folder can't be read
-            where = None
-        if kb:
-            out.append((pid, name, kb / 1048576, where))
-    return out
+    return [(pid, comm(pid), kb / 1048576, folder(pid)) for kb, pid in sorted(rss, reverse=True)[:n] if kb]
 
 
 def largest(n=3, big=None):
@@ -328,10 +405,10 @@ def queue_dir():
     return lock_path().with_name("windvane-heavy.queue")
 
 
-def join_queue(need, key=None, expect=None):
+def join_queue(need, key=None, expect=None, load=None):
     """An entry in the queue, named by arrival time so they sort in order, and flocked while this job lives. It holds
-    the job's memory need, for the waiters behind it to see whether it lets them by, and its `job_key` and own guess
-    of its run time (`expect`, minutes), for them to tell how long it runs.
+    the job's memory need and a measurement's load limit (`load`), for the waiters behind it to see whether it lets
+    them by, and its `job_key` and own guess of its run time (`expect`, minutes), for them to tell how long it runs.
 
     It's flocked and written under a hidden name first and only then renamed into place, so a scan never sees a live
     entry unlocked or empty. The open file keeps the entry; closing it (or dying) frees it."""
@@ -340,7 +417,7 @@ def join_queue(need, key=None, expect=None):
     name = f"{time.time_ns():020d}-{os.getpid()}"
     fd = os.open(q / f".{name}", os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
-    os.write(fd, json.dumps({"mem": need, "key": key, "expect": expect}).encode())
+    os.write(fd, json.dumps({"mem": need, "key": key, "expect": expect, "load": load}).encode())
     os.rename(q / f".{name}", q / name)
     return fd, q / name
 
@@ -406,11 +483,26 @@ def entry_pid(name):
 
 def need_of(path):
     """A waiter's memory need in GB, from its queue entry; None when it can't be read (an older windvane's entry)."""
+    return entry_number(path, "mem")
+
+
+def limit_of(path):
+    """A measurement's load limit, from its queue entry; None for a job that isn't one."""
+    return entry_number(path, "load")
+
+
+def entry_number(path, field):
     try:
-        need = json.loads(Path(path).read_text() or "{}").get("mem")
+        n = json.loads(Path(path).read_text() or "{}").get(field)
     except (OSError, ValueError, AttributeError):
         return None
-    return need if isinstance(need, (int, float)) and not isinstance(need, bool) else None
+    return n if isinstance(n, (int, float)) and not isinstance(n, bool) else None
+
+
+def held_up(path, mem, load):
+    """Why the waiter whose queue entry is `path` can't start now, with `mem` GB free and a load of `load`: short of
+    memory (`short`) or, for a measurement, of a quiet CPU (`too_busy`); None when it can."""
+    return short(need_of(path), mem) or too_busy(limit_of(path), load)
 
 
 def job_of(path):
@@ -567,13 +659,13 @@ def holder(lock):
         return {}
 
 
-def claim(lock, cmd, cwd, key=None, expect=None):
+def claim(lock, cmd, cwd, key=None, expect=None, measure=None):
     """Write this job into the lock it now holds, for the waiters' log line."""
     text = cmd if isinstance(cmd, str) else shlex.join(cmd)
     text = " ".join(text.split())
     where = Path(cwd or os.getcwd()).resolve().parts[-2:]
     info = {"pid": os.getpid(), "start": started_at(os.getpid()), "stamp": stamp(os.getpid()), "since": time.time(), "cmd": text if len(text) <= 60 else text[:59] + "…",
-            "cwd": "/".join(where), "key": key, "expect": expect}
+            "cwd": "/".join(where), "key": key, "expect": expect, "measure": measure}
     os.ftruncate(lock, 0)
     os.lseek(lock, 0, os.SEEK_SET)
     os.write(lock, json.dumps(info).encode())
@@ -661,32 +753,38 @@ def waited(log, head=65536):
 
 def waiting(log, head=65536):
     """Whether a heavy job whose output went to `log` is still waiting for the machine: `take` said why (always its
-    first line) and `run` hasn't said WAITED yet. A job that got the machine at once says neither."""
+    first line) and `run` hasn't said WAITED or the load at its start yet. A job that got the machine at once says
+    only the latter."""
     text = log_head(log, head)
-    return text.startswith("heavy: ") and not WAITED_RE.search(text)
+    return text.startswith("heavy: ") and not WAITED_RE.search(text) and not LOAD_START_RE.search(text)
 
 
-def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=None, default=False):
-    """Wait for this job's turn, its memory and a machine clear of `busy` work, then take the lock. True once held,
-    False at the deadline (a function: a moved deadline counts at once) or a stop.
+def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=None, default=False, measure=None):
+    """Wait for this job's turn, its memory, a machine clear of `busy` work and, for a measurement, a load average at
+    or under `measure`, then take the lock. True once held, False at the deadline (a function: a moved deadline counts
+    at once) or a stop.
 
     Only the head of the line (the oldest live waiter) tries the lock, so a job that arrives just as it frees can't
     overtake one that has been waiting (R-007). A head short of memory doesn't take it, and every job behind it would
     wait on that memory too: so the first waiter behind it whose own need is met may go first, while the head stays
-    the head and gets the first try once its memory is free. Only memory lets a job by: a waiter ahead whose need is
-    met, or unknown, keeps its turn. This job's own project's helpers (`reuse`) count as free for it alone: a waiter
+    the head and gets the first try once its memory is free. A measurement short of a quiet CPU lets them by the same
+    way, so it doesn't hold the whole line for hours, and gets the first try once the load is down. Only these let a
+    job by: a waiter ahead whose need is met, or unknown, keeps its turn. This job's own project's helpers (`reuse`) count as free for it alone: a waiter
     ahead is judged on what's free for anyone.
 
     Each time what it waits on changes, the line says so: the work ahead (`estimate`), or for a wait on memory the
     processes holding most, and once a wait, which of those are this project's own helpers not in its
-    `heavy_reuses` (`unreused`). With a session's stop known it says once that the job likely starts after the wrap-up:
+    `heavy_reuses` (`unreused`); for a wait on load the processes using the most CPU (`busiest`). With a session's stop known it says once that the job likely starts after the wrap-up:
     when the known work ahead runs past it, or the wrap-up came with the job still waiting. A `default` need (none of
     its own) is named as such once, with how to lower it (`DEFAULT_NEED`)."""
     said, busy_why, retry, warned, looked, hinted, told = None, None, 0, False, 0, False, not default
+    limit_told = False
     while True:
-        line, mem = ahead(entry), free_gb()
-        turn = all(short(need_of(w), mem) for w in line)  # the head, or all ahead wait on memory
-        mine = short(need, mem, helpers_gb(reuse) if mem is not None else 0) if turn else None
+        line, mem, load = ahead(entry), free_gb(), load_avg()
+        turn = all(held_up(w, mem, load) for w in line)  # the head, or all ahead wait on memory or a quiet CPU
+        low = short(need, mem, helpers_gb(reuse) if mem is not None else 0) if turn else None
+        hot = too_busy(measure, load) if turn and not low else None
+        mine = low or hot
         if turn and not mine and time.time() >= retry:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -701,12 +799,12 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
         why = mine or (busy_why if turn else None)
         info = holder(lock)
         n = 0 if turn else len(line)
-        key = "memory" if mine else why or (info.get("pid"), info.get("since"), n)
+        key = "memory" if low else "load" if hot else why or (info.get("pid"), info.get("since"), n)
         if key[:1] == (None,) and isinstance(said, tuple) and said[2] == n:  # a holder gone, the next yet to claim
             key = said  # it (it looks once a second): an empty line for that moment says nothing new
         if key != said or time.time() >= looked + 60:  # the wrap-up is looked at again each minute as time passes
             work, looked = work_ahead(info, [job_of(w) for w in line[:n]], load_times()), time.time()
-            if key != said and mine:
+            if key != said and low:
                 big = holders()
                 own = [] if hinted else unreused(reuse, big, [info["pid"]] if info.get("pid") else [])
                 hinted = hinted or bool(own)
@@ -715,6 +813,11 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
                             if reuse_word(h[0], h[1]) not in {reuse_word(g[0], g[1]) for g in own[:i]})
                     + ("" if told else "; " + DEFAULT_NEED.format(f"{need:.10g}")))
                 told = True
+            elif key != said and hot:  # not reprinted as the load drifts: it says what it waits on, not how much
+                cpu = busiest()
+                say(f"heavy: waiting: {why}" + (f"; busiest: {', '.join(cpu)}" if cpu else "")
+                    + ("" if limit_told else "; " + LOAD_LIMIT.format(f"≤ {measure:.10g}")))
+                limit_told = True
             elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
                 say(f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work)))
             wrap, now = wrap_up(), time.time()
@@ -762,10 +865,11 @@ def deadline(cfg, wait_s):
         return time.time() + cfg["heavy_wait"] * 60
 
 
-def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None):
+def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None, measure=False):
     """Run `cmd` under the machine-wide heavy lock, once `mem` GB (default: machine.toml's `min_free_gb`) are free,
-    counting the memory of its project's own reused helpers (`reuse_of`) as free. `expect` (minutes) is the job's own
-    guess of its run time, for the waiters' estimate until it has recorded times.
+    counting the memory of its project's own reused helpers (`reuse_of`) as free, and for a `measure` job once the
+    load is at or under machine.toml's `measure_load`. `expect` (minutes) is the job's own guess of its run time, for
+    the waiters' estimate until it has recorded times.
     Returns its exit code (TIMED_OUT if the wait timed out, at `deadline`, or as soon as the STOP file named in
     `STOP_ENV` appears while it waits).
 
@@ -785,20 +889,27 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None):
         return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
     outside_sandbox("the heavy lock")  # its $XDG_RUNTIME_DIR is read-only, and its pid namespace hides the holder
     need = cfg["min_free_gb"] if mem is None else mem
+    limit = cfg["measure_load"] if measure else None
+    if limit is not None and (not isinstance(limit, (int, float)) or isinstance(limit, bool)):
+        limit = default_load()
+        say(BAD_LIMIT.format(f"{limit:.10g}"))
+    if limit is not None and load_avg() is None:
+        say(NO_LOAD)
+        limit = None
     key = job_key(cmd, cwd)
-    entry = join_queue(need, key, expect)
+    entry = join_queue(need, key, expect, limit)
     lock = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
     try:
-        if not take(lock, entry, need, cfg, until, say, stopped, reuse, default=mem is None):
+        if not take(lock, entry, need, cfg, until, say, stopped, reuse, default=mem is None, measure=limit):
             return TIMED_OUT
         leave_queue(entry)  # the next waiter becomes the head and waits on the lock
         entry = None
         try:
-            claim(lock, cmd, cwd, key, expect)
+            claim(lock, cmd, cwd, key, expect, limit)
             if (s := round(time.time() - t0)) >= 1:
                 say(WAITED.format(s))
             t1 = time.time()
-            code = subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
+            code = watch_load(subprocess.Popen(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)), say)
             record(key, (time.time() - t1) / 60)  # still holding the lock: the next job's estimate counts it
             return code
         finally:
@@ -807,6 +918,28 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None):
         if entry:
             leave_queue(entry)
         os.close(lock)  # frees the lock
+
+
+def watch_load(proc, say):
+    """Wait for the job's `proc`, saying the load at its start, end and peak (sampled every LOAD_EVERY seconds from
+    here, not by a thread in the command). Its exit code."""
+    start = peak = load_avg()
+    say(LOAD_START.format("unknown" if start is None else loadf(start)))
+    try:
+        while True:
+            try:
+                code = proc.wait(timeout=LOAD_EVERY)
+                break
+            except subprocess.TimeoutExpired:
+                if (now := load_avg()) is not None:
+                    peak = now if peak is None else max(peak, now)
+    except BaseException:  # as subprocess.run: an interrupted wait doesn't leave the command running
+        proc.kill()
+        proc.wait()
+        raise
+    if (end := load_avg()) is not None:
+        say(LOAD_END.format(loadf(end), loadf(end if peak is None else max(peak, end))))
+    return code
 
 
 def status(reuse=None):
@@ -822,6 +955,7 @@ def status(reuse=None):
     times = load_times()
     pid = info.get("pid")
     note = "; " + paused_note(pid, "everyone waits") if pid and paused(pid) else ""
+    note += "; measuring" if pid and info.get("measure") is not None else ""
     line = held_by(info, times, note) if pid else "free"
     lines, head, jobs = [line], True, []
     q = queue_dir()
@@ -830,7 +964,8 @@ def status(reuse=None):
         if name.startswith(".") or not pid or not alive(q / name):
             continue
         since = time.strftime("%H:%M", time.localtime(int(name.split("-")[0]) / 1e9))
-        line = f"waiting: pid {pid}, since {since}"
+        limit = limit_of(q / name)
+        line = f"waiting: pid {pid}, since {since}" + (", measuring" if limit is not None else "")
         big = []
         if paused(pid):
             line += f" ({paused_note(pid, 'skipped')})"
@@ -838,16 +973,19 @@ def status(reuse=None):
             est = estimate(work_ahead(info, jobs, times))
             jobs.append(job_of(q / name))
             if head:
-                head, need, mem = False, need_of(q / name), free_gb()
-                if short(need, mem):
+                head, need, mem, load = False, need_of(q / name), free_gb(), load_avg()
+                if too_busy(limit, load) and not short(need, mem):
+                    line += f" (waiting for load ≤ {limit:.10g}, now {loadf(load)}; letting other jobs by)"
+                    big = [f"uses CPU: {b}" for b in busiest()]
+                elif short(need, mem):
                     line += f" (waiting for {need:.10g} GB, {down(mem)} free; letting smaller jobs by)"
                     procs = holders()
                     own = {h[0] for h in unreused(reuse, procs, [info["pid"]] if info.get("pid") else [])}
-                    big = [b + (" (this project's)" if h[0] in own else "")
+                    big = ["holds memory: " + b + (" (this project's)" if h[0] in own else "")
                            for h, b in zip(procs, largest(big=procs))]
             line += f"; {est}" if est else ""
         lines.append(line)
-        lines += [f"  holds memory: {b}" for b in big]
+        lines += [f"  {b}" for b in big]
     return lines
 
 

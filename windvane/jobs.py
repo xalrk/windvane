@@ -444,7 +444,7 @@ def stray_line(name, base):
             f"tied to it): {how}; log {base}.log")
 
 
-def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=False):
+def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=False, measure=False):
     """Start `cmd` in the background. A session's job dies with it; a kept one (`keep`) goes on past it, until the
     run's stop, so a heavy job that can't both queue and run in one session still runs: the driver holds its ticket
     until it ends."""
@@ -457,7 +457,7 @@ def bg(p, name, cmd, cwd, heavy=False, mem=None, keep=False, expect=None, quiet=
     with name_lock(Path(f"{base}.lock")):  # a session's parallel calls for one name: the second waits, then sees it
         if alive(find_job(p, name)[0]):
             sys.exit(f"bg: '{name}' is still running; wait with: windvane await {name}")
-        proc, who = start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect)
+        proc, who = start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect, measure)
     session = os.environ.get(NEST)
     if session and not keep:  # killed with the session that started it (runner.kill_nested), not left by a stop
         mark = p.state / "nested" / session / str(proc.pid)
@@ -511,7 +511,7 @@ def job_files(base):
             *base.parent.glob(f"{glob.escape(base.name)}.pid.*")]
 
 
-def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect):
+def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect, measure=False):
     """`bg`'s start, under its lock: the job's files and process. (the process, its `util.stamp` or None)."""
     pid = Path(f"{base}.pid")
     for end in ("pid", "exit", "keep", "child", "stamp", "cmd", "log"):  # no log: its command never ran (`never_started`)
@@ -522,10 +522,12 @@ def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect):
     Path(f"{base}.cwd").write_text(str(Path(cwd).resolve()))  # ties it to its worktree, should job_base move again
     Path(f"{base}.cmd").write_text(shlex.join([  # how to start it again, should it never start (`never_line`)
         "windvane", "bg", *(["--heavy"] if heavy else []), *(["--mem", f"{mem:g}"] if mem is not None else []),
-        *(["--expect", f"{expect:g}"] if expect is not None else []), *(["--keep"] if keep else []), name, *cmd]))
+        *(["--expect", f"{expect:g}"] if expect is not None else []), *(["--measure"] if measure else []),
+        *(["--keep"] if keep else []), name, *cmd]))
     if heavy:
         cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []),
-               *(["--expect", f"{expect:.10g}"] if expect is not None else []), "--", *cmd]
+               *(["--expect", f"{expect:.10g}"] if expect is not None else []), *(["--measure"] if measure else []),
+               "--", *cmd]
     env = {**os.environ, **tmp, IN_JOB: name}
     if keep:  # it waits for the machine as long as it's kept (`watch` ends it), and belongs to no session
         Path(f"{base}.keep").write_text(os.environ.get(RUN_STOP, ""))

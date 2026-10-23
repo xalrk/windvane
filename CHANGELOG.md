@@ -7,6 +7,10 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane heavy --measure` (and `bg --heavy --measure`) for a command that measures timing: it also waits until
+  the 1-minute load average is at or under `machine.toml`'s new `measure_load` (default a quarter of the CPU count),
+  naming the processes using the most CPU, and lets the jobs behind it by meanwhile. Every heavy job's log now says
+  the load at its start, end and peak, and `heavy --status` marks a measurement.
 - Windows, through WSL2: `windvane doctor` says when it runs in WSL and warns, each with its fix, about a project,
   state dir or `projects_dir` on a Windows drive (under `/mnt/`), a Windows `claude`, `git`, `python3`, `node`, `gh` or
   `tmux` on `PATH`, and systemd being off (the `wsl.conf` setting that turns it on). `windvane init` warns about a

@@ -116,19 +116,28 @@ beside the user's own engine session, can exhaust memory. `windvane heavy -- <co
   else `machine.toml`'s `min_free_gb`. The memory held by its project's own reused helpers (`heavy_reuses`: an
   emulator, a build daemon left up between jobs) counts as available to it, since it uses those very processes: a
   matching process counts when the nearest process up its tree that works in a checkout works in this project's (its
-  main checkout, a slot, its state dir), so another project's emulator never does.
+  main checkout, a slot, its state dir), so another project's emulator never does;
+- for a job that measures timing (`--measure`), once the 1-minute load average is at or under `machine.toml`'s
+  `measure_load` (default a quarter of the CPU count). Other projects' ordinary work (an emulator, a build daemon,
+  sessions) isn't heavy, but it slows a measurement's CPU-side times; adding it to `busy` would hold up every heavy
+  job, including those that reuse it. windvane never pauses or signals a process it didn't start: it only waits.
+  Without a load average (none readable) the job says so once and doesn't wait on it.
 
 Jobs waiting for the lock run in arrival order: each joins a queue beside the lock when it asks, so a job that
 arrives just as the lock frees can't overtake one that has waited, and a waiter that dies drops out of the line. A
 waiter paused with Ctrl-Z keeps its place but doesn't hold up the jobs behind it; resumed, it waits its turn again.
 The job at the head of the line takes the lock only once its memory is free too. While it waits for memory, the first
 job behind it whose own need is met (a 2 GB test run behind a 6 GB engine) may take the free lock and run; the head
-stays the head and gets the lock first once its memory frees. Only memory lets a job by: one that a `busy` process
-holds up keeps everyone behind it waiting.
+stays the head and gets the lock first once its memory frees. A measurement waiting for a quiet CPU lets them by the
+same way, so it doesn't hold the line for hours, and gets the lock first once the load is down. Only these let a job
+by: one that a `busy` process holds up keeps everyone behind it waiting.
 While it waits, its log says who holds the lock (pid, command, since when), how many jobs are ahead of it and about
 how long their work takes, or the memory it waits for and the three processes holding the most (pid, name, GB and the
-last two parts of their folder, so another project's idle emulator shows at once); `windvane heavy --status` shows the
-same at any time, with how long the holder has run. The estimate comes from each job's last few run times, kept per
+last two parts of their folder, so another project's idle emulator shows at once), or the load it waits for and the
+three processes using the most CPU; `windvane heavy --status` shows the same at any time, with how long the holder has
+run and `measuring` beside a measurement. Once it has the lock, every job's log says the load at its start, and after
+the command the load at its end and its peak (sampled every few seconds): `heavy: load 3.4 at end, 5.1 peak`, so a
+timing run made on a busy machine is plain in its log. The estimate comes from each job's last few run times, kept per
 project and command in `~/.local/state/windvane/heavy-times.json`, else from the minutes it was started with
 (`--expect`, for a command's first run): the holder's time less what it ran so far, plus each waiter's. A job with
 neither, or a holder past its usual or expected time, makes it `at least N min`, or `unknown` when nothing is known.

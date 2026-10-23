@@ -859,6 +859,8 @@ def main(argv=None):
     s.add_argument("--keep", action="store_true", help="with --heavy: it outlives the session (until the run's "
                                                        "stop, plus heavy_keep_hours); the ticket resumes when it ends")
     s.add_argument("--expect", type=expected, metavar="MIN", help="with --heavy: minutes it likely runs (as `heavy --expect`)")
+    s.add_argument("--measure", action="store_true", help="with --heavy: it measures timing, so wait for a quiet CPU too "
+                                                          "(as `heavy --measure`)")
     s.add_argument("--cancel", action="store_true", help="end your own job of that name instead, waiting or running")
     s.add_argument("name")
     s.add_argument("command", nargs=argparse.REMAINDER)
@@ -869,6 +871,8 @@ def main(argv=None):
                                              "(default: the project's heavy_mem, else machine.toml's min_free_gb)")
     s.add_argument("--expect", type=expected, metavar="MIN", help="minutes it likely runs, for the estimate of the jobs waiting "
                                                    "behind it until it has run times of its own")
+    s.add_argument("--measure", action="store_true", help="it measures timing: also wait until the 1-minute load "
+                                                          "average is at or under machine.toml's measure_load")
     s.add_argument("--status", action="store_true", help="who holds the lock and who waits, without waiting")
     s.add_argument("command", nargs=argparse.REMAINDER)
     s = sub.add_parser("await", help="wait (up to ~9.5 min) for a bg command (this ticket's own)")
@@ -931,7 +935,8 @@ def main(argv=None):
             p = Project(root)
             a.mem = p.cfg["heavy_mem"] if a.mem is None else a.mem
             reuse = heavy.reuse_of(p)
-        sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60, mem=a.mem, reuse=reuse, expect=a.expect))
+        sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60, mem=a.mem, reuse=reuse, expect=a.expect,
+                           measure=a.measure))
     p = find()
     phone.use(p)
     try:
@@ -945,12 +950,14 @@ def main(argv=None):
                 setattr(a, k, p.ap[k])
     if a.cmd == "bg":
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
-        for flag, given in (("--mem", a.mem is not None), ("--keep", a.keep), ("--expect", a.expect is not None)):
+        for flag, given in (("--mem", a.mem is not None), ("--keep", a.keep), ("--expect", a.expect is not None),
+                            ("--measure", a.measure)):
             if given and not a.heavy:
                 sys.exit(f"bg: {flag} goes with --heavy")
         if a.cancel:
             return sys.exit("bg --cancel: give only the job's name") if cmd or a.heavy else jobs.cancel(p, a.name)
-        return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy, a.mem, a.keep, a.expect) if cmd else sys.exit("bg: give a command")
+        return jobs.bg(p, a.name, cmd, os.getcwd(), a.heavy, a.mem, a.keep, a.expect,
+                       measure=a.measure) if cmd else sys.exit("bg: give a command")
     if a.cmd == "await":
         if jobs.await_(p, a.name, a.lines) == jobs.NEVER:  # else 0 whatever the job's code: it prints it
             sys.exit(jobs.NEVER_STARTED)
