@@ -25,8 +25,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import net, privacy
-from .config import HOME
+from . import net, privacy, renumber
+from .config import DIR, HOME
 from .phone import cut
 from .runner import plain_error, run_claude
 from .util import append_jsonl, git, gout, load_json, log, read_jsonl
@@ -86,6 +86,9 @@ NEXT = {
 
 
 NOTES_CAP = 4000  # the characters of notes.md the critic reads
+TEXT_CAP = 12000  # the characters of changed user-facing text the critic's prompt holds
+TEXT_SUFFIXES = (".md", ".markdown", ".rst")  # read by users by default, outside DIR: README, docs, CHANGELOG
+HUNK_RE = re.compile(r"^(?=@@ )", re.M)
 
 
 def pack_dir(p, tid):
@@ -613,6 +616,55 @@ def system_prompt(p, cwd, project=False):
     return "\n\n".join(parts)
 
 
+def text_paths(p, cwd, rev):
+    """The files the change touches that users read: Markdown outside DIR by default (README, docs, CHANGELOG), and
+    what `[critic] text` names (message files, UI strings). Source stays out: the critic judges the outcome, and the
+    reviewer reads the code. DIR never counts: tickets, questions and the scale are the autopilot's, not the users'."""
+    changed = gout(cwd, "diff", "--name-only", "-z", f"{p.upstream}...{rev}").split("\0")
+    return [f for f in changed if f and not f.startswith(f"{DIR}/")
+            and (f.lower().endswith(TEXT_SUFFIXES) or renumber.noted(f, p.critic.get("text") or []))]
+
+
+def text_diff(p, cwd, rev, cap=TEXT_CAP):
+    """The diff of what users read, with one line of context, so the critic judges the text itself and the pack
+    needn't quote it (before, a pack's missing quote was a send-back of its own). Over `cap` characters, whole hunks
+    go, the biggest first, so most changes stay whole, and a last line names what went: the critic can Read the rest.
+    Returns "" when the change touches no such file."""
+    paths = text_paths(p, cwd, rev)
+    if not paths:
+        return ""
+    # One diff per path, so what is cut is named by the path itself: git's headers quote an odd name (a `"`, a tab)
+    diffs = [(f, gout(cwd, "diff", "--no-color", "--no-ext-diff", "-U1", f"{p.upstream}...{rev}", "--",
+                      f":(literal){f}")) for f in paths]
+    pairs = [(f, HUNK_RE.split(d + "\n")) for f, d in diffs if d]  # (path, [header, hunk, hunk, ...])
+    if not pairs:
+        return ""
+    names, parts = zip(*pairs)
+    taken, opened, used = set(), set(), 0
+    for size, i, j in sorted((len(h), i, j) for i, f in enumerate(parts) for j, h in enumerate(f[1:], 1)):
+        cost = size + (0 if i in opened else len(parts[i][0]))
+        if used + cost <= cap:
+            taken.add((i, j))
+            opened.add(i)
+            used += cost
+    out, dropped, gone = [], {}, 0
+    for i, f in enumerate(parts):
+        keep = [h for j, h in enumerate(f[1:], 1) if (i, j) in taken]
+        if keep or len(f) == 1:  # a file with no hunks (binary, a mode change) is its header alone
+            out.append(f[0] + "".join(keep))
+        if len(keep) < len(f) - 1:
+            dropped[names[i]] = len(f) - 1 - len(keep)
+            gone += sum(len(h) for j, h in enumerate(f[1:], 1) if (i, j) not in taken)
+    text = "".join(out).rstrip("\n")
+    fence = "`" * max(3, max(map(len, re.findall(r"`+", text)), default=0) + 1)
+    note = ""
+    if dropped:
+        n = sum(dropped.values())
+        note = (f"\nCut to {cap:,} characters: {n} hunk{'s' * (n != 1)} ({gone:,} characters), the biggest, of "
+                + ", ".join(f"{f} ({k})" for f, k in dropped.items()) + ". Read those files for the rest.")
+    return f"{fence}diff\n{text}\n{fence}{note}"
+
+
 def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     """Critique a ticket's pack at `rev` and record the verdict. Returns (record or None, reply text).
     A critic session that dies (API error, crash) is no verdict on the ticket: `retry(error)` waits and says whether
@@ -638,6 +690,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         f"## The worker's pack notes\n{notes}",
         "## Pack images (Read them)\n" + "\n".join(map(str, images)) if images else "",
         f"## Files the change touches\n{stat}",
+        f"## What users read, as changed\n{said}" if (said := text_diff(p, cwd, rev)) else "",
         "## Your earlier critiques of this ticket, oldest first\n" + "\n---\n".join(earlier) if earlier else "",
     ]))
     session = {}

@@ -249,6 +249,13 @@ elif system.startswith("# windvane critic"):
             f"CRITIC: {score}/10 {tid} fixes={fixes} good")
     if os.environ.get("FAKE_CRITIC_TEXT"):  # a whole critique, `{tid}` filled in
         text = os.environ["FAKE_CRITIC_TEXT"].replace("{tid}", tid)
+    if os.environ.get("FAKE_CRITIC_READS"):  # "<check> <words>": yes only when the prompt's diff adds those words
+        check, words = os.environ["FAKE_CRITIC_READS"].split(" ", 1)
+        seen = prompt.split("## What users read, as changed\n", 1)[1:]
+        said = bool(seen) and any(l.startswith("+") and words in l for l in seen[0].split("\n## ")[0].splitlines())
+        text = (f"Checks:\n- {check}: {'yes, the diff says ' + repr(words) if said else 'no, not shown'}\n"
+                f"Verdict.\nFix in this ticket:\n{'' if said else '1. show the text'}\n"
+                f"CRITIC: {tid} fixes={0 if said else 1} read")
     if "--resume" in args and os.environ.get("FAKE_CRITIC_REASK"):  # its reply to the driver's re-ask
         text = os.environ["FAKE_CRITIC_REASK"].replace("{tid}", tid)
 elif system.startswith("# windvane planner run"):

@@ -7,6 +7,10 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- The critic reads what a ticket changed in the text users read: its prompt holds the diff of the Markdown and
+  reStructuredText files outside `.windvane/` (README, docs, CHANGELOG) and of the files `[critic] text` names
+  (message files, UI strings), up to 12,000 characters, the biggest hunks cut first and named. The evidence pack no
+  longer quotes that text, and a scale's check about text judges the text itself, not whether the pack quoted it.
 - `windvane stats --critic` says what the critic bought: which checks sent work back, alone or with others, and
   whether the next head changed the ticket's tree or only the evidence pack; what those revision rounds cost the
   worker in turns and weighted tokens; the reviews that still asked for changes after a critic pass; and the checks

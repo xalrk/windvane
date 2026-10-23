@@ -72,6 +72,7 @@ The Claude model and effort level for each kind of session. Models are anything 
 | `enabled` | `true` | Run the critic. `false` skips it: tickets go straight from the worker to the check and the review. |
 | `pass` | `8` | The pass mark out of 10. A ticket whose lowest dimension scores this or more goes on. The critic never sees it: it scores blind, and the driver applies the mark. |
 | `floor` | `4` | Under this on the first dimension (does it work at all), the worker is told to rethink the approach instead of patching it. |
+| `text` | `[]` | Paths or globs (a directory ending in `/`) of the files users read beyond Markdown, such as message files or UI strings (`["src/messages/*.json"]`). The critic reads their diff, with that of every Markdown (`.md`, `.markdown`) and reStructuredText (`.rst`) file outside `.windvane/`. |
 | `revisions` | `3` | How many times the worker may revise for the critic. After the last one the ticket goes on with its score recorded (`accept`). The driver sets a ticket aside after one send-back more (a READY without the evidence pack counts). |
 
 See [Concepts: the critic](concepts.md#the-critic-and-calibration).
