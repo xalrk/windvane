@@ -56,6 +56,10 @@ WAITED_RE = re.compile("^" + re.escape(WAITED).replace(r"\{\}", r"(\d+)") + "$",
 LOAD_START, LOAD_END, LOAD_EVERY = "heavy: load {} at start", "heavy: load {} at end, {} peak", 5
 LOAD_START_RE = re.compile("^" + re.escape(LOAD_START).replace(r"\{\}", r"\S+") + "$", re.M)
 NO_LOAD = "heavy: no load average on this machine: --measure doesn't wait for a quiet CPU"
+# Said once in a measurement's wait on load, as DEFAULT_NEED is for memory: where its limit comes from.
+LOAD_LIMIT = ("the {} is machine.toml's measure_load (default: a quarter of the CPU count): raise it there if this "
+              "machine is never that quiet")
+BAD_LIMIT = "heavy: machine.toml's measure_load isn't a number: waiting for the default, {}"
 # A wait on memory with no need of its own (no `--mem`, no `heavy_mem`): the line says once where the need comes from,
 # since a small job may sit for an hour behind a default sized for a big build.
 DEFAULT_NEED = ("the {} GB is machine.toml's min_free_gb: if this job needs less, give it --mem <GB> "
@@ -78,8 +82,13 @@ def machine_file():
     return user_dir("XDG_CONFIG_HOME", ".config") / "machine.toml"
 
 
+def default_load():
+    """`measure_load` when machine.toml doesn't set it: a quarter of the CPUs busy leaves a measurement its own."""
+    return 0.25 * (os.cpu_count() or 1)
+
+
 def machine():
-    base = {**DEFAULTS, "measure_load": 0.25 * (os.cpu_count() or 1)}
+    base = {**DEFAULTS, "measure_load": default_load()}
     try:
         return {**base, **tomllib.loads(machine_file().read_text())}
     except (OSError, ValueError):
@@ -769,6 +778,7 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
     when the known work ahead runs past it, or the wrap-up came with the job still waiting. A `default` need (none of
     its own) is named as such once, with how to lower it (`DEFAULT_NEED`)."""
     said, busy_why, retry, warned, looked, hinted, told = None, None, 0, False, 0, False, not default
+    limit_told = False
     while True:
         line, mem, load = ahead(entry), free_gb(), load_avg()
         turn = all(held_up(w, mem, load) for w in line)  # the head, or all ahead wait on memory or a quiet CPU
@@ -805,7 +815,9 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
                 told = True
             elif key != said and hot:  # not reprinted as the load drifts: it says what it waits on, not how much
                 cpu = busiest()
-                say(f"heavy: waiting: {why}" + (f"; busiest: {', '.join(cpu)}" if cpu else ""))
+                say(f"heavy: waiting: {why}" + (f"; busiest: {', '.join(cpu)}" if cpu else "")
+                    + ("" if limit_told else "; " + LOAD_LIMIT.format(f"≤ {measure:.10g}")))
+                limit_told = True
             elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
                 say(f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work)))
             wrap, now = wrap_up(), time.time()
@@ -878,6 +890,9 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None, measure=F
     outside_sandbox("the heavy lock")  # its $XDG_RUNTIME_DIR is read-only, and its pid namespace hides the holder
     need = cfg["min_free_gb"] if mem is None else mem
     limit = cfg["measure_load"] if measure else None
+    if limit is not None and (not isinstance(limit, (int, float)) or isinstance(limit, bool)):
+        limit = default_load()
+        say(BAD_LIMIT.format(f"{limit:.10g}"))
     if limit is not None and load_avg() is None:
         say(NO_LOAD)
         limit = None

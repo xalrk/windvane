@@ -116,6 +116,7 @@ class Measure(unittest.TestCase):
         self.assertEqual(self.ran(), [])
         self.assertEqual(len([l for l in self.said("timing") if l.startswith("heavy: waiting:")]), 1,
                          "said once, not again as the load drifts")
+        self.assertIn("is machine.toml's measure_load", self.said("timing")[0])
         self.load(3.9)
         self.assertEqual(job.wait(15), 0)
         self.assertEqual(self.ran(), ["timing"])
@@ -127,7 +128,9 @@ class Measure(unittest.TestCase):
         code, lines = self.run_here()
         self.assertEqual(code, heavy.TIMED_OUT)
         self.assertRegex(lines[0], r"^heavy: waiting: load 9\.5 \(want ≤ 4\); busiest: "
-                                   r"pid 4101 qemu-system-x86 \d+% in emu/slot-1, pid 4102 java \d+% in app/work$")
+                                   r"pid 4101 qemu-system-x86 \d+% in emu/slot-1, pid 4102 java \d+% in app/work; "
+                                   r"the ≤ 4 is machine.toml's measure_load \(default: a quarter of the CPU count\): "
+                                   r"raise it there if this machine is never that quiet$")
         self.assertNotIn("4103", lines[0])  # it used no CPU between the samples
 
     def test_cpu_times_come_from_each_process_stat(self):
@@ -185,6 +188,14 @@ class Measure(unittest.TestCase):
         code, lines = self.run_here()
         self.assertEqual(code, heavy.TIMED_OUT)
         self.assertEqual(lines[-1], f"{heavy.GAVE_UP}: load 9.5 (want ≤ 9)")
+
+    def test_a_measure_load_that_is_not_a_number_falls_back_to_the_default_and_says_so(self):
+        self.machine('measure_load = "4"\n')
+        self.in_process(busiest=lambda: [], default_load=lambda: 2)
+        code, lines = self.run_here()
+        self.assertEqual(code, heavy.TIMED_OUT)
+        self.assertEqual(lines[0], heavy.BAD_LIMIT.format(2))
+        self.assertEqual(lines[-1], f"{heavy.GAVE_UP}: load 9.5 (want ≤ 2)")
 
     def test_a_job_without_measure_never_waits_on_load(self):
         self.load(64)
