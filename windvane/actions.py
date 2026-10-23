@@ -94,8 +94,12 @@ class GhFailed(Exception):
 
 
 # A failed recount's cause, found in gh's first stderr line, and what fixes it: a rate limit first, since gh's limit
-# text also mentions authenticated requests.
+# text also mentions authenticated requests and comes as a 403 too. Any other 403 is a token that may log in but not
+# reach Actions (a fine-grained token, GH_TOKEN, an app's), as a classic token's or `gh auth login`'s repo scope covers
+# them; an organization's SAML refusal is a login problem instead.
+PERMISSION = "the token gh uses lacks the Actions permission: a fine-grained token needs Actions: {}"
 CAUSES = (("rate limit", re.compile(r"rate limit|HTTP 429", re.I), "windvane waits for the limit to reset"),
+          ("permission", re.compile(r"not accessible by|HTTP 403(?!.*SAML)", re.I), PERMISSION.format("read")),
           ("github", re.compile(r"HTTP 5\d\d", re.I), "GitHub's own error: the next recount tries again"),
           ("network", re.compile(r"connect|timed? ?out|timeout|network|no such host|dial tcp|unreachable|TLS", re.I),
            "check the connection"),
@@ -104,11 +108,13 @@ FIXES = {name: fix for name, _, fix in CAUSES}
 CHECK = "run `gh auth status`"  # an unknown cause's fix: it checks both the login and the connection
 
 
-def cause(why):
+def cause(why, access="read"):
     """(cause, hint) for gh's first stderr line: the hint names the fix, and is "" when gh's own text already names a
-    command (`gh auth login`), so the line never names two."""
+    command (`gh auth login`), so the line never names two. `access`: what a missing permission's fix asks for, as a
+    count only reads Actions and a workflow start writes."""
     name = next((n for n, rx, _ in CAUSES if rx.search(why)), "other")
-    return name, "" if re.search(r"\bgh [a-z]", why) else f" ({FIXES.get(name, CHECK)})"
+    fix = PERMISSION.format(access) if name == "permission" else FIXES.get(name, CHECK)
+    return name, "" if re.search(r"\bgh [a-z]", why) else f" ({fix})"
 
 
 def get(cd, path):
@@ -334,11 +340,34 @@ def line(p, total=None):
     return f"Actions {fmt(total['used'])}/{fmt(b[0])} min" + f" (counted {when})" * (time.time() - total["at"] > 3600)
 
 
-def refresh(p):
+def refresh(p, start=False):
     """Recount in the background (the driver at its start, every session at its end): status, the phone and worker
-    starts only read the cache, never wait. One background count per process at a time."""
-    if budget(p) and counting.acquire(blocking=False):
+    starts only read the cache, never wait. One background count per process at a time. At a run's `start` the
+    repo's visibility is first forgotten, so it is read afresh: a repo made private since the last run would
+    otherwise get its first workers' commits untagged at the cap."""
+    if not budget(p):
+        return
+    if start:
+        forget_public(p)
+    if counting.acquire(blocking=False):
         threading.Thread(target=refresh_now, args=(p,), daemon=True).start()
+
+
+def forget_public(p):
+    """Drop the project's visibility from this process and from the cache, under the count's lock as `public` writes
+    it, so worker starts and their hooks count it as private until this run's read is in. A lock another driver's
+    count holds past a few seconds isn't waited out: this process then doubts the cache's entry itself (`unsure`)."""
+    key = str(p.root)
+    visibility.pop(key, None)
+    kept.discard(key)
+    with locked(wait=5) as got:
+        if not got:
+            unsure.add(key)
+            return
+        cache = load_json(cache_file(), {})
+        if key in cache.get("public", {}):
+            del cache["public"][key]
+            save_json(cache_file(), cache)
 
 
 counting = threading.Lock()
@@ -411,11 +440,13 @@ def public(p, cd=None):
                     cache.setdefault("public", {})[key] = visibility[key]
                     save_json(cache_file(), cache)
                 kept.add(key)
+                unsure.discard(key)
     return visibility[key]
 
 
 def cached_public(p):
-    return load_json(cache_file(), {}).get("public", {}).get(str(p.root)) is True
+    key = str(p.root)
+    return key not in unsure and load_json(cache_file(), {}).get("public", {}).get(key) is True
 
 
 def over_cap(p, cd=None):
@@ -434,6 +465,7 @@ stale_logged = set()  # the projects whose log has said their count is too old t
 recount_said = {}  # project: the cause its log last said its recount failed for, until one works
 visibility = {}  # project root: whether its repo is public, as this process read it (once a run)
 kept = set()  # the project roots whose visibility this process has written to the cache
+unsure = set()  # the project roots whose cached visibility an earlier run left and this one couldn't drop
 
 
 def tag(p, msg, cd=None):
@@ -515,7 +547,7 @@ def skip_hooks(p, wd):
     script.write_text("#!/bin/sh\n# windvane: [skip ci] while the month's GitHub Actions minutes are at the cap\n"
                       + (f'{shlex.quote(str(first))} "$@" || exit $?\n' if os.access(first, os.X_OK) else "")
                       + f"python3 -c {shlex.quote(UNDER)} {shlex.quote(str(cache_file()))} {cap_minutes(p)} {STALE_S} "
-                      f"{shlex.quote(str(p.root))} 2>/dev/null && exit 0\n"
+                      f"{shlex.quote('' if str(p.root) in unsure else str(p.root))} 2>/dev/null && exit 0\n"
                       f"grep -qF '{SKIP}' \"$1\" && exit 0\n"
                       f"{{ printf '%s {SKIP}\\n' \"$(sed -n 1p \"$1\")\"; sed 1d \"$1\"; }} > \"$1.windvane\" "
                       '&& mv "$1.windvane" "$1"\n')
@@ -824,9 +856,13 @@ def ci(p, name="", ref="", dry=False):
     b = billable(here) and budget(p)
     if budget(p) and not billable(here):
         print(f"{repo} is public: GitHub runs its workflows on standard runners for free, so no estimate or cap.")
-    total = b and count(cd, max_age=60)
+    try:
+        total = b and recount(cd, max_age=60)
+    except GhFailed as e:
+        print(f"windvane ci: couldn't count this month's Actions minutes: {e}{cause(e.why)[1]}, so no workflow starts")
+        return 1
     if b and not total:
-        print("windvane ci: couldn't count this month's Actions minutes (gh missing, logged out or offline), so no "
+        print("windvane ci: couldn't count this month's Actions minutes (another driver's count is running), so no "
               "workflow starts")
         return 1
     if b:
@@ -863,7 +899,7 @@ def ci(p, name="", ref="", dry=False):
     r = net.call([real_gh() or "gh", *cmd[1:]], cd)
     if r.returncode:
         why = " ".join((r.stderr or r.stdout).split())[:300] or f"exit {r.returncode}"
-        print(f"windvane ci: gh workflow run failed: {why}{cause(why)[1]}")
+        print(f"windvane ci: gh workflow run failed: {why}{cause(why, 'read and write')[1]}")
         return 1
     print(f"Started {file} on {ref or 'the default branch'}.")
     return 0

@@ -137,8 +137,9 @@ class PublicTag(unittest.TestCase):
                                        f'exec {self.s.bin / "gh-fake"} "$@"\n')
         code, out = self.ci("test.yml", "--ref", "main")
         self.assertEqual(code, 1, out)
+        fix = actions.PERMISSION.format("read and write")
         self.assertEqual(out.strip().splitlines(), ["windvane ci: gh workflow run failed: HTTP 403: Resource not "
-                                                    "accessible by integration (run `gh auth status`)"])
+                                                    f"accessible by integration ({fix})"])
 
     def test_a_busy_lock_doesnt_make_each_merge_read_the_visibility_again(self):
         p = self.over_cap("PUBLIC")

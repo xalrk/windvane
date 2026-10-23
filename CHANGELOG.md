@@ -47,6 +47,11 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A repo made private between runs gets `[skip ci]` on its workers' commits at the Actions cap from the run's first
+  worker: each run reads the repo's visibility afresh as it starts, instead of trusting the last run's.
+- A 403 from a token without Actions access names the missing permission (Actions: read to count, read and write
+  to start a workflow) in `windvane ci` and the recount's log line, not `gh auth status`. `windvane ci` says why its
+  count failed too.
 - A session's hooks (the push scan, and `[skip ci]` at the Actions cap) apply to its own worktree only. They used to
   become the hooks of every repository a check clones or inits, so `git lfs install` in a test's clone failed under
   `windvane check` and a test's own hooks never ran.
