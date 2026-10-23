@@ -80,7 +80,11 @@ class Guard(unittest.TestCase):
 
     def test_a_held_branch_not_its_own_is_left_alone(self):
         """held.json edited by hand, or written by something else: the run's start skips it rather than raising."""
-        self.s.git("branch", "t-999-x")
+        self.s.git("switch", "-q", "-c", "t-999-x")
+        self.s.ticket("T-002")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-q", "-m", "not merged")
+        self.s.git("switch", "-q", "main")
         held.hold(self.p, "t-999-x", "push", "network down")
         self.assertEqual(held.push_held(self.p), 0)
         self.assertEqual(self.heads(), {"main"})
