@@ -152,11 +152,10 @@ so the next triage looks at it again.
 Run `gh auth status`. Workers open pull requests and the driver merges them with `gh`; it needs push and merge rights
 on the repository. Projects not on GitHub use `forge = "git"`.
 
-A valid login can still get "HTTP 403: Resource not accessible by integration" (or "by personal access token") from
-the Actions calls: the token gh uses (`GH_TOKEN`, a fine-grained token, an app's) can't reach Actions. windvane says
-so instead of pointing at `gh auth status`: the month's count needs the repository's Actions permission at read,
-`windvane ci`'s workflow start at read and write. The token `gh auth login` makes, and a classic token with the `repo`
-scope, already have both. A 403 that mentions a rate limit is still the rate limit.
+"HTTP 403: Resource not accessible by integration" with a valid login means the token gh uses (`GH_TOKEN`, a
+fine-grained token) can't reach Actions: counting needs its Actions permission at read, `windvane ci`'s workflow
+start at read and write. Grant it on GitHub under Settings, Developer settings, Personal access tokens; the token
+`gh auth login` makes already has both.
 
 ### The log says "actions: recount failed", or the phone's `status` says "Actions ... (stale: counted Oct 3, workers skip CI)"
 With `actions_minutes` set, windvane recounts the month's Actions minutes through `gh` at each run's start and each
