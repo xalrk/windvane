@@ -474,8 +474,9 @@ def worker_git(p, wd):
             asked.add(p.name)
             log(p, f"GitHub Actions at the cap and core.hooksPath is the project's: workers are asked for {SKIP}")
         return {}, f"GitHub Actions minutes are at the month's cap: end each commit message's first line with {SKIP}."
-    from .worktree import hooks_env
-    return hooks_env(wd, skip_hooks(p, wd)), ""
+    from .worktree import hooks_env, submodule_folder
+    subs = submodule_folder(p, wd)  # guard_pushes' for the submodules: their pushes are scanned at the cap too
+    return hooks_env(wd, skip_hooks(p, wd), subs if (subs / "pre-push").exists() else None), ""
 
 
 # The hook's test of the cache: exit 0 (no tag) when the project (argv 4) is known public, or when this month's cached
