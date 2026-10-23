@@ -126,6 +126,20 @@ class CriticValue(unittest.TestCase):
         flat = " ".join(self.out().split())
         self.assertIn("2 rounds, 3 turns, 15k weighted tokens (1 changed the tree: 2 turns, 6k; 1 not matched to a verdict)", flat)
 
+    def test_step_text_not_at_a_line_start_is_not_a_step(self):
+        grep = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "u-g", "content": [
+            {"type": "text", "text": 'cli.py:590: print("CRITIC STEP: pass. The critic is off")\n'
+                                     'docs/tokens.md: says `CRITIC STEP: revise`'}]}]}}
+        (self.p.state / "runs" / "T-001-0.jsonl").write_text("".join(json.dumps(e) + "\n" for e in [
+            turn("g0", fresh(400), "grep -rn 'CRITIC STEP' ."), grep,  # outside a round: starts none
+            turn("m1", fresh(500), "timeout 590 windvane critic T-001"), result("m1", "revise"),
+            turn("m2", fresh(1000), "grep -rn 'CRITIC STEP' ."), grep,  # inside one: ends nothing
+            turn("m3", fresh(1000), "windvane bg critic bin/windvane critic T-001"),
+            turn("m4", fresh(9000), "windvane await critic"), result("m4", "pass")]))
+        flat = " ".join(self.out().split())
+        self.assertIn("2 rounds, 4 turns, 8k weighted tokens (1 changed the tree: 2 turns, 6k; 1 only the pack: "
+                      "2 turns, 2k)", flat)
+
 
 if __name__ == "__main__":
     unittest.main()

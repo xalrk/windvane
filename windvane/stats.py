@@ -401,11 +401,11 @@ def critic_stats(a, p):
     bought(p, [r for r in recs if r.get("ticket") in dict(c["tickets"])], lad, c["bar"], since)
 
 
-
 SENT_BACK = ("revise", "rethink")  # the critic's steps that send the work back to the worker
 PASSED = ("pass", "scope", "accept")  # its steps that let the work go on to the review, a verdict given
-STEP_RE = re.compile(r"CRITIC STEP: (\w+)")
-CALL_RE = re.compile(r"(?:^|&&|;|\|\||\n)[ \t]*windvane critic\b")
+STEP_RE = re.compile(r"(?m)^CRITIC STEP: (\w+)")  # at a line start, as the critic prints it: not grepped code or docs
+CALL_RE = re.compile(r"(?:^|&&|;|\|\||\n)[ \t]*(?:timeout\s+\S+\s+)?(?:\S*/)?windvane\s+"
+                     r"(?:critic\b|bg\s+(?:--\S+\s+)*\S+\s+(?:\S*/)?windvane\s+critic\b|await\s+critic\b)")
 REVIEW_LOG_RE = re.compile(r"(\S+ \S+) (\S+): review (approve|changes): (.*)")
 
 
@@ -481,9 +481,9 @@ def answered(recs):
 
 
 def stream_rounds(p, runs):
-    """The worker's revision rounds on a ticket, from its worker runs' ledger rows `runs`, in order: [(turns, weighted tokens)], each from a `CRITIC STEP: revise`
-    (or rethink) the critic call printed to the next `windvane critic` call, across the ticket's worker runs (a run
-    cut off mid-round carries on in the next). A turn's input and cache tokens are its own, from the stream; its
+    """The worker's revision rounds on a ticket, in order, as [(turns, weighted tokens)], from its worker runs'
+    ledger rows `runs`: each from a `CRITIC STEP: revise` (or rethink) the critic call printed to the next critic
+    call, across the ticket's worker runs (a run cut off mid-round carries on in the next). A turn's input and cache tokens are its own, from the stream; its
     output isn't in the stream (each turn's usage there is a partial count), so a round gets the run's output in
     proportion to its turns."""
     rounds, cur = [], None
@@ -500,8 +500,8 @@ def stream_rounds(p, runs):
                         cur = None
             elif ev.get("type") == "user" and isinstance(msg.get("content"), list):
                 for c in msg["content"]:
-                    if c.get("type") == "tool_result" and (m := STEP_RE.search(str(c.get("content")))):
-                        cur = {} if m[1] in SENT_BACK else None
+                    if c.get("type") == "tool_result" and (step := critic_step(c.get("content"))):
+                        cur = {} if step in SENT_BACK else None
                         rounds += [cur] * (cur is not None)
         per_turn = (row.get("output") or 0) / max(len(seen), 1)
         for r in rounds:
@@ -509,6 +509,15 @@ def stream_rounds(p, runs):
                 u["_out"] = per_turn
     return [(sum(len(v) for v in r.values()), sum(turn_weight(u) for v in r.values() for u in v.values()))
             for r in rounds]
+
+
+def critic_step(content):
+    """The critic step a tool result ends on: the last line-start `CRITIC STEP:` in its text, the line the worker
+    follows. A result's content is its text or a list of parts."""
+    if isinstance(content, list):
+        content = "\n".join(str(c.get("text", "")) for c in content if isinstance(c, dict))
+    steps = STEP_RE.findall(content) if isinstance(content, str) else []
+    return steps[-1] if steps else None
 
 
 def turns_and_steps(path):
