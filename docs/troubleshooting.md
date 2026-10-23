@@ -152,13 +152,19 @@ so the next triage looks at it again.
 Run `gh auth status`. Workers open pull requests and the driver merges them with `gh`; it needs push and merge rights
 on the repository. Projects not on GitHub use `forge = "git"`.
 
+"HTTP 403: Resource not accessible by integration" with a valid login means the token gh uses (`GH_TOKEN`, a
+fine-grained token) can't reach Actions: counting needs its Actions permission at read, `windvane ci`'s workflow
+start at read and write. Grant it on GitHub under Settings, Developer settings, Personal access tokens; the token
+`gh auth login` makes already has both.
+
 ### The log says "actions: recount failed", or the phone's `status` says "Actions ... (stale: counted Oct 3, workers skip CI)"
 With `actions_minutes` set, windvane recounts the month's Actions minutes through `gh` at each run's start and each
 session's end. When a `gh` call fails, the log says so, naming the call, gh's own first line and the fix:
 "actions: recount failed: `gh api repos/me/proj/actions/runs`: API rate limit exceeded (windvane waits for the limit
 to reset)". A network error adds "(check the connection)", an HTTP 5xx "(GitHub's own error: the next recount tries
-again)", a login problem "(run `gh auth status`)"; when gh's own line already names a command ("please run: gh auth
-login"), nothing is added. Each cause is logged once a run: again
+again)", a login problem "(run `gh auth status`)", a 403 from a token without Actions access "(the token gh uses
+lacks the Actions permission: a fine-grained token needs Actions: read)"; when gh's own line already names a command
+("please run: gh auth login"), nothing is added. Each cause is logged once a run: again
 only when the cause changes or comes back after a recount worked. The next recount that works fixes the count.
 Once the last good count is over a day old, the phone's line marks it stale and workers' commits carry `[skip ci]`
 until a recount succeeds; the log says so once a run, with the same fix as the recount's line. A recount that waited on another project's driver counting isn't a failure and isn't

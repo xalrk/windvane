@@ -2580,7 +2580,7 @@ class Pilot(Desk, Periodic):
                 if self.newer:
                     self.log(f"windvane {self.newer} is out: pipx upgrade windvane")
             if ready:
-                actions.refresh(p)  # status and the phone read only the cached count
+                actions.refresh(p, start=True)  # status and the phone read only the cached count
             stopped_first = ready and not restarted and (p.state / "STOP").exists()
             if stopped_first:  # a stop as it came up (a schedule's window called off as it starts): nothing is spent
                 with self.critical():  # but a held plan, paid for already, still goes out; with STOP still there
