@@ -1017,12 +1017,13 @@ def access_help(c, old=()):
               "then let it read and post on the two new ones, and only them:")
         for topic in old:
             print(f"  ntfy access --reset {user} {topic}")
-        print("Once the old topics are taken back: `windvane phone setup --revoked`; until then every setup prints "
-              "them again.")
     else:
         print(f"On the server, let {who} read and post on windvane's two topics, and only them:")
     for topic in (c["topic"], c["reply_topic"]):
         print(f"  ntfy access {user} {topic} rw")
+    if old:
+        print("Once the old topics are taken back: `windvane phone setup --revoked`; until then every setup prints "
+              "their lines again.")
 
 
 def subscribe_help(c, old=()):
