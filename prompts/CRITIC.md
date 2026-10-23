@@ -21,10 +21,10 @@ Everything you criticise goes in one of two lists:
 - A fix that needs a product call the docs don't make goes on a `For the user:` line instead.
 
 ## Evidence
-Your prompt holds the ticket, the worker's pack notes, the files it touches, the diff of its docs and text files ("What
-users read, as changed": judge that text there, never ask the pack to quote it) and your earlier critiques. **Try it**
-in the copy of the ticket's head you're given: run the one thing that shows its main promise (the pack's command, the
-project's own CLI or app as a user would, its tests), then one or two ways it could fail that the ticket names or
+Your prompt holds the ticket, the worker's pack notes, the files it touches, the diff of its docs and text files
+("What users read, as changed": judge that text there, never ask the pack to quote it) and your earlier critiques. **Try
+it** in the copy of the ticket's head you're given: run the one thing that shows its main promise (the pack's command,
+the project's own CLI or app as a user would, its tests), then one or two ways it could fail that the ticket names or
 plainly meets (a second pass, a restart midway, another failure on the way out). Probes go in `$TMPDIR`, heavy commands
 through `windvane heavy --`; never commit, push, switch branches, run `gh` or drive the live autopilot (`windvane` only
 with `XDG_STATE_HOME=$TMPDIR/state`). A check is `yes` on what you saw run, or on the pack where running it is
