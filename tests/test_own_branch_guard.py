@@ -56,6 +56,35 @@ class Guard(unittest.TestCase):
             self.assertEqual(planner.branch_name(self.p, self.s.root, "plan"), "plan-20261020-120000-2")
             self.assertEqual(planner.branch_name(self.p, self.s.root, "answers"), "answers-20261020-120000")
 
+    def test_a_plan_whose_name_another_clone_pushed_lands_on_a_suffix(self):
+        """The whole plan run (fake `claude`), the other clone pushing while the planner session runs (after the
+        plan's fetch): its push isn't refused as non-fast-forward, so the paid plan isn't held back; the other
+        clone's branch is left as it was."""
+        other = self.s.tmp / "other"
+        self.s.git("clone", "-q", str(self.s.remote), str(other), cwd=self.s.tmp)
+        self.s.git("commit", "-q", "--allow-empty", "-m", "theirs", cwd=other)
+        theirs = self.s.git("rev-parse", "HEAD", cwd=other)
+
+        def session(*a, **k):
+            self.s.git("push", "-q", "origin", "HEAD:refs/heads/plan-20261020-120000", cwd=other)
+            return real(*a, **k)
+
+        real = planner.run_claude
+        with mock.patch.object(planner, "now", lambda: AT), mock.patch.object(planner, "run_claude", session):
+            self.assertGreater(planner.plan(self.p, "make it great"), 0)
+        self.s.git("fetch", "-q", "origin", "plan-20261020-120000-2")
+        self.assertIn(".windvane/tickets/T-002.md", self.s.git("ls-tree", "-r", "--name-only", "FETCH_HEAD"))
+        self.assertEqual(self.s.git("ls-remote", "origin", "plan-20261020-120000").split()[0], theirs)
+        self.assertEqual(held.load_json(self.p.state / "held.json", {}), {})
+        self.assertIn("plan: 1 ticket pushed to plan-20261020-120000-2", (self.p.state / "autopilot.log").read_text())
+
+    def test_a_held_branch_not_its_own_is_left_alone(self):
+        """held.json edited by hand, or written by something else: the run's start skips it rather than raising."""
+        self.s.git("branch", "t-999-x")
+        held.hold(self.p, "t-999-x", "push", "network down")
+        self.assertEqual(held.push_held(self.p), 0)
+        self.assertEqual(self.heads(), {"main"})
+
     def test_a_remote_that_cant_be_asked_still_gives_a_name(self):
         self.s.git("branch", "plan-20261020-120000")  # the local check still counts
         self.s.git("remote", "set-url", "origin", str(self.s.tmp / "gone.git"))
@@ -85,6 +114,12 @@ class AnswersStep(unittest.TestCase):
 
     def test_a_pushed_branch_names_the_merge_status_gives(self):
         self.assertIn("they wait on answers-1 until you merge it into main", self.answer("answers-1"))
+
+    def test_a_pushed_branch_without_a_pr_names_the_pr_to_open(self):
+        cfg = self.s.root / ".windvane/config.toml"
+        cfg.write_text(cfg.read_text().replace('forge = "git"', 'forge = "github"'))
+        self.s.publish("forge")
+        self.assertIn("they wait on answers-1 until you open a PR from it and merge it", self.answer("answers-1"))
 
     def test_a_local_branch_keeps_its_own_step(self):
         where = "the local branch answers-1 (network down; the next run pushes it again)"
