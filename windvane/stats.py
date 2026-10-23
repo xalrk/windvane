@@ -397,6 +397,195 @@ def critic_stats(a, p):
                     first, ever, k = rates[cid]
                     print(f"  {d + ' ' + g(r):9} {cid:10} {first:>2}/{k:<2} {ever:>2}/{k:<2} "
                           f"{critic_mod.advice(first, ever, k, top=r > c['bar'] or r == cs[-1][0])}".rstrip())
+    bought(p, [r for r in recs if r.get("ticket") in dict(c["tickets"])], lad, c["bar"], since)
+
+
+
+SENT_BACK = ("revise", "rethink")  # the critic's steps that send the work back to the worker
+PASSED = ("pass", "scope", "accept")  # its steps that let the work go on to the review, a verdict given
+STEP_RE = re.compile(r"CRITIC STEP: (\w+)")
+CALL_RE = re.compile(r"(?:^|&&|;|\|\||\n)[ \t]*windvane critic\b")
+REVIEW_LOG_RE = re.compile(r"(\S+ \S+) (\S+): review (approve|changes): (.*)")
+
+
+def bought(p, recs, lad, bar, since):
+    """What the critic's verdicts bought in the window: which checks sent work back and whether the next head
+    changed the ticket's tree or only the pack, what those revision rounds cost the worker, the passes the reviewer
+    still bounced, and the checks that never decided anything. Read from critic.jsonl, the ledger, the log and the
+    worker streams, so a change to the critic can show what it saved."""
+    by = {}
+    for r in recs:
+        if critic_mod.ticketed(r):
+            by.setdefault(r["ticket"], []).append(r)
+    backs = [(t, r, rs[i + 1] if i + 1 < len(rs) else None)
+             for t, rs in by.items() for i, r in enumerate(rs) if r.get("step") in SENT_BACK]
+    if not by:
+        return
+    times = Counter(Counter(t for t, _, _ in backs).values())
+    went = [f"{times[n]} went back {n_times(n)}" for n in sorted(times)]
+    note(f"what it bought: {len(by) - sum(times.values())} of {plural(len(by), 'ticket')} passed first time"
+         + "".join(f", {w}" for w in went) + (f"; {plural(len(backs), 'revision')}: {shape(backs)}" if backs else ""))
+    sent_back_table(recs, backs, lad)
+    rounds_line(p, by, backs)
+    misses(p, by, since)
+    undecided(recs, lad, bar)
+
+
+def n_times(n):
+    return {1: "once", 2: "twice"}.get(n, f"{n} times")
+
+
+def changed(r, nxt):
+    """What a sent-back verdict's next call judged: "tree" when the ticket's head moved (`sha` differs), "pack" when
+    only the evidence pack did, "none" when the critic wasn't asked again."""
+    return "none" if nxt is None else "tree" if nxt.get("sha") != r.get("sha") else "pack"
+
+
+def shape(backs):
+    n = Counter(changed(r, nxt) for _, r, nxt in backs)
+    return ", ".join(f"{n[k]} {what}" for k, what in (("tree", "changed the tree"), ("pack", "only the pack"),
+                                                      ("none", "not asked again")) if n[k])
+
+
+def sent_back_table(recs, backs, lad):
+    """Per check: its yes answers of all its answers, and the revisions it sent back alone or with other checks, by
+    what the next head changed. Checks in the scale's order, then any an older scale had."""
+    yes, asked = answered(recs)
+    rows = {}
+    for _, r, nxt in backs:
+        failed = r.get("failed") or []
+        for cid in dict.fromkeys(failed):
+            row = rows.setdefault(cid, Counter())
+            row["alone" if len(set(failed)) == 1 else "others"] += 1
+            row[changed(r, nxt)] += 1
+    order = [cid for cs in (lad or {}).values() for _, cid, _ in cs] + list(asked) + list(rows)
+    order = [cid for cid in dict.fromkeys(order) if cid in asked or cid in rows]
+    if not order:
+        return
+    print("  check        yes      sent back: alone  with others  tree  pack only")
+    for cid in order:
+        row = rows.get(cid, Counter())
+        print(f"  {cid:12} {f'{yes[cid]}/{asked[cid]}':8} {row['alone']:>16}  {row['others']:>11}  {row['tree']:>4}"
+              f"  {row['pack']:>9}")
+
+
+def answered(recs):
+    """Each check's yes answers and its answers of any kind, over the ticket verdicts in `recs`."""
+    yes, asked = Counter(), Counter()
+    for r in recs:
+        for cid, a in (r.get("answers") or {}).items() if critic_mod.ticketed(r) else ():
+            asked[cid] += 1
+            yes[cid] += a == "yes"
+    return yes, asked
+
+
+def stream_rounds(p, tid):
+    """The worker's revision rounds on `tid`, in order: [(turns, weighted tokens)], each from a `CRITIC STEP: revise`
+    (or rethink) the critic call printed to the next `windvane critic` call, across the ticket's worker runs (a run
+    cut off mid-round carries on in the next). A turn's input and cache tokens are its own, from the stream; its
+    output isn't in the stream (each turn's usage there is a partial count), so a round gets the run's output in
+    proportion to its turns."""
+    rounds, cur = [], None
+    for row in read_jsonl(p.state / "ledger.jsonl"):
+        if row.get("role") != "worker" or row.get("event") or row.get("ticket") != tid or not row.get("stream"):
+            continue
+        seen = {}  # every turn of the run, by message id
+        for ev in read_jsonl(p.state / "runs" / row["stream"]):
+            if not isinstance(ev, dict):
+                continue
+            msg = ev.get("message") or {}
+            if ev.get("type") == "assistant":
+                mid = msg.get("id") or len(seen)
+                seen[mid] = msg.get("usage") or {}
+                if cur is not None:
+                    cur.setdefault(row["stream"], {})[mid] = seen[mid]
+                    if any(CALL_RE.search(str((c.get("input") or {}).get("command", ""))) for c in tool_uses(msg)):
+                        cur = None
+            elif ev.get("type") == "user" and isinstance(msg.get("content"), list):
+                for c in msg["content"]:
+                    if c.get("type") == "tool_result" and (m := STEP_RE.search(str(c.get("content")))):
+                        cur = {} if m[1] in SENT_BACK else None
+                        rounds += [cur] * (cur is not None)
+        per_turn = (row.get("output") or 0) / max(len(seen), 1)
+        for r in rounds:
+            for mid, u in r.get(row["stream"], {}).items():
+                u["_out"] = per_turn
+    return [(sum(len(v) for v in r.values()), sum(turn_weight(u) for v in r.values() for u in v.values()))
+            for r in rounds]
+
+
+def tool_uses(msg):
+    content = msg.get("content")
+    return [c for c in content if isinstance(c, dict) and c.get("type") == "tool_use"] if isinstance(content, list) else []
+
+
+def turn_weight(u):
+    return weighted({"input": u.get("input_tokens"), "cache_write": u.get("cache_creation_input_tokens"),
+                     "cache_read": u.get("cache_read_input_tokens"), "output": u.get("_out")})
+
+
+def rounds_line(p, by, backs):
+    """What the revision rounds cost the worker, split by what they changed when a ticket's rounds in the streams
+    line up one to one with its sent-back verdicts."""
+    if not backs:
+        return
+    total, split, unmatched = [0, 0, 0], {}, 0
+    for t in by:
+        verdicts = [(r, nxt) for u, r, nxt in backs if u == t]
+        rounds = stream_rounds(p, t)
+        for turns, w in rounds:
+            total[0] += 1
+            total[1] += turns
+            total[2] += w
+        if len(rounds) != len(verdicts):
+            unmatched += len(rounds)
+            continue
+        for (r, nxt), (turns, w) in zip(verdicts, rounds):
+            s = split.setdefault(changed(r, nxt), [0, 0, 0])
+            s[0], s[1], s[2] = s[0] + 1, s[1] + turns, s[2] + w
+    if not total[0]:
+        print("revision rounds: none found in the worker streams")
+        return
+    parts = [f"{what} {s[0]}: {plural(s[1], 'turn')}, {k(s[2])}" for key, what in
+             (("tree", "tree"), ("pack", "pack only"), ("none", "not asked again")) if (s := split.get(key))]
+    parts += [f"{unmatched} not matched to a verdict"] * bool(unmatched)
+    note(f"revision rounds in the worker streams: {plural(total[0], 'round')}, {plural(total[1], 'turn')}, "
+         f"{k(total[2])} weighted tokens" + (f" ({'; '.join(parts)})" if parts else "")
+         + "; a round's output tokens are its run's, shared out by turns")
+
+
+def misses(p, by, since):
+    """The critic's misses: reviews that asked for changes on a ticket whose latest verdict before the review let the
+    work go on, with the review's line from the log."""
+    reviewed, missed = 0, []
+    for line in last_log(p, None):
+        m = REVIEW_LOG_RE.match(line)
+        if not m or m[2] not in by or m[1] < since:
+            continue
+        before = [r for r in by[m[2]] if r.get("at", "") <= m[1]]
+        if before and before[-1].get("step") in PASSED:
+            reviewed += 1
+            if m[3] == "changes":
+                missed.append(m)
+    if not reviewed:
+        return
+    print(f"critic misses: {missed and len(missed) or 'none'} of {plural(reviewed, 'review')} after a critic pass "
+          f"asked for changes" + ":" * bool(missed))
+    for m in missed:
+        print(f"  {m[2]:8} {m[1]}  {critic_mod.clip(m[4], 70)}")
+
+
+def undecided(recs, lad, bar, least=5):
+    """Checks that decided nothing in the window, once `least` verdicts answered them: always yes, so never sent
+    work back, or (over the pass mark) never yes, so never raised a score. Their answers cost the critic's output
+    tokens either way."""
+    above = {cid for cs in (lad or {}).values() for r, cid, _ in cs if r > bar}
+    yes, asked = answered(recs)
+    always = [f"{cid} {asked[cid]}/{asked[cid]}" for cid in asked if asked[cid] >= least and yes[cid] == asked[cid]]
+    never = [f"{cid} 0/{asked[cid]}" for cid in asked if asked[cid] >= least and cid in above and not yes[cid]]
+    if always or never:
+        note("decided nothing: " + "; ".join([f"always yes: {', '.join(always)}"] * bool(always)
+                                            + [f"never yes over the pass mark: {', '.join(never)}"] * bool(never)))
 
 
 def no_verdicts(p, recs, since):

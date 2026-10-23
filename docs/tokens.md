@@ -87,6 +87,14 @@ time, not tokens; no line without any. `stats --critic` ends with `no verdict: 2
 re-asks that try to save a reply the driver couldn't read, how they went, and what their sessions (labelled
 `-critic-reask`) cost.
 
+Its `what it bought` lines say what the critic's verdicts got: how many tickets went back and how often, and whether
+each revision's next verdict was on a new head (`changed the tree`) or the same `sha` with only the evidence pack
+refreshed (`only the pack`); per check, its yes answers and the revisions it sent back alone or with other checks;
+what the revision rounds cost the worker, the turns and weighted tokens in `runs/*.jsonl` from a `CRITIC STEP:
+revise` to the next `windvane critic` call (the stream carries no reliable output count per turn, so a round gets its
+run's output tokens in proportion to its turns); `critic misses`, the reviews that asked for changes after a critic
+pass, with the review's line; and the checks that decided nothing (always yes, or never yes over the pass mark).
+
 Check logs (`state/checks/`) are pruned when a check starts: a passed check's log after 3 days, any after 3 weeks,
 but never one still running or one of the 5 newest that failed or were cut off. A killed check's log gets its
 end row (its minutes) in the ledger before it goes, so its time still counts.
