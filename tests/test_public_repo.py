@@ -85,6 +85,10 @@ class Base(unittest.TestCase):
         pilot.work("T-001", "resume" if branches else "new", list(branches))
         return self.envs("# windvane worker run")[-1]
 
+    def hooks(self):
+        """The config file that gives the worker's worktree, and only it, windvane's push-scanning hooks."""
+        return str(worktree.hooks_folder(self.p, self.p.work_dir) / worktree.HOOKS_CONFIG)
+
     def envs(self, role):
         return [json.loads(x)["env"] for x in Path(os.environ["FAKE_ENV"]).read_text().splitlines()
                 if json.loads(x)["role"].startswith(role)]
@@ -145,7 +149,7 @@ class SessionEnv(Base):
             self.assertEqual(env[kept], os.environ[kept])
         self.assertEqual((env["PATH"].split(os.pathsep)[-1], env["HOME"]), ("/bin", os.environ["HOME"]))
         self.assertNotIn("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", env)
-        self.assertIn(("core.hooksPath", str(worktree.hooks_folder(self.p, self.p.work_dir))), runner.git_config(env))
+        self.assertIn(self.hooks(), [v for k, v in runner.git_config(env) if k.startswith("includeIf.gitdir:")])
 
     def test_claude_codes_subprocess_scrub_never_reaches_a_session_as_it_turns_auto_mode_off(self):
         os.environ["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
@@ -184,7 +188,7 @@ class TokenFile(Base):
         self.assertNotIn("GITHUB_TOKEN", env)
         config = runner.git_config(env)[len(GIT_CONFIG):]  # after the Sandbox's own
         self.assertEqual(config[:len(runner.GH_GIT)], list(runner.GH_GIT))  # pushes go through gh, with it
-        self.assertIn(("core.hooksPath", str(worktree.hooks_folder(self.p, self.p.work_dir))), config)
+        self.assertIn(self.hooks(), [v for k, v in config if k.startswith("includeIf.gitdir:")])
         runner.scope_github(self.p)
         runner.scope_github(self.p)  # once is enough: git's settings aren't added twice
         driver.pr_for(self.p, "t-001-work")

@@ -2,6 +2,7 @@
 driver, the plan run and held-back pushes, so neither of those imports the driver."""
 import contextlib
 import os
+import re
 import shutil
 from datetime import timedelta
 from pathlib import Path
@@ -83,11 +84,12 @@ HOOKS = "hooks"  # under the state dir: one hooks folder per worktree a session 
 
 
 def guard_pushes(p, path):
-    """Environment for a session that pushes from `path`: git's core.hooksPath, given in its environment config (never
-    the repo's: the user's checkout shares it), on a hooks folder of windvane's own. Its pre-push scans what each push
-    makes public (`privacy.pre_push`), then runs the repo's own pre-push; the repo's other hooks are linked in, so they
-    run as before. Rebuilt for every session: the repo's hooks may have changed. Sessions push their own branches, so
-    a scan in the driver would come too late: on a public repository a branch is public the moment it's pushed."""
+    """Environment for a session that pushes from `path`: git's core.hooksPath for `path` only (`hooks_env`), given in
+    its environment config (never the repo's: the user's checkout shares it), on a hooks folder of windvane's own. Its
+    pre-push scans what each push makes public (`privacy.pre_push`), then runs the repo's own pre-push; the repo's other
+    hooks are linked in, so they run as before. Rebuilt for every session: the repo's hooks may have changed. Sessions
+    push their own branches, so a scan in the driver would come too late: on a public repository a branch is public the
+    moment it's pushed."""
     folder = hooks_folder(p, path)
     theirs = their_hooks(path)
     shutil.rmtree(folder, ignore_errors=True)
@@ -99,9 +101,30 @@ def guard_pushes(p, path):
     own = theirs / "pre-push"
     script.write_text(privacy.hook_script(p.root, p.upstream, str(own) if os.access(own, os.X_OK) else ""))
     script.chmod(0o755)
+    return hooks_env(path, folder)
+
+
+HOOKS_CONFIG = ".gitconfig"  # in a hooks folder: the core.hooksPath its session's worktree includes
+
+
+def hooks_env(path, folder):
+    """Environment config giving `path`'s repo `folder` as its core.hooksPath, and no other repo: a session's git
+    environment reaches every git it runs, its check's included, so a plain core.hooksPath would also be the hooks of
+    every repo a test clones or inits (`git lfs install` there refuses windvane's pre-push, a test's own hooks never
+    run). The setting sits in a file in `folder`, included only where the git dir is `path`'s; no repo config is
+    written. An included file reads as scope `command`, so `their_hooks` still skips it."""
+    gitdir = git(path, "rev-parse", "--absolute-git-dir").stdout.strip()
+    pattern = re.sub(r"([][*?\\])", r"\\\1", gitdir)  # a glob to git: a `[` or `*` in the path matches only itself
+    conf = Path(folder, HOOKS_CONFIG)
+    conf.write_text(f"[core]\n\thooksPath = {quote_config(str(folder))}\n")
     n = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
-    return {"GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": "core.hooksPath",
-            f"GIT_CONFIG_VALUE_{n}": str(folder)}
+    return {"GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": f"includeIf.gitdir:{pattern}.path",
+            f"GIT_CONFIG_VALUE_{n}": str(conf)}
+
+
+def quote_config(value):
+    """`value` as a git config file's quoted string."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def hooks_folder(p, path):

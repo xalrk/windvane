@@ -43,6 +43,9 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A session's hooks (the push scan, and `[skip ci]` at the Actions cap) apply to its own worktree only. They used to
+  become the hooks of every repository a check clones or inits, so `git lfs install` in a test's clone failed under
+  `windvane check` and a test's own hooks never ran.
 - A kept job (`bg --heavy --keep`) that its own watch ended at the run's stop, before the run had wound down to it, is
   now listed under "Kept jobs killed at the stop" in the run's summary, and its log says the run's stop killed it. On
   a slow machine the run used to miss it.
