@@ -33,7 +33,9 @@ def stat(utime, stime=0):
     return f"1 (x y) S {' '.join(['0'] * 10)} {utime} {stime} " + " ".join(["0"] * 30)
 
 
-class Measure(unittest.TestCase):
+class Fixture(unittest.TestCase):
+    """A fake /proc with three busy-looking processes and a 1-minute load of 9.5, machine.toml's measure_load at 4,
+    and heavy jobs started on it in their own processes."""
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(prefix="windvane-")
         self.addCleanup(tmp.cleanup)
@@ -105,6 +107,8 @@ class Measure(unittest.TestCase):
             code = heavy.run(["true"], wait_s=wait_s, mem=0, measure=measure)
         return code, err.getvalue().splitlines()
 
+
+class Measure(Fixture):
     def test_a_measurement_waits_while_the_load_is_high_and_starts_once_it_drops(self):
         job = self.job("timing", measure=True)
         self.until(lambda: self.said("timing"))
@@ -116,7 +120,7 @@ class Measure(unittest.TestCase):
         self.assertEqual(self.ran(), [])
         self.assertEqual(len([l for l in self.said("timing") if l.startswith("heavy: waiting:")]), 1,
                          "said once, not again as the load drifts")
-        self.assertIn("is machine.toml's measure_load", self.said("timing")[0])
+        self.assertIn(f"is measure_load in {self.d / 'cfg/windvane/machine.toml'} ", self.said("timing")[0])
         self.load(3.9)
         self.assertEqual(job.wait(15), 0)
         self.assertEqual(self.ran(), ["timing"])
@@ -129,8 +133,9 @@ class Measure(unittest.TestCase):
         self.assertEqual(code, heavy.TIMED_OUT)
         self.assertRegex(lines[0], r"^heavy: waiting: load 9\.5 \(want ≤ 4\); busiest: "
                                    r"pid 4101 qemu-system-x86 \d+% in emu/slot-1, pid 4102 java \d+% in app/work; "
-                                   r"the ≤ 4 is machine.toml's measure_load \(default: a quarter of the CPU count\): "
-                                   r"raise it there if this machine is never that quiet$")
+                                   r"the ≤ 4 is measure_load in \S+/cfg/windvane/machine\.toml \(default: a quarter "
+                                   r"of the CPU count\): if this machine is never that quiet, raise it there with a line "
+                                   r"measure_load = <n>$")
         self.assertNotIn("4103", lines[0])  # it used no CPU between the samples
 
     def test_cpu_times_come_from_each_process_stat(self):
@@ -219,6 +224,21 @@ class Measure(unittest.TestCase):
                 self.assertEqual(lines[0], "heavy: load 1.2 at start")
                 self.assertEqual(lines[-1], "heavy: load 3.4 at end, 5.1 peak")
                 self.assertFalse(heavy.waiting(self.d / f"{tag}.err"))  # it ran: not still in the queue
+
+    def test_the_start_load_is_said_before_the_command_runs(self):
+        """Not after starting it: on a busy machine the command's own output came first."""
+        marker, seen, load = self.d / "ran", [], heavy.load_avg
+
+        class Log(io.StringIO):
+            def write(self, text):
+                if "at start" in text:
+                    seen.append(marker.exists())
+                return super().write(text)
+        self.in_process(load_avg=lambda: (time.sleep(0.3), load())[1])  # time for a started command to run
+        with redirect_stderr(Log()):
+            self.assertEqual(heavy.run(["touch", str(marker)], wait_s=5, mem=0), 0)
+        self.assertEqual(seen, [False])
+        self.assertTrue(marker.exists())
 
     def test_without_a_load_source_it_says_so_once_and_does_not_wait(self):
         (self.proc / "loadavg").unlink()
