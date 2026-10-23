@@ -51,7 +51,8 @@ DEFAULTS = {
                "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high",
                "preflight": "sonnet", "preflight_effort": "medium",  # preflight: a light read of the next tickets
                "fix": "opus", "fix_effort": "high"},  # fix: makes a red or conflicting desk PR merge
-    "critic": {"enabled": True, "pass": 8, "floor": 4, "revisions": 3},
+    "critic": {"enabled": True, "pass": 8, "floor": 4, "revisions": 3,
+               "text": []},  # globs of the files users read beyond Markdown: the critic reads their diff
     # parallel: "auto" starts another ticket whenever one fits beside the running ones (Touches) and in the usage
     # window, up to max_parallel; a number caps the slots at that
     "autopilot": {"parallel": "auto", "max_parallel": 4, "cap": 75, "week_cap": 95, "ticket_hours": 3,
@@ -230,6 +231,14 @@ def heavy_reuses(v):
     return v
 
 
+def critic_text(v):
+    """`[critic] text`: paths or globs (a directory ending in /) of message files or UI strings."""
+    if not isinstance(v, list) or not all(isinstance(x, str) and x.strip("/ ") for x in v):
+        raise SystemExit(f"windvane: [critic] text = {v!r} in config.toml: use a list of paths or globs, "
+                         "e.g. text = [\"src/messages/*.json\"]")
+    return v
+
+
 def actions_budget(c):
     """`actions_minutes` and `actions_cap`, checked at once: a typo here would let `windvane ci` spend unchecked."""
     m, cap = c["actions_minutes"], c["actions_cap"]
@@ -329,6 +338,7 @@ class Project:
         self.tmux = f"windvane-{self.name}"
         self.models = c["models"]
         self.critic = c["critic"]
+        critic_text(self.critic["text"])
         self.ap = c["autopilot"]
         setup_minutes(c["setup_minutes"])
         setup_minutes(c["teardown_minutes"], key="teardown_minutes")

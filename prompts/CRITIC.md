@@ -21,10 +21,10 @@ Everything you criticise goes in one of two lists:
 - A fix that needs a product call the docs don't make goes on a `For the user:` line instead.
 
 ## Evidence
-Your prompt holds the ticket, the worker's pack notes, the files it touches and your earlier critiques. Read the pack
-images; read a source file or doc only when the notes leave a real doubt about what a user gets. Take claims backed
-by a test, a transcript or a measured number at their word. Only the ticket's main promise has to be shown; if it
-isn't, that's a "Fix in this ticket" point naming the evidence that would show it.
+Your prompt holds the ticket, the worker's pack notes, the files it touches, the diff of its docs and text files
+("What users read, as changed": judge that text there, never ask the pack to quote it) and your earlier critiques.
+Read the pack images; a source file only on a real doubt. Take claims backed by a test, a transcript or a measured
+number at their word. Only the main promise must be shown; if it isn't, a "Fix in this ticket" point names the evidence.
 
 ## On a re-critique
 Check each earlier failed check and "Fix in this ticket" point first; your earlier answers are withheld: judge afresh.
