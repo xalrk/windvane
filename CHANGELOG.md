@@ -51,7 +51,10 @@ release on the same day adds a number (`2026.10.9.1`).
   become the hooks of every repository a check clones or inits, so `git lfs install` in a test's clone failed under
   `windvane check` and a test's own hooks never ran.
 - A session's push from a git submodule in its worktree is scanned against what that submodule's own remote already
-  has, not the project's main branch, and the submodule's own hooks run there instead of the project's.
+  has, not the project's main branch, and the submodule's own hooks run there instead of the project's. That
+  includes a submodule cloned in place with its own `.git` folder, as `.gitmodules` names it when the session starts.
+- A driver stopped while it rebuilt a session's hooks folder no longer leaves it empty or half-written, which let
+  a session already running in that worktree push without the scan: each folder is built beside it and swapped in.
 - A kept job (`bg --heavy --keep`) that its own watch ended at the run's stop, before the run had wound down to it, is
   now listed under "Kept jobs killed at the stop" in the run's summary, and its log says the run's stop killed it. On
   a slow machine the run used to miss it.

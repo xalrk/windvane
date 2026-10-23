@@ -19,7 +19,6 @@ import math
 import os
 import re
 import shlex
-import shutil
 import sys
 import threading
 import time
@@ -504,22 +503,22 @@ def skip_hooks(p, wd):
     line. It reads only the cache: no network in a git hook."""
     own = own_hooks(p, wd) or Path(wd, run(["git", "rev-parse", "--git-common-dir"], wd).stdout.strip(),
                                        "hooks").resolve()
+    from .worktree import rebuild
     folder = p.state / "skip-ci-hooks" / Path(wd).resolve().name  # one per worktree: parallel slots rebuild their own
-    shutil.rmtree(folder, ignore_errors=True)
-    folder.mkdir(parents=True)
-    for hook in own.iterdir() if own.is_dir() else ():
-        if hook.suffix != ".sample" and hook.name != "prepare-commit-msg" and os.access(hook, os.X_OK):
-            (folder / hook.name).symlink_to(hook)
     first = own / "prepare-commit-msg"
-    script = folder / "prepare-commit-msg"
-    script.write_text("#!/bin/sh\n# windvane: [skip ci] while the month's GitHub Actions minutes are at the cap\n"
-                      + (f'{shlex.quote(str(first))} "$@" || exit $?\n' if os.access(first, os.X_OK) else "")
-                      + f"python3 -c {shlex.quote(UNDER)} {shlex.quote(str(cache_file()))} {cap_minutes(p)} {STALE_S} "
-                      f"{shlex.quote(str(p.root))} 2>/dev/null && exit 0\n"
-                      f"grep -qF '{SKIP}' \"$1\" && exit 0\n"
-                      f"{{ printf '%s {SKIP}\\n' \"$(sed -n 1p \"$1\")\"; sed 1d \"$1\"; }} > \"$1.windvane\" "
-                      '&& mv "$1.windvane" "$1"\n')
-    script.chmod(0o755)
+    text = ("#!/bin/sh\n# windvane: [skip ci] while the month's GitHub Actions minutes are at the cap\n"
+            + (f'{shlex.quote(str(first))} "$@" || exit $?\n' if os.access(first, os.X_OK) else "")
+            + f"python3 -c {shlex.quote(UNDER)} {shlex.quote(str(cache_file()))} {cap_minutes(p)} {STALE_S} "
+            f"{shlex.quote(str(p.root))} 2>/dev/null && exit 0\n"
+            f"grep -qF '{SKIP}' \"$1\" && exit 0\n"
+            f"{{ printf '%s {SKIP}\\n' \"$(sed -n 1p \"$1\")\"; sed 1d \"$1\"; }} > \"$1.windvane\" "
+            '&& mv "$1.windvane" "$1"\n')
+    with rebuild(folder) as new:
+        for hook in own.iterdir() if own.is_dir() else ():
+            if hook.suffix != ".sample" and hook.name != "prepare-commit-msg" and os.access(hook, os.X_OK):
+                (new / hook.name).symlink_to(hook)
+        (new / "prepare-commit-msg").write_text(text)
+        (new / "prepare-commit-msg").chmod(0o755)
     return folder
 
 

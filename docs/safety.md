@@ -275,10 +275,12 @@ leaves the machine at three points:
   belongs to the session's own worktree and its submodules only: a repository that a test in your check clones or
   creates keeps its own hooks, so `git lfs install` works there and the test's own hooks run. A git submodule in that
   worktree is a repository of its own, whose remote may be public too: a push from it is scanned the same way, except
-  that what this clone knows that remote has doesn't count, and the submodule's own hooks still run (not
-  `reference-transaction` and the other hooks git runs on every ref change). That holds for the submodules git keeps
-  in the worktree's git dir, as `git submodule add <url>` and `git submodule update` make them, not for a repository
-  added in place with its own `.git` folder.
+  that commits that remote already has aren't held against the push, and the submodule's own hooks still run. That
+  holds for the submodules git keeps in the worktree's git dir, as `git submodule add <url>` and `git submodule
+  update` make them, and for those `.gitmodules` names with a `.git` folder of their own when the session starts (an
+  existing clone added with `git submodule add <url> <path>`, an older checkout); one cloned in place during the
+  session isn't covered. The hooks folders are rebuilt for each session and swapped in whole, so a driver stopped
+  midway leaves the previous ones working.
 - **Every merge.** Before it merges a ticket or a desk PR, the driver scans the branch's commits again, for a push that
   got past the hook (`--no-verify`, or one made elsewhere). A ticket goes back to its worker, who takes it out with a
   commit on top; windvane then merges the branch as one commit, so the commit that added it stays out of main's
