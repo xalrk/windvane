@@ -738,7 +738,7 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
     prompt = "\n\n".join(filter(None, [prompt, trial_part(p, cwd, rev, tree, note)]))
     system, session, out = system_prompt(p, cwd), {}, {"trial": "ran" if tree else "read-only"}
     while True:
-        text, killed, error = run_claude(p, "critic", f"{tid}-critic", prompt, system, where, allow, deny,
+        text, killed, error = run_claude(p, "critic", f"{tid}-critic", prompt, system, where, allow=allow, deny=deny,
                                          usage=usage, stop_if=stop, ticket=tid, session=session, extra_env=git_env)
         if not error or not retry or not retry(error):
             break
