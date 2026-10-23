@@ -149,8 +149,20 @@ class CriticTrial(unittest.TestCase):
         self.assertIn("a critic never drives the autopilot: `windvane stop` is refused", seen["out"])
         self.assertIn("quiet=0", seen["out"])  # what only reads still runs
         [call] = self.calls()
-        self.assertIn("Bash(windvane stop *)", call["deny"])
-        self.assertFalse((self.p.state / "stop").exists())
+        self.assertNotIn("Bash(windvane stop *)", call["deny"])  # it would turn away the scratch form too
+        self.assertFalse((self.p.state / "STOP").exists())
+
+    def test_it_drives_windvane_on_scratch_state(self):
+        self.env("FAKE_CRITIC_TRY", "XDG_STATE_HOME=$TMPDIR/state windvane stop; echo stop=$?; "
+                                    "ls $TMPDIR/state/windvane/*/STOP; windvane doctor --clean; echo clean=$?")
+        self.critic()
+        [seen] = self.tried()
+        self.assertIn("stop=0", seen["out"])
+        self.assertIn("/STOP\n", seen["out"])  # the scratch run's stop file
+        self.assertIn("`windvane doctor --clean` is refused on the live state", seen["out"])
+        self.assertIn("`XDG_STATE_HOME=$TMPDIR/state windvane doctor --clean ...`", seen["out"])
+        self.assertIn("clean=1", seen["out"])
+        self.assertFalse((self.p.state / "STOP").exists())
 
     def test_a_retry_gets_its_own_time_box(self):
         self.s.write(".windvane/config.toml", self.s.root.joinpath(".windvane/config.toml").read_text()

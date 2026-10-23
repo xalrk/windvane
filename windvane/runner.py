@@ -12,12 +12,13 @@ from datetime import datetime
 from pathlib import Path
 
 from . import actions, scratch
-from .config import HOME, author, github_token
+from .config import HOME, author, github_token, user_dir
 from .util import append_jsonl, last_match, load_json, recorded_stamp, same_process, save_json, stamp, started_at
 
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
 ROLE = "WINDVANE_ROLE"  # the session's role: `windvane request` records it, and files only from a worker (or the desk)
+LIVE = "WINDVANE_LIVE_STATE"  # the state root the session's driver runs on: a critic may drive windvane on any other
 NO_REQUEST = "Bash(windvane request *)"  # sessions other than workers (and the desk) don't file windvane requests
 TOOL_MS = "600000"
 GRACE = 3  # seconds a nested session gets to end on SIGTERM before SIGKILL: short, the driver waits on it
@@ -467,6 +468,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
            *(["--resume", resume] if resume else [])]
     started, parent = time.time(), os.environ.get(NEST)
     extra = {NEST: raw.stem, TICKET: ticket, ROLE: role, "TMPDIR": str(scratch.session_dir(p, ticket or label)),
+             LIVE: str(user_dir("XDG_STATE_HOME", ".local/state").resolve()),
              **(extra_env or {})}
     if limits:
         extra.update(WINDVANE_STOP_AT=str(limits[0].timestamp()), WINDVANE_CAPS=f"{limits[1]:g},{limits[2]:g}")

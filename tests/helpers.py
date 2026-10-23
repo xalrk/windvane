@@ -487,7 +487,7 @@ class Sandbox:
         os.environ.clear()  # without a worker's own GIT_CONFIG_* ([skip ci] hook, for one)
         os.environ.update({**{k: v for k, v in self.old_env.items() if not k.startswith("GIT_CONFIG_")}, **self.env})
         for k in ("WINDVANE_SESSION", "WINDVANE_TICKET", "WINDVANE_STOP_AT", "WINDVANE_CAPS", "WINDVANE_ROLE",
-                  "WINDVANE_SUPERVISED", "WINDVANE_RESTARTED", "WINDVANE_BEGAN",
+                  "WINDVANE_LIVE_STATE", "WINDVANE_SUPERVISED", "WINDVANE_RESTARTED", "WINDVANE_BEGAN",
                   "WINDVANE_BG_JOB"):  # when run in a session or its job
             os.environ.pop(k, None)
         from windvane import login, net, scratch

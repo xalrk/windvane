@@ -2,15 +2,14 @@
 on the project's own scale (`.windvane/CRITIC.md`), harshly. The code reviewer comes after it; the critic judges the
 outcome.
 
-The worker leaves an evidence pack in `<state>/critic/<ID>/`: `notes.md` (line 1 `User-facing: yes` or
-`User-facing: no (<why>)`, then what a user now gets and measured numbers) and up to a few images (screenshots,
-contact sheets). It runs `windvane critic <ID>` and follows the last line, `CRITIC STEP`: pass (lowest dimension >=
-pass mark), scope (under it, but nothing this ticket can fix), revise, rethink (the first dimension under the floor:
-the approach is wrong), accept (out of revisions). It tries the change itself, in a throwaway copy of the ticket's head
-(`worktree.trial`), for at most `[critic] trial_minutes`. A scale written as ladders of yes/no checks (T-054) has the critic
-answer the checks and the driver work out the score; an old numeric scale has the critic write the numbers. Either
-way the critic never sees the bar. Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed
-`windvane plan`.
+The worker leaves an evidence pack in `<state>/critic/<ID>/`: `notes.md` (line 1 `User-facing: yes` or `User-facing: no
+(<why>)`, then what a user now gets and measured numbers) and up to a few images (screenshots, contact sheets). It runs
+`windvane critic <ID>` and follows the last line, `CRITIC STEP`: pass (lowest dimension >= pass mark), scope (under it,
+but nothing this ticket can fix), revise, rethink (the first dimension under the floor: the approach is wrong), accept
+(out of revisions). It tries the change itself, in a throwaway copy of the ticket's head (`worktree.trial`), for at most
+`[critic] trial_minutes`. A scale written as ladders of yes/no checks (T-054) has the critic answer the checks and the
+driver work out the score; an old numeric scale has the critic write the numbers. Either way the critic never sees the
+bar. Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed `windvane plan`.
 
 `windvane critic --project` (and the `project-critic` [[periodic]] preset) runs the same scale on the whole project
 as it stands on main, one session per dimension (`project`), each in project mode (`prompts/CRITIC-project.md`). Its
@@ -29,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import net, privacy, renumber, worktree
-from .config import DIR, HOME
+from .config import DIR, HOME, user_dir
 from .phone import cut
 from .runner import plain_error, run_claude
 from .util import append_jsonl, git, gout, load_json, log, read_jsonl
@@ -69,12 +68,12 @@ DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch
 # it (`restore`), the ticket critic's is a throwaway copy (`worktree.trial`)
 PROJECT_DENY = DENY[1:] + ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
                            "Bash(git reset *)", "Bash(git stash *)", "Bash(gh *)"]
-# What `windvane` lets a critic run (`refused`): the heavy lock and what only reads. Never what drives the autopilot
-# (run, stop, critic, check, ci, bg...): its copy shares the live state dir, so a "restart midway" tried there would stop
-# the user's run. The deny rules turn the plain forms away first; the env check also catches `bin/windvane`.
-MAY_RUN = ("heavy", "status", "stats", "queue", "overview", "mode", "quiet")
-TRIAL_DENY = PROJECT_DENY + [f"Bash(windvane {c} *)" for c in ("run", "stop", "critic", "plan", "check", "ci", "bg",
-                                                               "await", "answer", "retry", "periodic", "request")]
+# What `windvane` lets a critic run on the live state dir (`refused`): the heavy lock and what only reads. Never what
+# drives the autopilot (run, stop, critic, check, ci, bg...): its copy shares that dir, so a "restart midway" tried there
+# would stop the user's run. On scratch state (another XDG_STATE_HOME) it runs anything, so no deny rule names these:
+# one would also turn away the scratch form, and the env check catches every spelling (`bin/windvane` too).
+MAY_RUN = ("heavy", "status", "stats", "queue", "overview", "mode", "quiet", "doctor", "watch", "public-check")
+TRIAL_DENY = PROJECT_DENY + ["Bash(windvane request *)"]
 TRIAL_UP = "trial time"  # why a ticket critic's session was stopped at `trial_minutes`: it then answers on what it saw
 PROJECT = "PROJECT"  # critic.jsonl's ticket for a verdict on the whole project
 COVERED_RE = re.compile(r"[(\[]?[ \t]*covered by[ \t]+([A-Za-z]+-\d+[a-z]?)[ \t]*[)\]]?", re.I)
@@ -796,12 +795,18 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
     return entry, critique
 
 
-def refused(cmd, role):
-    """Why `windvane <cmd>` is refused in a critic's session (its role from the environment), or ""."""
+def refused(cmd, role, live):
+    """Why `windvane <cmd>` is refused in a critic's session, or "": `role` and `live` (the state root its driver runs
+    on, LIVE) come from the environment. A command whose state root is elsewhere can't reach the user's run; without
+    `live` (an older driver) every state root counts as the live one."""
     if role.split(":")[0] != "critic" or not cmd or cmd in MAY_RUN or cmd == "request":  # it refuses with its own rule
         return ""
-    return (f"windvane: a critic never drives the autopilot: `windvane {cmd}` is refused (it may run "
-            f"{', '.join(f'`{c}`' for c in MAY_RUN)}). Try the change on scratch state in $TMPDIR.")
+    here = user_dir("XDG_STATE_HOME", ".local/state").resolve()
+    if live and here != Path(live).resolve():
+        return ""
+    return (f"windvane: a critic never drives the autopilot: `windvane {cmd}` is refused on the live state (it may run "
+            f"{', '.join(f'`{c}`' for c in MAY_RUN)}). Anything runs on scratch state: "
+            f"`XDG_STATE_HOME=$TMPDIR/state windvane {cmd} ...`.")
 
 
 def time_up(tid, minutes):

@@ -22,7 +22,7 @@ from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
 from .config import periodic as periodic_entries
 from .queue import Queue
-from .runner import Usage, inherited_stop, plain_error, scope_github
+from .runner import LIVE, ROLE, Usage, inherited_stop, plain_error, scope_github
 from .stats import cmd_stats, shared_line  # cmd_stats: main runs `stats` by its name
 from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 
@@ -903,7 +903,8 @@ def main(argv=None):
     s.add_argument("-n", type=int, default=30, help="start with this many past events")
     s.add_argument("-o", type=int, default=6, help="lines of each command's output (0 hides output)")
     a = ap.parse_args(argv)
-    if why := critic_mod.refused(a.cmd, os.environ.get("WINDVANE_ROLE", "")):
+    cmd = "doctor --clean" if a.cmd == "doctor" and a.clean else a.cmd  # --clean removes what the state dir holds
+    if why := critic_mod.refused(cmd, os.environ.get(ROLE, ""), os.environ.get(LIVE, "")):
         sys.exit(why)
     if a.cwd:
         if not os.path.isdir(a.cwd):  # a phone hook whose repo was deleted: one line, not a traceback
