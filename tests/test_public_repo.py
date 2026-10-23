@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import cli, doctor, driver, net, runner, worktree  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
-from helpers import REPO, Sandbox  # noqa: E402
+from helpers import GIT_CONFIG, REPO, Sandbox  # noqa: E402
 
 # PRs from a JSON state file: `pr list` filters by --head and --state as gh does (any fork's branch of that name
 # matches), `pr view` gives a body, `api` the private repos the token reaches. Every call notes the GH_TOKEN it saw.
@@ -182,14 +182,14 @@ class TokenFile(Base):
         env = self.work()
         self.assertEqual(env["GH_TOKEN"], "github_pat_scoped")
         self.assertNotIn("GITHUB_TOKEN", env)
-        config = runner.git_config(env)
+        config = runner.git_config(env)[len(GIT_CONFIG):]  # after the Sandbox's own
         self.assertEqual(config[:len(runner.GH_GIT)], list(runner.GH_GIT))  # pushes go through gh, with it
         self.assertIn(("core.hooksPath", str(worktree.hooks_folder(self.p, self.p.work_dir))), config)
         runner.scope_github(self.p)
         runner.scope_github(self.p)  # once is enough: git's settings aren't added twice
         driver.pr_for(self.p, "t-001-work")
         self.assertEqual(json.loads(self.gh.read_text())["tokens"][-1], "github_pat_scoped")
-        self.assertEqual(runner.git_config(os.environ), list(runner.GH_GIT))
+        self.assertEqual(runner.git_config(os.environ), [*GIT_CONFIG, *runner.GH_GIT])
 
     def test_an_unreadable_token_file_stops_rather_than_falls_back(self):
         self.token.unlink()

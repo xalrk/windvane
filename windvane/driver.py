@@ -2096,7 +2096,7 @@ class Pilot(Desk, Periodic):
                 self.kept_note = (f"Kept jobs run on until {hhmm(until)} (`windvane stop` ends them sooner); "
                                   f"the next run resumes their tickets when they end: {', '.join(on)}.\n")
         else:
-            killed = jobs.end_kept(self.p)
+            killed = jobs.end_kept(self.p, since=self.opened)
             if killed:
                 self.kept_note = f"Kept jobs killed at the stop (their tickets resume next run): {', '.join(killed)}.\n"
         if self.kept_note:

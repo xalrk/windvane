@@ -39,6 +39,9 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A kept job (`bg --heavy --keep`) that its own watch ended at the run's stop, before the run had wound down to it, is
+  now listed under "Kept jobs killed at the stop" in the run's summary, and its log says the run's stop killed it. On
+  a slow machine the run used to miss it.
 - Two `windvane answer` runs that landed in the same second no longer pick one branch name, which left the second's
   branch only on this machine (its push was refused); a periodic session's branch, named to the minute, could
   collide the same way. Every branch the driver lands its own tickets on now gets a suffix when its name is taken.

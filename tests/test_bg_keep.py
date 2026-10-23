@@ -13,6 +13,7 @@ from argparse import Namespace
 from contextlib import redirect_stdout
 from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -188,14 +189,29 @@ class RunStop(Base):
         self.assertIn(f"- 'job' exit {jobs.KILLED}", self.workers()[-1])
         self.assertNotIn("the kept job ran", self.workers()[-1])
 
+    def test_a_kept_job_its_watch_ended_first_is_still_killed_at_the_stop(self):
+        """A slow machine: the run winds down past its stop, and the job's watch has ended it by then."""
+        end = driver.Pilot.kept_at_end
+
+        def late(pilot):
+            self.until(lambda: self.job.with_suffix(".exit").exists(), 15, "the watch to end the job")
+            end(pilot)
+        with mock.patch.object(driver.Pilot, "kept_at_end", late):
+            pilot = self.run_to_stop()
+        log = self.job.with_suffix(".log").read_text()
+        self.assertEqual(log.splitlines()[-2:], [jobs.STOPPED, "windvane: kept job killed: the run's stop"])
+        self.assertIn("Kept jobs killed at the stop (their tickets resume next run): T-001's 'job'", pilot.summary())
+        self.assertEqual(jobs.end_kept(self.p), [])  # told once
+        (self.run_dir / "release").touch()
+
 
 class StopsAndSessions(Base):
-    def bg(self, keep, session="worker-session", run_stop=None):
+    def bg(self, keep, session="worker-session", run_stop=None, cmd=("sleep", "60")):
         os.environ[TICKET], os.environ[NEST] = "T-001", session
         if run_stop is not None:
             os.environ[jobs.RUN_STOP] = str(run_stop)
         with redirect_stdout(io.StringIO()) as out:
-            jobs.bg(self.p, "job", ["sleep", "60"], str(self.s.root), heavy=True, keep=keep)
+            jobs.bg(self.p, "job", list(cmd), str(self.s.root), heavy=True, keep=keep)
         for k in (TICKET, NEST, jobs.RUN_STOP):
             os.environ.pop(k, None)
         self.until(lambda: self.job.with_suffix(".pid").exists())
@@ -217,6 +233,35 @@ class StopsAndSessions(Base):
         self.until(lambda: not jobs.alive(self.job), 15, "the job to end at the run's stop")
         self.assertEqual(self.job.with_suffix(".exit").read_text().strip(), str(jobs.KILLED))
         self.assertIn("stopped at the run's stop", self.job.with_suffix(".log").read_text())
+
+    def test_the_watch_says_it_stopped_the_job_after_the_jobs_last_words(self):
+        """A command slow to die, writing to the log as it does: the watch's line still comes last, so the run that
+        ends after the watch did finds it and says it killed the job."""
+        dying = "trap 'sleep 1; echo dying words; exit 1' TERM; sleep 60 & wait"
+        opened = time.time()
+        self.bg(keep=True, run_stop=time.time() + 2, cmd=("bash", "-c", dying))
+        self.until(lambda: not jobs.alive(self.job), 15, "the job to end at the run's stop")
+        lines = self.job.with_suffix(".log").read_text().splitlines()
+        self.assertIn("dying words", lines)
+        self.assertEqual(lines[-1], jobs.STOPPED)
+        self.assertEqual(jobs.end_kept(self.p, since=opened), ["T-001's 'job'"])
+        self.assertEqual(self.job.with_suffix(".log").read_text().splitlines()[-1],
+                         "windvane: kept job killed: the run's stop")
+        self.assertEqual(jobs.end_kept(self.p, since=opened), [])
+
+    def test_a_job_a_watch_ended_before_the_run_is_no_stops_to_count(self):
+        """`heavy_keep_hours`: the watch ended the job hours ago, with no run going; `windvane stop` or the next
+        run's end before its ticket resumes didn't kill it and says nothing of it."""
+        self.bg(keep=True, run_stop=time.time() + 1)
+        self.until(lambda: not jobs.alive(self.job), 15, "the job to end at its stop")
+        exit_f = self.job.with_suffix(".exit")
+        hours_ago = time.time() - 3 * 3600
+        os.utime(exit_f, (hours_ago, hours_ago))
+        log = self.job.with_suffix(".log").read_text()
+        self.assertEqual(log.splitlines()[-1], jobs.STOPPED)
+        self.assertEqual(jobs.end_kept(self.p, why="windvane stop"), [])
+        self.assertEqual(jobs.end_kept(self.p, since=time.time() - 60), [])
+        self.assertEqual(self.job.with_suffix(".log").read_text(), log)
 
     def test_windvane_stop_kills_a_kept_job_with_no_run_going(self):
         self.bg(keep=True, run_stop=time.time() + 3600)
