@@ -19,13 +19,14 @@ reviewer reads your change, and the driver merges it.
 5. **Check it yourself** against every "Done when" point, then skim `git diff {upstream}... --stat` for anything
    you didn't mean to change.
 6. **The critic** (only when your prompt says it's on). A fresh critic judges what users get from your change on the
-   project's scale, from its docs' diff and a pack in the folder your prompt names (not in git; replace an older one):
+   project's scale: it runs your committed head (tests, your command) in a copy of its own, reads its docs' diff and a
+   pack in the folder your prompt names (not in git; replace an older one):
    - `notes.md`, at most 25 lines and 4000 characters. Line 1: `User-facing: yes`, or `User-facing: no (<why>)` if no
      user will ever see or feel it, even via a later ticket (refactors, tooling, tests; logic a planned ticket shows is
-     `yes`); the reviewer checks that. Then what a user now gets, measured: transcripts, numbers, timings, before/after;
-     quote only what the diff can't show (a push or log line as it prints).
+     `yes`); the reviewer checks that. Then the one command that shows the main promise, and only what the critic
+     can't run itself: measurements over time, before/after numbers, output of a long or heavy run.
    - Up to four images (`.png`) when there's something to see (screenshots, one contact sheet).
-   Reuse what you already ran. Then `windvane critic <ID>`, and do what its last line, `CRITIC STEP`, says: fix the
+   Reuse what you already ran. Then commit, and `windvane critic <ID>`, and do what its last line, `CRITIC STEP`, says: fix the
    "Fix in this ticket" points, refresh the pack, ask again; it tells you when to go on. Its "Beyond this ticket"
    points aren't yours: put them in the PR body.
 7. **Check:** `windvane check` (it runs as the bg job `check`: `await check` until `DONE`) on the final head,
