@@ -366,3 +366,59 @@ def clean_detach(p, cwd, rev):
     git(cwd, "reset", "-q", "--hard")
     git(cwd, "clean", "-qfd")
     return git(cwd, "switch", "-q", "--detach", rev).returncode == 0
+
+
+TRIALS = "trials"  # under the state dir: the critic's throwaway copies of a ticket's head, `<ticket>.<pid>`
+TRIAL_HOOK = "#!/bin/sh\necho \"windvane: this is the critic's throwaway copy: no commits or pushes\" >&2\nexit 1\n"
+
+
+@contextlib.contextmanager
+def trial(p, cwd, rev, tid, stop=lambda: ""):
+    """A throwaway detached worktree of `cwd`'s repo at `rev`, for the critic to run the change in, with the project's
+    `setup` run there: yields (its path, git environment, a note for the critic's prompt), or (None, {}, why) when it
+    can't be made, so the critic judges read-only instead. The worker's tree and the user's checkout are never
+    touched. Its hooks refuse commits and pushes (behind the critic's permission rules: a second wall). It's removed
+    however the critic ends; one a killed process left behind is removed by the next trial."""
+    root = p.state / TRIALS
+    root.mkdir(parents=True, exist_ok=True)
+    sweep_trials(cwd, root)
+    path = root / f"{tid}.{os.getpid()}"
+    drop_trial(cwd, path)  # a pid reused since
+    r = git(cwd, "worktree", "add", "--detach", str(path), rev)
+    if r.returncode:
+        drop_trial(cwd, path)
+        yield None, {}, f"no copy to run it in ({r.stderr.strip() or 'git worktree add failed'}): judge read-only"
+        return
+    try:
+        hooks = Path(f"{path}.hooks")
+        hooks.mkdir(exist_ok=True)
+        for name in ("pre-commit", "pre-merge-commit", "pre-push"):
+            (hooks / name).write_text(TRIAL_HOOK)
+            (hooks / name).chmod(0o755)
+        note = ""
+        if p.cfg["setup"]:
+            limit = p.cfg["setup_minutes"]
+            code, why, lines = run_limited(p.cfg["setup"], path, now() + timedelta(minutes=limit), stop, keep=3)
+            if code or why:
+                note = (f"its setup `{p.cfg['setup']}` {'timed out' if why == TIMED_OUT else why or f'failed (exit {code})'}"
+                        f"{': ' + lines[-1] if lines else ''}")
+        yield path, hooks_env(path, hooks), note
+    finally:
+        drop_trial(cwd, path)
+
+
+def drop_trial(cwd, path):
+    """Removes a trial worktree, its hooks and git's record of it."""
+    if (path / ".git").exists():
+        git(cwd, "worktree", "remove", "--force", str(path))
+    shutil.rmtree(path, ignore_errors=True)
+    shutil.rmtree(f"{path}.hooks", ignore_errors=True)
+    git(cwd, "worktree", "prune")
+
+
+def sweep_trials(cwd, root):
+    """Removes the trials of processes that have ended (a driver or a `windvane critic` killed outright)."""
+    for entry in list(root.iterdir()):
+        m = re.fullmatch(r"(.+\.(\d+))(?:\.hooks)?", entry.name)
+        if m and not alive(int(m[2])):
+            drop_trial(cwd, root / m[1])

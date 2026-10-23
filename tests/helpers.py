@@ -243,6 +243,10 @@ elif system.startswith("# windvane critic"):
         import time
         open(os.environ["FAKE_CRITIC_PID"], "w").write(str(os.getpid()))
         time.sleep(60)
+    if os.environ.get("FAKE_CRITIC_SLOW") and "--resume" not in args:  # seconds a trial runs: past its time box
+        import time
+        emit({"type": "system", "subtype": "init", "session_id": "fake-session"})
+        time.sleep(float(os.environ["FAKE_CRITIC_SLOW"]))
     score, fixes = os.environ.get("FAKE_CRITIC", "9 0").split()  # FAKE_CRITIC: "<score> <fixes>"
     fix = f"Fix in this ticket:\n- {tid} x\n" if fixes != "0" else ""
     text = (f"Score: {score}/10\nGood.\n{fix}Beyond this ticket:\n- make it faster\n"
@@ -256,6 +260,14 @@ elif system.startswith("# windvane critic"):
         text = (f"Checks:\n- {check}: {'yes, the diff says ' + repr(words) if said else 'no, not shown'}\n"
                 f"Verdict.\nFix in this ticket:\n{'' if said else '1. show the text'}\n"
                 f"CRITIC: {tid} fixes={0 if said else 1} read")
+    tried = os.environ.get("FAKE_CRITIC_TRY")  # a command it runs where it works, trying the change as a user would
+    if tried and "--resume" not in args:
+        r = subprocess.run(tried, shell=True, capture_output=True, text=True)
+        with open(log + ".tried", "a") as f:  # where it ran, and what it saw
+            f.write(json.dumps({"cwd": os.getcwd(), "code": r.returncode, "out": r.stdout + r.stderr}) + "\n")
+        bad = [l for l in (r.stdout + r.stderr).splitlines() if l.startswith("FAIL")]
+        text = (f"Checks:\n- works: {'no, ran: ' + bad[0] if bad else 'yes, ran: the tests pass'}\nVerdict.\n"
+                f"Fix in this ticket:\n{'1. ' + bad[0] if bad else ''}\nCRITIC: {tid} fixes={len(bad[:1])} tried")
     if "--resume" in args and os.environ.get("FAKE_CRITIC_REASK"):  # its reply to the driver's re-ask
         text = os.environ["FAKE_CRITIC_REASK"].replace("{tid}", tid)
 elif system.startswith("# windvane planner run"):

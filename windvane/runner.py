@@ -315,7 +315,7 @@ class Usage:
 # [[periodic]] session) keeps the CLI's default set and the project's skills.
 TOOLS = {"worker": ["Bash", "Read", "Edit", "Write"], "fix": ["Bash", "Read", "Edit", "Write"],
          "planner": ["Bash", "Read", "Edit", "Write"], "reviewer": ["Bash", "Read"],
-         "critic": ["Read", "Glob", "Grep"], "critic:project": ["Bash", "Read", "Glob", "Grep"],
+         "critic": ["Bash", "Read", "Glob", "Grep"], "critic:project": ["Bash", "Read", "Glob", "Grep"],
          "preflight": ["Read", "Glob", "Grep"]}
 NO_MCP = json.dumps({"mcpServers": {}})
 # The flags every session's command line uses that an older `claude` may not know: `windvane doctor` checks them,
@@ -483,7 +483,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         mark.write_text(stamp(proc.pid) or "")
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
-    result, killed, final, noise, seen = "", None, {}, [], {}
+    result, killed, final, noise, seen, sid = "", None, {}, [], {}, None
     try:
         with raw.open("w") as out:
             while True:
@@ -498,6 +498,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
                     except ValueError:
                         noise = (noise + [line.strip()])[-5:] if line.strip() else noise
                         continue
+                    sid = ev.get("session_id") or sid  # a killed session has no result event, but can be resumed
                     if ev.get("type") == "rate_limit_event" and usage:
                         usage.update(ev.get("rate_limit_info", {}))
                     elif ev.get("type") == "assistant":
@@ -537,7 +538,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     if end == "budget":  # stopped by its own limit: the caller treats it as a killed run, never retries it
         killed, error = error, None
     if session is not None:
-        session["id"] = final.get("session_id")
+        session["id"] = final.get("session_id") or sid
     append_jsonl(p.state / "ledger.jsonl", {
         "role": role, "label": label, "ticket": ticket, "model": model, "effort": effort,
         "minutes": round((time.time() - started) / 60, 1), **spent(final, seen),
