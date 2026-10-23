@@ -199,7 +199,10 @@ the server's keepalive, for 90 s (twice in a row if streams worked before, so a 
 phone still works: it asks every 15 s, and every 30 minutes tries a stream for up to 50 s; it says "gets through
 again" once one does. Outside a run the line is in the service's
 journal (`journalctl --user -u windvane-phone`). To stream again, let the ntfy server's address bypass the proxy
-(`NO_PROXY`) or use [a server of your own](phone.md#your-own-server) the network doesn't hold back.
+(`NO_PROXY`) or use [a server of your own](phone.md#your-own-server) the network doesn't hold back. An `export` in
+your shell doesn't reach the service: add the line `Environment=NO_PROXY=ntfy.sh` (your server's host, plus any hosts
+already in your `NO_PROXY`) under `[Service]` with `systemctl --user edit windvane-phone`, then
+`systemctl --user restart windvane-phone`.
 
 ### The critic gives everything the same score
 `windvane stats --critic` shows the spread and each check's yes rate. Sharpen a check every ticket passes, lower one
