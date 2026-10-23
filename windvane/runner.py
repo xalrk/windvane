@@ -18,7 +18,7 @@ from .util import append_jsonl, last_match, load_json, recorded_stamp, same_proc
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
 ROLE = "WINDVANE_ROLE"  # the session's role: `windvane request` records it, and files only from a worker (or the desk)
-LIVE = "WINDVANE_LIVE_STATE"  # the state root the session's driver runs on: a critic may drive windvane on any other
+LIVE = "WINDVANE_LIVE_STATE"  # the state root the session's driver runs on: on any other a critic may run state-only commands
 NO_REQUEST = "Bash(windvane request *)"  # sessions other than workers (and the desk) don't file windvane requests
 TOOL_MS = "600000"
 GRACE = 3  # seconds a nested session gets to end on SIGTERM before SIGKILL: short, the driver waits on it
