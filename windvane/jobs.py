@@ -618,25 +618,34 @@ def end_job(base, line):
     return True
 
 
-def end_kept(p, ticket=None, why="the run's stop"):
+def end_kept(p, ticket=None, why="the run's stop", since=None):
     """Kill the kept jobs still waiting or running (a ticket's, or every one), each with a last log line saying why.
-    Those their own `watch` has already ended at the run's stop count too: the watch and the run both stop at that
-    time, and a run winding down (its sessions, its checks) gets there seconds after the watch's next look. Their
+    With `since` (a run's own end passes when it opened), those their own `watch` ended at that run's stop count too:
+    the watch and the run both stop at that time, and a run winding down (its sessions, its checks) gets there seconds
+    after the watch's next look. A job a watch ended before then, or with no run ending, isn't this call's. Their
     names."""
-    out = []
+    out, line = [], f"windvane: kept job killed: {why}"
     for b in kept_jobs(p, ticket):
-        if alive(b) and end_job(b, f"windvane: kept job killed: {why}") or stopped_by_watch(b):
+        if alive(b):
+            if end_job(b, line):
+                out.append(f"{b.parent.name}'s '{b.name}'")
+        elif since is not None and stopped_by_watch(b, since, line):
             out.append(f"{b.parent.name}'s '{b.name}'")
     return out
 
 
-def stopped_by_watch(b):
-    """Whether `watch` ended kept job `b` at the run's stop and no `end_kept` has said so yet; if so, says it, so
-    its log reads as if the run had killed it, and the next `end_kept` doesn't count it again."""
-    if alive(b) or tail(f"{b}.log", 1) != STOPPED:
+def stopped_by_watch(b, since, line):
+    """Whether `watch` ended dead kept job `b` at the run's stop, after `since`, and no `end_kept` has said so yet;
+    if so, gives its log `line`, so it reads as if the run had killed it and the next `end_kept` doesn't count it
+    again. The watch writes its line before the job's `.exit`, so that file's time is when it ended."""
+    try:
+        ended = Path(f"{b}.exit").stat().st_mtime
+    except OSError:
+        return False
+    if ended < since or tail(f"{b}.log", 1) != STOPPED:
         return False
     with open(f"{b}.log", "a") as f:
-        f.write("windvane: kept job killed: the run's stop\n")
+        f.write(f"{line}\n")
     return True
 
 

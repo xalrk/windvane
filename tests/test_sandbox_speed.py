@@ -66,6 +66,7 @@ class CallersGit(unittest.TestCase):
             self.assertEqual(shutil.which("git"), str(d / "git"))
             self.assertIn("init", s.git("log", "--format=%s"))
             (s.bin / "git").write_text("#!/bin/sh\n")  # a test's own git, first on the PATH, over nobody's
+            (s.bin / "git").chmod(0o755)
         self.assertIn("exec /usr/bin/git", git.read_text())
 
     def test_the_systems_own_git_needs_no_link(self):

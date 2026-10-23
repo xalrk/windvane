@@ -238,15 +238,30 @@ class StopsAndSessions(Base):
         """A command slow to die, writing to the log as it does: the watch's line still comes last, so the run that
         ends after the watch did finds it and says it killed the job."""
         dying = "trap 'sleep 1; echo dying words; exit 1' TERM; sleep 60 & wait"
+        opened = time.time()
         self.bg(keep=True, run_stop=time.time() + 2, cmd=("bash", "-c", dying))
         self.until(lambda: not jobs.alive(self.job), 15, "the job to end at the run's stop")
         lines = self.job.with_suffix(".log").read_text().splitlines()
         self.assertIn("dying words", lines)
         self.assertEqual(lines[-1], jobs.STOPPED)
-        self.assertEqual(jobs.end_kept(self.p), ["T-001's 'job'"])
+        self.assertEqual(jobs.end_kept(self.p, since=opened), ["T-001's 'job'"])
         self.assertEqual(self.job.with_suffix(".log").read_text().splitlines()[-1],
                          "windvane: kept job killed: the run's stop")
-        self.assertEqual(jobs.end_kept(self.p), [])
+        self.assertEqual(jobs.end_kept(self.p, since=opened), [])
+
+    def test_a_job_a_watch_ended_before_the_run_is_no_stops_to_count(self):
+        """`heavy_keep_hours`: the watch ended the job hours ago, with no run going; `windvane stop` or the next
+        run's end before its ticket resumes didn't kill it and says nothing of it."""
+        self.bg(keep=True, run_stop=time.time() + 1)
+        self.until(lambda: not jobs.alive(self.job), 15, "the job to end at its stop")
+        exit_f = self.job.with_suffix(".exit")
+        hours_ago = time.time() - 3 * 3600
+        os.utime(exit_f, (hours_ago, hours_ago))
+        log = self.job.with_suffix(".log").read_text()
+        self.assertEqual(log.splitlines()[-1], jobs.STOPPED)
+        self.assertEqual(jobs.end_kept(self.p, why="windvane stop"), [])
+        self.assertEqual(jobs.end_kept(self.p, since=time.time() - 60), [])
+        self.assertEqual(self.job.with_suffix(".log").read_text(), log)
 
     def test_windvane_stop_kills_a_kept_job_with_no_run_going(self):
         self.bg(keep=True, run_stop=time.time() + 3600)
