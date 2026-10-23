@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import actions, critic, login, net, privacy, requests
-from .held import author_ident, is_local, land, local_push, n_tickets, push_branch
+from .held import OWN_BRANCHES, author_ident, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
 from .queue import Queue, folder_ids, id_after, ref_ids
 from .runner import NO_REQUEST, rules, run_claude
@@ -55,12 +55,6 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
             release_ids(p, "plan")
 
 
-# The branches the driver lands its own tickets on: a plan's, a periodic chain's, the desk answers' (whose follow-up
-# tickets change a provisional answer). Until one merges its ticket ids are taken, so a new kind of branch that can
-# carry tickets goes here too, or its ids are handed out again.
-OWN_BRANCHES = ("plan-", "periodic-", "answers-")
-
-
 def branch_name(p, cd, kind):
     """`<kind>-<date>-<time to the second>`, with a suffix should that name be taken here or on the remote: the name
     of every branch the driver lands its own tickets on. An unknown `kind` raises: one missing from `OWN_BRANCHES`
@@ -68,12 +62,21 @@ def branch_name(p, cd, kind):
     if f"{kind}-" not in OWN_BRANCHES:
         raise ValueError(f"{kind}: not one of the driver's own branches {OWN_BRANCHES}")
     base = name = f"{kind}-{now():%Y%m%d-%H%M%S}"
+    theirs = remote_heads(p, cd, f"{base}*")
     n = 1
-    while any(git(cd, "rev-parse", "-q", "--verify", ref).returncode == 0
-              for ref in (f"refs/heads/{name}", f"refs/remotes/{p.remote}/{name}")):
+    while name in theirs or any(git(cd, "rev-parse", "-q", "--verify", ref).returncode == 0
+                                for ref in (f"refs/heads/{name}", f"refs/remotes/{p.remote}/{name}")):
         n += 1
         name = f"{base}-{n}"
     return name
+
+
+def remote_heads(p, cd, pattern):
+    """The remote's branch names matching `pattern`, asked once (another machine may have pushed one since the last
+    fetch, and pushing to it would be refused); none when it can't be asked: the local refs still count."""
+    res = net.git(cd, "ls-remote", "--heads", p.remote, pattern)
+    return {line.split("refs/heads/", 1)[1] for line in res.stdout.splitlines() if "\trefs/heads/" in line} \
+        if res.returncode == 0 else set()
 
 
 def pending_ids(p, ask_forge=True):

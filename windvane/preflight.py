@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from . import privacy
 from .config import slots
 from .driver import REVIEW_DENY
-from .held import land
+from .held import land, landing_step
 from .planner import branch_name, pick_ids, release_ids
 from .questions import (BLOCK_RE, OPT_RE, blocks, give_answer, note, part, prov_numbers, qkey, remembered, shown,
                         ticket_of, waiting_on)
@@ -298,7 +298,8 @@ def record(p, answers):
         return f"answers for {ids} not recorded ({where}); answer again with {again}"
     forget(p, {a[0]["id"] for a in filed})
     if not ok:
-        return f"answers for {ids} not merged; they wait on {where}"
+        step = landing_step(p, where)
+        return f"answers for {ids} not merged; they wait on {where}" + f" until you {step}" * bool(step)
     log(p, f"preflight: answers for {ids} on {p.main}", echo=False)
     made = [a[3] for a in filed if len(a) > 3]
     return (f"{len(answers)} answer{'s' * (len(answers) > 1)} recorded on {p.main}"

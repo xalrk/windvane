@@ -280,7 +280,7 @@ def kept_secret(p, patch, s):
     ensure_worktree(p, p.plan_dir, setup=False)
     (p.plan_dir / ".windvane/IDEAS.md").write_text("try " + "ghp_" + "Zq7" * 12 + "\n")
     s.git("add", "-A", ".windvane", cwd=p.plan_dir)
-    held_mod.land(p, p.plan_dir, "ideas-1", LONG, "body")
+    held_mod.land(p, p.plan_dir, "periodic-1", LONG, "body")
     return {"Not pushed": ("Its .windvane/ lines hold a token at .windvane/IDEAS.md:1 in ",
                            "then the next run pushes it.")}
 
