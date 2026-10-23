@@ -129,8 +129,9 @@ waiter paused with Ctrl-Z keeps its place but doesn't hold up the jobs behind it
 The job at the head of the line takes the lock only once its memory is free too. While it waits for memory, the first
 job behind it whose own need is met (a 2 GB test run behind a 6 GB engine) may take the free lock and run; the head
 stays the head and gets the lock first once its memory frees. A measurement waiting for a quiet CPU lets them by the
-same way, so it doesn't hold the line for hours, and gets the lock first once the load is down. Only these let a job
-by: one that a `busy` process holds up keeps everyone behind it waiting.
+same way, so it doesn't hold the line for hours, and gets the lock first once the load is down; but only for
+`measure_hold` minutes (default 20), since each job it lets by adds load: then it holds the line, and the jobs behind
+it wait until it has run. Only these let a job by: one that a `busy` process holds up keeps everyone behind it waiting.
 While it waits, its log says who holds the lock (pid, command, since when), how many jobs are ahead of it and about
 how long their work takes, or the memory it waits for and the three processes holding the most (pid, name, GB and the
 last two parts of their folder, so another project's idle emulator shows at once), or the load it waits for and the

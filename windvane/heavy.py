@@ -9,6 +9,7 @@ that tool, waiting on its own lock); instead it waits until no process matching 
     min_free_gb = 6                                           # wait for this much MemAvailable before starting
     heavy_wait = 60                                           # minutes a command run by hand waits before giving up
     measure_load = 4                                          # a --measure job waits for a 1-minute load this low
+    measure_hold = 20                                         # minutes it lets other jobs by before holding the line
 
 A job's own `--mem`, or its project's `heavy_mem`, replaces `min_free_gb` for it. Its project's `heavy_reuses` names
 helpers its heavy jobs reuse (an emulator, a build daemon): the memory theirs hold counts as free for it. Free memory
@@ -19,7 +20,8 @@ starts after its session's wrap-up; one waiting on memory names the processes th
 
 A job that measures timing (`--measure`) also waits for a quiet CPU: a 1-minute load average at or under
 `measure_load` (default a quarter of the CPU count), since another project's ordinary work (an emulator, a build
-daemon) slows its CPU-side times without being heavy. Every job's log says the load at its start, end and peak, so a
+daemon) slows its CPU-side times without being heavy. It lets the jobs behind it by for `measure_hold` minutes, then
+holds the line, since each job it lets by adds load of its own. Every job's log says the load at its start, end and peak, so a
 contended run shows in it. windvane never pauses or signals processes it didn't start to get a quiet CPU.
 """
 import fcntl
@@ -41,7 +43,7 @@ from .runner import outside_sandbox
 from .util import same_process, stamp, started_at
 
 # Process names, not command lines: `pgrep -f blender` would match any Claude session whose prompt says "blender".
-DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb": 6, "heavy_wait": 60}
+DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb": 6, "heavy_wait": 60, "measure_hold": 20}
 # A wait that timed out: the exit code, and the start of the line said just before it (`gave_up` reads it back).
 TIMED_OUT = 75
 GAVE_UP = "heavy: gave up waiting for the machine"
@@ -57,8 +59,11 @@ LOAD_START, LOAD_END, LOAD_EVERY = "heavy: load {} at start", "heavy: load {} at
 LOAD_START_RE = re.compile("^" + re.escape(LOAD_START).replace(r"\{\}", r"\S+") + "$", re.M)
 NO_LOAD = "heavy: no load average on this machine: --measure doesn't wait for a quiet CPU"
 # Said once in a measurement's wait on load, as DEFAULT_NEED is for memory: where its limit comes from.
-LOAD_LIMIT = ("the {} is machine.toml's measure_load (default: a quarter of the CPU count): raise it there if this "
-              "machine is never that quiet")
+LOAD_LIMIT = ("the {} is measure_load in {} (default: a quarter of the CPU count): if this machine is never that "
+              "quiet, raise it there with a line measure_load = <n>")
+# Said once by a measurement that has waited on load for machine.toml's `measure_hold` minutes: the jobs it let by
+# kept the load up, so from now on they wait behind it.
+HOLDING = "heavy: holding the line for a quiet CPU after {} min"
 BAD_LIMIT = "heavy: machine.toml's measure_load isn't a number: waiting for the default, {}"
 # A wait on memory with no need of its own (no `--mem`, no `heavy_mem`): the line says once where the need comes from,
 # since a small job may sit for an hour behind a default sized for a big build.
@@ -500,9 +505,38 @@ def entry_number(path, field):
 
 
 def held_up(path, mem, load):
-    """Why the waiter whose queue entry is `path` can't start now, with `mem` GB free and a load of `load`: short of
-    memory (`short`) or, for a measurement, of a quiet CPU (`too_busy`); None when it can."""
-    return short(need_of(path), mem) or too_busy(limit_of(path), load)
+    """Why the waiter whose queue entry is `path` lets the jobs behind it by, with `mem` GB free and a load of `load`:
+    short of memory (`short`) or, for a measurement not yet holding the line (`holds`), of a quiet CPU (`too_busy`);
+    None when it can start, or holds the line."""
+    return short(need_of(path), mem) or (None if holds(path) else too_busy(limit_of(path), load))
+
+
+def holds(path):
+    """Whether the measurement whose queue entry is `path` has waited on load long enough to hold the line."""
+    try:
+        return json.loads(Path(path).read_text() or "{}").get("hold") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def hold_line(entry):
+    """Mark this waiter's queue entry as holding the line. Written over the old text in one go, longer than it, so a
+    scan reads the old entry or the new one (or, at worst, nothing: a waiter that can't be read is waited on)."""
+    fd, path = entry
+    os.pwrite(fd, json.dumps({**json.loads(path.read_text()), "hold": True}).encode(), 0)
+
+
+def holding(path, load):
+    """Why the jobs behind the measurement whose entry is `path` wait on it: it holds the line and the load is still
+    too high for it; else None."""
+    hot = holds(path) and too_busy(limit_of(path), load)
+    return hot and f"pid {entry_pid(path.name)}, a --measure job, holds the line for a quiet CPU: {hot}"
+
+
+def hold_minutes(cfg):
+    """machine.toml's `measure_hold`, or its default when it isn't a number."""
+    m = cfg.get("measure_hold")
+    return m if isinstance(m, (int, float)) and not isinstance(m, bool) and m >= 0 else DEFAULTS["measure_hold"]
 
 
 def job_of(path):
@@ -768,8 +802,10 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
     overtake one that has been waiting (R-007). A head short of memory doesn't take it, and every job behind it would
     wait on that memory too: so the first waiter behind it whose own need is met may go first, while the head stays
     the head and gets the first try once its memory is free. A measurement short of a quiet CPU lets them by the same
-    way, so it doesn't hold the whole line for hours, and gets the first try once the load is down. Only these let a
-    job by: a waiter ahead whose need is met, or unknown, keeps its turn. This job's own project's helpers (`reuse`) count as free for it alone: a waiter
+    way, so it doesn't hold the whole line for hours, and gets the first try once the load is down; but only for
+    machine.toml's `measure_hold` minutes of waiting on load: each job it lets by adds load, so on a busy day the
+    load would never drop. Then it holds the line (`hold_line`): the jobs behind it wait, saying who holds them up,
+    and it starts once the running job ends and the load is down. Only these let a job by: a waiter ahead whose need is met, or unknown, keeps its turn. This job's own project's helpers (`reuse`) count as free for it alone: a waiter
     ahead is judged on what's free for anyone.
 
     Each time what it waits on changes, the line says so: the work ahead (`estimate`), or for a wait on memory the
@@ -778,13 +814,20 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
     when the known work ahead runs past it, or the wrap-up came with the job still waiting. A `default` need (none of
     its own) is named as such once, with how to lower it (`DEFAULT_NEED`)."""
     said, busy_why, retry, warned, looked, hinted, told = None, None, 0, False, 0, False, not default
-    limit_told = False
+    limit_told, hot_since, holding_it, hold = False, None, False, hold_minutes(cfg)
     while True:
         line, mem, load = ahead(entry), free_gb(), load_avg()
         turn = all(held_up(w, mem, load) for w in line)  # the head, or all ahead wait on memory or a quiet CPU
         low = short(need, mem, helpers_gb(reuse) if mem is not None else 0) if turn else None
         hot = too_busy(measure, load) if turn and not low else None
         mine = low or hot
+        hot_since = hot_since or (time.time() if hot else None)  # its wait on load, from its first moment
+        if hot_since and not holding_it and time.time() - hot_since >= hold * 60:
+            hold_line(entry)
+            say(HOLDING.format(f"{hold:.10g}"))
+            holding_it = True
+        lead = None if turn else next((w for w in line if not held_up(w, mem, load)), None)
+        held = lead and holding(lead, load)
         if turn and not mine and time.time() >= retry:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -796,10 +839,11 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
                     return True
                 fcntl.flock(lock, fcntl.LOCK_UN)  # no one runs beside it anyway; it looks again in 10 s
                 busy_why, retry = f"'{b}' is running", time.time() + 10
-        why = mine or (busy_why if turn else None)
+        why = mine or (busy_why if turn else held)
         info = holder(lock)
         n = 0 if turn else len(line)
-        key = "memory" if low else "load" if hot else why or (info.get("pid"), info.get("since"), n)
+        key = "memory" if low else "load" if hot else f"held by {lead.name}" if held else why or (
+            info.get("pid"), info.get("since"), n)
         if key[:1] == (None,) and isinstance(said, tuple) and said[2] == n:  # a holder gone, the next yet to claim
             key = said  # it (it looks once a second): an empty line for that moment says nothing new
         if key != said or time.time() >= looked + 60:  # the wrap-up is looked at again each minute as time passes
@@ -816,7 +860,7 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
             elif key != said and hot:  # not reprinted as the load drifts: it says what it waits on, not how much
                 cpu = busiest()
                 say(f"heavy: waiting: {why}" + (f"; busiest: {', '.join(cpu)}" if cpu else "")
-                    + ("" if limit_told else "; " + LOAD_LIMIT.format(f"≤ {measure:.10g}")))
+                    + ("" if limit_told else "; " + LOAD_LIMIT.format(f"≤ {measure:.10g}", machine_file())))
                 limit_told = True
             elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
                 say(f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work)))
@@ -975,7 +1019,8 @@ def status(reuse=None):
             if head:
                 head, need, mem, load = False, need_of(q / name), free_gb(), load_avg()
                 if too_busy(limit, load) and not short(need, mem):
-                    line += f" (waiting for load ≤ {limit:.10g}, now {loadf(load)}; letting other jobs by)"
+                    by = "holding the line" if holds(q / name) else "letting other jobs by"
+                    line += f" (waiting for load ≤ {limit:.10g}, now {loadf(load)}; {by})"
                     big = [f"uses CPU: {b}" for b in busiest()]
                 elif short(need, mem):
                     line += f" (waiting for {need:.10g} GB, {down(mem)} free; letting smaller jobs by)"
