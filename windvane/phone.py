@@ -739,15 +739,16 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
     within a second of its release, instead of exiting for systemd to start it again every 30 s.
 
     Every install leans on one ntfy server's per-visitor budget, so a dropped stream is opened again after RETRY
-    seconds, doubling to RETRY_CAP while it keeps dropping (a 429 waits its Retry-After), with one line per spell
-    of drops; a stream that delivers or stays up STEADY seconds starts over at RETRY. Where a stream opens but
-    nothing comes through (a proxy holding it back), it looks every PUMP_EVERY seconds instead, trying a stream
-    again every RESTREAM seconds and going back to it once one brings anything. Before any stream worked, one silent
-    stream is enough; after, it takes two in a row (one can be a hiccup), so a proxy that turns up later is caught
-    too. A try waits TRY_WAIT, not STREAM_WAIT, for its first line: polling pauses meanwhile, and a shorter try
-    keeps an answer sent then from waiting longer than it would for a poll (two extra polls around a full-length
-    try wouldn't: the answer would still wait out the try). A try that gets through is closed after its first line and
-    opened again at once from the last id, so the stream that stays waits STREAM_WAIT like any other."""
+    seconds, doubling to RETRY_CAP while it keeps dropping (a 429 waits its Retry-After), with one line per spell of
+    drops; a stream that delivers or stays up STEADY seconds starts over at RETRY. Where a stream opens but nothing
+    comes through (a proxy holding it back), it looks every PUMP_EVERY seconds instead, trying a stream again every
+    RESTREAM seconds and going back to it once one brings anything. Before any stream worked (since the last fall back
+    to polling; a try's one line doesn't count), one silent stream is enough; after, it takes two in a row (one can be a
+    hiccup), so a proxy that turns up later is caught too. A try waits TRY_WAIT, not STREAM_WAIT, for its first line:
+    polling pauses meanwhile, and a shorter try keeps an answer sent then from waiting longer than it would for a poll
+    (two extra polls around a full-length try wouldn't: the answer would still wait out the try). A try that gets
+    through is closed after its first line and opened again at once from the last id, so the stream that stays waits
+    STREAM_WAIT like any other."""
     since = time.time() if since is None else since
     d = state_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -805,7 +806,7 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
                 err = e
             if once:
                 return handled
-            streamed = streamed or (lines > 0 and not poll)
+            streamed = streamed or (lines > 0 and not poll and not retrying)  # a try's one line proves little
             if lines:
                 silent = 0
             elif opened and not polling and isinstance(err, TimeoutError):
@@ -825,10 +826,11 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
                 rest(PUMP_EVERY, until)
                 continue
             if silent >= (2 if streamed else 1):
-                polling, restream_at, silent = True, time.time() + RESTREAM, 0
+                polling, restream_at, silent, streamed = True, time.time() + RESTREAM, 0, False
                 host = urllib.parse.urlsplit(server).hostname
                 tell(f"windvane phone: the server's stream opened but brought nothing in {span(STREAM_WAIT)}: a proxy "
-                     f"or VPN holds it back (`env | grep -i proxy`); NO_PROXY={host} lets it bypass that (docs/"
+                     f"or VPN holds it back (`env | grep -i proxy`); NO_PROXY={host} lets it bypass that"
+                     f"{as_service(heard)} (docs/"
                      f"troubleshooting.md, \"the server's stream opened but brought nothing\"). Asking every "
                      f"{span(PUMP_EVERY)} instead, and trying a stream again every {span(RESTREAM)}")
                 continue
@@ -843,6 +845,14 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
             wait = min(wait * 2, RETRY_CAP)
     finally:
         lock.close()
+
+
+def as_service(heard):
+    """Where the listener's NO_PROXY has to go when it runs as the service: systemd sets INVOCATION_ID for each unit
+    it starts, and a shell's `export` never reaches the unit. Empty for one run by hand or a run's own stream."""
+    if heard or not os.environ.get("INVOCATION_ID"):
+        return ""
+    return f", set for the service with `systemctl --user edit {SERVICE.removesuffix('.service')}`"
 
 
 def take(lock, kind, until):
