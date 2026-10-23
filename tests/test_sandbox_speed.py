@@ -29,7 +29,7 @@ class Git(unittest.TestCase):
     def test_the_tests_and_the_drivers_git_dont_fsync_nor_start_maintenance(self):
         p = Project(self.s.root)
         session = runner.env(worktree.guard_pushes(p, self.s.root), p)  # its own GIT_CONFIG_* too: the hooks' path
-        self.assertIn("core.hooksPath", runner.git_config(session)[-1])
+        self.assertEqual(self.config("core.hooksPath", self.s.root, session), str(worktree.hooks_folder(p, self.s.root)))
         for where, env in (("the tests'", None), ("a session's", session)):
             self.assertEqual(self.config("core.fsync", self.s.root, env), "none", where)
             self.assertEqual(self.config("maintenance.auto", self.s.root, env), "false", where)

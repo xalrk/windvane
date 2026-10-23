@@ -188,6 +188,9 @@ if system.startswith("# windvane worker run"):
                 open(".windvane/QUESTIONS.md", "w").write(q)
         if not resolve_only:
             sh("git", "add", "-A"); sh("git", "commit", "-qm", f"{tid}: build")
+        if os.environ.get("FAKE_WORKER_RUN") and log:  # a command from its Bash tool (`windvane check`), before the push
+            r = subprocess.run(os.environ["FAKE_WORKER_RUN"], shell=True, capture_output=True, text=True)
+            open(log + ".ran", "a").write(r.stdout + r.stderr)
         past = os.environ.get("FAKE_NO_VERIFY")  # "first": only its first run's push gets past the pre-push hook
         past = past and (past != "first" or "## Act on this first" not in prompt)
         r = subprocess.run(["git", "push", "-q", *["--no-verify"] * bool(past),

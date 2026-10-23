@@ -426,12 +426,12 @@ def tag(p, msg, cd=None):
 
 
 def worker_git(p, wd):
-    """(environment, prompt line) for a worker session. With a budget set its own commits get a prepare-commit-msg
-    hook, given in git's environment config, never the repo's config (the user's checkout shares it), that adds
-    `[skip ci]` when the cached total is at the cap at the time of each commit: a session runs for hours and the
-    month's count can cross the cap meanwhile. A project with its own core.hooksPath keeps it, and the prompt asks
-    for the tag instead when the cache says the cap is reached at the session's start. Never counts: starts don't
-    wait on gh."""
+    """(environment, prompt line) for a worker session. With a budget set its own commits get a prepare-commit-msg hook,
+    given in git's environment config for its own worktree only (worktree.hooks_env), never the repo's config (the
+    user's checkout shares it), that adds `[skip ci]` when the cached total is at the cap at the time of each commit: a
+    session runs for hours and the month's count can cross the cap meanwhile. A project with its own core.hooksPath
+    keeps it, and the prompt asks for the tag instead when the cache says the cap is reached at the session's start.
+    Never counts: starts don't wait on gh."""
     if not budget(p):
         return {}, ""
     say_stale(p)
@@ -442,9 +442,8 @@ def worker_git(p, wd):
             asked.add(p.name)
             log(p, f"GitHub Actions at the cap and core.hooksPath is the project's: workers are asked for {SKIP}")
         return {}, f"GitHub Actions minutes are at the month's cap: end each commit message's first line with {SKIP}."
-    n = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
-    return {"GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": "core.hooksPath",
-            f"GIT_CONFIG_VALUE_{n}": str(skip_hooks(p, wd))}, ""
+    from .worktree import hooks_env
+    return hooks_env(wd, skip_hooks(p, wd)), ""
 
 
 # The hook's test of the cache: exit 0 (no tag) only when this month's cached total is under the cap (argv 2) and
