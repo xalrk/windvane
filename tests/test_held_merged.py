@@ -131,11 +131,13 @@ class HeldMerged(Base):
         self.assertIn(branch, r.stdout)
 
     def test_the_hand_pushed_line_says_what_to_do_per_forge(self):
-        self.hand_pushed_land()
+        branch = self.hand_pushed_land()
         self.assertIn(", not merged: ", self.windvane("status"))
-        self.assertIn("): merge it into main\n", self.windvane("status"))
+        self.assertIn(f"): merge it into main: `git merge origin/{branch}-b` on main, then push it\n",
+                      self.windvane("status"))
         self.github()
-        self.assertIn("): open a PR from it and merge it\n", self.windvane("status"))
+        self.assertIn(f"): open a PR from it and merge it: `gh pr create --head {branch}-b --base main --fill`, then "
+                      "`gh pr merge`\n", self.windvane("status"))
 
     def test_push_protection_names_the_file_and_the_unblock_page(self):
         self.refusal = test_held_secret.SECRET

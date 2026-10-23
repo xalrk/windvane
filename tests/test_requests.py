@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import cli, driver, requests, runner  # noqa: E402
+from windvane import cli, driver, held, requests, runner  # noqa: E402
 from windvane.config import HOME, Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -196,7 +196,7 @@ class Requests(unittest.TestCase):
 
     def test_an_accept_whose_land_stays_on_a_branch_is_done_as_held(self):
         self.make(TRIAGE)
-        with unittest.mock.patch("windvane.held.land", lambda *a: (False, "the branch periodic-x")):
+        with unittest.mock.patch("windvane.held.land", lambda p, cd, branch, *a, **k: held.Landed(False, "the branch periodic-x", branch)):
             self.triage([("Retry the check on a flaky network", "WANT=accept")])
         self.assertEqual(list(self.inbox()), [])  # the next round doesn't ticket it again
         self.assertRegex(self.inbox(done=True)["R-001"], r"- Verdict: accepted → T-003 \(held on periodic-\d{8}-\d{6}\)")

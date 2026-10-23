@@ -288,7 +288,7 @@ def record(p, answers):
             git(cd, "add", "-A", ".windvane")
             ids = ", ".join(sorted({a[0]["ticket"] for a in filed}))
             ok, where = land(p, cd, branch_name(p, cd, "answers"), f"Answers at the desk: {ids}",
-                             "\n\n".join(block(*a) for a in filed), close=True)
+                             "\n\n".join(block(*a) for a in filed), close=True, fresh=True)
         finally:
             release_ids(p, "answers")
         clean_detach(p, cd, p.upstream)

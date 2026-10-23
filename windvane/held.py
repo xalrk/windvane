@@ -34,13 +34,23 @@ def author_ident(p):
     return ["-c", f"user.name={name}", "-c", f"user.email={email}"] if email else []
 
 
-def push_branch(p, cd, branch, tries=2):
+def push_branch(p, cd, branch, tries=2, fresh=False):
     """Push `cd`'s HEAD to `branch`, trying twice (or `tries` times). When all fail, the commit stays on a local branch of that name, so
-    the next run's reset of `cd` can't lose paid-for work. Returns where it is: `branch`, or "the local branch ...
-    (why the push was refused and what to do)", so every push that names the place also says the next step."""
+    the next run's reset of `cd` can't lose paid-for work. Returns where it is: the branch pushed, or "the local branch
+    ... (why the push was refused and what to do)", so every push that names the place also says the next step.
+    A `fresh` branch (just named by `planner.branch_name`, so no one was told its name) that another machine pushed
+    meanwhile goes to the next free suffix once, and that name is returned; a held one keeps its name."""
     own_branch(branch)
     for _ in range(tries):
-        res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+        res = push_head(p, cd, branch)
+        if res.returncode == 0:
+            return branch
+        if fresh and NAME_TAKEN.search(res.stderr):  # the same name is refused the same way
+            break
+    if fresh and NAME_TAKEN.search(res.stderr):
+        taken, branch = branch, next_name(p, cd, branch)
+        log(p, f"{taken} was pushed from elsewhere meanwhile; pushing to {branch}")
+        res = push_head(p, cd, branch)
         if res.returncode == 0:
             return branch
     git(cd, "branch", "-f", branch, "HEAD")
@@ -48,6 +58,37 @@ def push_branch(p, cd, branch, tries=2):
     why = push_refusal(res.stderr, p.cfg["forge"], branch, p.remote, p.main)
     hold(p, branch, "push", why)
     return f"the local branch {branch} ({why})"
+
+
+def push_head(p, cd, branch):
+    return net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{branch}")
+
+
+def next_name(p, cd, taken):
+    """The free name after `taken`, a `branch_name` one (`<kind>-<date>-<time>`, maybe with a suffix): its stem with
+    the next suffix free here and on the remote, asked again."""
+    m = re.fullmatch(r"(.+-\d{8}-\d{6})(?:-\d+)?", taken)
+    return free_name(p, cd, m[1] if m else taken, {taken})
+
+
+def free_name(p, cd, base, taken=()):
+    """`base`, or `base-2`, `-3`... the first that no branch here, on the fetched remote or on the remote itself (asked
+    now: `remote_heads`) has, nor `taken`."""
+    theirs = remote_heads(p, cd, f"{base}*") | set(taken)
+    name, n = base, 1
+    while name in theirs or any(git(cd, "rev-parse", "-q", "--verify", ref).returncode == 0
+                                for ref in (f"refs/heads/{name}", f"refs/remotes/{p.remote}/{name}")):
+        n += 1
+        name = f"{base}-{n}"
+    return name
+
+
+def remote_heads(p, cd, pattern):
+    """The remote's branch names matching `pattern`, asked once (another machine may have pushed one since the last
+    fetch, and pushing to it would be refused); none when it can't be asked: the local refs still count."""
+    res = net.git(cd, "ls-remote", "--heads", p.remote, pattern)
+    return {line.split("refs/heads/", 1)[1] for line in res.stdout.splitlines() if "\trefs/heads/" in line} \
+        if res.returncode == 0 else set()
 
 
 def hold(p, branch, how, why=""):
@@ -85,10 +126,14 @@ def edit_held(p, change):
         save_json(p.state / "held_why.json", {b: w for b, w in reasons.items() if b in held})
 
 
+# A push refused because the branch already holds commits this one doesn't build on: another machine pushed that name.
+NAME_TAKEN = re.compile(r"non-fast-forward|fetch first", re.I)
+
 # What a refused push's stderr says, first match wins, with its next step: a secret by taking it out of the commit
 # (GitHub's push protection is a GH013 rule too, but no rule change or other name gets past it), a login problem by
 # logging in, a hook or branch protection by changing the rule or the branch (pushing again alone fails the same way),
-# the network by waiting: the next run pushes what was held back (`push_held`).
+# a name another machine pushed meanwhile by pushing under another (a fresh one already tried the next suffix), the
+# network by waiting: the next run pushes what was held back (`push_held`).
 REFUSALS = (
     ("refused: it holds a secret{where} (GitHub push protection); remove it from the branch's commit "
      "(`git commit --amend` on `{branch}`), then the next run pushes it{allow}",
@@ -101,6 +146,8 @@ REFUSALS = (
     ("refused by a hook or branch rule; change the rule, or push it by hand with `git push {remote} {branch}:{branch}-b` "
      "and {then}",
      re.compile(r"hook declined|protected branch|GH00\d|GH013|rule violation|remote rejected", re.I)),
+    ("refused: the name {branch} was taken on the remote meanwhile; push it by hand with "
+     "`git push {remote} {branch}:{branch}-b` and {land}", NAME_TAKEN),
     ("network down; the next run pushes it again",
      re.compile(r"could not resolve|timed out|connection (refused|reset)|network is unreachable|unable to access|"
                 r"early eof|could not read from remote", re.I)),
@@ -120,7 +167,8 @@ def push_refusal(stderr, forge="git", branch="BRANCH", remote="origin", main="ma
     for why, pattern in REFUSALS:
         if pattern.search(stderr):
             return why.format(login=LOGIN.get(forge, LOGIN["git"]), branch=branch, remote=remote,
-                              then=THEN.get(forge, THEN["git"]).format(main=main), **secret_at(stderr))
+                              then=THEN.get(forge, THEN["git"]).format(main=main),
+                              land=merge_words(forge, remote, f"{branch}-b", main), **secret_at(stderr))
     return "push failed; see the windvane log"
 
 
@@ -143,6 +191,11 @@ def is_local(where):
     return where.startswith("the local branch ")
 
 
+def local_name(where):
+    """The branch a "the local branch ..." place names."""
+    return where.removeprefix("the local branch ").split(" ", 1)[0]
+
+
 def local_push(where, kept, log):
     """A push's body for a branch `push_branch` kept locally: why the push was refused and the next step first, then
     `kept` with the branch's name on its own line."""
@@ -151,34 +204,54 @@ def local_push(where, kept, log):
     return whole("", why[:1].upper() + why[1:], ".", log=log) + f"\n{kept} {branch}."
 
 
-def land(p, cd, branch, title, body, commit=True, tries=2, close=False):
+class Landed(tuple):
+    """`land`'s (landed, where), with the name the branch went under as `.branch`: a `fresh` one may have moved to a
+    suffix (`push_branch`), and a caller that keeps the name must keep that one."""
+    def __new__(cls, ok, where, branch):
+        landed = super().__new__(cls, (ok, where))
+        landed.branch = branch
+        return landed
+
+
+def land(p, cd, branch, title, body, commit=True, tries=2, close=False, fresh=False):
     """Put the driver's own change in `cd` (staged, or committed when `commit` is off) on main: through a merged PR on
-    github, a push (replayed onto a main that moved) on plain git. Returns (landed, where it is). One kept on a local
-    branch, or whose PR can't merge, is noted as one to land; with `close`, a PR that can't merge is closed instead
-    and the result is (None, why)."""
+    github, a push (replayed onto a main that moved) on plain git. Returns Landed(landed, where it is). One kept on a
+    local branch, or whose PR can't merge, is noted as one to land; with `close`, a PR that can't merge is closed
+    instead and the result is (None, why). `fresh`: as `push_branch`'s."""
     own_branch(branch)
     title, body = actions.tag(p, privacy.censor(title), cd), privacy.censor(body)  # a periodic or plan session's reply
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
     found = privacy.outgoing(cd, p.upstream, "HEAD", DIR, privacy.guarded(p))
-    ok, where = (False, kept_secret(p, cd, branch, title, found)) if found \
-        else _land(p, cd, branch, title, body, tries, close)
+    ok, where, branch = (False, kept_secret(p, cd, branch, title, found), branch) if found \
+        else _land(p, cd, branch, title, body, tries, close, fresh)
     if is_local(where):
         hold(p, branch, "land")
-    return ok, where
+    return Landed(ok, where, branch)
 
 
 def landing_step(p, where):
     """What lands a change `land` left unmerged at `where`, as words to follow "until you": its PR's merge command, or
-    the merge `status` names for a branch pushed but not merged; "" for a local branch (`where` says why, and what to
-    do)."""
+    the commands `status` names for a branch pushed but not merged; "" for a local branch (`where` says why, and what
+    to do)."""
     if is_local(where):
         return ""
     pr = re.search(r"/pull/(\d+)/?$", where)
     if pr:
         return f"merge it: `gh pr merge {pr[1]} --merge`"
-    forge = p.cfg["forge"]
-    return THEN.get(forge, THEN["git"]).format(main=p.main) + " and merge it" * (forge == "github")
+    return merge_step(p, where)
+
+
+def merge_step(p, branch):
+    """The commands that land `branch`, pushed but not merged (on github, through a PR): one wording for `status`
+    and the desk answers, so the two read the same."""
+    return merge_words(p.cfg["forge"], p.remote, branch, p.main)
+
+
+def merge_words(forge, remote, branch, main):
+    if forge == "github":
+        return f"open a PR from it and merge it: `gh pr create --head {branch} --base {main} --fill`, then `gh pr merge`"
+    return f"merge it into {main}: `git merge {remote}/{branch}` on {main}, then push it"
 
 
 def kept_secret(p, cd, branch, title, found):
@@ -196,25 +269,28 @@ def kept_secret(p, cd, branch, title, found):
     return f"the local branch {branch} ({why})"
 
 
-def _land(p, cd, branch, title, body, tries, close):
+def _land(p, cd, branch, title, body, tries, close, fresh):
+    """`land`'s push, PR and merge: (landed, where, the branch's name)."""
     if p.cfg["forge"] == "github":
-        where = push_branch(p, cd, branch, tries)
+        where = push_branch(p, cd, branch, tries, fresh)
         if is_local(where):
-            return False, where
+            return False, where, local_name(where)
+        branch = where
         pr = net.sh(cd, "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title, "--body", body)
         pr_n = pr.rstrip("/").rsplit("/", 1)[-1]
         merged, state = merge_pr(p, cd, branch, pr_n, title) if pr_n.isdigit() else (False, "")
         if merged:
             net.git(p.main_root(), "push", "-q", p.remote, "--delete", branch)
-            return True, pr
-        return not_merged(p, cd, branch, pr, pr_n, state, close)
+            return True, pr, branch
+        return (*not_merged(p, cd, branch, pr, pr_n, state, close), branch)
     res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
     if res.returncode:  # main moved meanwhile: the change only adds to .windvane/, so replay it
         if replayed(p, cd):
             res = net.git(cd, "push", "-q", p.remote, f"HEAD:refs/heads/{p.main}")
         if res.returncode:  # keep the paid-for work on its branch rather than drop it
-            return False, push_branch(p, cd, branch, tries)
-    return True, p.main
+            where = push_branch(p, cd, branch, tries, fresh)
+            return False, where, local_name(where) if is_local(where) else where
+    return True, p.main, branch
 
 
 CANT_MERGE = "couldn't merge"  # in a held change's reason: it has a PR, so `status` shows why, not "open a PR"
@@ -524,11 +600,9 @@ def held_lines(p, now=None, subject=60):
     """One line per held branch (of `now`, `held_now`'s list) with how long it has waited and where it is: the last
     refusal's reason and next step, or, pushed by hand, the merge still to do (on github, through a PR); for `status`
     (`subject` None: the commit subject whole) and `overview`."""
-    forge = p.cfg["forge"]
-    merge = THEN.get(forge, THEN["git"]).format(main=p.main) + " and merge it" * (forge == "github")
     return [f"held back for {age(time.time() - at)}, " + (f"pushed to {on}, not merged" if on else "not pushed")
             + f": {b} ({gout(p.main_root(), 'log', '-1', '--format=%s', b)[:subject]}): "
-            + (merge if on and CANT_MERGE not in why else why)
+            + (merge_step(p, on.removeprefix(f"{p.remote}/")) if on and CANT_MERGE not in why else why)
             for b, why, at, on in (held_now(p) if now is None else now)]
 
 

@@ -369,7 +369,8 @@ class Periodic:
         from .planner import branch_name
         branch = branch_name(p, cd, "periodic")
         with self.critical():  # a signal waits until the land is pushed
-            ok, where = land_on_main(p, cd, branch, title, body)
+            ok, where = landed = land_on_main(p, cd, branch, title, body, fresh=True)
+        branch = landed.branch
         how = {"near": f"right after {anchor}" if anchor else "at the top", "next": "at the top",
                "end": "at the end", "hold": "held for the desk"}.get(land, "")
         what = f"{', '.join(tickets)}, {how}" if tickets else "no new tickets"
