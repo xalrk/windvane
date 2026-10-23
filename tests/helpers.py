@@ -400,6 +400,22 @@ if (_ram := ram_tmp()) is not None:  # this process's temp files and its subproc
     os.environ["TMPDIR"] = tempfile.tempdir = _ram
 
 
+def git_dir():
+    """A dir holding only a link to the git first on the caller's PATH, for a Sandbox's PATH (which has only the system
+    dirs), or None when that git is the system's. macOS's /usr/bin/git is a stub that looks up the developer tools' git
+    on every call, and a driver test starts hundreds. Not in the Sandbox's bin, where a test writes its own `git`."""
+    git = shutil.which("git")
+    if not git or Path(git).parent in (Path("/usr/bin"), Path("/bin")):
+        return None
+    d = Path(tempfile.mkdtemp(prefix="windvane-git-"))
+    atexit.register(shutil.rmtree, str(d), True)
+    (d / "git").symlink_to(Path(git).resolve())
+    return str(d)
+
+
+GIT_DIR = git_dir()
+
+
 def git_config_env(pairs):
     """The (key, value) settings `pairs` as git reads them from the environment."""
     out = {"GIT_CONFIG_COUNT": str(len(pairs))}
@@ -437,7 +453,8 @@ class Sandbox:
         # too old for windvane (macOS ships 3.9)
         (self.bin / "python3").symlink_to(sys.executable)
         (self.bin / "windvane").symlink_to(REPO / "bin/windvane")
-        self.env = {"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.tmp / "home"),
+        path = [str(self.bin), *([GIT_DIR] if GIT_DIR else []), "/usr/bin", "/bin"]
+        self.env = {"PATH": ":".join(path), "HOME": str(self.tmp / "home"),
                     "XDG_STATE_HOME": str(self.tmp / "state"), "XDG_CONFIG_HOME": str(self.tmp / "config"),
                     "WINDVANE_SELF_UPDATE": "0", "TMPDIR": str(self.tmp / "tmp"),
                     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",

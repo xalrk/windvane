@@ -2,6 +2,7 @@
 time) or starts its auto maintenance, and no RAM-backed temp dir to put the repos in (macOS has none)."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -45,6 +46,31 @@ class Git(unittest.TestCase):
         flushes = [e for e in events if e["event"] == "counter" and e.get("name") == "hardware-flush"]
         self.assertEqual(flushes, [])
         self.assertFalse([e for e in events if e["event"] == "start" and "maintenance" in e["argv"]])
+
+
+class CallersGit(unittest.TestCase):
+    """macOS: the Sandbox's PATH reaches the caller's git (Homebrew's, say), not the developer tools' stub."""
+
+    def test_a_git_outside_the_system_dirs_is_linked_in_a_dir_of_its_own(self):
+        git = tmpdir(self) / "brew/bin/git"
+        git.parent.mkdir(parents=True)
+        git.write_text("#!/bin/sh\nexec /usr/bin/git \"$@\"\n")
+        git.chmod(0o755)
+        with mock.patch.object(helpers.shutil, "which", lambda name: str(git)):
+            d = Path(helpers.git_dir())
+        self.assertEqual(os.listdir(d), ["git"])
+        self.assertEqual((d / "git").resolve(), git.resolve())
+        with mock.patch.object(helpers, "GIT_DIR", str(d)):
+            s = Sandbox()
+            self.addCleanup(s.close)
+            self.assertEqual(shutil.which("git"), str(d / "git"))
+            self.assertIn("init", s.git("log", "--format=%s"))
+            (s.bin / "git").write_text("#!/bin/sh\n")  # a test's own git, first on the PATH, over nobody's
+        self.assertIn("exec /usr/bin/git", git.read_text())
+
+    def test_the_systems_own_git_needs_no_link(self):
+        with mock.patch.object(helpers.shutil, "which", lambda name: "/usr/bin/git"):
+            self.assertIsNone(helpers.git_dir())
 
 
 class NoRam(unittest.TestCase):
