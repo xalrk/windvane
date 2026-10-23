@@ -953,7 +953,7 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None, measure=F
             if (s := round(time.time() - t0)) >= 1:
                 say(WAITED.format(s))
             t1 = time.time()
-            code = watch_load(subprocess.Popen(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)), say)
+            code = watch_load(lambda: subprocess.Popen(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)), say)
             record(key, (time.time() - t1) / 60)  # still holding the lock: the next job's estimate counts it
             return code
         finally:
@@ -964,11 +964,13 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None, measure=F
         os.close(lock)  # frees the lock
 
 
-def watch_load(proc, say):
-    """Wait for the job's `proc`, saying the load at its start, end and peak (sampled every LOAD_EVERY seconds from
-    here, not by a thread in the command). Its exit code."""
+def watch_load(start_job, say):
+    """Start the job (`start_job` gives its process) and wait for it, saying the load at its start, end and peak
+    (sampled every LOAD_EVERY seconds from here, not by a thread in the command). The start is said before the job
+    runs, so it comes before the job's own output. Its exit code."""
     start = peak = load_avg()
     say(LOAD_START.format("unknown" if start is None else loadf(start)))
+    proc = start_job()
     try:
         while True:
             try:

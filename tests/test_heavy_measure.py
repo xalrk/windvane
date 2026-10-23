@@ -225,6 +225,21 @@ class Measure(Fixture):
                 self.assertEqual(lines[-1], "heavy: load 3.4 at end, 5.1 peak")
                 self.assertFalse(heavy.waiting(self.d / f"{tag}.err"))  # it ran: not still in the queue
 
+    def test_the_start_load_is_said_before_the_command_runs(self):
+        """Not after starting it: on a busy machine the command's own output came first."""
+        marker, seen, load = self.d / "ran", [], heavy.load_avg
+
+        class Log(io.StringIO):
+            def write(self, text):
+                if "at start" in text:
+                    seen.append(marker.exists())
+                return super().write(text)
+        self.in_process(load_avg=lambda: (time.sleep(0.3), load())[1])  # time for a started command to run
+        with redirect_stderr(Log()):
+            self.assertEqual(heavy.run(["touch", str(marker)], wait_s=5, mem=0), 0)
+        self.assertEqual(seen, [False])
+        self.assertTrue(marker.exists())
+
     def test_without_a_load_source_it_says_so_once_and_does_not_wait(self):
         (self.proc / "loadavg").unlink()
 
