@@ -48,8 +48,8 @@ release on the same day adds a number (`2026.10.9.1`).
 - A session's hooks (the push scan, and `[skip ci]` at the Actions cap) apply to its own worktree only. They used to
   become the hooks of every repository a check clones or inits, so `git lfs install` in a test's clone failed under
   `windvane check` and a test's own hooks never ran.
-- A session's push from a git submodule in its worktree is scanned again, now against what that submodule's own
-  remote already has (it was scanned against the project's main branch), and the submodule's own hooks run.
+- A session's push from a git submodule in its worktree is scanned against what that submodule's own remote already
+  has, not the project's main branch, and the submodule's own hooks run there instead of the project's.
 - A kept job (`bg --heavy --keep`) that its own watch ended at the run's stop, before the run had wound down to it, is
   now listed under "Kept jobs killed at the stop" in the run's summary, and its log says the run's stop killed it. On
   a slow machine the run used to miss it.

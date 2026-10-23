@@ -159,6 +159,43 @@ class Submodule(Base):
         self.assertNotIn("old.txt", r.stderr)
         self.assertEqual(self.ran(), ["pre-commit", "pre-push", "pre-commit"])  # refused before its own pre-push
 
+    def test_a_push_to_its_remotes_url_counts_what_that_remote_has_and_one_to_a_new_remote_counts_all_it_sends(self):
+        env, _ = self.session()
+        self.git(env, self.sub, "checkout", "-q", "-b", "topic", "origin/old")
+        self.commit(env, self.sub, "new.txt", "clean\n")
+        r = self.git(env, self.sub, "push", "-q", str(self.sub_remote), "topic")  # by URL, not by name
+        self.assertEqual(r.returncode, 0, r.stderr)
+        mirror = self.s.tmp / "mirror.git"
+        self.git(None, self.s.tmp, "init", "-q", "--bare", str(mirror))
+        self.git(env, self.sub, "remote", "add", "mirror", str(mirror))  # nothing fetched: no refs of it here
+        for where in (str(mirror), "mirror"):
+            r = self.git(env, self.sub, "push", "-q", where, "topic")
+            self.assertNotEqual(r.returncode, 0, where)  # the token on `old` would be public there too
+            self.assertIn("a token at old.txt:1", r.stderr)
+        r = self.git(env, self.sub, "push", "-q", "mirror", "origin/main:refs/heads/main")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_nested_submodules_push_is_scanned_too(self):
+        inner = self.s.tmp / "inner.git"
+        self.git(None, self.s.tmp, "init", "-q", "--bare", "-b", "main", str(inner))
+        seed = self.s.tmp / "seed"
+        self.git(None, seed, "push", "-q", str(inner), "main")
+        self.git(None, seed, "checkout", "-q", "main")
+        r = self.git(None, seed, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(inner), "inner")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.git(None, seed, "commit", "-qm", "inner")
+        self.git(None, seed, "push", "-q", str(self.sub_remote), "main")
+        env, _ = self.session()
+        r = self.git(env, self.sub, "-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        nested = self.sub / "inner"
+        self.assertEqual(self.git(env, nested, "config", "core.hooksPath").stdout.strip(),
+                         str(submodule_folder(self.p, self.wt)))
+        self.commit(env, nested, "b.txt", TOKEN.replace("Wq4", "Zr7") + "\n")  # inner.git has TOKEN already
+        r = self.git(env, nested, "push", "-q", "origin", "HEAD:refs/heads/topic")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("a token at b.txt:1", r.stderr)
+
     def test_a_submodule_with_a_core_hooks_path_of_its_own_still_runs_those_hooks(self):
         env, _ = self.session()
         self.git(None, self.sub, "config", "core.hooksPath", ".githooks")  # the submodule's own config

@@ -272,6 +272,18 @@ def hook_script(root, upstream, theirs, own_remote=False):
             f"sys.exit(privacy.pre_push(sys.argv[1:], {str(root)!r}, {upstream!r}, {theirs!r}, {own_remote!r}))\n")
 
 
+def remote_named(args):
+    """The remote a pre-push's arguments (name, URL) push to, by name or by its URL; "" for one this repo doesn't
+    have, whose refs it can't know."""
+    out = subprocess.run(["git", "config", "--get-regexp", r"^remote\..*\.(push)?url$"], capture_output=True,
+                         text=True).stdout
+    urls = {}
+    for key, _, url in (line.partition(" ") for line in out.splitlines()):
+        urls.setdefault(key[len("remote."):key.rindex(".")], set()).add(url)
+    name, url = (args + ["", ""])[:2]
+    return name if name in urls else next((n for n, have in urls.items() if url in have), "")
+
+
 def pre_push(args, root, upstream, theirs="", own_remote=False):
     """git's pre-push hook: scan what each pushed ref adds beyond upstream and what the remote already has, with the
     kinds the project's config refuses now (`scan_allow` may change while a session runs), and refuse with kinds and
@@ -291,9 +303,9 @@ def pre_push(args, root, upstream, theirs="", own_remote=False):
     known = []  # what the remote has, beyond each ref's value there
     if own_remote:
         from .worktree import their_hooks
-        theirs, remote = str(their_hooks(".") / "pre-push"), args[0] if args else ""
-        upstream = ""  # pushed to a URL: only each ref's value there is known
-        if remote in subprocess.run(["git", "remote"], capture_output=True, text=True).stdout.split():
+        theirs, remote = str(their_hooks(".") / "pre-push"), remote_named(args)
+        upstream = ""  # a remote this repo doesn't track: only each ref's value there is known
+        if remote:
             upstream = f"refs/remotes/{remote}/HEAD"
             known = subprocess.run(["git", "for-each-ref", "--format=%(objectname)", f"refs/remotes/{remote}/"],
                                    capture_output=True, text=True).stdout.split()
