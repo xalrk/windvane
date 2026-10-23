@@ -20,7 +20,7 @@ from windvane import heavy, jobs, scratch, util  # noqa: E402
 from windvane.runner import IN_SANDBOX, TICKET  # noqa: E402
 
 GB = 1048576  # kB
-CLAUSE = ("is machine.toml's min_free_gb: if this job needs less, give it --mem <GB> "
+CLAUSE = ("is min_free_gb in {}: if this job needs less, give it --mem <GB> "
           "(or set heavy_mem in .windvane/config.toml)")
 
 
@@ -34,6 +34,7 @@ class DefaultNeed(unittest.TestCase):
         (proc / "meminfo").write_text(f"MemTotal: {32 * GB} kB\nMemAvailable: {int(3.35 * GB)} kB\n")
         (d / "cfg/windvane").mkdir(parents=True)
         (d / "cfg/windvane/machine.toml").write_text("busy = []\nmin_free_gb = 6\nheavy_wait = 60\n")
+        self.clause = CLAUSE.format(d / "cfg/windvane/machine.toml")  # names the file to set it in
         env = {"XDG_RUNTIME_DIR": str(d), "XDG_CONFIG_HOME": str(d / "cfg"), "XDG_STATE_HOME": str(d / "st")}
         for patch in (mock.patch.object(util, "PROC", proc), mock.patch.dict(os.environ, env)):
             patch.start()
@@ -53,14 +54,14 @@ class DefaultNeed(unittest.TestCase):
     def test_the_default_need_is_named_once(self):
         said = self.run_job(None)
         self.assertIn("only 3.3 GB free (want 6)", said)
-        self.assertEqual(said.count(CLAUSE), 1, said)
-        self.assertIn(f"the 6 GB {CLAUSE}", said)
+        self.assertEqual(said.count(self.clause), 1, said)
+        self.assertIn(f"the 6 GB {self.clause}", said)
 
     def test_a_need_of_its_own_gets_no_clause(self):
         """`--mem 6` and a project's `heavy_mem = 6` reach `run` the same way: as its `mem`."""
         said = self.run_job(6)
         self.assertIn("only 3.3 GB free (want 6)", said)
-        self.assertNotIn(CLAUSE, said)
+        self.assertNotIn(self.clause, said)
 
     def test_take_says_it_again_only_after_a_new_wait(self):
         """Once per wait: a memory line said again as what it waits on changes doesn't repeat the clause."""
@@ -79,7 +80,7 @@ class DefaultNeed(unittest.TestCase):
             os.close(lock)
         memory = [ln for ln in lines if ln.startswith("heavy: waiting: only")]
         self.assertGreaterEqual(len(memory), 2, lines)
-        self.assertEqual("\n".join(lines).count(CLAUSE), 1, lines)
+        self.assertEqual("\n".join(lines).count(self.clause), 1, lines)
 
 
 class AwaitWaiting(unittest.TestCase):
