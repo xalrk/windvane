@@ -14,6 +14,7 @@ The user's own `notify` / `notify-ask` scripts, when on PATH, are used instead (
 """
 import fcntl
 import functools
+import itertools
 import getpass
 import http.client
 import json
@@ -28,6 +29,7 @@ import time
 import threading
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -728,8 +730,8 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
     stream is enough; after, it takes two in a row (one can be a hiccup), so a proxy that turns up later is caught
     too. A try waits TRY_WAIT, not STREAM_WAIT, for its first line: polling pauses meanwhile, and a shorter try
     keeps an answer sent then from waiting longer than it would for a poll (two extra polls around a full-length
-    try wouldn't: the answer would still wait out the try). A try that gets through keeps that timeout for its life;
-    a keepalive late past it is an ordinary drop."""
+    try wouldn't: the answer would still wait out the try). A try that gets through is closed after its first line and
+    opened again at once from the last id, so the stream that stays waits STREAM_WAIT like any other."""
     since = time.time() if since is None else since
     d = state_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -757,7 +759,7 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
                 req = urllib.request.Request(url, headers=auth(c))
                 with urllib.request.urlopen(req, timeout=15 if poll else TRY_WAIT if retrying else STREAM_WAIT) as stream:
                     opened = True
-                    for raw in stream:
+                    for raw in itertools.islice(stream, 1 if retrying else None):
                         lines += 1
                         if polling and not poll:
                             polling = False
@@ -792,6 +794,8 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
                 silent = 0
             elif opened and not polling and isinstance(err, TimeoutError):
                 silent += 1  # opened, then nothing in STREAM_WAIT: not even ntfy's keepalive got through
+            if retrying and lines and err is None:
+                continue  # a try got through: open it again at once, from the last id, with STREAM_WAIT
             if retrying and polling:
                 restream_at = time.time() + RESTREAM
                 if opened and isinstance(err, TimeoutError):
@@ -806,9 +810,11 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
                 continue
             if silent >= (2 if streamed else 1):
                 polling, restream_at, silent = True, time.time() + RESTREAM, 0
-                tell(f"windvane phone: the server's stream opened but brought nothing in {span(STREAM_WAIT)}: check "
-                     f"for a proxy or VPN that buffers long requests (`env | grep -i proxy`, a company gateway). "
-                     f"Asking every {span(PUMP_EVERY)} instead, and trying a stream again every {span(RESTREAM)}")
+                host = urllib.parse.urlsplit(server).hostname
+                tell(f"windvane phone: the server's stream opened but brought nothing in {span(STREAM_WAIT)}: a proxy "
+                     f"or VPN holds it back (`env | grep -i proxy`); NO_PROXY={host} lets it bypass that (docs/"
+                     f"troubleshooting.md, \"the server's stream opened but brought nothing\"). Asking every "
+                     f"{span(PUMP_EVERY)} instead, and trying a stream again every {span(RESTREAM)}")
                 continue
             is_429 = isinstance(err, urllib.error.HTTPError) and err.code == 429
             pause = max(retry_after(err, wait) if is_429 else wait, PUMP_EVERY if polling else 0)

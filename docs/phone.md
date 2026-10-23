@@ -37,7 +37,7 @@ request per push, reconnecting after a drop with a wait that doubles from 10 s t
 `429 Too Many Requests` it gets. That keeps it well inside ntfy.sh's budget for each address: 60 requests, refilled
 one every 5 s, 30 open connections and 250 messages a day. Where a proxy or VPN buffers long requests, a stream
 opens but brings nothing, and the listener asks the server at intervals instead (how often:
-[Troubleshooting](troubleshooting.md)).
+[Troubleshooting](troubleshooting.md#the-log-says-the-servers-stream-opened-but-brought-nothing)).
 
 ## Your own server
 
