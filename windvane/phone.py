@@ -830,7 +830,7 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
                 host = urllib.parse.urlsplit(server).hostname
                 tell(f"windvane phone: the server's stream opened but brought nothing in {span(STREAM_WAIT)}: a proxy "
                      f"or VPN holds it back (`env | grep -i proxy`); NO_PROXY={host} lets it bypass that"
-                     f"{as_service(heard)} (docs/"
+                     f"{as_service(heard, host)} (docs/"
                      f"troubleshooting.md, \"the server's stream opened but brought nothing\"). Asking every "
                      f"{span(PUMP_EVERY)} instead, and trying a stream again every {span(RESTREAM)}")
                 continue
@@ -847,12 +847,13 @@ def listen(once=False, until=lambda: False, since=None, heard=None):
         lock.close()
 
 
-def as_service(heard):
+def as_service(heard, host):
     """Where the listener's NO_PROXY has to go when it runs as the service: systemd sets INVOCATION_ID for each unit
     it starts, and a shell's `export` never reaches the unit. Empty for one run by hand or a run's own stream."""
     if heard or not os.environ.get("INVOCATION_ID"):
         return ""
-    return f", set for the service with `systemctl --user edit {SERVICE.removesuffix('.service')}`"
+    return f", set for the service as `Environment=NO_PROXY={host}` under `[Service]` with `systemctl --user edit " \
+           f"{SERVICE.removesuffix('.service')}`"
 
 
 def take(lock, kind, until):

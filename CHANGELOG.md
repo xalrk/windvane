@@ -72,8 +72,9 @@ release on the same day adds a number (`2026.10.9.1`).
 - A heavy job's waiting line is no longer said twice when one holder leaves and the next hasn't yet taken the lock.
 - A run whose last ticket merged while it was looking for the next one takes its new windvane code up before it
   ends, instead of ending on the old code.
-- The phone listener's line about a proxy holding its stream back says, when it runs as the service, that its
-  `NO_PROXY` goes in with `systemctl --user edit windvane-phone`: an `export` in your shell doesn't reach it.
+- The phone listener's line about a proxy holding its stream back says, when it runs as the service, what to add
+  and where: `Environment=NO_PROXY=<host>` under `[Service]` with `systemctl --user edit windvane-phone`. An
+  `export` in your shell doesn't reach the service.
 - A stream the listener opened again after a try got through, and that brings nothing again, falls back to polling
   at once and says why, instead of reconnecting to one more silent stream first.
 

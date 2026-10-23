@@ -125,8 +125,8 @@ class ProxyLineAsService(Base):
 
     def test_the_service_s_line_says_where_no_proxy_goes(self):
         line = self.proxy_line({"INVOCATION_ID": "0123456789abcdef"})
-        self.assertIn("NO_PROXY=127.0.0.1 lets it bypass that, set for the service with "
-                      "`systemctl --user edit windvane-phone` (docs/troubleshooting.md", line)
+        self.assertIn("NO_PROXY=127.0.0.1 lets it bypass that, set for the service as `Environment=NO_PROXY=127.0.0.1` "
+                      "under `[Service]` with `systemctl --user edit windvane-phone` (docs/troubleshooting.md", line)
         self.assertLess(len(line.encode()), phone.MOST)
 
     def test_run_by_hand_it_stays_as_it_was(self):
