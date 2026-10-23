@@ -47,7 +47,8 @@ class Calibration(unittest.TestCase):
             "0 out of scope",
         ])
         self.assertRegex(out[7], r"^  T-001 +4 → 6 → 8 +pass$")
-        self.assertRegex(out[-1], r"^  T-005 +8 → 8 +pass$")
+        bought = next(i for i, line in enumerate(out) if line.startswith("what it bought: "))
+        self.assertRegex(out[bought - 1], r"^  T-005 +8 → 8 +pass$")  # the tickets end the spread part
 
     def test_last_n_keeps_the_latest_tickets(self):
         out = self.run_cli(cli.cmd_stats, critic=True, last=2)

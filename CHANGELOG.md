@@ -7,6 +7,10 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane stats --critic` says what the critic bought: which checks sent work back, alone or with others, and
+  whether the next head changed the ticket's tree or only the evidence pack; what those revision rounds cost the
+  worker in turns and weighted tokens; the reviews that still asked for changes after a critic pass; and the checks
+  that never decided anything.
 - `windvane heavy --measure` (and `bg --heavy --measure`) for a command that measures timing: it also waits until
   the 1-minute load average is at or under `machine.toml`'s new `measure_load` (default a quarter of the CPU count),
   naming the processes using the most CPU, and lets the jobs behind it by meanwhile, for `machine.toml`'s
