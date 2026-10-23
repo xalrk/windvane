@@ -265,12 +265,13 @@ On a public repository a branch is public the moment it's pushed, before anyone 
 leaves the machine at three points:
 
 - **Every push a session makes.** Sessions run with a `pre-push` hook of windvane's own, given in their git
-  environment (your repository's config and hooks stay as they are, and your own `pre-push` still runs after it).
-  The hook applies to the session's own worktree only: a repository its check clones or inits (a test's fixture)
-  keeps its own hooks, so `git lfs install` there works and a test's own hooks run. It refuses a push whose new lines hold a token or a private key, an ntfy URL or this machine's topic, a personal email
+  environment (your repository's config and hooks stay as they are, and your own `pre-push` still runs after it). It
+  refuses a push whose new lines hold a token or a private key, an ntfy URL or this machine's topic, a personal email
   or a word from `private-terms.txt`, or that adds a file named like a secret: `.env` and `.env.*` (not
   `.env.example`), `*.pem`, `*.key`, `id_rsa*`, `credentials*.json`, `*.p12`. The refusal names the kind and the file
-  and line, never the text. Lines already on main don't count, and `scan_allow` lets a kind through here too.
+  and line, never the text. Lines already on main don't count, and `scan_allow` lets a kind through here too. The
+  hook belongs to the session's own worktree only: a repository that a test in your check clones or creates keeps its
+  own hooks, so `git lfs install` works there and the test's own hooks run.
 - **Every merge.** Before it merges a ticket or a desk PR, the driver scans the branch's commits again, for a push that
   got past the hook (`--no-verify`, or one made elsewhere). A ticket goes back to its worker, who takes it out with a
   commit on top; windvane then merges the branch as one commit, so the commit that added it stays out of main's

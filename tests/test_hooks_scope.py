@@ -5,12 +5,15 @@ import os
 import subprocess
 import sys
 import unittest
+from argparse import Namespace
+from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import actions, runner  # noqa: E402
+from windvane import actions, driver, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
+from windvane.util import now  # noqa: E402
 from windvane.worktree import ensure_worktree, guard_pushes, hooks_env, hooks_folder  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_actions_budget import FAKE_GH  # noqa: E402
@@ -110,6 +113,45 @@ class Scope(unittest.TestCase):
         env = {**os.environ, **hooks_env(odd, folder)}
         self.assertEqual(self.git(env, odd, "config", "core.hooksPath").stdout.strip(), str(folder))
         self.assertEqual(self.git(env, near, "config", "core.hooksPath").stdout, "")
+
+
+# A project's check whose tests make repos of their own: it fails when one gets a core.hooksPath it didn't set
+FIXTURE_CHECK = """set -e
+d=$(mktemp -d)
+git clone -q "$(git remote get-url origin)" "$d/clone"
+git init -q "$d/fresh"
+for r in clone fresh; do
+    h=$(git -C "$d/$r" config core.hooksPath || true)
+    [ -z "$h" ] || { echo "$r has core.hooksPath $h"; exit 1; }
+done
+echo "the fixtures keep their own hooks"
+"""
+
+
+class Pipeline(unittest.TestCase):
+    """A worker session as the driver starts it, running `windvane check` from its worktree."""
+
+    def setUp(self):
+        self.s = Sandbox()
+        self.addCleanup(self.s.close)
+        self.s.ticket("T-001")
+        self.s.write("fixture_check.sh", FIXTURE_CHECK)
+        cfg = self.s.root / ".windvane/config.toml"
+        cfg.write_text(cfg.read_text().replace('check = "test -f README"', 'check = "sh fixture_check.sh"'))
+        self.s.publish()
+        os.environ["FAKE_WORKER_RUN"] = "windvane check; echo hooks: $(git config core.hooksPath)"
+        self.addCleanup(setattr, driver, "push", driver.push)
+        driver.push = lambda *a, **k: None
+
+    def test_the_sessions_check_makes_repos_without_its_hooks_while_its_worktree_keeps_the_push_scan(self):
+        p = Project(self.s.root)
+        driver.Pilot(p, Namespace(cap=75, week_cap=95, ticket_hours=1, min_slot=0, answer_wait=10, replan=0, goal="",
+                                  parallel=1)).run(now() + timedelta(hours=1))
+        ran = Path(os.environ["FAKE_LOG"] + ".ran").read_text()  # what the session's commands said
+        self.assertIn("CHECK PASSED", ran)
+        self.assertNotIn("has core.hooksPath", ran)
+        self.assertIn(f"hooks: {hooks_folder(p, p.work_dir)}\n", ran)  # test_push_scan's Merge: its push is refused
+        self.assertIn("T-001", self.s.git("log", "--format=%s", "origin/main"))  # merged: its push went through
 
 
 if __name__ == "__main__":
