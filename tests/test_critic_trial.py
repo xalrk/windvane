@@ -138,6 +138,37 @@ class CriticTrial(unittest.TestCase):
         self.assertEqual(head, self.s.git("rev-parse", "HEAD"))
         self.assertGone()
 
+    def test_it_never_drives_the_autopilot(self):
+        self.env("FAKE_CRITIC_TRY", "windvane stop; echo stop=$?; bin=$(command -v windvane); "
+                                    "python3 $(dirname $(readlink -f $bin))/windvane run --hours 1; echo run=$?; "
+                                    "windvane quiet; echo quiet=$?")
+        self.critic()
+        [seen] = self.tried()
+        self.assertIn("stop=1", seen["out"])
+        self.assertIn("run=1", seen["out"])  # its own copy of the CLI too: the role is in its environment
+        self.assertIn("a critic never drives the autopilot: `windvane stop` is refused", seen["out"])
+        self.assertIn("quiet=0", seen["out"])  # what only reads still runs
+        [call] = self.calls()
+        self.assertIn("Bash(windvane stop *)", call["deny"])
+        self.assertFalse((self.p.state / "stop").exists())
+
+    def test_a_retry_gets_its_own_time_box(self):
+        self.s.write(".windvane/config.toml", self.s.root.joinpath(".windvane/config.toml").read_text()
+                     .replace("enabled = true", "enabled = true\ntrial_minutes = 0.03"))
+        self.p = Project(self.s.root)
+        self.env("FAKE_FAIL", "error,ok")
+        waits = []
+
+        def retry(error):  # the backoff outlasts the box: the second attempt must still get its whole box
+            waits.append(error)
+            time.sleep(2.5)
+            return len(waits) == 1
+        entry, _ = critic.judge(self.p, "T-001", str(self.s.root), retry=retry)
+        self.assertEqual(1, len(waits))
+        self.assertEqual(("pass", "ran"), (entry["step"], entry["trial"]))
+        self.assertEqual(2, len(self.calls()))  # the error, then the verdict: no time-up turn
+        self.assertGone()
+
     def test_gone_when_the_critic_dies(self):
         self.env("FAKE_ERROR_FOR", "Critique T-001")
         self.env("FAKE_CRITIC_TRY", "true")
@@ -183,14 +214,25 @@ class CriticTrial(unittest.TestCase):
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         trials = self.p.state / worktree.TRIALS
         until = time.time() + 20
-        while not (trials.is_dir() and any(trials.iterdir())) and time.time() < until:
+        while not self.calls() and time.time() < until:  # its critic started
             time.sleep(0.05)
-        self.assertTrue(any(trials.iterdir()), "no trial started")
+        self.assertTrue(self.calls(), "no critic started")
         os.killpg(proc.pid, signal.SIGKILL)
         proc.wait()
         self.assertTrue(any(trials.iterdir()))  # killed outright: nothing ran its cleanup
         os.environ.pop("FAKE_CRITIC_SLOW")
         self.critic()
+        self.assertGone()
+
+    def test_a_copy_killed_while_it_was_made_goes_too(self):
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        trials = self.p.state / worktree.TRIALS
+        left = trials / f"T-009.{dead.pid}"
+        self.s.git("worktree", "add", "-q", "--detach", str(left), "HEAD")
+        self.s.git("worktree", "lock", "--reason", "initializing", str(left))  # as git leaves one it was killed making
+        with worktree.trial(self.p, str(self.s.root), "HEAD", "T-001"):
+            self.assertFalse(left.exists())
         self.assertGone()
 
     def test_off_it_reads_the_worker_tree_with_bash_denied(self):

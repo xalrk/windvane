@@ -69,6 +69,12 @@ DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch
 # it (`restore`), the ticket critic's is a throwaway copy (`worktree.trial`)
 PROJECT_DENY = DENY[1:] + ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
                            "Bash(git reset *)", "Bash(git stash *)", "Bash(gh *)"]
+# What `windvane` lets a critic run (`refused`): the heavy lock and what only reads. Never what drives the autopilot
+# (run, stop, critic, check, ci, bg...): its copy shares the live state dir, so a "restart midway" tried there would stop
+# the user's run. The deny rules turn the plain forms away first; the env check also catches `bin/windvane`.
+MAY_RUN = ("heavy", "status", "stats", "queue", "overview", "mode", "quiet")
+TRIAL_DENY = PROJECT_DENY + [f"Bash(windvane {c} *)" for c in ("run", "stop", "critic", "plan", "check", "ci", "bg",
+                                                               "await", "answer", "retry", "periodic", "request")]
 TRIAL_UP = "trial time"  # why a ticket critic's session was stopped at `trial_minutes`: it then answers on what it saw
 PROJECT = "PROJECT"  # critic.jsonl's ticket for a verdict on the whole project
 COVERED_RE = re.compile(r"[(\[]?[ \t]*covered by[ \t]+([A-Za-z]+-\d+[a-z]?)[ \t]*[)\]]?", re.I)
@@ -729,15 +735,16 @@ def boxed(stop_if, minutes):
 
 
 def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_env, note):
-    """judge's sessions and verdict. With a copy (`tree`) the critic runs commands there (PROJECT_DENY keeps it off
-    commits, pushes, switches and gh), within `trial_minutes`; stopped by that box, it's asked once, in the same
-    session and with no tools to run, for its verdict on what it saw, so a trial that runs out never costs the ticket
-    its critique. Every follow-up turn runs in the same tree: a session resumes only from the folder it started in."""
-    where, allow, deny = (tree, ["Bash"], PROJECT_DENY) if tree else (cwd, [], DENY)
-    stop = boxed(stop_if, p.critic["trial_minutes"]) if tree else stop_if
+    """judge's sessions and verdict. With a copy (`tree`) the critic runs commands there (TRIAL_DENY and `refused`
+    keep it off commits, pushes, switches, gh and the autopilot's controls), within `trial_minutes` per attempt;
+    stopped by that box, it's asked once, in the same session and with no tools to run, for its verdict on what it
+    saw, so a trial that runs out never costs the ticket its critique. Every follow-up turn runs in the same tree: a
+    session resumes only from the folder it started in."""
+    where, allow, deny = (tree, ["Bash"], TRIAL_DENY) if tree else (cwd, [], DENY)
     prompt = "\n\n".join(filter(None, [prompt, trial_part(p, cwd, rev, tree, note)]))
     system, session, out = system_prompt(p, cwd), {}, {"trial": "ran" if tree else "read-only"}
-    while True:
+    while True:  # each attempt gets the whole box: a retry's wait is no time spent trying
+        stop = boxed(stop_if, p.critic["trial_minutes"]) if tree else stop_if
         text, killed, error = run_claude(p, "critic", f"{tid}-critic", prompt, system, where, allow=allow, deny=deny,
                                          usage=usage, stop_if=stop, ticket=tid, session=session, extra_env=git_env)
         if not error or not retry or not retry(error):
@@ -787,6 +794,14 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
              "hits": hits, "scoped": scoped, "capped": was, "anchor": anchor, **saved}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
+
+
+def refused(cmd, role):
+    """Why `windvane <cmd>` is refused in a critic's session (its role from the environment), or ""."""
+    if role.split(":")[0] != "critic" or not cmd or cmd in MAY_RUN or cmd == "request":  # it refuses with its own rule
+        return ""
+    return (f"windvane: a critic never drives the autopilot: `windvane {cmd}` is refused (it may run "
+            f"{', '.join(f'`{c}`' for c in MAY_RUN)}). Try the change on scratch state in $TMPDIR.")
 
 
 def time_up(tid, minutes):

@@ -903,6 +903,8 @@ def main(argv=None):
     s.add_argument("-n", type=int, default=30, help="start with this many past events")
     s.add_argument("-o", type=int, default=6, help="lines of each command's output (0 hides output)")
     a = ap.parse_args(argv)
+    if why := critic_mod.refused(a.cmd, os.environ.get("WINDVANE_ROLE", "")):
+        sys.exit(why)
     if a.cwd:
         if not os.path.isdir(a.cwd):  # a phone hook whose repo was deleted: one line, not a traceback
             sys.exit(f"windvane: {a.cwd} doesn't exist (any more)")

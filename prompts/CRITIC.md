@@ -26,10 +26,10 @@ Your prompt holds the ticket, the worker's pack notes, the files it touches, the
 **Try it** in the copy of the ticket's head your prompt gives you: run the one thing that shows its main promise (the
 pack's command, the project's own CLI or app as a user would, its tests), then one or two ways it could fail that the
 ticket names or plainly meets (a second pass, a restart midway, another failure on the way out). Probes go in
-`$TMPDIR`, heavy commands through `windvane heavy -- <command>`; never commit, push, switch branches or run `gh`. A
-check is `yes` on what you saw run, or on the pack where running it is unreasonable (a render, hours of work, no
-copy); say which (`ran: ...`, `pack: ...`). A case you saw fail is a "Fix in this ticket" point naming the command
-and what it printed. Read the pack images; a source file only on a real doubt.
+`$TMPDIR`, heavy commands through `windvane heavy -- <command>`; never commit, push, switch branches, run `gh` or drive
+the autopilot (`windvane run`, `stop`...). A check is `yes` on what you saw run, or on the pack where running it is
+unreasonable (a render, hours of work, no copy); say which (`ran: ...`, `pack: ...`). A case you saw fail is a "Fix in
+this ticket" point naming the command and what it printed. Read the pack images; a source file only on a real doubt.
 
 ## On a re-critique
 Check each earlier failed check and "Fix in this ticket" point first, rerunning a failed case; your earlier answers
