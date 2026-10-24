@@ -835,6 +835,9 @@ def session_critic(p, cwd, tid):
         seen.unlink(missing_ok=True)
         bg(p, SESSION_CRITIC, [*exe(), "critic", tid], cwd, quiet=True)
         ask.write_text(this)
+    elif (was := tail(ask, 1).split()[-1:]) and was != this.split()[-1:]:  # its verdict is on the head it started on
+        print(f"critic: the running critique started on {was[0][:7]}, not {this.split()[-1][:7]}: once it ends, run "
+              f"`windvane critic {tid}` again")
     code = await_(p, SESSION_CRITIC, CRITIC_LINES, again=f"windvane critic {tid}")
     if code is None or code == NEVER:
         return heavy.TIMED_OUT

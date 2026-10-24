@@ -337,8 +337,12 @@ class CriticTrial(unittest.TestCase):
         self.assertEqual(heavy.TIMED_OUT, code, out)
         self.assertIn("call windvane critic T-001 again", out)
         self.assertNotIn("CRITIC STEP", out)
+        old = self.s.git("rev-parse", "HEAD")[:7]
+        self.s.git("commit", "-q", "--allow-empty", "-m", "a new head meanwhile")
         code, out = self.critic_code()  # asked again while it runs: the same critique, not a second one
         self.assertEqual(1, len(self.calls()))
+        self.assertIn(f"critic: the running critique started on {old}, not {self.s.git('rev-parse', 'HEAD')[:7]}: "
+                      "once it ends, run `windvane critic T-001` again", out)
         for _ in range(20):
             if code != heavy.TIMED_OUT:
                 break
