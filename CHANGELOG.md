@@ -7,6 +7,9 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane periodic <name>` while a run is on asks that run for the round instead of refusing: it runs at the run's
+  next gap between tickets, from the config on `main` as it is then, without stopping the run. `--cancel` takes the
+  ask back, and `windvane status` shows it.
 - The critic tries the change before it judges it. Each critique runs in a throwaway copy of the ticket's committed
   head, where the critic runs the command that shows the ticket's promise, the tests and small probes, then one or two
   ways it could fail (a second pass, a restart midway). A case it sees fail sends the ticket back, named. Commits,

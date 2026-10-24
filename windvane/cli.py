@@ -323,6 +323,8 @@ def cmd_status(a, p):
               f"({', '.join(w.get('names') or '?')}), {waited} min of {driver.CHECKS_MOST:g}")
     for tid in dict.fromkeys(st.get("failed", [])) if on else ():
         print(f"failed: {tid}; once its cause is fixed: windvane retry {tid}")
+    for name in periodic_mod.asked(p) if on else ():
+        print(f"asked: periodic {name}, at the next gap")
     for key, q in questions.waiting_on(st.get("questions", {})).items():
         print(f"waiting on you: {key}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
     for q in questions.with_ids(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"), p):
@@ -696,19 +698,32 @@ def cmd_quiet(a, p):
 
 def cmd_periodic(a, p):
     """A [[periodic]] entry and its `then` chain now, from the desk, as a run would between tickets. It takes the
-    run's lock, so it never runs beside one (nor one beside it)."""
+    run's lock, so it never runs beside one: while a run is on, the ask waits for that run's next gap between tickets
+    instead (periodic.py), and may name an entry only main's config has yet. `--cancel` takes an ask back."""
     need(p)
-    e = p.periodic.get(a.name)
+    if a.cancel:
+        print(f"periodic {a.name}: ask taken back" if periodic_mod.unask(p, a.name)
+              else f"periodic {a.name}: nothing asked to take back")
+        return
+    on = driver.locked(p)  # a schedule waiting for its window, or a run not yet started, has none to ask
+    entries = {**p.periodic, **(periodic_mod.main_entries(p) if on else {})}
+    e = entries.get(a.name)
     if not e:
         sys.exit(f"no [[periodic]] entry {a.name!r} in {DIR}/config.toml"
-                 + (f" (there is: {', '.join(p.periodic)})" if p.periodic else ""))
+                 + (f" (there is: {', '.join(entries)})" if entries else ""))
+    if on:
+        again = "" if periodic_mod.ask(p, a.name) else " (asked already: it runs once)"
+        print(f"the running autopilot runs periodic {a.name} at its next gap between tickets{again}; "
+              f"to take it back: windvane periodic {a.name} --cancel")
+        return
     desk_periodic(p, e)
 
 
 def desk_periodic(p, e):
     """Run [[periodic]] entry `e` (and its chain) from the desk, under the run's lock."""
-    if running(p):
-        sys.exit("a run is busy: it runs periodic sessions itself between tickets; try again once it stops")
+    if running(p):  # its next run starts fresh and would drop an ask made now
+        sys.exit("a run is starting or a schedule waits for its window: ask again once the run is on (it takes the "
+                 "ask at its next gap), or once it stops")
     if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
         sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
     keys = ("cap", "week_cap", "ticket_hours", "min_slot", "answer_wait")
@@ -892,8 +907,10 @@ def main(argv=None):
     s.add_argument("--merge", action="store_true", help="merge the tickets at once (default: a PR to look at)")
     s.add_argument("--no-followups", action="store_true", help="leave out the critic's notes")
     s.add_argument("--max", type=int, default=6, help="at most this many new tickets (default 6)")
-    s = sub.add_parser("periodic", help="run a [[periodic]] session (and its `then` chain) now")
+    s = sub.add_parser("periodic", help="run a [[periodic]] session (and its `then` chain) now; while a run is on, "
+                       "ask it for one at its next gap between tickets")
     s.add_argument("name")
+    s.add_argument("--cancel", action="store_true", help="take back an ask a running autopilot hasn't taken yet")
     s = sub.add_parser("new", help="write a new ticket file with the next id")
     s.add_argument("title", nargs="+")
     s = sub.add_parser("stats", help="tokens per role or ticket, from the ledger")

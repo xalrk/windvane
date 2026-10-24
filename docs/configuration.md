@@ -110,7 +110,7 @@ the [README](../README.md#periodic-sessions) for an example.
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | `periodic-<n>` | Its name in the log, the phone push and the ledger (`periodic:<name>`). |
-| `every` | unset | Run after this many merged tickets (counted over the run, restarts included). With none of `every`, `after_group` and `requests` set, it runs only as another entry's `then`. |
+| `every` | unset | Run after this many merged tickets (counted over the run, restarts included). With none of `every`, `after_group` and `requests` set, it runs only as another entry's `then`, or when asked for (below). |
 | `after_group` | unset | Run when a group of tickets is finished: a regex searched in each ticket's header (its first 8 lines), whose group 1 names the ticket's group, e.g. `'Milestone:\s*(M\d+)'`. A group is finished when none of its tickets is open (merged or `done:`; `parked:` ones don't hold it up). Groups finished when the run starts, or when the entry last ran, don't count, even if they gain a ticket and finish again (a playtest's fix tickets filed under its milestone don't start another); several finishing before it runs give one session, whose prompt names them and their tickets (`## Finished since the last run: M7 (12 tickets: T-031, ...)`). A round skipped before its session (the checkout busy, a failed `setup`, no time before the deadline) leaves them owed until the next merge. With `every` too, either makes it due and a run resets both. `windvane queue` shows the closest groups, and their parked tickets. |
 | `requests` | `false` | Run while windvane's request inbox (`windvane request`, shared by every project on the machine) holds requests no round this run was given yet: the session gets up to 10 of them, fenced as untrusted data, and ends with a `REQUEST: R-NNN accept <ticket>`, `reject <why>` or `question <the question>` line each. The driver writes each verdict into its request and moves it to `done/` (an accept only for a ticket that landed or exists); a question stays in the inbox, pushed to the phone with how to answer it, until `windvane request --answer`; one with no line waits for the next run. `prompt` defaults to windvane's own `TRIAGE-REQUESTS.md`. windvane's own config has one, with `land = "end"`. |
 | `minutes` | `60` | The session's time limit. It is skipped when the deadline is nearer. |
@@ -127,6 +127,13 @@ of a ticket that isn't merged or `done:` (a finding it already covers: any other
 logged) and lines added to `QUEUE.md` are kept; they land on `main` as a plan does, with the last session's final reply
 (cut to 80 lines) in the commit and the PR, so what it found covered or chose not to ticket stays on record. A session cut off (deadline, stop, usage cap) or without the
 line leaves nothing.
+
+`windvane periodic <name>` runs an entry now from the desk. While a run is on it asks that run instead: the run takes
+the ask at its next gap between tickets, before any other due entry, with the entry (and its `then` chain) as the
+config on `main` has it then, so an entry pushed after the run started can be asked for. Asking twice gives one round;
+`windvane periodic <name> --cancel` takes it back, and `windvane status` shows it (`asked: periodic <name>, at the
+next gap`). It survives a driver restart; a failed `setup` or no time before the deadline drops it with one push, a
+busy checkout keeps it owed until the next merge, and a run that ends first drops it and says so in its summary.
 
 ## [permissions]
 

@@ -12,23 +12,30 @@ the commit; every other change is dropped with the tree. Where the new tickets g
 
 A `score=<n>` on the PERIODIC line goes to the ledger (`event: score`), and `windvane stats --periodic` shows it.
 
+`windvane periodic <name>` while a run is on asks that run for the round: the ask waits in the state dir (`asked.json`)
+until the run's next gap between tickets, which takes it before any other due entry, from the config on main as it is
+then, and is dropped when the run ends.
+
 An entry with `builtin = "project-critic"` needs no prompt: it runs the critic on the whole project (`critic.project`),
 whose points an open ticket covers land as that ticket's notes, and whose new ones a `then` triage gets.
 """
 import difflib
 import os
 import re
+import tomllib
 from datetime import timedelta
 from pathlib import Path
 
 from . import critic, phone, requests
+from .config import DIR, periodic as periodic_entries, permissions
 from .questions import quiet_now
 from .queue import Queue, title as title_of
 from .runner import NO_REQUEST, plain_error
-from .util import append_jsonl, git, gout, hhmm, last_match, now, push, run_limited
+from .util import append_jsonl, edit_json, git, gout, hhmm, last_match, load_json, now, push, run_limited
 
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
 SCORE_RE = re.compile(r"\bscore=(-?\d+(?:\.\d+)?)\b")
+ASKED = "asked.json"  # the state dir's `windvane periodic <name>` asks a run holds for its next gap: {name: when}
 ASK_LAND = (("near", "queue them right after the ticket in progress"), ("end", "queue them after everything else"),
             ("hold", "hold them, parked in QUEUE.md, for you at the desk"))
 
@@ -40,9 +47,13 @@ class Periodic:
     due at once, one more try rather than a lost playtest."""
 
     def periodic_due(self):
-        """The first [[periodic]] entry whose `every` merges have passed since it last ran this run (restarts carry
-        the count), or with a group finished since then, or with requests in the inbox no round this run was given
-        (one that failed waits for the next run, never loops), or None."""
+        """An entry asked for with `windvane periodic <name>` (`asked_due`), else the first [[periodic]] entry whose
+        `every` merges have passed since it last ran this run (restarts carry the count), or with a group finished
+        since then, or with requests in the inbox no round this run was given (one that failed waits for the next
+        run, never loops), or None."""
+        e = self.asked_due()
+        if e:
+            return e
         for e in self.p.periodic.values():
             if e["every"] and len(self.merged) - self.periodic_at.get(e["name"], 0) >= e["every"]:
                 return e
@@ -51,6 +62,35 @@ class Periodic:
             if e["requests"] and requests.pending(self.requests_tried):
                 return e
         return None
+
+    def asked_due(self):
+        """The oldest ask's entry, as main's config has it now (an entry added after the run started works), marked
+        `asked`; its chain looks up `then` there too. One skipped as the checkout was busy waits for the next merge,
+        as a skipped group does. An ask for a name main's config and the run's both lack is dropped with a push."""
+        p = self.p
+        for name in asked(p):
+            if len(self.merged) <= self.asks_wait.get(name, -1):
+                continue
+            entries = {**p.periodic, **main_entries(p, log=self.log)}
+            if name not in entries:
+                unask(p, name)
+                self.log(f"{name}: asked for, but no [[periodic]] entry has that name on {p.upstream}: dropped")
+                push(f"{name} round not run", f"You asked for the {name} round, but {DIR}/config.toml on "
+                     f"{p.upstream} has no [[periodic]] entry {name}: the ask is dropped.", 3, "warning")
+                continue
+            for role, perms in permissions(p.cfg["permissions"], entries)[0].items():
+                p.perms.setdefault(role, perms)  # an entry new on main: its own allow / deny
+            self.asked_chain = entries
+            return dict(entries[name], asked=True)
+        return None
+
+    def asked_taken(self, e, why=""):
+        """The asked round `e` ran, or was skipped for a reason the user hears (`why`, pushed once): the ask is gone,
+        never tried again."""
+        unask(self.p, e["name"])
+        self.asks_wait.pop(e["name"], None)
+        if why:
+            push(f"{e['name']} round not run", f"The {e['name']} round you asked for didn't run: {why}", 3, "warning")
 
     def group_queue(self):
         """The queue on main as last fetched, read again only when main moved: `periodic_due` looks between tickets,
@@ -84,19 +124,24 @@ class Periodic:
             done = {g for g, (_, left) in groups(self.group_queue(), e["after_group"]).items() if not left}
             self.groups_seen[e["name"]] = sorted(done | set(self.groups_seen.get(e["name"], [])), key=natural)
 
+    def periodic_busy(self, e):
+        """`e` skipped as the checkout is busy: due again after the next merge, an asked one still owed."""
+        self.periodic_ran(e, skipped=True)
+        if e.get("asked"):
+            self.asks_wait[e["name"]] = len(self.merged)
+
     def periodic(self, e):
         """Run `e` and the entries its `then` chains to, one after another in the ci tree on current main, then
         land the tickets they wrote. Whatever else they changed is discarded with the tree."""
         from .planner import release_ids
         from .worktree import clean_detach
         p, cd, done, prev = self.p, self.p.ci_dir, set(), None
+        entries = self.asked_chain if e.get("asked") else p.periodic
         if cd == p.work_dir and any(self.owner.values()):
-            self.periodic_ran(e, skipped=True)
             self.log(f"{e['name']}: skipped: the checkout holds a ticket's unfinished work")
-            return
+            return self.periodic_busy(e)
         if not self.keep_changes(f"the {e['name']} round"):
-            self.periodic_ran(e, skipped=True)
-            return
+            return self.periodic_busy(e)
         self.fetch()
         clean_detach(p, cd, p.upstream)
         kept, reply = None, ""  # what the last session that finished leaves; a cut-off one's changes are dropped
@@ -110,7 +155,7 @@ class Periodic:
                 seen = list(self.groups_seen.get(e["name"], []))
                 self.periodic_ran(e)
                 land = e["land"] or land
-                got = self.periodic_session(e, cd, prev, finished)
+                got = self.periodic_session(e, cd, prev, finished, entries)
                 if got is False:  # skipped before it started (a failed setup): its groups stay owed
                     self.groups_seen[e["name"]] = seen
                     self.periodic_ran(e, skipped=True)
@@ -118,7 +163,7 @@ class Periodic:
                     break
                 reply, prev = got
                 kept, last = self.periodic_keep(cd, e["name"]), e["name"]
-                e = p.periodic.get(e["then"])
+                e = entries.get(e["then"])
             self.save()
             try:
                 landed, held = [], {}
@@ -135,6 +180,9 @@ class Periodic:
         left = self.end() - now()
         if left < timedelta(minutes=e["minutes"]):
             self.log(f"{e['name']}: skipped: {e['minutes']} min don't fit before the deadline")
+            if e.get("asked"):
+                self.asked_taken(e, f"its {e['minutes']} min don't fit before the run's deadline "
+                                    f"({hhmm(self.end())}).")
             return False
         return True
 
@@ -147,15 +195,19 @@ class Periodic:
         last = phone.cut(lines[0], log=self.log) if lines else "no output"
         return why or (f"exit {code}: {last}" if code else "")
 
-    def periodic_session(self, e, cd, prev, finished=None):
+    def periodic_session(self, e, cd, prev, finished=None, entries=None):
         """One periodic session: (its final reply, that plus the files it names), False when it was skipped before it
         started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
-        it due, {group: its tickets}, named in its prompt."""
+        it due, {group: its tickets}, named in its prompt; `entries`: the chain's (main's for an asked round). An
+        asked round's ask is taken once its session starts or is skipped for good (`asked_taken`)."""
         from .planner import pick_ids
         from .runner import rules
         name, p = e["name"], self.p
+        entries = entries or p.periodic
         if not self.periodic_fits(e):
             return False
+        if e.get("asked"):  # whatever comes next, it was this ask's round: a failed setup is pushed once below
+            self.asked_taken(e)
         if e["setup"]:
             self.log(f"{name}: setup `{e['setup']}`")
             failed = self.periodic_setup(e, cd)
@@ -183,7 +235,7 @@ class Periodic:
         # the chain's earlier ones: in cd, and still claimed with the new ones
         ids = pick_ids(p, "periodic", 6, cd, own="periodic", keep=self.handed)
         self.handed |= set(ids)
-        triage = any(x["then"] == name for x in p.periodic.values())
+        triage = any(x["then"] == name for x in entries.values())
         notes = critic.followups(p) if triage else []
         limit = now() + timedelta(minutes=e["minutes"])
         prompt = "\n\n".join(filter(None, [
@@ -411,6 +463,43 @@ class Periodic:
             self.sleep(min(5, max(0.0, (until - now()).total_seconds())))
         self.log(f"{name}: no answer; the tickets are held")
         return "hold"
+
+
+def asked(p):
+    """The names asked for with `windvane periodic <name>` while a run was on, oldest first."""
+    got = load_json(p.state / ASKED, {})
+    return sorted(got, key=lambda n: str(got[n]))
+
+
+def ask(p, name):
+    """Hold `name` for the running autopilot's next gap. False when it was asked for already (it stays asked once)."""
+    return edit_json(p.state / ASKED, lambda d: name not in d and not d.update({name: now().isoformat()}), {})
+
+
+def unask(p, name):
+    """Take back the ask for `name`; False when there was none."""
+    return edit_json(p.state / ASKED, lambda d: d.pop(name, None) is not None, {})
+
+
+def clear_asked(p):
+    """Drop every ask (a run ended, or a fresh one starts): the names dropped."""
+    def drop(d):
+        names = list(d)
+        d.clear()
+        return names
+    return edit_json(p.state / ASKED, drop, {})
+
+
+def main_entries(p, log=None):
+    """The [[periodic]] entries in the config on main as last fetched (a push from the checkout updates it), or {}
+    when it has none or they don't parse (`log` says why)."""
+    text = gout(p.main_root(), "show", f"{p.upstream}:{DIR}/config.toml")
+    try:
+        return periodic_entries(tomllib.loads(text).get("periodic", [])) if text else {}
+    except (tomllib.TOMLDecodeError, SystemExit) as e:
+        if log:
+            log(f"the [[periodic]] entries on {p.upstream} don't read: {e}")
+        return {}
 
 
 def natural(text):
