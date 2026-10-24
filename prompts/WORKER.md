@@ -25,10 +25,9 @@ reviewer reads your change, and the driver merges it.
      `yes`); the reviewer checks that. Then the command that shows the main promise, and only what the critic can't
      run itself or read in the diff: measurements over time, before/after numbers, a long or heavy run's output.
    - Up to four images (`.png`) when there's something to see (screenshots, one contact sheet).
-   Reuse what you already ran. Then `windvane critic <ID>` (it runs as the bg job `critic`: call it again until it
-   prints `CRITIC STEP`), and do what that last line says: fix the
-   "Fix in this ticket" points, refresh the pack, ask again; it tells you when to go on. Its "Beyond this ticket"
-   points aren't yours: put them in the PR body.
+   Reuse what you already ran. Then `windvane critic <ID>` (the bg job `critic`: call it again until it prints its
+   last line, `CRITIC STEP`), and do what that says: fix the "Fix in this ticket" points, refresh the pack, ask again;
+   it tells you when to go on. Its "Beyond this ticket" points aren't yours: put them in the PR body.
 7. **Check:** `windvane check` (it runs as the bg job `check`: `await check` until `DONE`) on the final head,
    committed and pushed, with nothing uncommitted. A pass is recorded for that tree, so the driver reuses it. On a
    failure, rerun only the failing part until it passes, then check once more.

@@ -600,8 +600,13 @@ def cmd_critic(a, p):
     if os.environ.get(heavy.STOP_AT) and not os.environ.get(jobs.IN_JOB):  # a session: past one tool call, it goes on
         sys.exit(jobs.session_critic(p, os.getcwd(), tid))
     usage = Usage(p)
-    entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage),
-                                   retry=critic_retry(p))
+    # a session's critic job is ended with SIGTERM: unwound, its critic session, record and copy go with it
+    was = signal.signal(signal.SIGTERM, lambda *_: sys.exit(jobs.KILLED))
+    try:
+        entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage),
+                                       retry=critic_retry(p))
+    finally:
+        signal.signal(signal.SIGTERM, was)
     print(text)
     if entry is None:  # the text ends with its CRITIC STEP line
         sys.exit(1)
