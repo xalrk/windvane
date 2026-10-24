@@ -22,7 +22,7 @@ from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
 from .config import periodic as periodic_entries
 from .queue import Queue
-from .runner import Usage, inherited_stop, plain_error, scope_github
+from .runner import LIVE, ROLE, Usage, inherited_stop, plain_error, scope_github
 from .stats import cmd_stats, shared_line  # cmd_stats: main runs `stats` by its name
 from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 
@@ -562,7 +562,7 @@ def cmd_check(a, p):
     sys.exit(jobs.check_exit(ok))
 
 
-CRITIC_WAIT = 8  # minutes of retry pauses `windvane critic` may spend: the worker's Bash call stops at 10
+CRITIC_WAIT = 8  # minutes of retry pauses `windvane critic` may spend: the worker waits on it, the driver retries
 
 
 def critic_retry(p, sleep=time.sleep):
@@ -597,9 +597,16 @@ def cmd_critic(a, p):
     long = critic_mod.too_long(p, tid)
     if long:
         sys.exit(long)
+    if os.environ.get(heavy.STOP_AT) and not os.environ.get(jobs.IN_JOB):  # a session: past one tool call, it goes on
+        sys.exit(jobs.session_critic(p, os.getcwd(), tid))
     usage = Usage(p)
-    entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage),
-                                   retry=critic_retry(p))
+    # a session's critic job is ended with SIGTERM: unwound, its critic session, record and copy go with it
+    was = signal.signal(signal.SIGTERM, lambda *_: sys.exit(jobs.KILLED))
+    try:
+        entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage),
+                                       retry=critic_retry(p))
+    finally:
+        signal.signal(signal.SIGTERM, was)
     print(text)
     if entry is None:  # the text ends with its CRITIC STEP line
         sys.exit(1)
@@ -903,6 +910,9 @@ def main(argv=None):
     s.add_argument("-n", type=int, default=30, help="start with this many past events")
     s.add_argument("-o", type=int, default=6, help="lines of each command's output (0 hides output)")
     a = ap.parse_args(argv)
+    cmd = "doctor --clean" if a.cmd == "doctor" and a.clean else a.cmd  # --clean removes what the state dir holds
+    if why := critic_mod.refused(cmd, os.environ.get(ROLE, ""), os.environ.get(LIVE, "")):
+        sys.exit(why)
     if a.cwd:
         if not os.path.isdir(a.cwd):  # a phone hook whose repo was deleted: one line, not a traceback
             sys.exit(f"windvane: {a.cwd} doesn't exist (any more)")

@@ -36,7 +36,7 @@ class Context(unittest.TestCase):
 
     def test_each_role_gets_only_its_tools_and_no_mcp_servers_or_skills(self):
         want = {"worker": "Bash,Read,Edit,Write", "fix": "Bash,Read,Edit,Write", "planner": "Bash,Read,Edit,Write",
-                "reviewer": "Bash,Read", "critic": "Read,Glob,Grep", "preflight": "Read,Glob,Grep"}
+                "reviewer": "Bash,Read", "critic": "Bash,Read,Glob,Grep", "preflight": "Read,Glob,Grep"}
         for role, tools in want.items():
             flags = self.session(role)
             self.assertEqual(self.flag(flags, "--tools"), tools, role)
@@ -54,7 +54,7 @@ class Context(unittest.TestCase):
     def test_subagents_bring_the_agent_tool_to_editing_roles_only(self):
         self.p.ap["subagents"] = True
         self.assertEqual(self.flag(self.session("worker"), "--tools"), "Bash,Read,Edit,Write,Agent")
-        self.assertEqual(self.flag(self.session("critic"), "--tools"), "Read,Glob,Grep")
+        self.assertEqual(self.flag(self.session("critic"), "--tools"), "Bash,Read,Glob,Grep")
 
     def test_a_pilot_run_starts_its_worker_and_reviewer_lean(self):
         from datetime import timedelta

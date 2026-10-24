@@ -10,7 +10,8 @@ With `isolate = true` (the default), every session works in git worktrees the au
 
 | Worktree | Used by | For |
 |---|---|---|
-| `work/` (`work-1/`, ... per extra slot) | workers, and the critics they start | building tickets on their branches |
+| `work/` (`work-1/`, ... per extra slot) | workers | building tickets on their branches |
+| `trials/<ticket>.<pid>` | the ticket critic | trying a ticket's committed head, removed after each critique |
 | `ci/` (`ci-1/`, ...) | the driver, the reviewer and `[[periodic]]` sessions | checks, reviews and merges, always on a detached head |
 | `plan/` | the planner | writing tickets, even with `isolate = false` |
 
@@ -42,11 +43,26 @@ per role:
 | Role | May | May not |
 |---|---|---|
 | **Worker** | edit files in its worktree, run commands, commit, push its ticket branch, open and edit its pull request, run `windvane` helper commands, file up to 2 `windvane request`s | push to `main` (in any form), force-push, `reset --hard`, check out or switch to `main`, manage worktrees, merge pull requests, spawn subagents (unless `subagents = true`), edit windvane's own files or its request inbox |
-| **Critic** | read files and the evidence pack | run any command, edit or write files, fetch from the web, spawn agents |
+| **Critic** | read files and the evidence pack; run commands (the tests, the project's own CLI or app, small probe scripts) in a throwaway copy of the ticket's head, for up to `[critic] trial_minutes` | commit, push, switch branches, reset, stash, use `gh`, drive the autopilot with `windvane` (a few state-only commands on scratch state), edit files with its tools, fetch from the web, spawn agents |
 | **Reviewer** | read files, run commands such as `git diff`, `git log`, `git show` | edit or write files, commit, push, switch branches, reset, merge, comment on or close pull requests |
 | **Planner** | write ticket files in its own worktree | commit, push, switch branches, spawn agents: the driver commits its tickets and opens the pull request (or merges, with `--merge`) |
 | **Periodic** | run commands and edit files on a detached `ci/` tree between tickets | commit, push, switch branches, reset, use `gh`, spawn agents: the driver keeps only new tickets, lines added at the end of open tickets and added `QUEUE.md` lines, lands them, and discards the rest |
 | **Preflight** | read the next tickets (in your checkout, read-only) | run any command, edit or write files, fetch from the web |
+
+**The critic's copy.** The ticket critic never runs in the worker's worktree: each critique makes a detached worktree
+of the ticket's committed head under the state dir (`trials/<ticket>.<pid>`), runs the project's `setup` there, and
+starts the critic in it, with git hooks for that copy alone refusing commits and pushes behind its deny rules. The copy
+is removed however the critique ends; one left by a process killed outright goes at the next critique. On the live
+state dir `windvane` refuses a critic all but `heavy` and the commands that only read (`status`, `stats`, `queue`,
+`overview`, `mode`, `quiet`, `doctor` without `--clean`, `watch`, `public-check`): a `windvane stop` there would stop
+your run. On scratch state (`XDG_STATE_HOME=$TMPDIR/state windvane ...`) it may also run `stop`, `deadline`, `retry`,
+`await` and `doctor --clean`, which change nothing but that state dir; whatever reaches the shared repo, remote,
+token or `claude` (`run`, `plan`, `ci`, `critic`, `check`, `bg`, `answer` and the like) is refused everywhere. Its
+commands run in Claude Code's sandbox like any session's, machine-heavy ones through the heavy lock. At
+`trial_minutes` the session is stopped and asked once for its verdict on what it saw; a retried critic gets its whole
+time again. `trial_minutes = 0` keeps it read-only: Bash denied, in the worker's tree. A worker's `windvane critic`
+runs as its session's bg job `critic`, so a critique longer than one tool call keeps going and the worker's next
+`windvane critic` gets its verdict; the job and its critic end with the worker's session.
 
 Every session gets its rules (`prompts/*.md`) and the ticket in its prompt, and ends with a machine-readable result
 line the driver acts on. Product calls are never a session's to make: they become questions for you (see

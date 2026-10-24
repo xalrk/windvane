@@ -1,32 +1,34 @@
-"""The critic: a fresh, read-only session that judges what a ticket's change gives the people who use the project,
+"""The critic: a fresh session that judges what a ticket's change gives the people who use the project,
 on the project's own scale (`.windvane/CRITIC.md`), harshly. The code reviewer comes after it; the critic judges the
 outcome.
 
-The worker leaves an evidence pack in `<state>/critic/<ID>/`: `notes.md` (line 1 `User-facing: yes` or
-`User-facing: no (<why>)`, then what a user now gets and measured numbers) and up to a few images (screenshots,
-contact sheets). It runs `windvane critic <ID>` and follows the last line, `CRITIC STEP`: pass (lowest dimension >=
-pass mark), scope (under it, but nothing this ticket can fix), revise, rethink (the first dimension under the floor:
-the approach is wrong), accept (out of revisions). A scale written as ladders of yes/no checks (T-054) has the critic
-answer the checks and the driver work out the score; an old numeric scale has the critic write the numbers. Either
-way the critic never sees the bar. Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed
-`windvane plan`.
+The worker leaves an evidence pack in `<state>/critic/<ID>/`: `notes.md` (line 1 `User-facing: yes` or `User-facing: no
+(<why>)`, then what a user now gets and measured numbers) and up to a few images (screenshots, contact sheets). It runs
+`windvane critic <ID>` and follows the last line, `CRITIC STEP`: pass (lowest dimension >= pass mark), scope (under it,
+but nothing this ticket can fix), revise, rethink (the first dimension under the floor: the approach is wrong), accept
+(out of revisions). It tries the change itself, in a throwaway copy of the ticket's head (`worktree.trial`), for at most
+`[critic] trial_minutes`. A scale written as ladders of yes/no checks (T-054) has the critic answer the checks and the
+driver work out the score; an old numeric scale has the critic write the numbers. Either way the critic never sees the
+bar. Every verdict goes to `critic.jsonl`; its "Beyond this ticket" points feed `windvane plan`.
 
 `windvane critic --project` (and the `project-critic` [[periodic]] preset) runs the same scale on the whole project
 as it stands on main, one session per dimension (`project`), each in project mode (`prompts/CRITIC-project.md`). Its
 record (ticket PROJECT) feeds the planner only its `new` follow-ups; those an open ticket covers become that ticket's
 notes.
 """
+import contextlib
 import hashlib
 import os
 import re
 import statistics
 import subprocess
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import net, privacy, renumber
-from .config import DIR, HOME
+from . import net, privacy, renumber, worktree
+from .config import DIR, HOME, user_dir
 from .phone import cut
 from .runner import plain_error, run_claude
 from .util import append_jsonl, git, gout, load_json, log, read_jsonl
@@ -62,10 +64,21 @@ CHECKS_RE = re.compile(r"^" + NOT_ANSWER + r"[ \t#*_]*Checks[*_]*:[*_]*[ \t]*\n?
 ANCHOR_RE = re.compile(r"^[ \t]*Nearest anchor:[ \t]*(.+)$", re.I | re.M)
 DONE = ("pass", "scope", "accept", "skip")
 DENY = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]
-# The project critic runs commands for its evidence, but never changes the tree or the repo (what it does change is
-# put back after it, `restore`)
+# The critics that run commands for their evidence never change the repo: the project critic's tree is put back after
+# it (`restore`), the ticket critic's is a throwaway copy (`worktree.trial`)
 PROJECT_DENY = DENY[1:] + ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
                            "Bash(git reset *)", "Bash(git stash *)", "Bash(gh *)"]
+# What `windvane` lets a critic run (`refused`): the heavy lock and what only reads. Its copy shares the live state
+# dir, so a "restart midway" tried there would stop the user's run; on scratch state (another XDG_STATE_HOME) it may
+# also run SCRATCH_RUN, which changes nothing but that dir. Scratch state moves only the state dir: the repo, its
+# remote, the GitHub token, real `claude` and `gh`, ~/.config and tmux stay shared, so what reaches them (run, plan,
+# ci, critic, phone, answer's landing on main, bg's jobs that outlive the copy, check and new in any checkout...) is
+# refused on every root. No deny rule names these: one would also turn away the scratch form, and the env check
+# catches every spelling (`bin/windvane` too).
+MAY_RUN = ("heavy", "status", "stats", "queue", "overview", "mode", "quiet", "doctor", "watch", "public-check")
+SCRATCH_RUN = ("stop", "deadline", "retry", "await", "doctor --clean")
+TRIAL_DENY = PROJECT_DENY + ["Bash(windvane request *)"]
+TRIAL_UP = "trial time"  # why a ticket critic's session was stopped at `trial_minutes`: it then answers on what it saw
 PROJECT = "PROJECT"  # critic.jsonl's ticket for a verdict on the whole project
 COVERED_RE = re.compile(r"[(\[]?[ \t]*covered by[ \t]+([A-Za-z]+-\d+[a-z]?)[ \t]*[)\]]?", re.I)
 NEW_TAG_RE = re.compile(r"[ \t]*[(\[][ \t]*new[ \t]*[)\]][ \t.]*$", re.I)
@@ -666,7 +679,8 @@ def text_diff(p, cwd, rev, cap=TEXT_CAP):
 
 
 def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
-    """Critique a ticket's pack at `rev` and record the verdict. Returns (record or None, reply text).
+    """Critique a ticket at `rev`, its pack and a trial of it (`tried`), and record the verdict. Returns (record or
+    None, reply text).
     A critic session that dies (API error, crash) is no verdict on the ticket: `retry(error)` waits and says whether
     to run it again; when it says no, the record's step is "unavailable", with no score, so it never counts as one."""
     notes, images, facing = pack(p, tid)
@@ -693,30 +707,76 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         f"## What users read, as changed\n{said}" if (said := text_diff(p, cwd, rev)) else "",
         "## Your earlier critiques of this ticket, oldest first\n" + "\n---\n".join(earlier) if earlier else "",
     ]))
-    session = {}
-    while True:
-        text, _, error = run_claude(p, "critic", f"{tid}-critic", prompt, system_prompt(p, cwd), cwd, deny=DENY,
-                                    usage=usage, stop_if=stop_if, ticket=tid, session=session)
+    with tried(p, tid, cwd, rev, stop_if) as (tree, git_env, note):
+        return critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_env, note)
+
+
+def tried(p, tid, cwd, rev, stop_if=None):
+    """Where the critic works: a throwaway copy of `rev` it may run commands in (`worktree.trial`), or, with
+    `trial_minutes = 0`, nowhere of its own (None): it reads the worker's tree with Bash denied."""
+    if not p.critic["trial_minutes"]:
+        return contextlib.nullcontext((None, {}, ""))
+    return worktree.trial(p, cwd, rev, tid, stop=stop_if or (lambda: ""))
+
+
+def trial_part(p, cwd, rev, tree, note):
+    """The prompt's lines on the critic's copy: which head, its time, what went wrong making it."""
+    if tree is None:
+        return f"## No copy to run it in\nJudge read-only, on the pack{f': {note}' if note else ''}." if note else ""
+    return (f"## Your copy\nYou work in a throwaway copy of the ticket's head ({gout(cwd, 'rev-parse', '--short', rev)}"
+            f"), removed after you; {note or 'set up as the project sets up a fresh tree'}. You have "
+            f"{p.critic['trial_minutes']:g} minutes for commands: then you're stopped and answer on what you saw.")
+
+
+def boxed(stop_if, minutes):
+    """`stop_if` with the trial's own time box on top: TRIAL_UP once `minutes` pass."""
+    until = time.time() + minutes * 60
+
+    def stop():
+        return (stop_if() if stop_if else None) or (TRIAL_UP if time.time() >= until else None)
+    return stop
+
+
+def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_env, note):
+    """judge's sessions and verdict. With a copy (`tree`) the critic runs commands there (TRIAL_DENY and `refused`
+    keep it off commits, pushes, switches, gh and the autopilot's controls), within `trial_minutes` per attempt;
+    stopped by that box, it's asked once, in the same session and with no tools to run, for its verdict on what it
+    saw, so a trial that runs out never costs the ticket its critique. Every follow-up turn runs in the same tree: a
+    session resumes only from the folder it started in."""
+    where, allow, deny = (tree, ["Bash"], TRIAL_DENY) if tree else (cwd, [], DENY)
+    prompt = "\n\n".join(filter(None, [prompt, trial_part(p, cwd, rev, tree, note)]))
+    system, session, out = system_prompt(p, cwd), {}, {"trial": "ran" if tree else "read-only"}
+    while True:  # each attempt gets the whole box: a retry's wait is no time spent trying
+        stop = boxed(stop_if, p.critic["trial_minutes"]) if tree else stop_if
+        text, killed, error = run_claude(p, "critic", f"{tid}-critic", prompt, system, where, allow=allow, deny=deny,
+                                         usage=usage, stop_if=stop, ticket=tid, session=session, extra_env=git_env)
         if not error or not retry or not retry(error):
             break
+    if killed == TRIAL_UP:  # recorded with or without a session to ask: the stream may end before its id
+        out["trial"] = "timed out"
+    if killed == TRIAL_UP and session.get("id"):
+        text, killed, error = run_claude(p, "critic", f"{tid}-critic-time", time_up(tid, p.critic["trial_minutes"]),
+                                         system, where, deny=DENY, usage=usage, stop_if=stop_if, ticket=tid,
+                                         resume=session["id"], extra_env=git_env)
     if error:
         entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": None, "fixes": 0,
-                 "revisions": n, "step": "unavailable", "gist": cut(plain_error(error)), "critique": ""}
+                 "revisions": n, "step": "unavailable", "gist": cut(plain_error(error)), "critique": "", **out}
         append_jsonl(p.state / "critic.jsonl", entry)
         return entry, f"Critic unavailable ({cut(plain_error(error))})."  # the worker reads it
     why, asked = unread(p, tid, lad, text), {}
     if why and session.get("id"):  # one more turn in the same session reads its context cached, not fresh (T-116)
         again, killed, error = run_claude(p, "critic", f"{tid}-critic-reask", reask(tid, why, lad),
-                                          system_prompt(p, cwd), cwd, deny=DENY, usage=usage, stop_if=stop_if,
-                                          ticket=tid, resume=session["id"])
+                                          system, where, deny=DENY, usage=usage, stop_if=stop_if,
+                                          ticket=tid, resume=session["id"], extra_env=git_env)
         if killed or error:  # no reply to it: the first reply stands, and the log says the re-ask failed
             asked = {"reask_failed": cut(killed or plain_error(error))}
         else:
             text, why, asked = again, unread(p, tid, lad, again), {"reasked": True}
     if why:
-        return none(p, tid, text, why, **asked)
+        return none(p, tid, text, why, **asked, **out)
     _, dims, fixes, gist = verdict(text)
     saved = {"reasked": True} if asked else {}  # the re-ask saved this verdict: `stats --critic` counts it
+    saved |= out
     if lad:
         return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved)
     caps, anchor = checks(text)
@@ -738,6 +798,30 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
              "hits": hits, "scoped": scoped, "capped": was, "anchor": anchor, **saved}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
+
+
+def refused(cmd, role, live):
+    """Why `windvane <cmd>` is refused in a critic's session, or "": `role` and `live` (the state root its driver runs
+    on, LIVE) come from the environment. Only SCRATCH_RUN goes by the state root, as only it touches nothing but the
+    state dir; without `live` (an older driver) every state root counts as the live one."""
+    if role.split(":")[0] != "critic" or not cmd or cmd in MAY_RUN or cmd == "request":  # it refuses with its own rule
+        return ""
+    here = user_dir("XDG_STATE_HOME", ".local/state").resolve()
+    if cmd in SCRATCH_RUN and live and here != Path(live).resolve():
+        return ""
+    may = ", ".join(f"`{c}`" for c in MAY_RUN)
+    if cmd in SCRATCH_RUN:
+        return (f"windvane: a critic never drives the autopilot: `windvane {cmd}` is refused on the live state (it may "
+                f"run {may}). It runs on scratch state: `XDG_STATE_HOME=$TMPDIR/state windvane {cmd} ...`.")
+    return (f"windvane: a critic never drives the autopilot: `windvane {cmd}` is refused on every state root, as it "
+            f"reaches past the state dir (the repo, GitHub, paid sessions or your config). It may run {may}, and on "
+            f"scratch state (`XDG_STATE_HOME=$TMPDIR/state`) also {', '.join(f'`{c}`' for c in SCRATCH_RUN)}.")
+
+
+def time_up(tid, minutes):
+    """The turn a critic stopped at its time box gets: its verdict now, on what it ran and the pack."""
+    return (f"Your {minutes:g} minutes for trying it are up: run nothing more. Answer every check now on what you saw "
+            f"run and the pack, saying which, and end with the CRITIC line for {tid}.")
 
 
 def unread(p, tid, lad, text):
@@ -797,14 +881,15 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None):
     return entry, critique
 
 
-def none(p, tid, text, why, rerun=True, reasked=False, reask_failed=None):
+def none(p, tid, text, why, rerun=True, reasked=False, reask_failed=None, trial=None):
     """judge's (None, reply) when there's no verdict, the reply ending in the step that says why. Only a missing pack
     is the worker's to fix: a reply the driver can't read is the critic's slip, and "fix the pack" sent a worker with
     a sound pack to pay for a second run (R-001). Logged as `step: none`, so `windvane stats` can count what no
     verdict costs: `reasked` only when the same-session re-ask replied, `reask_failed` why one didn't (an API error,
-    the deadline). `history()` leaves these lines out."""
+    the deadline), `trial` how its tries went. `history()` leaves these lines out."""
     append_jsonl(p.state / "critic.jsonl", {"ticket": tid, "step": "none", "why": why, "reasked": reasked,
-                                            **({"reask_failed": reask_failed} if reask_failed else {})})
+                                            **({"reask_failed": reask_failed} if reask_failed else {}),
+                                            **({"trial": trial} if trial else {})})
     todo = (f" Your pack isn't the problem: run `windvane critic {tid}` again; if the critic keeps failing, go on."
             if rerun else "")
     return None, f"{text}\n\nCRITIC STEP: none. No verdict: {why}{todo}".lstrip()

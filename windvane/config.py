@@ -52,6 +52,7 @@ DEFAULTS = {
                "preflight": "sonnet", "preflight_effort": "medium",  # preflight: a light read of the next tickets
                "fix": "opus", "fix_effort": "high"},  # fix: makes a red or conflicting desk PR merge
     "critic": {"enabled": True, "pass": 8, "floor": 4, "revisions": 3,
+               "trial_minutes": 15,  # the critic's time to run the change in a copy of its head; 0: read-only
                "text": []},  # globs of the files users read beyond Markdown: the critic reads their diff
     # parallel: "auto" starts another ticket whenever one fits beside the running ones (Touches) and in the usage
     # window, up to max_parallel; a number caps the slots at that
@@ -239,6 +240,14 @@ def critic_text(v):
     return v
 
 
+def trial_minutes(v):
+    """`[critic] trial_minutes`: minutes, 0 for a critic that only reads."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+        raise SystemExit(f"windvane: [critic] trial_minutes = {v!r} in config.toml: use a number of minutes (0: the "
+                         "critic only reads, runs nothing)")
+    return v
+
+
 def actions_budget(c):
     """`actions_minutes` and `actions_cap`, checked at once: a typo here would let `windvane ci` spend unchecked."""
     m, cap = c["actions_minutes"], c["actions_cap"]
@@ -339,6 +348,7 @@ class Project:
         self.models = c["models"]
         self.critic = c["critic"]
         critic_text(self.critic["text"])
+        trial_minutes(self.critic["trial_minutes"])
         self.ap = c["autopilot"]
         setup_minutes(c["setup_minutes"])
         setup_minutes(c["teardown_minutes"], key="teardown_minutes")

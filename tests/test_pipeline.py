@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import critic, driver, jobs, planner, runner  # noqa: E402
+from windvane import critic, driver, jobs, planner, runner, worktree  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now, read_jsonl  # noqa: E402
@@ -538,6 +538,8 @@ class Sessions(unittest.TestCase):
             self.fail("the critic outlived its worker")
         self.assertLess(time.time() - started, 30)
         self.assertEqual(list((self.p.state / "nested").glob("*/*")), [])
+        trials = self.p.state / worktree.TRIALS
+        self.assertEqual(list(trials.iterdir()) if trials.is_dir() else [], [])  # its copy went with it, not a sweep
 
     def test_a_nested_session_keeps_the_outer_deadline_and_caps(self):
         u = runner.Usage(self.p)

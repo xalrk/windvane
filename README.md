@@ -116,8 +116,8 @@ The [getting started guide](docs/getting-started.md) walks through each step.
 
 1. **Worker**: a fresh headless Claude Code session with the ticket and any earlier feedback in its prompt. It
    branches, builds with tests, pushes often, and opens a pull request.
-2. **Critic**: a fresh read-only session scores what users get from the change on your project's own scale, and
-   sends fixes back (up to three revisions). Its ideas beyond the ticket feed the next plan.
+2. **Critic**: a fresh session tries the change in a throwaway copy, scores what users get from it on your
+   project's own scale, and sends fixes back (up to three revisions). Its ideas beyond the ticket feed the next plan.
 3. **Check**: the driver runs your project's test command on the exact pushed head.
 4. **Reviewer**: a fresh read-only session reads the diff against the ticket and approves or asks for changes.
 5. **Merge**: the driver merges `main` into the ticket, re-checks the merged tree if `main` moved, and merges.
