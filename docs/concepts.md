@@ -163,9 +163,13 @@ no 2nd slot: 3 tickets x 9 min fit before 18:45 one at a time
 
 ## The critic and calibration
 
-The critic is a fresh, read-only session that judges what a ticket gives the people who use the project, not the
-code (that is the reviewer's job). The worker leaves an **evidence pack** for it outside git: `notes.md` (what a
-user now sees, with measured numbers, transcripts, before and after) and up to four images. The critic also reads
+The critic is a fresh session that judges what a ticket gives the people who use the project, not the code (that is
+the reviewer's job). It tries the change as a user would: in a throwaway copy of the ticket's committed head, it runs
+the command that shows the ticket's promise and the tests, then one or two ways it could fail (a second pass, a
+restart midway), for at most `[critic] trial_minutes` (15 by default; when they run out it answers on what it saw).
+A case it sees fail sends the ticket back, named. The worker leaves an **evidence pack** for it outside git:
+`notes.md` (the command that shows the promise, and what the critic can't run itself: measurements over time, before
+and after numbers, a long run's output) and up to four images. The critic also reads
 the diff of the text users read, so the pack quotes none of it: every Markdown or reStructuredText file outside
 `.windvane/` (README, docs, CHANGELOG) and the files `[critic] text` names (message files, UI strings), up to 12,000
 characters, the biggest hunks cut first and named. A change no user will ever see, even through a later ticket (a

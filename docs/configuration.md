@@ -73,6 +73,7 @@ The Claude model and effort level for each kind of session. Models are anything 
 | `pass` | `8` | The pass mark out of 10. A ticket whose lowest dimension scores this or more goes on. The critic never sees it: it scores blind, and the driver applies the mark. |
 | `floor` | `4` | Under this on the first dimension (does it work at all), the worker is told to rethink the approach instead of patching it. |
 | `text` | `[]` | Paths or globs (a directory ending in `/`) of the files users read beyond Markdown, such as message files or UI strings (`["src/messages/*.json"]`). The critic reads their diff, with that of every Markdown (`.md`, `.markdown`) and reStructuredText (`.rst`) file outside `.windvane/`. |
+| `trial_minutes` | `15` | How long the critic may run commands in its throwaway copy of the ticket's head (the tests, the project's own command, small probes) before it must answer on what it saw. `0` keeps it read-only: it judges on the pack alone. A worker's `windvane critic` runs as a background job, so a critique may take longer than one tool call: asked again, it waits on the same critique and prints its verdict. |
 | `revisions` | `3` | How many times the worker may revise for the critic. After the last one the ticket goes on with its score recorded (`accept`). The driver sets a ticket aside after one send-back more (a READY without the evidence pack counts). |
 
 See [Concepts: the critic](concepts.md#the-critic-and-calibration).

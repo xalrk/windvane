@@ -142,7 +142,7 @@ class CriticReadsText(unittest.TestCase):
 
     def test_the_rules_say_where_the_text_is(self):
         self.assertIn("What users read, as changed", (REPO / "prompts/CRITIC.md").read_text())
-        self.assertIn("quote only what the diff can't show", (REPO / "prompts/WORKER.md").read_text())
+        self.assertIn("only what the critic can't\n     run itself or read in the diff", (REPO / "prompts/WORKER.md").read_text())
 
 
 if __name__ == "__main__":

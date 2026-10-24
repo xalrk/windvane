@@ -18,16 +18,16 @@ reviewer reads your change, and the driver merges it.
    (`git push -u {remote} HEAD`), and never commit credentials, `.env` files, logs or captures: `.gitignore` them.
 5. **Check it yourself** against every "Done when" point, then skim `git diff {upstream}... --stat` for anything
    you didn't mean to change.
-6. **The critic** (only when your prompt says it's on). A fresh critic judges what users get from your change on the
-   project's scale, from its docs' diff and a pack in the folder your prompt names (not in git; replace an older one):
+6. **The critic** (only when your prompt says it's on) runs your committed head in a copy of its own and judges what
+   users get on the project's scale, with its docs' diff and a pack in the folder your prompt names (not in git):
    - `notes.md`, at most 25 lines and 4000 characters. Line 1: `User-facing: yes`, or `User-facing: no (<why>)` if no
      user will ever see or feel it, even via a later ticket (refactors, tooling, tests; logic a planned ticket shows is
-     `yes`); the reviewer checks that. Then what a user now gets, measured: transcripts, numbers, timings, before/after;
-     quote only what the diff can't show (a push or log line as it prints).
+     `yes`); the reviewer checks that. Then the command that shows the main promise, and only what the critic can't
+     run itself or read in the diff: measurements over time, before/after numbers, a long or heavy run's output.
    - Up to four images (`.png`) when there's something to see (screenshots, one contact sheet).
-   Reuse what you already ran. Then `windvane critic <ID>`, and do what its last line, `CRITIC STEP`, says: fix the
-   "Fix in this ticket" points, refresh the pack, ask again; it tells you when to go on. Its "Beyond this ticket"
-   points aren't yours: put them in the PR body.
+   Reuse what you already ran. Then `windvane critic <ID>` (the bg job `critic`: call it again until it prints its
+   last line, `CRITIC STEP`), and do what that says: fix the "Fix in this ticket" points, refresh the pack, ask again;
+   it tells you when to go on. Its "Beyond this ticket" points aren't yours: put them in the PR body.
 7. **Check:** `windvane check` (it runs as the bg job `check`: `await check` until `DONE`) on the final head,
    committed and pushed, with nothing uncommitted. A pass is recorded for that tree, so the driver reuses it. On a
    failure, rerun only the failing part until it passes, then check once more.

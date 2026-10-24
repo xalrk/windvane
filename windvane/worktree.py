@@ -10,7 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from . import net, privacy
-from .util import git, log, now, run_limited, save_json
+from .util import git, log, now, run_limited, same_process, save_json, stamp
 
 
 def ensure_worktree(p, path, setup=True, stop=lambda: ""):
@@ -366,3 +366,72 @@ def clean_detach(p, cwd, rev):
     git(cwd, "reset", "-q", "--hard")
     git(cwd, "clean", "-qfd")
     return git(cwd, "switch", "-q", "--detach", rev).returncode == 0
+
+
+TRIALS = "trials"  # under the state dir: the critic's throwaway copies of a ticket's head, `<ticket>.<pid>`
+TRIAL_HOOK = "#!/bin/sh\necho \"windvane: this is the critic's throwaway copy: no commits or pushes\" >&2\nexit 1\n"
+
+
+@contextlib.contextmanager
+def trial(p, cwd, rev, tid, stop=lambda: ""):
+    """A throwaway detached worktree of `cwd`'s repo at `rev`, for the critic to run the change in, with the project's
+    `setup` run there: yields (its path, git environment, a note for the critic's prompt), or (None, {}, why) when it
+    can't be made, so the critic judges read-only instead. The worker's tree and the user's checkout are never
+    touched. Its hooks refuse commits and pushes (behind the critic's permission rules: a second wall). It's removed
+    however the critic ends; one a killed process left behind is removed by the next trial."""
+    root = p.state / TRIALS
+    root.mkdir(parents=True, exist_ok=True)
+    sweep_trials(cwd, root)
+    path = root / f"{tid}.{os.getpid()}"
+    drop_trial(cwd, path)  # an earlier process's with this pid and no owner mark: this one makes one copy per ticket
+    hooks = Path(f"{path}.hooks")
+    hooks.mkdir()
+    (hooks / "owner").write_text(stamp(os.getpid()) or "")  # before the copy, so a kill midway leaves it marked
+    r = git(cwd, "worktree", "add", "--detach", str(path), rev)
+    if r.returncode:
+        drop_trial(cwd, path)
+        yield None, {}, f"no copy to run it in ({r.stderr.strip() or 'git worktree add failed'}): judge read-only"
+        return
+    try:
+        for name in ("pre-commit", "pre-merge-commit", "pre-push"):
+            (hooks / name).write_text(TRIAL_HOOK)
+            (hooks / name).chmod(0o755)
+        note = ""
+        if p.cfg["setup"]:
+            limit = p.cfg["setup_minutes"]
+            code, why, lines = run_limited(p.cfg["setup"], path, now() + timedelta(minutes=limit), stop, keep=3)
+            if code or why:
+                note = (f"its setup `{p.cfg['setup']}` {'timed out' if why == TIMED_OUT else why or f'failed (exit {code})'}"
+                        f"{': ' + lines[-1] if lines else ''}")
+        yield path, hooks_env(path, hooks), note
+    finally:
+        drop_trial(cwd, path)
+
+
+def drop_trial(cwd, path):
+    """Removes a trial worktree, its hooks and git's record of it; a process killed inside `git worktree add` leaves
+    it locked, which prune alone would keep, even once its folder is gone."""
+    git(cwd, "worktree", "unlock", str(path))
+    if path.exists():
+        git(cwd, "worktree", "remove", "--force", "--force", str(path))
+    shutil.rmtree(path, ignore_errors=True)
+    shutil.rmtree(f"{path}.hooks", ignore_errors=True)
+    git(cwd, "worktree", "prune")
+
+
+def sweep_trials(cwd, root):
+    """Removes the trials of processes that have ended (a driver or a `windvane critic` killed outright), and of a pid
+    reused since: its `owner` mark names another process. By `stamp`, not wall-clock start times, which a step of
+    the clock moves: a live critic's copy must never go mid-trial. Without a mark (killed before writing it) it
+    goes by whether the pid is alive."""
+    for entry in list(root.iterdir()):
+        m = re.fullmatch(r"(.+\.(\d+))(?:\.hooks)?", entry.name)
+        if not m:
+            continue
+        pid = int(m[2])
+        try:
+            recorded = Path(root, f"{m[1]}.hooks", "owner").read_text().strip() or None
+        except OSError:
+            recorded = None
+        if not alive(pid) or recorded and same_process(pid, recorded) is False:
+            drop_trial(cwd, root / m[1])

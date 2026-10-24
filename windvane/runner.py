@@ -12,12 +12,13 @@ from datetime import datetime
 from pathlib import Path
 
 from . import actions, scratch
-from .config import HOME, author, github_token
+from .config import HOME, author, github_token, user_dir
 from .util import append_jsonl, last_match, load_json, recorded_stamp, same_process, save_json, stamp, started_at
 
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
 ROLE = "WINDVANE_ROLE"  # the session's role: `windvane request` records it, and files only from a worker (or the desk)
+LIVE = "WINDVANE_LIVE_STATE"  # the state root the session's driver runs on: on any other a critic may run state-only commands
 NO_REQUEST = "Bash(windvane request *)"  # sessions other than workers (and the desk) don't file windvane requests
 TOOL_MS = "600000"
 GRACE = 3  # seconds a nested session gets to end on SIGTERM before SIGKILL: short, the driver waits on it
@@ -315,7 +316,7 @@ class Usage:
 # [[periodic]] session) keeps the CLI's default set and the project's skills.
 TOOLS = {"worker": ["Bash", "Read", "Edit", "Write"], "fix": ["Bash", "Read", "Edit", "Write"],
          "planner": ["Bash", "Read", "Edit", "Write"], "reviewer": ["Bash", "Read"],
-         "critic": ["Read", "Glob", "Grep"], "critic:project": ["Bash", "Read", "Glob", "Grep"],
+         "critic": ["Bash", "Read", "Glob", "Grep"], "critic:project": ["Bash", "Read", "Glob", "Grep"],
          "preflight": ["Read", "Glob", "Grep"]}
 NO_MCP = json.dumps({"mcpServers": {}})
 # The flags every session's command line uses that an older `claude` may not know: `windvane doctor` checks them,
@@ -467,6 +468,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
            *(["--resume", resume] if resume else [])]
     started, parent = time.time(), os.environ.get(NEST)
     extra = {NEST: raw.stem, TICKET: ticket, ROLE: role, "TMPDIR": str(scratch.session_dir(p, ticket or label)),
+             LIVE: str(user_dir("XDG_STATE_HOME", ".local/state").resolve()),
              **(extra_env or {})}
     if limits:
         extra.update(WINDVANE_STOP_AT=str(limits[0].timestamp()), WINDVANE_CAPS=f"{limits[1]:g},{limits[2]:g}")
@@ -483,7 +485,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         mark.write_text(stamp(proc.pid) or "")
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
-    result, killed, final, noise, seen = "", None, {}, [], {}
+    result, killed, final, noise, seen, sid = "", None, {}, [], {}, None
     try:
         with raw.open("w") as out:
             while True:
@@ -498,6 +500,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
                     except ValueError:
                         noise = (noise + [line.strip()])[-5:] if line.strip() else noise
                         continue
+                    sid = ev.get("session_id") or sid  # a killed session has no result event, but can be resumed
                     if ev.get("type") == "rate_limit_event" and usage:
                         usage.update(ev.get("rate_limit_info", {}))
                     elif ev.get("type") == "assistant":
@@ -537,7 +540,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     if end == "budget":  # stopped by its own limit: the caller treats it as a killed run, never retries it
         killed, error = error, None
     if session is not None:
-        session["id"] = final.get("session_id")
+        session["id"] = final.get("session_id") or sid
     append_jsonl(p.state / "ledger.jsonl", {
         "role": role, "label": label, "ticket": ticket, "model": model, "effort": effort,
         "minutes": round((time.time() - started) / 60, 1), **spent(final, seen),

@@ -52,6 +52,8 @@ WATCH_S = 2  # seconds between a kept job's looks at its end time
 AWAIT_S = 570  # how long `await` blocks: under one tool call's 10 minutes
 AWAIT_POLL = 3  # seconds between its looks at a job still running
 SESSION_CHECK = "check"  # the bg job a session's heavy check runs as
+SESSION_CRITIC = "critic"  # the bg job a session's `windvane critic` runs as
+CRITIC_LINES = 400  # of a critique's log `windvane critic` prints: the whole critique, which ends on its CRITIC STEP
 # A heavy wait's own lines (`heavy.take`) that `await`'s live state covers, and the hints that keep one shown anyway.
 WAIT_LINES = ("heavy: waiting", "heavy: the machine lock is free")
 HINTS = (heavy.OWN, "is min_free_gb in", "is measure_load in")
@@ -740,10 +742,11 @@ def exit_code(exit_f, patience=2.0):
     return code or "?"
 
 
-def await_(p, name, lines=40, limit=None):
+def await_(p, name, lines=40, limit=None, again=None):
     """Block until a bg job ends, at most `limit` seconds (default AWAIT_S). The seconds it blocked go to the ledger
     as an `await` row (a ticket's only), so `stats` shows the time each role spends waiting. Its exit code (a
-    string), NEVER for a job whose command never ran, or None while it still waits or runs."""
+    string), NEVER for a job whose command never ran, or None while it still waits or runs (its line then says to
+    call `again`, by default `windvane await <name>`, once more)."""
     outside_sandbox("waiting for a background job")  # its own pid namespace hides the job: it would look dead
     (base, stray), ticket = find_job(p, name), os.environ.get(TICKET)
     if not Path(f"{base}.start").exists():
@@ -770,6 +773,8 @@ def await_(p, name, lines=40, limit=None):
         return NEVER
     if exit_f.exists():
         code = exit_code(exit_f)
+        if name == SESSION_CRITIC:  # its verdict was read: `windvane critic` asked again asks anew
+            Path(f"{base}.seen").touch()
         print(f"DONE {name} exit {code} after {mins:.0f} min")
         out = tail(f"{base}.log", lines)  # a check job's log line was for the wait: its summary names a log it needs
         print(out[out.index("\n") + 1:] if out.startswith(CHECK_LOG) and "\n" in out else out)
@@ -777,7 +782,7 @@ def await_(p, name, lines=40, limit=None):
     log = watched_log(base)
     state = "WAITING" if heavy.waiting(log) else "RUNNING"
     where = "in the heavy queue, " if state == "WAITING" else ""
-    print(f"{state} {name} ({where}{mins:.0f} min so far); call windvane await {name} again")
+    print(f"{state} {name} ({where}{mins:.0f} min so far); call {again or f'windvane await {name}'} again")
     now = heavy.standing(str(base), reuse(p)) if state == "WAITING" else []
     print("\n".join([*now, *said(log, 3, covered=bool(now))]))
     return None
@@ -838,5 +843,29 @@ def session_check(p, cwd, mem=None, lines=60):
             print(f"check: the running check started on {was}, not {head}: once it ends, run `windvane check` again")
     code = await_(p, SESSION_CHECK, lines + 1)
     if code is None or code == NEVER:  # await's line said to call it again: the job keeps its place in line meanwhile
+        return heavy.TIMED_OUT
+    return int(code) if code.isdigit() else 1
+
+
+def session_critic(p, cwd, tid):
+    """A session's `windvane critic <ID>`. A critique (the project's setup, the trial's time box, the time-up turn)
+    can outlast one tool call's 10 minutes, and a killed call would lose its verdict while its critic went on
+    unwatched: so it runs as the session's bg job `critic` and is awaited as `await` does. Asked again while it runs,
+    it waits on the same one; asked again once it ended, it prints that verdict when no call has yet (same session,
+    same head), else it asks anew. Its exit code: the critique's own once it ended, else TIMED_OUT."""
+    outside_sandbox("a session's critic")  # the job would die with the call
+    base = find_job(p, SESSION_CRITIC)[0]
+    ask, seen = Path(f"{base}.ask"), Path(f"{base}.seen")
+    this = f"{tid} {os.environ.get(NEST, '')} {gout(cwd, 'rev-parse', 'HEAD')}"
+    unread = Path(f"{base}.exit").exists() and not seen.exists() and tail(ask, 1) == this
+    if not alive(base) and not unread:
+        seen.unlink(missing_ok=True)
+        bg(p, SESSION_CRITIC, [*exe(), "critic", tid], cwd, quiet=True)
+        ask.write_text(this)
+    elif (was := tail(ask, 1).split()[-1:]) and was != this.split()[-1:]:  # its verdict is on the head it started on
+        print(f"critic: the running critique started on {was[0][:7]}, not {this.split()[-1][:7]}: once it ends, run "
+              f"`windvane critic {tid}` again")
+    code = await_(p, SESSION_CRITIC, CRITIC_LINES, again=f"windvane critic {tid}")
+    if code is None or code == NEVER:
         return heavy.TIMED_OUT
     return int(code) if code.isdigit() else 1
