@@ -210,6 +210,17 @@ class LiveStanding(unittest.TestCase):
                           heavy.standing("/st/bg/T-1/eval", reuse)[1])
             self.assertIn("(waiting for 8 GB, 2.4 free; letting", heavy.standing("/st/bg/T-1/eval")[1])  # not its own
 
+    def test_a_job_behind_a_measurement_holding_the_line_says_so(self):
+        holder = self.proc()
+        self.hold(holder.pid)
+        measuring = self.queue(0)
+        measuring[1].write_text(json.dumps({"mem": 0, "load": 1, "hold": True}))  # past its measure_hold
+        self.queue(1, "/st/bg/T-1/small")
+        with mock.patch.object(heavy, "load_avg", lambda: 9.0):
+            now = heavy.standing("/st/bg/T-1/small")
+        self.assertIn(f") is 1 ahead of it (behind pid {os.getpid()}, a --measure job holding the line for a quiet "
+                      "CPU); work ahead unknown", now[1])
+
     def test_an_estimate_that_ran_out_reads_as_overdue(self):
         at = time.time()
         past, soon = heavy.clock(at - 50 * 60), heavy.clock(at + 10 * 60)

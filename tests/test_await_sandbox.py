@@ -140,6 +140,16 @@ class AwaitQueued(unittest.TestCase):
                                  r"2.4 free; letting smaller jobs by\); work ahead unknown \(never timed\)$")
         self.assertEqual(len(out), 3, out)  # the log's wait line is covered by the live one
 
+    def test_a_bg_job_tells_its_wait_which_job_it_is(self):
+        """`bg` names the job's files to its command, which a heavy wait writes into its queue entry."""
+        with mock.patch.object(jobs.subprocess, "Popen", return_value=SimpleNamespace(pid=os.getpid())) as popen:
+            jobs.start_job("eval", ["true"], self.base.parent, self.base, {}, True, None, False, None)
+        self.assertEqual(popen.call_args.kwargs["env"][heavy.JOB_ENV], str(self.base))
+        with mock.patch.dict(os.environ, {heavy.JOB_ENV: str(self.base)}):
+            entry = heavy.join_queue(1)
+        self.addCleanup(heavy.leave_queue, entry)
+        self.assertEqual(heavy.bg_job_of(entry[1]), str(self.base))
+
     def test_without_its_queue_entry_the_log_says_its_age(self):
         """No entry of this job's (an older windvane queued it): the log's line, with its age and its estimate
         overdue."""

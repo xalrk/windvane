@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import heavy, scratch, util
 from .config import exe
-from .heavy import STOP_AT
+from .heavy import JOB_ENV, STOP_AT
 from .runner import GRACE, IN_JOB, NEST, ROLE, TICKET, outside_sandbox, signal_group
 from .util import append_jsonl, gout, now, read_jsonl
 
@@ -531,7 +531,7 @@ def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect, measure=False
         cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []),
                *(["--expect", f"{expect:.10g}"] if expect is not None else []), *(["--measure"] if measure else []),
                "--", *cmd]
-    env = {**os.environ, **tmp, IN_JOB: name, heavy.JOB_ENV: str(base)}
+    env = {**os.environ, **tmp, IN_JOB: name, JOB_ENV: str(base)}
     if keep:  # it waits for the machine as long as it's kept (`watch` ends it), and belongs to no session
         Path(f"{base}.keep").write_text(os.environ.get(RUN_STOP, ""))
         cmd = [sys.executable, "-c", WATCH, str(Path(__file__).parents[1]), str(base), *cmd]
