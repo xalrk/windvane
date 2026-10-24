@@ -49,21 +49,18 @@ per role:
 | **Periodic** | run commands and edit files on a detached `ci/` tree between tickets | commit, push, switch branches, reset, use `gh`, spawn agents: the driver keeps only new tickets, lines added at the end of open tickets and added `QUEUE.md` lines, lands them, and discards the rest |
 | **Preflight** | read the next tickets (in your checkout, read-only) | run any command, edit or write files, fetch from the web |
 
-**The critic's copy.** The ticket critic never runs in the worker's worktree. Each critique makes a detached worktree of
-the ticket's committed head under the state dir (`trials/<ticket>.<pid>`), runs the project's `setup` there, and starts
-the critic in it with git's hooks for that copy alone refusing every commit and push, behind its deny rules. On the live
-state dir, `windvane` itself refuses a critic every command but `heavy` and those that only read (`status`, `stats`,
-`queue`, `overview`, `mode`, `quiet`, `doctor` without `--clean`, `watch`, `public-check`), whichever copy of it runs: a
-`windvane stop` tried there would stop your run. Scratch state (`XDG_STATE_HOME=$TMPDIR/state windvane ...`) moves only
-the state dir, so there it may also run what changes nothing else (`stop`, `deadline`, `retry`, `await`, `doctor
---clean`): enough to try a stop midway without touching yours. The repo, its remote, your GitHub token, `claude`, `gh`
-and your config stay shared, so what reaches them (`run`, `plan`, `ci`, `critic`, `preflight`, `periodic`, `phone`,
-`answer`, `check`, `bg`, `new`, `init`, `install`, `uninstall`) is refused on every state root. What it builds or breaks stays in the
-copy, which is removed when the critique ends, however it ends; a copy left by a process killed outright is removed by
-the next critique. Its commands run in Claude Code's sandbox as any session's do (`git` and `windvane` outside it, as
-below), and its rules send machine-heavy ones through the heavy lock. At `trial_minutes` the session is stopped (its
-commands with it) and asked once, with nothing more to run, for its verdict on what it saw; a critic retried after a
-failure gets its whole time again. `trial_minutes = 0` keeps the critic read-only: Bash denied, in the worker's tree.
+**The critic's copy.** The ticket critic never runs in the worker's worktree: each critique makes a detached worktree
+of the ticket's committed head under the state dir (`trials/<ticket>.<pid>`), runs the project's `setup` there, and
+starts the critic in it, with git hooks for that copy alone refusing commits and pushes behind its deny rules. The copy
+is removed however the critique ends; one left by a process killed outright goes at the next critique. On the live
+state dir `windvane` refuses a critic all but `heavy` and the commands that only read (`status`, `stats`, `queue`,
+`overview`, `mode`, `quiet`, `doctor` without `--clean`, `watch`, `public-check`): a `windvane stop` there would stop
+your run. On scratch state (`XDG_STATE_HOME=$TMPDIR/state windvane ...`) it may also run `stop`, `deadline`, `retry`,
+`await` and `doctor --clean`, which change nothing but that state dir; whatever reaches the shared repo, remote,
+token or `claude` (`run`, `plan`, `ci`, `critic`, `check`, `bg`, `answer` and the like) is refused everywhere. Its
+commands run in Claude Code's sandbox like any session's, machine-heavy ones through the heavy lock. At
+`trial_minutes` the session is stopped and asked once for its verdict on what it saw; a retried critic gets its whole
+time again. `trial_minutes = 0` keeps it read-only: Bash denied, in the worker's tree.
 
 Every session gets its rules (`prompts/*.md`) and the ticket in its prompt, and ends with a machine-readable result
 line the driver acts on. Product calls are never a session's to make: they become questions for you (see

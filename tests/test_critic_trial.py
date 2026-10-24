@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import cli, critic, worktree  # noqa: E402
+from windvane import cli, critic, util, worktree  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -274,16 +274,27 @@ class CriticTrial(unittest.TestCase):
 
     def test_a_copy_whose_pid_was_reused_goes_too(self):
         trials = self.p.state / worktree.TRIALS
-        mine = worktree.started(os.getpid())
-        if mine is None:
+        if not str(util.stamp(os.getpid()) or "").startswith("boot:"):
             self.skipTest("no /proc here: a reused pid's copy waits for that process to end")
         old, new = trials / f"T-008.{os.getpid()}", trials / f"T-007.{os.getpid()}"
-        for left in (old, new):
+        for left, owner in ((old, "boot:another-boot:12"), (new, util.stamp(os.getpid()))):  # old: an earlier process's
             self.s.git("worktree", "add", "-q", "--detach", str(left), "HEAD")
-        os.utime(old, (mine - 60, mine - 60))  # made by an earlier process with this pid
+            Path(f"{left}.hooks").mkdir()
+            Path(f"{left}.hooks", "owner").write_text(owner)
         worktree.sweep_trials(str(self.s.root), trials)
         self.assertEqual((False, True), (old.exists(), new.exists()))  # this process's own copy stays
         worktree.drop_trial(str(self.s.root), new)
+
+    def test_a_clock_step_leaves_a_live_critics_copy(self):
+        trials = self.p.state / worktree.TRIALS
+        mine = trials / f"T-007.{os.getpid()}"
+        self.s.git("worktree", "add", "-q", "--detach", str(mine), "HEAD")
+        Path(f"{mine}.hooks").mkdir()
+        Path(f"{mine}.hooks", "owner").write_text(util.stamp(os.getpid()) or "")
+        os.utime(mine, (time.time() - 3600, time.time() - 3600))  # the wall clock stepped an hour since it was made
+        worktree.sweep_trials(str(self.s.root), trials)
+        self.assertTrue(mine.exists())
+        worktree.drop_trial(str(self.s.root), mine)
 
     def test_off_it_reads_the_worker_tree_with_bash_denied(self):
         self.s.write(".windvane/config.toml", self.s.root.joinpath(".windvane/config.toml").read_text()

@@ -10,7 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from . import net, privacy
-from .util import git, log, now, run_limited, save_json
+from .util import git, log, now, run_limited, same_process, save_json, stamp
 
 
 def ensure_worktree(p, path, setup=True, stop=lambda: ""):
@@ -383,15 +383,16 @@ def trial(p, cwd, rev, tid, stop=lambda: ""):
     root.mkdir(parents=True, exist_ok=True)
     sweep_trials(cwd, root)
     path = root / f"{tid}.{os.getpid()}"
-    drop_trial(cwd, path)  # a pid reused since
+    drop_trial(cwd, path)  # an earlier process's with this pid and no owner mark: this one makes one copy per ticket
+    hooks = Path(f"{path}.hooks")
+    hooks.mkdir()
+    (hooks / "owner").write_text(stamp(os.getpid()) or "")  # before the copy, so a kill midway leaves it marked
     r = git(cwd, "worktree", "add", "--detach", str(path), rev)
     if r.returncode:
         drop_trial(cwd, path)
         yield None, {}, f"no copy to run it in ({r.stderr.strip() or 'git worktree add failed'}): judge read-only"
         return
     try:
-        hooks = Path(f"{path}.hooks")
-        hooks.mkdir(exist_ok=True)
         for name in ("pre-commit", "pre-merge-commit", "pre-push"):
             (hooks / name).write_text(TRIAL_HOOK)
             (hooks / name).chmod(0o755)
@@ -420,26 +421,17 @@ def drop_trial(cwd, path):
 
 def sweep_trials(cwd, root):
     """Removes the trials of processes that have ended (a driver or a `windvane critic` killed outright), and of a pid
-    reused since: its process started after the copy was last changed, which its owner can't have."""
+    reused since: its `owner` mark names another process. By `stamp`, not wall-clock start times, which a step of
+    the clock moves: a live critic's copy must never go mid-trial. Without a mark (killed before writing it) it
+    goes by whether the pid is alive."""
     for entry in list(root.iterdir()):
         m = re.fullmatch(r"(.+\.(\d+))(?:\.hooks)?", entry.name)
         if not m:
             continue
-        pid, start = int(m[2]), started(int(m[2]))
+        pid = int(m[2])
         try:
-            changed = entry.stat().st_mtime
-        except OSError:  # removed meanwhile, with its twin
-            continue
-        if not alive(pid) or start is not None and start > changed + 1:
+            recorded = Path(root, f"{m[1]}.hooks", "owner").read_text().strip() or None
+        except OSError:
+            recorded = None
+        if not alive(pid) or recorded and same_process(pid, recorded) is False:
             drop_trial(cwd, root / m[1])
-
-
-def started(pid):
-    """When process `pid` started (epoch seconds), from /proc; None where there's none (macOS) or it has ended."""
-    try:
-        ticks = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
-        boot = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
-                    if line.startswith("btime "))
-        return boot + ticks / os.sysconf("SC_CLK_TCK")
-    except (OSError, ValueError, IndexError, StopIteration):
-        return None
