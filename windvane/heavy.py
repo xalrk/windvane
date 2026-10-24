@@ -83,6 +83,9 @@ STOP_AT = "WINDVANE_STOP_AT"
 # The driver's check also follows the run's deadline file (its path in this env var), read as it waits: a deadline the
 # user moved earlier ends the wait then, not at the end it had when the check started.
 DEADLINE_ENV = "WINDVANE_HEAVY_DEADLINE"
+# A `bg` job's files (their base path), which `bg` sets for its command: a wait for the machine writes it into its queue
+# entry, so `await` on the job finds that entry and says where it stands in line now (`standing`).
+JOB_ENV = "WINDVANE_BG_BASE"
 # A session's wrap-up is this long before its stop (as the worker prompt tells it): a job likely to start after it is
 # one the session should plan around.
 WRAP_UP_S = 20 * 60
@@ -430,7 +433,8 @@ def join_queue(need, key=None, expect=None, load=None):
     name = f"{time.time_ns():020d}-{os.getpid()}"
     fd = os.open(q / f".{name}", os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
-    os.write(fd, json.dumps({"mem": need, "key": key, "expect": expect, "load": load}).encode())
+    job = os.environ.get(JOB_ENV)
+    os.write(fd, json.dumps({"mem": need, "key": key, "expect": expect, "load": load, "job": job}).encode())
     os.rename(q / f".{name}", q / name)
     return fd, q / name
 
@@ -548,6 +552,14 @@ def hold_minutes(cfg):
     """machine.toml's `measure_hold`, or its default when it isn't a number."""
     m = cfg.get("measure_hold")
     return m if isinstance(m, (int, float)) and not isinstance(m, bool) and m >= 0 else DEFAULTS["measure_hold"]
+
+
+def bg_job_of(path):
+    """The `bg` job a waiter waits for (its base path, `JOB_ENV`), from its queue entry; None for one run by hand."""
+    try:
+        return json.loads(Path(path).read_text() or "{}").get("job")
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def job_of(path):
@@ -668,12 +680,41 @@ def estimate(work, now=None):
     if never:
         why.append("never timed" if never == jobs else f"{never} never timed")
     why = "; ".join(why)
-    if unknown == jobs or (unknown and mins < 1):
+    if (end := until_of(work, now)) is None:
         return f"work ahead unknown ({why})"
-    until = time.strftime("%H:%M", time.localtime((time.time() if now is None else now) + mins * 60))
+    until = clock(end)
     if unknown:
         return f"at least {minutes(mins)} of work ahead (until {until} or later; {why})"
     return ("under 1 min" if mins < 1 else f"about {minutes(mins)}") + f" of work ahead (until about {until})"
+
+
+def until_of(work, now=None):
+    """When the `work_ahead` should be done, as a Unix time: None when `estimate` gives no clock time for it."""
+    mins, unknown, jobs, _ = work
+    if not jobs or unknown == jobs or (unknown and mins < 1):
+        return None
+    return (time.time() if now is None else now) + mins * 60
+
+
+def clock(t):
+    return time.strftime("%H:%M", time.localtime(t))
+
+
+OVERDUE = "overdue since {}"
+UNTIL_RE = re.compile(r"\(until (?:about )?(\d\d):(\d\d)(?: or later)?(;[^)]*)?\)")
+
+
+def overdue(text, now=None):
+    """`text` (a wait line said earlier) with each estimate's "until" that has passed by `now` said as overdue,
+    "(until about 03:57)" as "(overdue since 03:57)": a line read an hour later mustn't read as a time to come. Its
+    clock time is taken within 12 hours of now, the way an estimate's end is read."""
+    now = time.time() if now is None else now
+
+    def mark(m):
+        at = datetime.fromtimestamp(now).replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0).timestamp()
+        at += 86400 * ((now - at > 43200) - (at - now > 43200))
+        return f"({OVERDUE.format(m.group(1) + ':' + m.group(2))}{m.group(3) or ''})" if now >= at + 60 else m.group(0)
+    return UNTIL_RE.sub(mark, text)
 
 
 def ahead(entry):
@@ -760,12 +801,14 @@ def paused_note(pid, who):
     return f"paused, so {who}: resume it with kill -CONT {target}"
 
 
-def waiting_line(info, n, est=None):
+def waiting_line(info, n, est=None, past=None):
     """A job about to wait, as said once. With the holder gone it waits only on the jobs ahead, so it says the lock
-    is free rather than "waiting for the machine lock: free"."""
+    is free rather than "waiting for the machine lock: free". Said again once the last line's estimate ran out
+    (`past`, its end), it says that estimate is overdue."""
     holder = held_by(info)
     lock = "the machine lock is free" if holder == "free" else f"waiting for the machine lock: {holder}"
-    return f"heavy: {lock}; " + (f"{n} ahead of this job" if n else "next in line") + (f"; {est}" if est else "")
+    return f"heavy: {lock}; " + (f"{n} ahead of this job" if n else "next in line") + (f"; {est}" if est else "") \
+        + (f"; the last estimate is {OVERDUE.format(clock(past))}" if past else "")
 
 
 def gave_up(log):
@@ -843,7 +886,7 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
     said, busy_why, retry, warned, looked, hinted, told = None, None, 0, False, 0, False, not default
     limit_told, hot_since, free_since, hold = False, None, None, hold_minutes(cfg)
     holding_it = let_go = False
-    too = None
+    too = due = None
     while True:
         line, mem, load = ahead(entry), free_gb(), load_avg()
         turn = all(held_up(w, mem, load) for w in line)  # the head, or all ahead wait on memory or a quiet CPU
@@ -898,6 +941,7 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
             too = None
         if key != said or time.time() >= looked + 60:  # the wrap-up is looked at again each minute as time passes
             work, looked = work_ahead(info, [job_of(w) for w in line[:n]], load_times()), time.time()
+            past = due if key == said and due is not None and looked >= due + 60 else None  # its end came and went
             extra, too = f"; {too}" if too else "", None  # said on the wait line it changes, not a line of its own
             if key != said and low:
                 big = holders()
@@ -913,8 +957,11 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
                 say(f"heavy: waiting: {why}" + (f"; busiest: {', '.join(cpu)}" if cpu else "")
                     + ("" if limit_told else "; " + LOAD_LIMIT.format(f"≤ {measure:.10g}", machine_file())) + extra)
                 limit_told = True
-            elif key != said:  # reprinted when what it waits on changes, not every second (nor as free memory drifts)
-                say((f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work))) + extra)
+            elif key != said or past:  # reprinted when what it waits on changes or its estimate ran out, not every
+                # second (nor as free memory drifts)
+                say((f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work), past)) + extra)
+            if key != said or past:
+                due = None if why else until_of(work)
             wrap, now = wrap_up(), time.time()
             late = wrap and (now >= wrap or work[1] < work[2] and now + work[0] * 60 > wrap)
             if late and not warned:
@@ -1042,50 +1089,107 @@ def watch_load(start_job, say):
 
 def status(reuse=None):
     """Who holds the lock and who waits, in order, without waiting or taking either: the holder's line (it writes it
-    in when it takes the lock, and empties it on the way out), then a line per live waiter with the work ahead of it,
-    and for a head short of memory the processes holding most: run from a project (`reuse`), its own helpers not in
-    its `heavy_reuses` are marked."""
+    in when it takes the lock, and empties it on the way out), then a line per live waiter with what it waits on and
+    the work ahead of it (`queue_view`), and for the first one short of memory or a quiet CPU the processes holding
+    most: run from a project (`reuse`), its own helpers not in its `heavy_reuses` are marked."""
     outside_sandbox("the heavy lock")  # its own pid namespace hides the holder and waiters: it would say `free`
+    info, times = lock_info(), load_times()
+    lines = [holder_line(info, times)]
+    for w in queue_view(info, times, reuse):
+        lines.append(f"waiting: pid {w['pid']}, since {w['since']}" + (", measuring" if w["measuring"] else "")
+                     + (f" ({w['why']})" if w["why"] else "") + (f"; {w['est']}" if w["est"] else ""))
+        lines += [f"  {b}" for b in w["big"]]
+    return lines
+
+
+def standing(job, reuse=None):
+    """Where the `bg` job `job` (its base path) stands in the queue now, as `status` reads it, for `await`: the
+    holder's line and this job's (its place in line, what it waits on, the work ahead), or [] when no waiter in the
+    queue is that job's (it just took the machine, or an older windvane queued it)."""
+    info, times = lock_info(), load_times()
+    w = next((w for w in queue_view(info, times, reuse, big=False) if w["job"] == job), None)
+    if w is None:
+        return []
+    holder = holder_line(info, times)
+    place = w["place"] or "paused"
+    return ["now: the machine lock is " + holder,
+            f"now: this job (pid {w['pid']}, queued at {w['since']}) is {place}" + (f" ({w['why']})" if w["why"] else "")
+            + (f"; {w['est']}" if w["est"] else "")]
+
+
+def lock_info():
+    """The holder's line in the lock, read without opening it for writing: {} when free or unreadable."""
     try:
-        info = json.loads(lock_path().read_text() or "{}")
+        return json.loads(lock_path().read_text() or "{}")
     except (OSError, ValueError):
-        info = {}
-    times = load_times()
+        return {}
+
+
+def holder_line(info, times):
+    """The holder, read live (`held_by` with its run time), marked when it's paused or measuring; "free"."""
     pid = info.get("pid")
-    note = "; " + paused_note(pid, "everyone waits") if pid and paused(pid) else ""
-    note += "; measuring" if pid and info.get("measure") is not None else ""
-    line = held_by(info, times, note) if pid else "free"
-    lines, head, jobs = [line], True, []
-    q = queue_dir()
+    if not pid:
+        return "free"
+    note = "; " + paused_note(pid, "everyone waits") if paused(pid) else ""
+    note += "; measuring" if info.get("measure") is not None else ""
+    return held_by(info, times, note)
+
+
+def own_job(path, reuse):
+    """Whether the waiter whose queue entry is `path` runs for the project `reuse` is of: its `job_key` starts with
+    one of that project's dirs."""
+    key = job_of(path)[0]
+    return bool(reuse and isinstance(key, str) and any(key.startswith(d + " ") for d in reuse[1]))
+
+
+def queue_view(info, times, reuse=None, big=True):
+    """Each live waiter, oldest first, as {pid, job, since, measuring, place, why, est, big}, judged the way its own
+    wait (`take`) judges it, so what `status` and `await` say is what the waiter does: it's next in line when every
+    live waiter ahead lets it by (`held_up`), and then waits on its own memory (this project's helpers, `reuse`,
+    counting as free for this project's jobs alone) or a quiet CPU; else on the jobs ahead, or a measurement ahead
+    holding the line. Its work ahead counts the jobs it waits behind. The first waiter short of memory or a quiet
+    CPU lists the processes holding most (`big`: false skips that look, which takes a second)."""
+    q, out, line, listed = queue_dir(), [], [], not big
+    mem, load, hold = free_gb(), load_avg(), hold_minutes(machine())
+    helpers = None
     for name in sorted(os.listdir(q)) if q.is_dir() else []:
-        pid = entry_pid(name)
-        if name.startswith(".") or not pid or not alive(q / name):
+        path, pid = q / name, entry_pid(name)
+        if name.startswith(".") or not pid or not alive(path):
             continue
-        since = time.strftime("%H:%M", time.localtime(int(name.split("-")[0]) / 1e9))
-        limit = limit_of(q / name)
-        line = f"waiting: pid {pid}, since {since}" + (", measuring" if limit is not None else "")
-        big = []
+        w = {"pid": pid, "job": bg_job_of(path), "since": clock(int(name.split("-")[0]) / 1e9),
+             "measuring": limit_of(path) is not None, "place": None, "why": None, "est": None, "big": []}
+        out.append(w)
         if paused(pid):
-            line += f" ({paused_note(pid, 'skipped')})"
-        else:
-            est = estimate(work_ahead(info, jobs, times))
-            jobs.append(job_of(q / name))
-            if head:
-                head, need, mem, load = False, need_of(q / name), free_gb(), load_avg()
-                if too_busy(limit, load) and not short(need, mem):
-                    by = "holding the line" if holds(q / name) else "letting other jobs by"
-                    line += f" (waiting for load ≤ {limit:.10g}, now {loadf(load)}; {by})"
-                    big = [f"uses CPU: {b}" for b in busiest()]
-                elif short(need, mem):
-                    line += f" (waiting for {need:.10g} GB, {down(mem)} free; letting smaller jobs by)"
+            w["why"] = paused_note(pid, "skipped")
+            continue
+        turn = all(held_up(a, mem, load) for a in line)
+        n = 0 if turn else len(line)
+        w["place"] = f"{n} ahead of it" if n else "next in line"
+        w["est"] = estimate(work_ahead(info, [job_of(a) for a in line[:n]], times))
+        need, limit = need_of(path), limit_of(path)
+        if turn:
+            if helpers is None:
+                helpers = helpers_gb(reuse) if mem is not None and own_job(path, reuse) else 0
+            mine = helpers if own_job(path, reuse) else 0
+            if short(need, mem, mine):
+                w["why"] = f"waiting for {need:.10g} GB, {down(mem)} free" + (
+                    f" + {down(mine)} in this project's helpers" if mine else "") + "; letting smaller jobs by"
+                if not listed:
                     procs = holders()
                     own = {h[0] for h in unreused(reuse, procs, [info["pid"]] if info.get("pid") else [])}
-                    big = ["holds memory: " + b + (" (this project's)" if h[0] in own else "")
-                           for h, b in zip(procs, largest(big=procs))]
-            line += f"; {est}" if est else ""
-        lines.append(line)
-        lines += [f"  {b}" for b in big]
-    return lines
+                    w["big"] = ["holds memory: " + b + (" (this project's)" if h[0] in own else "")
+                                for h, b in zip(procs, largest(big=procs))]
+            elif too_busy(limit, load):
+                by = "holding the line" if holds(path) else "letting other jobs by"
+                w["why"] = f"waiting for load ≤ {limit:.10g}, now {loadf(load)}; {by}"
+                w["big"] = [] if listed else [f"uses CPU: {b}" for b in busiest()]
+            listed = listed or bool(w["why"])
+        else:
+            lead = next((a for a in line if not held_up(a, mem, load)), None)
+            if lead and holding(lead, load, hold):
+                w["why"] = f"behind pid {entry_pid(lead.name)}, a --measure job holding the line for a quiet CPU"
+        line.append(path)
+    return out
 
 
 def lives(pid):
