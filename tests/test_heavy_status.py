@@ -1,5 +1,6 @@
 """T-131: `windvane heavy --status` tells a holder whose pid was reused from the real one, marks a paused holder, and
-without /proc doesn't run `ps` on every poll."""
+without /proc doesn't run `ps` on every poll. T-268: it and `await` (`standing`) read each waiter the way its own wait
+does, and a wait line's estimate that ran out reads as overdue."""
 import json
 import os
 import shutil
@@ -128,6 +129,163 @@ class HeavyStatus(unittest.TestCase):
             with mock.patch.object(heavy.time, "monotonic", return_value=time.monotonic() + heavy.PS_KEEP):
                 heavy.paused(4242)  # kept no longer than PS_KEEP
             self.assertEqual(len(count.read_text().splitlines()), 3)
+
+
+class LiveStanding(unittest.TestCase):
+    """What `status` and `await` say of a waiter, from one `queue_view`, and the wait loop's own lines (T-268)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="windvane-")
+        self.addCleanup(tmp.cleanup)
+        self.d = Path(tmp.name)
+        env = {**machine(self.d, 60), "XDG_STATE_HOME": str(self.d / "st")}
+        patch = mock.patch.dict(os.environ, env)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for k in ("WINDVANE_HEAVY_HELD", "WINDVANE_STOP_AT", heavy.JOB_ENV):  # a session running the tests has them
+            os.environ.pop(k, None)
+        self.mem = [9.0]
+        for patch in (mock.patch.object(heavy, "free_gb", lambda: self.mem[0]),
+                      mock.patch.object(heavy, "load_avg", lambda: None),
+                      mock.patch.object(heavy, "holders", lambda n=3: [])):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def proc(self):
+        """A live pid, for a holder."""
+        p = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        return p
+
+    def hold(self, pid, cmd="make", **info):
+        heavy.lock_path().write_text(json.dumps({"pid": pid, "since": time.time(), "cmd": cmd, "cwd": "a/b", **info}))
+
+    def queue(self, need, job=None, key=None):
+        with mock.patch.dict(os.environ, {heavy.JOB_ENV: job} if job else {}):
+            entry = heavy.join_queue(need, key)
+        self.addCleanup(heavy.leave_queue, entry)
+        time.sleep(0.001)  # entries are named by arrival time
+        return entry
+
+    def test_await_and_status_say_the_same_of_a_job_short_of_memory(self):
+        holder = self.proc()
+        self.hold(holder.pid)
+        self.queue(8, "/st/bg/T-1/eval")
+        self.mem[0] = 2.4
+        now = heavy.standing("/st/bg/T-1/eval")
+        self.assertEqual(len(now), 2, now)
+        self.assertRegex(now[0], rf"^now: the machine lock is held by pid {holder.pid} \(make in a/b, since \d\d:\d\d; "
+                                 r"running under 1 min, never timed\)$")
+        tail = "(waiting for 8 GB, 2.4 free; letting smaller jobs by); work ahead unknown (never timed)"
+        self.assertRegex(now[1], rf"^now: this job \(pid {os.getpid()}, queued at \d\d:\d\d\) is next in line ")
+        self.assertTrue(now[1].endswith(tail), now[1])
+        self.assertTrue(heavy.status()[1].endswith(tail), heavy.status())
+        self.assertEqual(heavy.standing("/st/bg/T-1/other"), [])  # no waiter of that job's
+
+    def test_a_job_behind_one_short_of_memory_is_next_and_waits_on_the_holder_alone(self):
+        """As `take` counts it: the head short of memory lets it by, so its work ahead is the holder's, not theirs."""
+        holder = self.proc()
+        self.hold(holder.pid, key="k-make")
+        heavy.record("k-make", 10)
+        heavy.record("k-big", 50)
+        self.queue(8, key="k-big")
+        self.queue(1, "/st/bg/T-1/small")
+        self.mem[0] = 2.4
+        now = heavy.standing("/st/bg/T-1/small")
+        self.assertIn(") is next in line; about 10 min of work ahead (until about ", now[1])
+        self.mem[0] = 9.0  # the head can go: this one waits behind it, on both
+        now = heavy.standing("/st/bg/T-1/small")
+        self.assertIn(") is 1 ahead of it; about 60 min of work ahead (until about ", now[1])
+
+    def test_this_projects_helpers_count_as_free_for_its_own_jobs(self):
+        holder = self.proc()
+        self.hold(holder.pid)
+        reuse = (["emu"], [str(self.d / "proj")])
+        self.queue(8, "/st/bg/T-1/eval", key=f"{self.d / 'proj'} make")
+        self.mem[0] = 2.4
+        with mock.patch.object(heavy, "helpers_gb", lambda r: 6.0):
+            self.assertIn(") is next in line; work ahead unknown", heavy.standing("/st/bg/T-1/eval", reuse)[1])
+        with mock.patch.object(heavy, "helpers_gb", lambda r: 3.0):
+            self.assertIn("(waiting for 8 GB, 2.4 free + 3.0 in this project's helpers; letting smaller jobs by)",
+                          heavy.standing("/st/bg/T-1/eval", reuse)[1])
+            self.assertIn("(waiting for 8 GB, 2.4 free; letting", heavy.standing("/st/bg/T-1/eval")[1])  # not its own
+
+    def test_another_projects_head_does_not_hide_this_projects_helpers(self):
+        holder = self.proc()
+        self.hold(holder.pid)
+        reuse = (["emu"], [str(self.d / "proj")])
+        self.queue(8, "/st/bg/T-9/other", key=f"{self.d / 'elsewhere'} make")
+        self.queue(8, "/st/bg/T-1/eval", key=f"{self.d / 'proj'} make")
+        self.mem[0] = 2.4
+        with mock.patch.object(heavy, "helpers_gb", lambda r: 6.0):
+            self.assertIn(") is next in line; work ahead unknown", heavy.standing("/st/bg/T-1/eval", reuse)[1])
+
+    def test_a_paused_waiter_says_paused_once(self):
+        holder = self.proc()
+        self.hold(holder.pid)
+        self.queue(1, "/st/bg/T-1/eval")
+        with mock.patch.object(heavy, "paused", lambda pid: pid == os.getpid()):
+            now = heavy.standing("/st/bg/T-1/eval")[1]
+        self.assertRegex(now, r"\) is paused, so skipped: resume it with kill -CONT -\d+$")
+
+    def test_a_job_behind_a_measurement_holding_the_line_says_so(self):
+        holder = self.proc()
+        self.hold(holder.pid)
+        measuring = self.queue(0)
+        measuring[1].write_text(json.dumps({"mem": 0, "load": 1, "hold": True}))  # past its measure_hold
+        self.queue(1, "/st/bg/T-1/small")
+        with mock.patch.object(heavy, "load_avg", lambda: 9.0):
+            now = heavy.standing("/st/bg/T-1/small")
+        self.assertIn(f") is 1 ahead of it (behind pid {os.getpid()}, a --measure job holding the line for a quiet "
+                      "CPU); work ahead unknown", now[1])
+
+    def test_an_estimate_that_ran_out_reads_as_overdue(self):
+        at = time.time()
+        past, soon = heavy.clock(at - 50 * 60), heavy.clock(at + 10 * 60)
+        self.assertEqual(heavy.overdue(f"next in line; about 10 min of work ahead (until about {past})", at),
+                         f"next in line; about 10 min of work ahead (overdue since {past})")
+        self.assertEqual(heavy.overdue(f"at least 5 min of work ahead (until {past} or later; 1 never timed)", at),
+                         f"at least 5 min of work ahead (overdue since {past}; 1 never timed)")
+        line = f"about 10 min of work ahead (until about {soon})"
+        self.assertEqual(heavy.overdue(line, at), line)
+
+    def run_take(self, steps, need=8):
+        """`take`'s lines for a waiter needing `need` GB with the lock held throughout, `steps` {sleep count: what
+        changes then} run as it waits, and its wait given up after the last."""
+        entry = self.queue(need)
+        lock = os.open(heavy.lock_path(), os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, lock)
+        n, lines = [0], []
+
+        def tick(_):
+            n[0] += 1
+            steps.get(n[0], lambda: None)()
+        with mock.patch.object(heavy.fcntl, "flock", side_effect=OSError), \
+                mock.patch.object(heavy.time, "sleep", tick):
+            heavy.take(lock, entry, need, {"busy": []}, lambda: 0 if n[0] > max(steps) else float("inf"), lines.append)
+        return lines
+
+    def test_the_wait_loop_says_each_change_of_r049s_sequence(self):
+        """R-049: a holder exits, another job takes the lock, then the waiter is short of memory. The wait's log says
+        each (a killed holder leaves its line in the lock, one that ended empties it): the hour-old line `await`
+        showed was its tail, not a line the loop missed."""
+        for clean in (False, True):
+            with self.subTest(holder_ended_cleanly=clean):
+                first, second = self.proc(), self.proc()
+                self.hold(first.pid, cmd="tools/check.sh")
+
+                def exits():
+                    first.kill()
+                    first.wait()
+                    if clean:
+                        heavy.lock_path().write_text("")
+                lines = self.run_take({3: exits, 6: lambda: self.hold(second.pid), 9: lambda: self.mem.__setitem__(0, 2.4)})
+                self.mem[0] = 9.0
+                waits = [ln for ln in lines if ln.startswith("heavy: waiting")]
+                self.assertEqual(len(waits), 3, lines)
+                self.assertIn(f"held by pid {first.pid} (tools/check.sh", waits[0])
+                self.assertIn(f"held by pid {second.pid} (make", waits[1])
+                self.assertTrue(waits[2].startswith("heavy: waiting: only 2.4 GB free (want 8)"), waits[2])
 
 
 if __name__ == "__main__":

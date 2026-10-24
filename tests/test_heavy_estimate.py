@@ -115,7 +115,8 @@ class HeavyEstimate(unittest.TestCase):
         self.assertEqual(len([x for x in self.take()[0] if x.startswith("heavy: likely to start after")]), 1)
 
     def test_the_wrap_up_is_looked_at_again_as_time_passes(self):
-        """A holder that overruns: no line changes, but once the wrap-up comes with the job still waiting, it's said."""
+        """A holder that overruns: once its estimate runs out, the line says so; once the wrap-up comes with the job
+        still waiting, that's said."""
         self.times(render=[30])
         self.held("render", ran_min=0)
         clock = [time.time()]
@@ -134,7 +135,10 @@ class HeavyEstimate(unittest.TestCase):
         late = [(t, m) for t, m in said if m.startswith("heavy: likely to start after")]
         self.assertEqual(len(late), 1, said)
         self.assertTrue(wrap <= late[0][0] < wrap + 61)  # within a minute of the wrap-up
-        self.assertEqual(len([m for _, m in said if m.startswith("heavy: waiting")]), 1)
+        waits = [m for _, m in said if m.startswith("heavy: waiting")]  # once more as its estimate runs out
+        self.assertEqual(len(waits), 2, said)
+        self.assertRegex(waits[1], r"; work ahead unknown \(the holder is past its usual 30 min\); "
+                                   r"the last estimate is overdue since \d\d:\d\d$")
 
     def test_a_corrupt_or_unwritable_times_file_doesnt_stop_a_job(self):
         f = heavy.times_file()

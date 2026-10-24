@@ -143,6 +143,8 @@ timing run made on a busy machine is plain in its log. The estimate comes from e
 project and command in `~/.local/state/windvane/heavy-times.json`, else from the minutes it was started with
 (`--expect`, for a command's first run): the holder's time less what it ran so far, plus each waiter's. A job with
 neither, or a holder past its usual or expected time, makes it `at least N min`, or `unknown` when nothing is known.
+When that end comes and the job still waits on the same thing, it says its line again, ending `the last estimate is
+overdue since 03:57`.
 In a session, a job says once when it likely starts after the wrap-up (20 minutes before the session's stop): when the
 known work ahead runs past it, or when the wrap-up comes and the job still waits. It keeps waiting; the session decides
 whether to plan without it.
