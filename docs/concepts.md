@@ -206,6 +206,11 @@ the mark becomes a fix; `no (out of scope)` becomes a follow-up instead:
 
 "Beyond this ticket" points go in the pull request and feed the next `windvane plan`.
 
+**Who judges what.** The critic owns behaviour as a user meets it: each of its points names what a user meets (a
+command's output, a push, a lost file, a wait) and what fixed looks like, never a missing test or something the pack
+should show. The reviewer owns the code: tests, races, the project's rules and the failure paths the critic's trial
+didn't reach, without redoing a trial a passing verdict reports; the planner drops a note that only asks for a test.
+
 **Calibration.** A check every ticket passes, or none ever does, measures nothing. `.windvane/CALIBRATION.md` holds
 your own verdicts where you disagreed with the critic (date, ticket, its answer, yours, why) and anchors as check
 answers ("T-004: `safe: no`"); every critic reads it. `windvane stats --critic` shows how scores spread over recent
