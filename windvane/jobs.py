@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import heavy, scratch, util
 from .config import exe
-from .heavy import STOP_AT
+from .heavy import JOB_ENV, STOP_AT
 from .runner import GRACE, IN_JOB, NEST, ROLE, TICKET, outside_sandbox, signal_group
 from .util import append_jsonl, gout, now, read_jsonl
 
@@ -54,6 +54,9 @@ AWAIT_POLL = 3  # seconds between its looks at a job still running
 SESSION_CHECK = "check"  # the bg job a session's heavy check runs as
 SESSION_CRITIC = "critic"  # the bg job a session's `windvane critic` runs as
 CRITIC_LINES = 400  # of a critique's log `windvane critic` prints: the whole critique, which ends on its CRITIC STEP
+# A heavy wait's own lines (`heavy.take`) that `await`'s live state covers, and the hints that keep one shown anyway.
+WAIT_LINES = ("heavy: waiting", "heavy: the machine lock is free")
+HINTS = (heavy.OWN, "is min_free_gb in", "is measure_load in")
 CHECK_LOG = "check: log "  # a check job's first line names the check's log, where its wait for the machine is said
 # A bg job's shell: it links its own pid in first, should `bg` be killed before writing it (a link: never half-written,
 # and never over the one `bg` wrote, which its stamp must not predate), then runs the command and writes its exit.
@@ -530,7 +533,7 @@ def start_job(name, cmd, cwd, base, tmp, heavy, mem, keep, expect, measure=False
         cmd = [*exe(), "heavy", *(["--mem", f"{mem:.10g}"] if mem is not None else []),
                *(["--expect", f"{expect:.10g}"] if expect is not None else []), *(["--measure"] if measure else []),
                "--", *cmd]
-    env = {**os.environ, **tmp, IN_JOB: name}
+    env = {**os.environ, **tmp, IN_JOB: name, JOB_ENV: str(base)}
     if keep:  # it waits for the machine as long as it's kept (`watch` ends it), and belongs to no session
         Path(f"{base}.keep").write_text(os.environ.get(RUN_STOP, ""))
         cmd = [sys.executable, "-c", WATCH, str(Path(__file__).parents[1]), str(base), *cmd]
@@ -780,8 +783,32 @@ def await_(p, name, lines=40, limit=None, again=None):
     state = "WAITING" if heavy.waiting(log) else "RUNNING"
     where = "in the heavy queue, " if state == "WAITING" else ""
     print(f"{state} {name} ({where}{mins:.0f} min so far); call {again or f'windvane await {name}'} again")
-    print(tail(log, 3))
+    now = heavy.standing(str(base), reuse(p)) if state == "WAITING" else []
+    print("\n".join([*now, *said(log, 3, covered=bool(now))]))
     return None
+
+
+def reuse(p):
+    """The project's `heavy_reuses` and dirs (`heavy.reuse_of`), which its jobs count as free memory; None outside
+    one."""
+    try:
+        return heavy.reuse_of(p)
+    except (AttributeError, KeyError, OSError):
+        return None
+
+
+def said(log, n, covered=False):
+    """A running job's last `n` log lines, headed by how long ago the last one was written, since a waiting job's
+    lines are written only when what it waits on changes; an estimate in them that ran out reads as overdue. With
+    the live state shown (`covered`), the wait lines it covers are dropped, unless one carries a hint."""
+    lines = [heavy.overdue(ln) for ln in tail(log, n).splitlines()]
+    if covered:
+        lines = [ln for ln in lines if not ln.startswith(WAIT_LINES) or any(h in ln for h in HINTS)]
+    try:
+        ago = (time.time() - Path(log).stat().st_mtime) / 60
+    except OSError:
+        return lines
+    return [f"log, last said {heavy.minutes(ago)} ago:", *lines] if lines and ago >= 1 else lines
 
 
 def check_exit(ok):

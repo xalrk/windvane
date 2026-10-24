@@ -91,7 +91,9 @@ class SessionHeavyCheck(unittest.TestCase):
         self.assertEqual(code, heavy.TIMED_OUT, out)
         self.assertEqual(out.splitlines()[0], "check: the running check keeps its own need; --mem 2 goes to the next one")
         self.assertRegex(out, r"WAITING check \(in the heavy queue, 0 min so far\); call windvane await check again\n")
-        self.assertIn("heavy: waiting for the machine lock: held by pid", out)
+        self.assertIn("\nnow: the machine lock is held by pid", out)  # where its wait stands now, the log's line covered
+        self.assertIn("\nnow: this job (pid ", out)
+        self.assertNotIn("heavy: waiting for the machine lock", out)
         self.assertEqual(len(self.queue()), 1)
         self.assertEqual(self.checks(), [])
         old = self.s.git("rev-parse", "--short", "HEAD")

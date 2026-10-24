@@ -44,6 +44,13 @@ release on the same day adds a number (`2026.10.9.1`).
   that the token's user may read the reply topic, and a refused test names the one `ntfy access` line still to run.
 
 ### Changed
+- `windvane await` on a job still in the heavy queue says where it stands now, read as `heavy --status` reads it:
+  who holds the lock and since when, the job's place in line, what it waits on and the work ahead. The log lines it
+  still shows say how long ago they were written, and an estimate that ran out reads `overdue since 03:57`, not a
+  time an hour ago; a waiting job's log says its line again once its estimate runs out.
+- `windvane heavy --status` judges every waiter as its own wait does, not only the head: a job let by a head short
+  of memory is next in line, its work ahead counts only the jobs it waits behind, and this project's own
+  `heavy_reuses` helpers count as free memory for its jobs.
 - A dropped late answer's line in `windvane status` says whether its ticket has merged, so you know whether
   `windvane answer` changes it now or only after the merge. At most 20 unshown ones are kept for it; the log names
   any past that.
