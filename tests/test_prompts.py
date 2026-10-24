@@ -66,9 +66,15 @@ class WhoJudgesWhat(unittest.TestCase):
         self.assertIn("A code reviewer comes after you for the code and its tests", self.text("CRITIC.md"))
 
     def test_the_reviewer_skips_what_the_critic_tried(self):
-        self.assertIn("The critic's verdict says what it ran and saw: don't redo that trial or re-raise a point it "
-                      "settled", self.text("REVIEW.md"))
-        self.assertIn("spend the review on the code, the tests and the paths it didn't run", self.text("REVIEW.md"))
+        review = self.text("REVIEW.md")
+        self.assertIn("A critic verdict ending `fixes=0` says what it ran and saw: don't redo that trial or re-raise a "
+                      "point it settled", review)
+        self.assertIn("spend the review on the code, the tests and the paths no trial reached", review)
+
+    def test_only_a_passing_verdict_settles_the_trial(self):
+        """A critic session that died on a revised head leaves its older `revise` verdict as the last one: the
+        reviewer must try that head itself rather than trust a trial of another head."""
+        self.assertIn("Any other verdict, or none, settles nothing: try the main promise yourself", self.text("REVIEW.md"))
 
     def test_the_planner_drops_test_only_critic_notes(self):
         self.assertIn("A critic note asking only for a test or a pack measurement is dropped, not ticketed, unless it "
