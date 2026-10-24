@@ -8,11 +8,13 @@ import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import cli, critic, util, worktree  # noqa: E402
+from windvane import cli, critic, heavy, jobs, util, worktree  # noqa: E402
+from windvane.runner import IN_JOB, IN_SANDBOX  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -67,13 +69,30 @@ class CriticTrial(unittest.TestCase):
         self.addCleanup(os.environ.pop, key, None)
 
     def critic(self):
-        out = io.StringIO()
+        return self.critic_code()[1]
+
+    def critic_code(self):
+        """`windvane critic T-001` in this process: (its exit code, its output)."""
+        out, code = io.StringIO(), 0
         with redirect_stdout(out), redirect_stderr(out):
             try:
                 cli.cmd_critic(argparse.Namespace(ticket="T-001", project=False), self.p)
-            except SystemExit:
-                pass
-        return out.getvalue()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 0 if e.code is None else 1
+        return code, out.getvalue()
+
+    def in_session(self, seconds):
+        """`windvane critic` as a worker session runs it, its tool call stopping after `seconds` (10 minutes for real)."""
+        for k in (IN_JOB, IN_SANDBOX):  # a suite run as a background job is in one
+            if k in os.environ:
+                self.addCleanup(os.environ.__setitem__, k, os.environ.pop(k))
+        self.env(heavy.STOP_AT, str(time.time() + 600))
+        self.env("WINDVANE_TICKET", "T-001")
+        base = jobs.job_base(self.p, jobs.SESSION_CRITIC)
+        self.addCleanup(lambda: jobs.end_job(base, "test over") if jobs.alive(base) else None)
+        limit = mock.patch.object(jobs, "AWAIT_S", seconds)
+        limit.start()
+        self.addCleanup(limit.stop)
 
     def calls(self):
         return [c for c in read_jsonl(self.s.tmp / "calls.jsonl") if c["system"].startswith("# windvane critic")]
@@ -272,6 +291,19 @@ class CriticTrial(unittest.TestCase):
             self.assertFalse(left.exists())
         self.assertGone()
 
+    def test_a_locked_entry_whose_folder_is_gone_goes_too(self):
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        left = self.p.state / worktree.TRIALS / f"T-009.{dead.pid}"
+        self.s.git("worktree", "add", "-q", "--detach", str(left), "HEAD")
+        self.s.git("worktree", "lock", "--reason", "initializing", str(left))
+        Path(f"{left}.hooks").mkdir()
+        import shutil
+        shutil.rmtree(left)  # its folder went, git's locked entry stayed
+        with worktree.trial(self.p, str(self.s.root), "HEAD", "T-001"):
+            pass
+        self.assertGone()
+
     def test_a_copy_whose_pid_was_reused_goes_too(self):
         trials = self.p.state / worktree.TRIALS
         if not str(util.stamp(os.getpid()) or "").startswith("boot:"):
@@ -295,6 +327,42 @@ class CriticTrial(unittest.TestCase):
         worktree.sweep_trials(str(self.s.root), trials)
         self.assertTrue(mine.exists())
         worktree.drop_trial(str(self.s.root), mine)
+
+    def test_a_session_gets_its_verdict_from_a_critique_longer_than_one_call(self):
+        # a session's tool call stops at 10 minutes, a critique can take longer: it runs as the session's bg job
+        self.in_session(1)
+        self.env("FAKE_CRITIC_SLOW", "4")
+        self.env("FAKE_CRITIC_TRY", "true")
+        code, out = self.critic_code()
+        self.assertEqual(heavy.TIMED_OUT, code, out)
+        self.assertIn("call windvane critic T-001 again", out)
+        self.assertNotIn("CRITIC STEP", out)
+        code, out = self.critic_code()  # asked again while it runs: the same critique, not a second one
+        self.assertEqual(1, len(self.calls()))
+        for _ in range(20):
+            if code != heavy.TIMED_OUT:
+                break
+            code, out = self.critic_code()
+        self.assertEqual(0, code, out)
+        self.assertIn("CRITIC STEP: pass", out)
+        self.assertEqual(1, len(self.calls()))
+        self.assertGone()
+        os.environ.pop("FAKE_CRITIC_SLOW")
+        code, out = self.critic_code()  # its verdict was read: asked again (a refreshed pack), it asks anew
+        self.assertEqual((0, 2), (code, len(self.calls())), out)
+
+    def test_a_session_s_finished_critique_it_never_read_is_given_not_asked_again(self):
+        self.in_session(0.5)
+        self.env("FAKE_CRITIC_SLOW", "2")
+        code, out = self.critic_code()
+        self.assertEqual(heavy.TIMED_OUT, code, out)
+        base = jobs.job_base(self.p, jobs.SESSION_CRITIC)
+        until = time.time() + 30
+        while not Path(f"{base}.exit").exists() and time.time() < until:  # it ends between the worker's calls
+            time.sleep(0.1)
+        code, out = self.critic_code()
+        self.assertIn("CRITIC STEP: pass", out)
+        self.assertEqual(1, len(self.calls()))
 
     def test_off_it_reads_the_worker_tree_with_bash_denied(self):
         self.s.write(".windvane/config.toml", self.s.root.joinpath(".windvane/config.toml").read_text()

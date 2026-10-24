@@ -60,7 +60,9 @@ your run. On scratch state (`XDG_STATE_HOME=$TMPDIR/state windvane ...`) it may 
 token or `claude` (`run`, `plan`, `ci`, `critic`, `check`, `bg`, `answer` and the like) is refused everywhere. Its
 commands run in Claude Code's sandbox like any session's, machine-heavy ones through the heavy lock. At
 `trial_minutes` the session is stopped and asked once for its verdict on what it saw; a retried critic gets its whole
-time again. `trial_minutes = 0` keeps it read-only: Bash denied, in the worker's tree.
+time again. `trial_minutes = 0` keeps it read-only: Bash denied, in the worker's tree. A worker's `windvane critic`
+runs as its session's bg job `critic`, so a critique longer than one tool call keeps going and the worker's next
+`windvane critic` gets its verdict; the job and its critic end with the worker's session.
 
 Every session gets its rules (`prompts/*.md`) and the ticket in its prompt, and ends with a machine-readable result
 line the driver acts on. Product calls are never a session's to make: they become questions for you (see

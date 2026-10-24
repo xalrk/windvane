@@ -760,7 +760,7 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
                                          resume=session["id"], extra_env=git_env)
     if error:
         entry = {"ticket": tid, "sha": gout(cwd, "rev-parse", "--short", rev), "score": None, "fixes": 0,
-                 "revisions": n, "step": "unavailable", "gist": cut(plain_error(error)), "critique": ""}
+                 "revisions": n, "step": "unavailable", "gist": cut(plain_error(error)), "critique": "", **out}
         append_jsonl(p.state / "critic.jsonl", entry)
         return entry, f"Critic unavailable ({cut(plain_error(error))})."  # the worker reads it
     why, asked = unread(p, tid, lad, text), {}

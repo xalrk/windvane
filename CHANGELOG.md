@@ -13,7 +13,8 @@ release on the same day adds a number (`2026.10.9.1`).
   pushes, branch switches, `gh` and the `windvane` commands that drive the autopilot are refused there, and the copy
   is removed afterwards however the critique ends. `[critic] trial_minutes` (default 15) bounds it: then the critic
   answers on what it saw; `0` keeps it read-only. The evidence pack shrinks to the command that shows the promise and
-  what the critic can't run itself.
+  what the critic can't run itself. A worker's `windvane critic` runs as its session's background job `critic`, so a
+  critique longer than one tool call keeps going: the worker asks again and gets that critique's verdict.
 - The critic reads what a ticket changed in the text users read: its prompt holds the diff of the Markdown and
   reStructuredText files outside `.windvane/` (README, docs, CHANGELOG) and of the files `[critic] text` names
   (message files, UI strings), up to 12,000 characters, the biggest hunks cut first and named. The evidence pack no

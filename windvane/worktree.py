@@ -410,9 +410,9 @@ def trial(p, cwd, rev, tid, stop=lambda: ""):
 
 def drop_trial(cwd, path):
     """Removes a trial worktree, its hooks and git's record of it; a process killed inside `git worktree add` leaves
-    it locked, which prune alone would keep."""
+    it locked, which prune alone would keep, even once its folder is gone."""
+    git(cwd, "worktree", "unlock", str(path))
     if path.exists():
-        git(cwd, "worktree", "unlock", str(path))
         git(cwd, "worktree", "remove", "--force", "--force", str(path))
     shutil.rmtree(path, ignore_errors=True)
     shutil.rmtree(f"{path}.hooks", ignore_errors=True)

@@ -562,7 +562,7 @@ def cmd_check(a, p):
     sys.exit(jobs.check_exit(ok))
 
 
-CRITIC_WAIT = 8  # minutes of retry pauses `windvane critic` may spend: the worker's Bash call stops at 10
+CRITIC_WAIT = 8  # minutes of retry pauses `windvane critic` may spend: the worker waits on it, the driver retries
 
 
 def critic_retry(p, sleep=time.sleep):
@@ -597,6 +597,8 @@ def cmd_critic(a, p):
     long = critic_mod.too_long(p, tid)
     if long:
         sys.exit(long)
+    if os.environ.get(heavy.STOP_AT) and not os.environ.get(jobs.IN_JOB):  # a session: past one tool call, it goes on
+        sys.exit(jobs.session_critic(p, os.getcwd(), tid))
     usage = Usage(p)
     entry, text = critic_mod.judge(p, tid, os.getcwd(), usage=usage, stop_if=inherited_stop(p, usage),
                                    retry=critic_retry(p))
