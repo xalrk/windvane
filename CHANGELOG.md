@@ -73,6 +73,9 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- Nothing a run starts reaches your tmux server any more. Sessions, the project check and `setup`/`teardown` got the
+  driver's `TMUX` and `TMUX_PANE` under `run --detach`, and tmux goes by `$TMUX` before `TMUX_TMPDIR`: a session that
+  made a scratch tmux server and ended it with `tmux kill-server` ended yours, and every detached run on it.
 - A plan, periodic or desk-answers branch that another machine pushed under the same name between windvane naming
   it and pushing it goes to the next free suffix (`-2`) instead of being held back with "see the windvane log". A
   push refused because its branch name was taken (a second clash, or a branch held before) says so, with the hand

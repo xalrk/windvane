@@ -195,7 +195,8 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None):
     start = time.time()
     code = waited = None
     t = ticket or os.environ.get(TICKET)  # a ticket's check gets its scratch dir as TMPDIR, as its sessions do
-    env = {**os.environ, **({"TMPDIR": str(scratch.session_dir(p, t))} if t else {})}
+    # it runs code and tests a session wrote: no tmux pane (util.without_tmux), as for sessions
+    env = {**util.without_tmux(os.environ), **({"TMPDIR": str(scratch.session_dir(p, t))} if t else {})}
     try:
         with log.open("w") as f:
             fcntl.flock(f, fcntl.LOCK_EX)  # blocking: `running` may hold a momentary shared probe

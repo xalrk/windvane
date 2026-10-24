@@ -23,6 +23,18 @@ from pathlib import Path
 # only the driver, which lets the step finish, and never git in the middle of a merge.
 shielded = False
 
+# A tmux pane's variables. Without -L or -S, tmux takes $TMUX's socket over TMUX_TMPDIR, so a command that inherits
+# them and makes a scratch server reaches the driver's server instead, and its `tmux kill-server` ends that one: the
+# user's own, with every detached run on it.
+TMUX_VARS = ("TMUX", "TMUX_PANE")
+
+
+def without_tmux(environ):
+    """`environ` without the driver's tmux pane (TMUX_VARS), for whatever runs code the driver didn't write itself:
+    sessions, the project check and the config's setup and teardown commands. The driver's own `os.environ` keeps
+    them (`supervise`, its re-exec and `run --detach` go by them)."""
+    return {k: v for k, v in environ.items() if k not in TMUX_VARS}
+
 
 def held(fh):
     """Whether another open file holds a lock on `fh`'s file. The probe's own shared lock is let go at once: a close
@@ -59,7 +71,9 @@ def no_prompts(cwd, env=None):
 def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1):
     """Run shell `cmd` with no input in a process group of its own until it ends, `until` passes or `stop()` gives a
     reason; then the whole group is killed (a build's own children too). (exit code, why it was stopped or "", its
-    last `keep` lines); `echo` shows its output as it comes, so a long `npm ci` doesn't look stuck."""
+    last `keep` lines); `echo` shows its output as it comes, so a long `npm ci` doesn't look stuck. It runs without
+    the driver's tmux pane (`without_tmux`): a setup's install scripts come from the repo, and a teardown that stops a
+    helper in tmux finds it on the default server, where a pane-less command looks."""
     lines = deque(maxlen=keep)
 
     def read(out):
@@ -68,7 +82,8 @@ def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1):
                 print(line, end="", flush=True)
             lines.append(line.rstrip())
     with subprocess.Popen(cmd, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True) as proc:
+                          stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True,
+                          env=without_tmux(os.environ)) as proc:
         reader = threading.Thread(target=read, args=(proc.stdout,), daemon=True)
         reader.start()
         why = ""
