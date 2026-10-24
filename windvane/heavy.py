@@ -1111,10 +1111,9 @@ def standing(job, reuse=None):
     if w is None:
         return []
     holder = holder_line(info, times)
-    place = w["place"] or "paused"
+    where = w["why"] if w["place"] is None else w["place"] + (f" ({w['why']})" if w["why"] else "")  # paused
     return ["now: the machine lock is " + holder,
-            f"now: this job (pid {w['pid']}, queued at {w['since']}) is {place}" + (f" ({w['why']})" if w["why"] else "")
-            + (f"; {w['est']}" if w["est"] else "")]
+            f"now: this job (pid {w['pid']}, queued at {w['since']}) is {where}" + (f"; {w['est']}" if w["est"] else "")]
 
 
 def lock_info():
@@ -1168,9 +1167,10 @@ def queue_view(info, times, reuse=None, big=True):
         w["est"] = estimate(work_ahead(info, [job_of(a) for a in line[:n]], times))
         need, limit = need_of(path), limit_of(path)
         if turn:
-            if helpers is None:
-                helpers = helpers_gb(reuse) if mem is not None and own_job(path, reuse) else 0
-            mine = helpers if own_job(path, reuse) else 0
+            mine = 0
+            if own_job(path, reuse):  # looked up once, and only for this project's own jobs
+                helpers = (helpers_gb(reuse) if mem is not None else 0) if helpers is None else helpers
+                mine = helpers
             if short(need, mem, mine):
                 w["why"] = f"waiting for {need:.10g} GB, {down(mem)} free" + (
                     f" + {down(mine)} in this project's helpers" if mine else "") + "; letting smaller jobs by"

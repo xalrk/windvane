@@ -210,6 +210,24 @@ class LiveStanding(unittest.TestCase):
                           heavy.standing("/st/bg/T-1/eval", reuse)[1])
             self.assertIn("(waiting for 8 GB, 2.4 free; letting", heavy.standing("/st/bg/T-1/eval")[1])  # not its own
 
+    def test_another_projects_head_does_not_hide_this_projects_helpers(self):
+        holder = self.proc()
+        self.hold(holder.pid)
+        reuse = (["emu"], [str(self.d / "proj")])
+        self.queue(8, "/st/bg/T-9/other", key=f"{self.d / 'elsewhere'} make")
+        self.queue(8, "/st/bg/T-1/eval", key=f"{self.d / 'proj'} make")
+        self.mem[0] = 2.4
+        with mock.patch.object(heavy, "helpers_gb", lambda r: 6.0):
+            self.assertIn(") is next in line; work ahead unknown", heavy.standing("/st/bg/T-1/eval", reuse)[1])
+
+    def test_a_paused_waiter_says_paused_once(self):
+        holder = self.proc()
+        self.hold(holder.pid)
+        self.queue(1, "/st/bg/T-1/eval")
+        with mock.patch.object(heavy, "paused", lambda pid: pid == os.getpid()):
+            now = heavy.standing("/st/bg/T-1/eval")[1]
+        self.assertRegex(now, r"\) is paused, so skipped: resume it with kill -CONT -\d+$")
+
     def test_a_job_behind_a_measurement_holding_the_line_says_so(self):
         holder = self.proc()
         self.hold(holder.pid)
