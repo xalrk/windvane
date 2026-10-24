@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import driver, periodic  # noqa: E402
+from windvane import driver, periodic, schedule  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
@@ -36,9 +36,10 @@ class Ask(unittest.TestCase):
         self.p = Project(self.s.root)
         capture(self, driver, periodic)
 
-    def wv(self, *argv):
-        """The real `windvane` command, from the user's checkout: its output and exit code."""
-        r = subprocess.run(["windvane", *argv], cwd=self.s.root, capture_output=True, text=True)
+    def wv(self, *argv, path=None):
+        """The real `windvane` command, from the user's checkout (`path` first on PATH): its output and exit code."""
+        env = dict(os.environ, PATH=f"{path}:{os.environ['PATH']}") if path else None
+        r = subprocess.run(["windvane", *argv], cwd=self.s.root, capture_output=True, text=True, env=env)
         return r.stdout + r.stderr, r.returncode
 
     def during_t001(self, *commands):
@@ -157,6 +158,24 @@ class Ask(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("no [[periodic]] entry 'quality' in .windvane/config.toml (there is: audit, triage)", out)
         self.assertEqual(periodic.asked(self.p), [])
+
+    def test_refused_while_a_schedule_waits_for_its_window(self):
+        self.make()
+        self.p.state.mkdir(parents=True, exist_ok=True)
+        start = now() + timedelta(hours=1)
+        (self.p.state / schedule.STATE).write_text(json.dumps(
+            {"start": start.isoformat(), "end": (start + timedelta(hours=2)).isoformat(), "daily": False,
+             "waiting": True}))
+        tmux = self.s.tmp / "tmux-bin"
+        tmux.mkdir()
+        (tmux / "tmux").write_text("#!/bin/sh\nexit 0\n")  # its tmux session is up
+        (tmux / "tmux").chmod(0o755)
+        with open(self.p.state / schedule.LOCK, "w") as lock:  # the schedule's own lock: no run holds the run's
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            out, code = self.wv("periodic", "audit", path=tmux)
+        self.assertEqual(code, 1)
+        self.assertIn("a schedule waits for its window: ask again once the run is on", out)
+        self.assertEqual(periodic.asked(self.p), [])  # the window's fresh run would have dropped it unseen
 
     def test_status_and_help_show_the_ask(self):
         self.make()

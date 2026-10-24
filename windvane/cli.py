@@ -705,7 +705,7 @@ def cmd_periodic(a, p):
         print(f"periodic {a.name}: ask taken back" if periodic_mod.unask(p, a.name)
               else f"periodic {a.name}: nothing asked to take back")
         return
-    on = driver.locked(p) or in_tmux(p)  # a schedule waiting for its window has no run to ask: refused below
+    on = driver.locked(p)  # a schedule waiting for its window, or a run not yet started, has none to ask
     entries = {**p.periodic, **(periodic_mod.main_entries(p) if on else {})}
     e = entries.get(a.name)
     if not e:
@@ -721,8 +721,9 @@ def cmd_periodic(a, p):
 
 def desk_periodic(p, e):
     """Run [[periodic]] entry `e` (and its chain) from the desk, under the run's lock."""
-    if running(p):
-        sys.exit("a run is busy: it runs periodic sessions itself between tickets; try again once it stops")
+    if running(p):  # its next run starts fresh and would drop an ask made now
+        sys.exit("a run is starting or a schedule waits for its window: ask again once the run is on (it takes the "
+                 "ask at its next gap), or once it stops")
     if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
         sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
     keys = ("cap", "week_cap", "ticket_hours", "min_slot", "answer_wait")
