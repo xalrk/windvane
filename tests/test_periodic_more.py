@@ -224,13 +224,13 @@ class ByHand(Base):
         self.assertEqual(Queue(self.p).status("T-004"), "parked")
         self.assertFalse(driver.locked(self.p))  # the lock goes with it
 
-    def test_refused_while_a_run_is_busy(self):
+    def test_held_for_the_run_while_one_is_busy(self):
         self.make(PLAYTEST + TRIAGE)
         self.p.state.mkdir(parents=True, exist_ok=True)
         with open(self.p.state / "lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self.assertIn("a run is busy", self.cli("periodic", "playtest"))
-        self.assertEqual(self.prompts(), [])
+            self.assertIn("runs periodic playtest at its next gap", self.cli("periodic", "playtest"))
+        self.assertEqual(self.prompts(), [])  # the run does it (test_periodic_ask.py)
 
     def test_an_unknown_name(self):
         self.make(PLAYTEST + TRIAGE)
