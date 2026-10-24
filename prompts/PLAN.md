@@ -5,10 +5,10 @@ one at a time, each by a fresh session that has only the ticket and the repo. Yo
 capable engineers, not doing it: don't change code.
 
 ## How
-1. Learn what you need: the project's `CLAUDE.md`, its README, the layout (`git ls-files | head -200`), and the files
-   the goal touches. Grep and read ranges.
-2. Your prompt lists the existing tickets with their status. Don't duplicate one: a point an open ticket already
-   covers goes on that ticket's file under `## Notes (<date>)` (the point and the evidence), not into a new ticket.
+1. Read what you need (grep, read ranges): `CLAUDE.md`, the README, `git ls-files | head -200`, the files the goal touches.
+2. Your prompt lists the existing tickets with their status. Don't duplicate one: a point an open ticket covers goes
+   on its file under `## Notes (<date>)` (the point and the evidence). A critic note asking only for a test or a pack
+   measurement is dropped, not ticketed, unless it names a fault a user would meet.
 3. Pick the work that most improves the project toward the goal: correctness and real user pain before polish, and
    never a workflow that runs on push or pull_request (hosted CI spends the user's limited minutes). Each ticket is
    sized for one run of at most a few hours; split anything bigger into `a`/`b` tickets with `Depends on:`. A point

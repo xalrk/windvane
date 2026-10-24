@@ -37,6 +37,51 @@ class UserFacing(unittest.TestCase):
     def test_the_prompts_did_not_grow(self):
         self.assertLessEqual(len((PROMPTS / "WORKER.md").read_text().splitlines()), 93)
         self.assertLessEqual(len((PROMPTS / "REVIEW.md").read_text().splitlines()), 29)
+        self.assertLessEqual(len((PROMPTS / "CRITIC.md").read_text().splitlines()), 54)
+        self.assertLessEqual(len((PROMPTS / "PLAN.md").read_text().splitlines()), 42)
+
+
+class WhoJudgesWhat(unittest.TestCase):
+    """T-263: the critic's points name what a user meets, never a test or a pack measurement; the reviewer owns the
+    code and doesn't redo the critic's trial; the planner drops a critic note that only asks for a test."""
+
+    def text(self, name):
+        return " ".join((PROMPTS / name).read_text().split())
+
+    def lists(self):
+        """The critic's rules for its two lists, unwrapped."""
+        text = self.text("CRITIC.md")
+        return text[text.index("## Judge only"):text.index("## Evidence")]
+
+    def test_every_critic_point_names_what_a_user_meets(self):
+        self.assertIn("Every point names what a user meets (a command's output, a push, a lost file, a wait) and what "
+                      "fixed looks like", self.lists())
+        self.assertIn("- <what a user meets> -> <the follow-up>", self.text("CRITIC.md"))
+
+    def test_tests_and_pack_measurements_are_never_a_critic_point(self):
+        rule = self.lists()
+        self.assertIn("A missing test (the reviewer judges tests), a pack that doesn't show something or a count to add "
+                      "is never a point", rule)
+        self.assertIn("a fault you suspect but couldn't try is a `no` on its check, with the reason", rule)
+        self.assertIn("A code reviewer comes after you for the code and its tests", self.text("CRITIC.md"))
+
+    def test_the_reviewer_skips_what_the_critic_tried(self):
+        self.assertIn("The critic's verdict says what it ran and saw: don't redo that trial or re-raise a point it "
+                      "settled", self.text("REVIEW.md"))
+        self.assertIn("spend the review on the code, the tests and the paths it didn't run", self.text("REVIEW.md"))
+
+    def test_the_planner_drops_test_only_critic_notes(self):
+        self.assertIn("A critic note asking only for a test or a pack measurement is dropped, not ticketed, unless it "
+                      "names a fault a user would meet", self.text("PLAN.md"))
+
+    def test_the_rules_reach_the_sessions(self):
+        """The sessions get these rules through `rules()`, not only the files on disk."""
+        s = Sandbox()
+        self.addCleanup(s.close)
+        p = Project(s.root)
+        for name, words in (("CRITIC.md", "is never a point"), ("REVIEW.md", "don't redo that trial"),
+                            ("PLAN.md", "dropped, not ticketed")):
+            self.assertIn(words, " ".join(rules(p, name).split()), name)
 
 
 if __name__ == "__main__":
