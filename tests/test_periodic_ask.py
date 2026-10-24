@@ -1,4 +1,4 @@
-"""`windvane periodic <name>` while a run is on: the ask waits in the state dir for the run's next gap between tickets."""
+"""`windvane periodic <name>` while a run is on: the ask waits in the state dir for the run's next gap."""
 import fcntl
 import json
 import os

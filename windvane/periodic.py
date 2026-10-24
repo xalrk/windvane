@@ -47,9 +47,10 @@ class Periodic:
     due at once, one more try rather than a lost playtest."""
 
     def periodic_due(self):
-        """An entry asked for with `windvane periodic <name>` (`asked_due`), else the first [[periodic]] entry whose `every` merges have passed since it last ran this run (restarts carry
-        the count), or with a group finished since then, or with requests in the inbox no round this run was given
-        (one that failed waits for the next run, never loops), or None."""
+        """An entry asked for with `windvane periodic <name>` (`asked_due`), else the first [[periodic]] entry whose
+        `every` merges have passed since it last ran this run (restarts carry the count), or with a group finished
+        since then, or with requests in the inbox no round this run was given (one that failed waits for the next
+        run, never loops), or None."""
         e = self.asked_due()
         if e:
             return e
