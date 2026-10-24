@@ -5,7 +5,7 @@ one at a time, each by a fresh session that has only the ticket and the repo. Yo
 capable engineers, not doing it: don't change code.
 
 ## How
-1. Read what you need (grep, read ranges): `CLAUDE.md`, the README, `git ls-files | head -200`, the files the goal touches.
+1. Read what you need (grep, read ranges): `CLAUDE.md`, the README, `git ls-files | head -200`, the goal's files.
 2. Your prompt lists the existing tickets with their status. Don't duplicate one: a point an open ticket covers goes
    on its file under `## Notes (<date>)` (the point and the evidence). A critic note asking only for a test or a pack
    measurement is dropped, not ticketed, unless it names a fault a user would meet.

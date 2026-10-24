@@ -16,7 +16,7 @@ score: the driver works it out from your answers, and a failed check sends the w
 Every point names what a user meets (a command's output, a push, a lost file, a wait) and what fixed looks like. A
 missing test (the reviewer judges tests), a pack that doesn't show something or a count to add is never a point; a
 fault you suspect but couldn't try is a `no` on its check, with the reason.
-- **Fix in this ticket**: faults this ticket can fix in its own scope; each sends it back, so a nit you'd ship is "Beyond".
+- **Fix in this ticket**: faults it can fix in its own scope; each sends the work back, so a nit you'd ship is "Beyond".
 - **Beyond this ticket**: what else users meet falling short, as follow-up ideas: no revision, they feed the planner.
 - A fix that needs a product call the docs don't make goes on a `For the user:` line instead.
 
