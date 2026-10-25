@@ -49,9 +49,9 @@ Do everything yourself. The user should only have to answer real product questio
    the driver scores them on the project's own scale, and work under the bar goes back: the scale decides "done".
    - `.windvane/CRITIC.md`: who uses this and what a 10 means (name the products to beat), then 2-4 dimensions drawn
      from that 10 (the first: does it work at all), each a `## <name>` ladder of `- <rung> <id>: <check>` lines
-     (`templates/CRITIC.md`). Write checks someone reading the evidence pack could answer yes or no, about what a
-     user would see or a test would show ("a crash keeps the file"), never adjectives ("solid"); about 12 in all.
-     Each should fail on some tickets, and the top must be reachable by a good ticket.
+     (`templates/CRITIC.md`, a start per kind of project). Write about 12 checks answered by trying the change: what
+     a user meets when it's run, broken or read ("a crash keeps the file"), never what the pack or a test shows, nor
+     adjectives ("solid"). For visual or slow output, name in it the command that shows it (screenshots, a short run).
    - `.windvane/CALIBRATION.md`: your own first tickets as check answers, at least one with a `no` under the bar.
    - The bar: `[critic] pass` (default 8) and `revisions` (default 3) in the config. Never put the pass mark in the
      scale, and add no rule asking the critic to justify an answer: it writes the sentence instead of a `no`.

@@ -312,7 +312,7 @@ class Ladder(unittest.TestCase):
         checks = [c for cs in lad.values() for c in cs]
         ids = [c for _, c, _ in checks]
         self.assertEqual(list(lad)[0], "works")
-        self.assertLessEqual(len(ids), 12)
+        self.assertLessEqual(len(ids), 14)
         self.assertEqual(len(ids), len(set(ids)), "check ids are unique across the scale")
         for r, c, q in checks:
             self.assertTrue(0 < r <= 10 and q.endswith("."), f"{c}: a rung with one check to answer yes or no")

@@ -33,8 +33,8 @@ if m:
 os.execv(sys.executable, [sys.executable, os.path.join(os.path.dirname(__file__), "claude-session"), *args])
 '''
 # The critic's reply on the scale init's CRITIC.md starts with (its example ladder, until the user writes their own)
-CRITIQUE = ("Checks:\n- shown: yes, the transcript\n- safe: yes, seen\n- failures: yes, seen\n- class: no\n"
-            "Beyond this ticket:\n- more\nCRITIC: 8/10 {tid} fixes=0 says hello")
+CRITIQUE = ("Checks:\n- runs: yes, ran it\n- safe: yes, seen\n- failures: yes, seen\n- state: yes, seen\n- class: no\n"
+            "- screens: -\n- game: -\n- api: -\nBeyond this ticket:\n- more\nCRITIC: 8/10 {tid} fixes=0 says hello")
 
 OPTIONAL = {"claude", "windvane", "gh", "tmux", "notify", "notify-ask"}  # the clean machine has none of these
 
