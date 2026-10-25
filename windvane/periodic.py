@@ -503,7 +503,8 @@ class Periodic:
         """A bench entry's turn: "land" once its finished job found a regression (a ticket to write, in a quiet gap),
         "start" when tickets touching its `after_touch` paths merged since the windvane last benchmarked (or since a
         round that ran to its end and left nothing to compare: it waits for a new change; one cut off by a run's end
-        stays due), or nothing is recorded yet (a baseline); else None. A finished job's verdict is read here, once. Main's head is looked at only when it moved."""
+        stays due), or nothing is recorded yet (a baseline); else None. A finished job's verdict is read here, once.
+        Main's head is looked at only when it moved."""
         p, name = self.p, e["name"]
         st = load_json(bench_file(p, name), {})
         if st.get("job") and jobs.alive(Path(st["job"])):
@@ -547,10 +548,11 @@ class Periodic:
         todo = 1 if base is None else 1 + (not bench_runs(p, base, which))
         hours = (e["minutes"] - todo * bench.JUDGE_MINUTES) / 60 / todo
         if hours < 0.25:
-            self.log(f"{name}: bench not started: {e['minutes']} min leave under 15 min for each of its {todo} runs")
+            why = f"{e['minutes']} min leave under 15 min for each of its {todo} runs"
+            self.log(f"{name}: bench not started: {why}")
+            if e.get("asked"):
+                self.asked_taken(e, f"{why}.")
             return
-        if e.get("asked"):
-            self.asked_taken(e)
         args = (["--ref", head] if base is None else ["compare", base, head]) + [
             f"--{which}", "--hours", f"{hours:.3g}", "--cap", f"{self.a.cap:g}", "--week-cap", f"{self.a.week_cap:g}"]
         touched = touching(p, base, head, e["after_touch"]) if base else []
@@ -559,7 +561,11 @@ class Periodic:
             jobs.bg(p, job.name, bench_command(p, args), p.main_root(), quiet=True)
         except SystemExit as err:  # `bg` refuses with an exit; the driver goes on
             self.log(f"{name}: bench not started: {err}")
+            if e.get("asked"):
+                self.asked_taken(e)  # its failure is pushed just below
             return self.periodic_failed(name, f"the bench didn't start: {err}")
+        if e.get("asked"):
+            self.asked_taken(e)
         save_json(bench_file(p, name), {"job": str(job), "base": base, "head": head, "size": which, "after": after,
                                         "touched": touched})
         what = (f"a baseline at {head[:7]}" if base is None else f"{base[:7]} against {head[:7]}, after "
@@ -577,7 +583,8 @@ class Periodic:
                 for k, side, rs in (("base", "last benchmarked", base), ("head", "main", head)) if rs]
         why, moved = bench.regression(both, e["bench_cost_up"]) if len(both) == 2 else (None, [])
         if not head or st["base"] and why is None:
-            code = jobs.exit_code(Path(f"{st['job']}.exit"), 0)
+            exit_f = Path(f"{st['job']}.exit")  # none when the job died with its wrapper (a reboot, the OOM killer)
+            code = jobs.exit_code(exit_f, 0) if exit_f.exists() else "?"
             lack = (f"no run of {st['head'][:7]}" if not head else f"no run of {st['base'][:7]}" if not base
                     else "no seed counted on both sides")
             self.log(f"{name}: bench ended (exit {code}) with {lack} to compare; log {st['job']}.log")
@@ -838,9 +845,12 @@ def bench_command(p, args):
 
 
 def bench_runs(p, sha, size, after=""):
-    """The recorded bench runs of `sha` at `size` a compare would reuse (no judge failed), from run id `after` on."""
+    """The recorded bench runs of `sha` at `size` a compare would reuse (its seeds, no judge failed), from run id
+    `after` on."""
+    want = bench.planned(p, sha, size)
     return [rs for rs in bench.runs_of(p).values() if rs[0].get("sha") == sha and rs[0].get("size") == size
-            and str(rs[0].get("run")) >= after and not any(map(bench.judge_failed, rs))]
+            and str(rs[0].get("run")) >= after and sorted(r["seed"] for r in rs) == want
+            and not any(map(bench.judge_failed, rs))]
 
 
 def last_benched(p, head):

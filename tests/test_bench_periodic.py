@@ -43,11 +43,14 @@ def rec(sha, seed="alpha", passed=8, yes=5, weighted=300_000, merged=3, run="202
 
 
 class Base(unittest.TestCase):
-    def make(self, config=BENCH, tickets=0):
+    def make(self, config=BENCH, tickets=0, seeds=("alpha",)):
         self.s = Sandbox(config)
         self.addCleanup(self.s.close)
         for i in range(1, tickets + 1):
             self.s.ticket(f"T-00{i}")
+        for seed in seeds:  # what a recorded run must have worked to be read (`bench.planned`)
+            self.s.write(f"bench/{seed}/seed/README.md", f"{seed}\n")
+            self.s.write(f"bench/{seed}/hidden/bench.toml", "")
         self.s.write("prompts/WORKER.md", "the worker's rules\n")
         self.s.publish()
         self.p = Project(self.s.root)
@@ -157,7 +160,7 @@ class Rounds(Base):
         pushed.assert_not_called()
 
     def test_a_regression_writes_one_ticket_with_both_sides_numbers_and_one_push(self):
-        self.make()
+        self.make(seeds=("alpha", "beta"))
         self.record(rec(self.first), rec(self.first, seed="beta"))
         self.merge("Merge T-006: a shorter worker prompt", "prompts/WORKER.md")
         head = self.merge("Merge T-007: a docs fix", "docs/x.md")
@@ -210,6 +213,31 @@ class Rounds(Base):
         self.assertIn("It runs again after the next change to its paths, or now with `windvane periodic bench`.",
                       pushed.call_args[0][1])
 
+    def test_a_base_run_over_other_seeds_is_not_compared(self):
+        self.make(seeds=("alpha", "beta"))
+        self.record(rec(self.first))  # alpha only: a seed was added since, so `bench compare` wouldn't reuse it
+        self.merge("Merge T-006: a shorter worker prompt", "prompts/WORKER.md")
+        _, pushed = self.start([{"passed": 4}, {"seed": "beta"}])
+        self.assertEqual(pushed.call_count, 1)
+        self.assertIn(f"no run of {self.first[:7]} to compare", pushed.call_args[0][1])
+
+    def test_a_job_that_died_without_its_exit_file_is_one_failed_push(self):
+        self.make()
+        self.record(rec(self.first))
+        head = self.merge("Merge T-006: a shorter worker prompt", "prompts/WORKER.md")
+        job = periodic.bench_job(self.p, "bench")  # its wrapper died with the machine: a dead pid, no .exit
+        job.parent.mkdir(parents=True, exist_ok=True)
+        Path(f"{job}.pid").write_text("999999999")
+        periodic.save_json(periodic.bench_file(self.p, "bench"), {
+            "job": str(job), "base": self.first, "head": head, "size": "full", "after": "20261001-000000",
+            "touched": []})
+        pilot = self.pilot()
+        with mock.patch.object(periodic, "push") as pushed:
+            pilot.periodic_due()
+        self.assertEqual(pushed.call_count, 1)
+        self.assertIn("the bench ended (exit ?)", pushed.call_args[0][1])
+        self.assertEqual(json.loads(periodic.bench_file(self.p, "bench").read_text())["verdict"], "failed")
+
     def test_an_ask_while_a_regression_waits_lands_its_ticket_first(self):
         self.make()
         self.record(rec(self.first))
@@ -250,6 +278,33 @@ class Caps(Base):
         self.not_started(self.pilot(hours=1))
         self.assertIn("bench: skipped: 120 min don't fit before the deadline", self.log())
 
+    def test_an_asked_round_too_short_to_start_is_one_push_and_no_longer_asked(self):
+        self.make(BENCH.replace("minutes = 120", "minutes = 60"))
+        self.record(rec(self.first))
+        self.merge("Merge T-006: a shorter worker prompt", "prompts/WORKER.md")
+        pilot = self.pilot(week=80)  # small, and the base isn't recorded small: two runs in 60 minutes
+        periodic.ask(self.p, "bench")
+        with self.fake([{}]), mock.patch.object(periodic, "push") as pushed:
+            for _ in range(3):
+                if due := pilot.periodic_due():
+                    pilot.periodic(due)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(pushed.call_count, 1)
+        self.assertIn("60 min leave under 15 min for each of its 2 runs.", pushed.call_args[0][1])
+        self.assertEqual(periodic.asked(self.p), [])
+
+    def test_an_asked_round_bg_refuses_is_one_push_and_no_longer_asked(self):
+        pilot = self.pilot()
+        periodic.ask(self.p, "bench")
+        with self.fake([{}]), mock.patch.object(periodic, "push") as pushed, \
+                mock.patch.object(jobs, "bg", side_effect=SystemExit("bg: a job periodic-bench runs already")):
+            for _ in range(3):
+                if due := pilot.periodic_due():
+                    pilot.periodic(due)
+        self.assertEqual(pushed.call_count, 1)
+        self.assertIn("the bench didn't start: bg: a job periodic-bench runs already", pushed.call_args[0][1])
+        self.assertEqual(periodic.asked(self.p), [])
+
     def test_over_the_weekly_cap_it_doesnt_start(self):
         self.not_started(self.pilot(week=96))
         self.assertIn("bench: bench not started: weekly usage at 96% (cap 95%)", self.log())
@@ -282,7 +337,6 @@ class Run(Base):
         waited = log.index("waiting for the bench bench round to end")  # the queue was done before the bench
         self.assertGreater(log.index("no regression", waited), waited)  # read before the run ended
         self.assertNotIn("ended with the run", log)
-
 
     def test_a_bench_that_ends_during_the_runs_last_pass_is_read_before_the_run_ends(self):
         self.make()
