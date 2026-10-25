@@ -88,6 +88,10 @@ release on the same day adds a number (`2026.10.9.1`).
   that the token's user may read the reply topic, and a refused test names the one `ntfy access` line still to run.
 
 ### Changed
+- The critic no longer fails a check for want of the project's check or full suite passing: its rules say the
+  driver runs the check on the final head after it, so it judges the tests it ran on the change. A scale check
+  that asks for one (naming the check's command, or "check passed", "the test suite passes" and the like) gets a
+  warning from `windvane doctor` and at each critique's start, telling you to drop it from its rung.
 - `windvane status`, the phone's `status` and `overview` no longer show the month's Actions minutes: the cap acts on
   its own, and `windvane ci` and `doctor` still report the count. `status` says what happens to questions in words
   (`questions: pushed to your phone as they come`, or `none pushed until 08:00 (quiet time)`) instead of the

@@ -321,13 +321,40 @@ def evidence_graded(text, rel):
             for cs in ladder(text).values() for _, cid, q in cs if (m := GRADES_EVIDENCE.search(q))]
 
 
+RUN_BY = r"(?:(?:project's|full|whole|entire|test)\s+)*(?:suite|checks?|ci)"
+ASKS_CHECK = re.compile(r"(?:^|\b(?:the|its|all|every|a|project's|full|whole|entire|test)\s+)" + RUN_BY +
+                        r"\s+(?:run\s+)?(?:pass(?:es|ed|ing)?|(?:is|are|runs?|stays?|goes)\s+green|green)\b|"
+                        r"\bpassing\s+" + RUN_BY + r"\b", re.I)
+
+
+def check_asked(text, rel, cmd=""):
+    """[(what, fix)] for each check asking for the project's check or full suite passing: the check's command `cmd`
+    (or its script, a first word with a path in it), or "check passed", "the test suite passes", "a passing suite"
+    and the like. The driver runs the check on the final head after the critic, so a critic can't see it pass and
+    such a check reads as a `no` on every ticket, and sends it back only for
+    a pack that didn't quote the check passing. "health check passes" names a product's check and is no warning."""
+    words = cmd.split()
+    names = [cmd.strip()] + [w for w in words[:1] if len(words) > 1 and any(c in w for c in "/.")]
+    named = [re.compile(r"(?<![\w/.-])" + re.escape(n) + r"(?![\w/-])") for n in names if n]
+    out = []
+    for cs in ladder(text).values():
+        for _, cid, q in cs:
+            if m := next(filter(None, (r.search(q) for r in named + [ASKS_CHECK])), None):
+                out.append((f"critic scale: check `{cid}` asks for the project's check or suite passing "
+                            f'("{m.group(0).strip()}"), which the critic can\'t see',
+                            f"drop it from its rung in {rel}: the driver runs the check on the final head after the "
+                            "critic"))
+    return out
+
+
 def scale_warnings(p, cwd):
-    """`misread()` and `evidence_graded()` on the project's scale in `cwd`, or [] when it has none."""
+    """`misread()`, `evidence_graded()` and `check_asked()` on the project's scale in `cwd`, or [] when it has
+    none."""
     f = Path(cwd) / p.rubric_rel
     if not f.is_file():
         return []
-    text = f.read_text()
-    return misread(text, p.rubric_rel) + evidence_graded(text, p.rubric_rel)
+    text, cmd = f.read_text(), (getattr(p, "cfg", None) or {}).get("check") or ""
+    return misread(text, p.rubric_rel) + evidence_graded(text, p.rubric_rel) + check_asked(text, p.rubric_rel, cmd)
 
 
 def clip(text, n=200):
@@ -736,6 +763,9 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     ticket = gout(cwd, "show", f"{rev}:{p.tickets_rel}/{tid}.md")
     stat = "\n".join(gout(cwd, "diff", "--stat", f"{p.upstream}...{rev}").splitlines()[-40:])
     lad = rubric(p, cwd)
+    if (f := Path(cwd) / p.rubric_rel).is_file():  # every critique: a worker's `windvane critic` has no run start
+        for what, fix in check_asked(f.read_text(), p.rubric_rel, p.cfg["check"] or ""):
+            log(p, f"{tid}: {what}: {fix}")
     prior = carries(p, tid, cwd, lad)
     earlier = [] if prior else [unscored(e["critique"], lad) for e in past if e.get("critique")]
 
