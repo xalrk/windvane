@@ -34,11 +34,26 @@ class UserFacing(unittest.TestCase):
     def test_the_reviewer_checks_the_claim_by_the_same_test(self):
         self.assertIn("no user will ever see or feel the diff, even via a later ticket", self.rule("REVIEW.md"))
 
-    def test_the_prompts_did_not_grow(self):
-        self.assertLessEqual(len((PROMPTS / "WORKER.md").read_text().splitlines()), 93)
-        self.assertLessEqual(len((PROMPTS / "REVIEW.md").read_text().splitlines()), 29)
-        self.assertLessEqual(len((PROMPTS / "CRITIC.md").read_text().splitlines()), 54)
-        self.assertLessEqual(len((PROMPTS / "PLAN.md").read_text().splitlines()), 42)
+
+# Each prompt's size in bytes when it was capped (T-295): every session re-reads its prompt on every turn, so new
+# text replaces old. Bytes, not lines, so a longer line can't dodge the cap. A prompt that shrinks lowers its cap here.
+CAPS = {"CRITIC.md": 3892, "CRITIC-numeric.md": 2164, "CRITIC-project.md": 842, "FIX.md": 987, "PERIODIC.md": 1089,
+        "PLAN.md": 2761, "PREFLIGHT.md": 1299, "REVIEW.md": 2149, "TRIAGE-REQUESTS.md": 1499, "WORKER.md": 7895}
+
+
+def over_cap(sizes):
+    """The prompts in `sizes` (name: bytes) past their cap, and any without one."""
+    return sorted(n for n, size in sizes.items() if size > CAPS.get(n, -1))
+
+
+class Caps(unittest.TestCase):
+    def test_no_prompt_grew(self):
+        self.assertEqual(over_cap({f.name: len(f.read_bytes()) for f in PROMPTS.glob("*.md")}), [])
+
+    def test_one_byte_more_is_caught(self):
+        for name, cap in CAPS.items():
+            self.assertEqual(over_cap({name: cap + 1}), [name])
+            self.assertEqual(over_cap({name: cap}), [])
 
 
 class WhoJudgesWhat(unittest.TestCase):
