@@ -39,7 +39,8 @@ TEST_TIMEOUT = 600  # seconds the hidden tests of one seed may take
 DENIED = ("bench", "tests/fixtures/bench")
 # unittest -v: a test's line (`test_x (module.Class.test_x)`), and its outcome at the end of it or of the docstring's
 START = re.compile(r"^(\w+) \(([\w.]+)\)")
-OUTCOME = re.compile(r" \.\.\. (ok|FAIL|ERROR|skipped.*|expected failure|unexpected success)$")
+# (or alone on a line, when a warning the test caused was printed between the two)
+OUTCOME = re.compile(r"(?:^| \.\.\. )(ok|FAIL|ERROR|skipped.*|expected failure|unexpected success)$")
 
 
 def state_root():

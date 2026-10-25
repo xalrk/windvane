@@ -134,9 +134,10 @@ class Small(unittest.TestCase):
 
     def test_unittest_output_is_read_per_test(self):
         text = ("test_a (m.C.test_a) ... ok\ntest_b (m.C.test_b)\nT-001: says so ... FAIL\n"
-                "m (unittest.loader._FailedTest.m) ... ERROR\n")
+                "m (unittest.loader._FailedTest.m) ... ERROR\ntest_c (m.C.test_c) ... m.py:3: ResourceWarning: x\n"
+                "  self.proc = ...\nok\nok\n")
         self.assertEqual(bench.outcomes(text), {"m.C.test_a": "ok", "m.C.test_b": "FAIL",
-                                                "unittest.loader._FailedTest.m": "ERROR"})
+                                                "unittest.loader._FailedTest.m": "ERROR", "m.C.test_c": "ok"})
 
 
 class RealSeeds(unittest.TestCase):
@@ -183,12 +184,11 @@ class RealSeeds(unittest.TestCase):
                                 self.assertIn(line, ticket)  # the ticket's own words, quoted
 
     def test_no_reference_solution_ships_in_bench(self):
-        names = {f.name for f in (FIXTURES / "reference").rglob("*.py")}
-        for seed in (REPO / "bench").iterdir():
-            self.assertFalse((seed / "reference").exists())
-            self.assertFalse(names & {f.name for f in (seed / "seed").rglob("*.py")
-                                      if f.read_text() == (FIXTURES / "reference" / seed.name / f.name).read_text()
-                                      if (FIXTURES / "reference" / seed.name / f.name).exists()})
+        for ref in (FIXTURES / "reference").rglob("*.py"):
+            rel = ref.relative_to(FIXTURES / "reference")
+            shipped = REPO / "bench" / rel.parts[0] / "seed" / Path(*rel.parts[1:])
+            self.assertFalse(shipped.exists() and shipped.read_text() == ref.read_text(), rel)
+        self.assertFalse(list((REPO / "bench").glob("*/reference")))
 
 
 if __name__ == "__main__":
