@@ -2454,7 +2454,7 @@ class Pilot(Desk, Periodic):
                     self.plans += 1
                     with self.critical():  # its session dies at its next poll on a signal; the merge finishes
                         n = plan(p, self.a.goal or p.cfg["goal"], True, self.usage,
-                                 self.stopper(now() + timedelta(minutes=40)), merge=True)
+                                 self.stopper(now() + timedelta(minutes=40)), merge=True, merged=self.merged)
                     if n:
                         continue
                 if self.checking:  # a merge held by its checks: tried again when its wait is up

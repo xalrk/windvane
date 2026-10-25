@@ -29,7 +29,7 @@ from pathlib import Path
 from . import critic, phone, requests
 from .config import DIR, periodic as periodic_entries, permissions
 from .questions import quiet_now
-from .queue import Queue, title as title_of
+from .queue import Queue, mend_queue, title as title_of
 from .runner import NO_REQUEST, plain_error
 from .util import append_jsonl, edit_json, git, gout, hhmm, last_match, load_json, now, push, run_limited
 
@@ -250,7 +250,8 @@ class Periodic:
             prev and f"## The previous session's output\n{prev}",
             notes and "## The critic's follow-up notes since the last plan (ticket, point)\n"
             + "\n".join(f"- ({t}) {b}" for t, b in notes[:60]),
-            triage and f"## Existing tickets (id, status, title)\n{Queue(p).listing() or '(none yet)'}",
+            triage and "## Existing tickets (id, status, title)\n"
+            + (Queue(p).listing(compact=True, keep=self.merged) or "(none yet)"),
             f"## Ids for new tickets, in order (at most 6)\n{', '.join(ids)}",
             f"Time limit: {hhmm(limit)}; check with `date`.",
             reqs and requests.prompt_part(reqs),
@@ -373,6 +374,7 @@ class Periodic:
                 why = "deleted" if new is None else "changed, not only lines added at its end"
                 self.log(f"{name}: {tid} {why}: that change is dropped")
         tickets = sorted(p.norm(Path(f).stem) for f in keep)
+        mend_queue(p, cd)
         old_q = gout(cd, "show", f"HEAD:{p.queue_rel}")
         queue = added_lines(old_q, (cd / p.queue_rel).read_text() if (cd / p.queue_rel).is_file() else old_q)
         other = len(changed_paths(cd)) - len(keep) - len(notes) - logged - (queue != old_q)

@@ -9,6 +9,10 @@ Every tool call a session makes re-reads its whole context. The cost of a sessio
 times its context size, so windvane cuts turns:
 - **The prompt carries what the session would otherwise fetch**: the ticket, earlier feedback, the pull request
   body, the critic's verdict, and for the reviewer the diff itself (up to `inline_diff_lines`).
+- **Ticket listings hold the open tickets**: plan and periodic triage sessions get every ticket that isn't done
+  and one line counting the done ones (keeping those an open ticket depends on and those merged this run). On a
+  repository with a few hundred done tickets that is a tenth of the size, thousands of tokens less on every turn: it shows as
+  a drop in `windvane stats --wide`'s `base` and `cached/turn` for `planner` and `periodic:*`.
 - **One fresh session per ticket**, not one long session for the whole run: context doesn't pile up across tickets.
   Subagents are off unless you turn them on.
 - **Nothing runs twice**: a passing check is recorded per git tree, so the driver reuses the worker's own pass on

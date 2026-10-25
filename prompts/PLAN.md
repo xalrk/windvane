@@ -32,8 +32,8 @@ capable engineers, not doing it: don't change code.
    is likely to change, and prefer splitting work so tickets touch different files. Name test files, never `tests/`
    (it overlaps every ticket): new tests go in a file of their own (`tests/test_<topic>.py`) unless the ticket
    changes existing ones. `Related:` keeps tickets on one feature apart even when their files differ.
-5. Append the new ids, most valuable first, as `- <ID> <title>` bullets to `.windvane/QUEUE.md` (create it with a
-   `# Queue` heading if missing; the queue runs top to bottom, then any unlisted ticket by number).
+5. Append the new ids, most valuable first, as `- <ID> <title>` bullets to `.windvane/QUEUE.md` with a shell `>>`,
+   unread (the queue runs top to bottom, then any unlisted ticket by number).
 
 Don't commit: the driver commits your files. Write nothing outside `.windvane/`.
 
