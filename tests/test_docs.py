@@ -184,7 +184,7 @@ class Workflow(unittest.TestCase):
         self.wf = yaml_subset(WORKFLOW.read_text())
 
     def test_runs_by_hand_on_the_oldest_and_newest_python(self):
-        """Hosted minutes are limited: the local check runs every Python, the workflow only on request."""
+        """Hosted minutes are limited: the local check covers every Python, the workflow runs only on request."""
         job = self.wf["jobs"]["test"]
         self.assertEqual([s["run"] for s in job["steps"] if "run" in s], [RUN])
         self.assertEqual(self.wf["on"], {"workflow_dispatch": None})

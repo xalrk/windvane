@@ -8,11 +8,14 @@ the same time are counted, and K is split among the checks (at least 2 each), as
 
 Prints one unittest-style summary for the lot (`Ran N tests in Xs`, then `OK` or `FAILED (...)` with the counts
 summed), then `slowest: ...` with the five slowest modules; the failed modules' output tails go to --tails.
-tools/check_pythons.sh runs it once per Python, under that Python, then `--fold` to merge the versions' rerun lines and
-add the check's line to --log, so how often checks rerun something can be followed over weeks.
+tools/check_pythons.sh runs it under the Python it tests, then `--fold` to merge the versions' rerun lines and add the
+check's line to --log, so how often checks rerun something can be followed over weeks. With --imports it only
+byte-compiles and imports every module of the folders given, in seconds, which is how the check tries the newest
+Python without running the whole suite there.
 Standard library only.
 Usage: test_pool.py --jobs K --tails FILE [--times FILE] [--share DIR --check ID] [DIR]   (DIR defaults to tests)
        test_pool.py --fold VERSION=LOG... [--log FILE --check ID]
+       test_pool.py --imports DIR...
 """
 import argparse
 import json
@@ -221,6 +224,42 @@ def stop(signum, _frame):
     sys.exit(128 + signum)
 
 
+def imports(dirs):
+    """Byte-compiles every .py under DIRS and imports every module, a package (a folder with __init__.py) by its dotted
+    name from its parent, a test folder's test_*.py by name from inside it, as bin/windvane and unittest discover put
+    them on sys.path. Prints a unittest-style summary and a line for each module that didn't make it; the exit code.
+    A stdlib module or name a newer Python removed fails here as it would in the suite, without the suite's minutes."""
+    sys.dont_write_bytecode = True  # leave the tree as it was
+    start, failed, names = time.monotonic(), [], []
+    for d in map(Path, dirs):
+        d = d.resolve()
+        package = (d / "__init__.py").exists()
+        for f in sorted(d.rglob("*.py")):
+            if "__pycache__" in f.parts:
+                continue
+            try:
+                compile(f.read_bytes(), str(f), "exec")
+            except (SyntaxError, ValueError) as e:
+                failed.append(f"{f.relative_to(d.parent)}: {type(e).__name__}: {e}")
+                continue
+            parts = f.relative_to(d.parent).with_suffix("").parts
+            if package and parts[-1] != "__main__":  # running __main__ would start the CLI
+                names.append(".".join(parts[:-1] if parts[-1] == "__init__" else parts))
+            elif not package and f.parent == d and f.stem.startswith("test_"):
+                names.append(f.stem)
+        sys.path.insert(0, str(d.parent if package else d))
+    for name in names:
+        try:
+            __import__(name)
+        except (Exception, SystemExit) as e:
+            failed.append(f"{name}: {type(e).__name__}: {e}")
+    for line in failed:
+        print(f"import failed: {line}")
+    print(f"Ran {len(names)} imports in {time.monotonic() - start:.1f}s\n")
+    print(f"FAILED (errors={len(failed)})" if failed else "OK")
+    return 1 if failed else 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--jobs", type=int, default=2)
@@ -230,8 +269,11 @@ def main(argv=None):
     p.add_argument("--check", default=str(os.getpid()), help="this check's id: one per check, not per Python")
     p.add_argument("--fold", nargs="+", metavar="VERSION=LOG", help="print one rerun line for these pools' logs")
     p.add_argument("--log", type=Path, help="with --fold: the file that keeps one line a check")
+    p.add_argument("--imports", nargs="+", metavar="DIR", help="only byte-compile and import these folders' modules")
     p.add_argument("dir", nargs="?", default="tests")
     a = p.parse_args(argv)
+    if a.imports:
+        return imports(a.imports)
     if a.fold:
         line, logged = fold(arg.partition("=")[::2] for arg in a.fold)
         if line:

@@ -32,10 +32,13 @@ bin/windvane --help
 ```sh
 python3 -m unittest discover -s tests -q
 ```
-It runs the whole driver end to end, so it takes a while. `tools/check_pythons.sh` runs it on every Python from
-3.11 up that you have installed, the test modules side by side (slowest first, once it has timed them), reruns a
-failed module once on its own and names it (a test that times its steps can miss on a busy machine), and prints the
-five slowest modules; give it unittest arguments and it runs just those, in one process per Python. In its
+It runs the whole driver end to end, so it takes a while. `tools/check_pythons.sh` is the check every change has to
+pass: it runs the suite on the oldest Python from 3.11 up that you have installed, the test modules side by side
+(slowest first, once it has timed them), reruns a failed module once on its own and names it (a test that times its
+steps can miss on a busy machine), and prints the five slowest modules. On the newest Python you have it only
+byte-compiles and imports every module, which takes seconds and catches anything a newer Python removed.
+`tools/check_pythons.sh --all` runs the whole suite on every installed Python instead, as a release does; give it
+unittest arguments and it runs just those on every Python, in one process each. In its
 `rerun alone:` line, `passed` means the module was only flaky beside the others and needs nothing from you, and
 `failed again` is a real failure, its output printed below; a full check (no arguments) also adds a line to
 `~/.cache/windvane-check/reruns.log`, so you can see how often reruns happen over time. The CI workflow
