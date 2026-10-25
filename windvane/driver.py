@@ -2485,8 +2485,9 @@ class Pilot(Desk, Periodic, Experiments):
             if why:
                 self.stop_reason = why
                 return
+            waits = self.trial_check()  # first: a revert a killed driver began is finished before any pull
             self.self_update()
-            if self.trial_check() or self.draining():
+            if waits or self.draining():
                 self.pause()
                 continue
             free = [i for i in range(self.n) if i not in self.running.values()]
@@ -2729,6 +2730,8 @@ class Pilot(Desk, Periodic, Experiments):
         run on another project): only those can be reverted."""
         p = self.p
         t, new = selfupdate.on_trial(p.state), gout(self.home, "rev-parse", "HEAD")
+        if t and "reverting" in t:  # the restarted driver finishes it (`trial_check`)
+            return
         good = t["good"] if t else self.loaded
         back = load_json(p.state / selfupdate.REVERTED, {}).get("good")
         if not good or any(g and not selfupdate.code_changed(self.home, g) for g in (good, back)) or \
@@ -2748,6 +2751,8 @@ class Pilot(Desk, Periodic, Experiments):
         """Each pass: new code on trial is kept once a ticket merges on it (or after an hour, `on_trial`); a bad one
         is reverted once no ticket runs, and the run goes on on the good code. True while that waits."""
         t = selfupdate.on_trial(self.p.state)
+        if t and self.bad is None and "reverting" in t:  # a driver killed while it reverted: finished here
+            self.bad = t["reverting"]["how"]
         if t and self.bad is None and len(self.merged) > t["merged"]:
             selfupdate.end_trial(self.p.state)
             self.log(f"windvane {t['new'][:8]} passed its trial: {self.merged[-1]} merged on it")
@@ -3140,22 +3145,26 @@ def undo_update(p, cd, home, trial, how, log):
     """New driver code that broke the run on trial (`how`): reverted on main with a ticket to fix it
     (`selfupdate.revert_update`), the install fast-forwarded to the revert, and one push; None when the run goes on
     on the good code that way, else why it stops. Never two reverts without a ticket merged between them: a second bad
-    update in a row stops the run, as only the user can tell what goes on."""
+    update in a row stops the run, as only the user can tell what goes on. The trial stays (`reverting`) until the
+    revert has landed: a driver killed meanwhile finishes it when it starts again (`trial_check`)."""
     st, new, good = p.state, trial["new"][:8], trial["good"][:8]
-    selfupdate.end_trial(st)
     shas = [c[0][:8] for c in selfupdate.to_revert(p.main_root(), p.upstream, trial["good"], trial["new"]) or []]
     by_hand = (f". To go on, revert {', '.join(shas) or new} on {p.main} by hand (`git revert -m 1 <sha>` for a merge) "
                "or fix it, push, then start the run again")
-    if (st / selfupdate.REVERTED).exists():
+    if "reverting" not in trial and (st / selfupdate.REVERTED).exists():
+        selfupdate.end_trial(st)
         return f"windvane {new} {how}, right after a revert, with no ticket merged since: nothing more is reverted{by_hand}"
-    save_json(st / selfupdate.REVERTED, {"good": trial["good"]})  # first: a kill while it lands still counts it
+    trial.setdefault("reverting", {"how": how})
+    save_json(st / selfupdate.TRIAL, trial)
+    how = trial["reverting"]["how"]
     try:
         _, ids, tid, sha = selfupdate.revert_update(p, cd, trial, how, log)
     except (selfupdate.Unreverted, SetupFailed) as e:
-        (st / selfupdate.REVERTED).unlink(missing_ok=True)  # nothing reached main
+        selfupdate.end_trial(st)  # nothing reached main
         then = "; land it, then start the run again" if str(e).startswith("the revert waits") else by_hand
         return f"windvane {new} {how}, and it couldn't be reverted: {e}{then}"
     save_json(st / selfupdate.REVERTED, {"good": trial["good"], "revert": sha, "tickets": ids, "fix": tid})
+    selfupdate.end_trial(st)
     said = []
     selfupdate.pull(home, said, trial["new"])
     if selfupdate.code_changed(home, trial["good"]):
@@ -3237,8 +3246,9 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
             stop = asked()
         if stop:
             log(p, f"driver crashed ({why}); not restarted: {stop}")
-            push("windvane stopped", whole("Why: the driver crashed (", why, f"); not restarted: {stop}.",
-                                          log=lambda m: log(p, m)) + "\n"
+            push("windvane stopped", (whole("Why: ", stop, ".", log=lambda m: log(p, m)) if bad else
+                                      whole("Why: the driver crashed (", why, f"); not restarted: {stop}.",
+                                            log=lambda m: log(p, m))) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             tear_down(p, lock=True, tell=True)  # after the push, as the driver's own end does
             if not locked(p):  # its sessions ended with it (a killed one's may not have: not checked there); a run

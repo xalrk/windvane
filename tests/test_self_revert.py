@@ -168,6 +168,7 @@ class Tickets(Trial):
     def pilot(self):
         pilot = driver.Pilot(self.p, args(parallel=1))
         pilot.home, pilot.argv, self.calls = self.home, ["run", "--for", "6h", "--detach"], []
+        pilot.loaded = self.s.git("rev-parse", "HEAD", cwd=self.home)  # as a driver started on the install reads it
 
         def execv(path, argv):
             self.calls.append(argv)
@@ -265,17 +266,39 @@ class Tickets(Trial):
             pilot.fail("T-002", "driver error: KeyError: 'x'")
         self.assertEqual(pilot.bad, "failed T-001, T-002 the same way at the driver error: driver error: KeyError: 'x'")
 
-    def test_a_revert_killed_while_it_lands_still_counts(self):
-        self.update("broken\n")
+    def killed(self, after_landing):
+        """The supervisor killed while it reverts: before its push to main, or right after it."""
+        from windvane import held
+        real = held.land
 
-        def killed(*a):
+        def land(*a, **k):
+            if after_landing:
+                real(*a, **k)
             raise SystemExit("killed")
-        orig, selfupdate.revert_update = selfupdate.revert_update, killed
+        held.land = land
         try:
             with self.assertRaises(SystemExit):
-                driver.undo_update(self.p, self.p.ci_dir, self.home, selfupdate.on_trial(self.p.state), "broke", print)
+                Crashes.supervise(self)
         finally:
-            selfupdate.revert_update = orig
+            held.land = real
+        self.assertIn("reverting", selfupdate.on_trial(self.p.state))  # still on trial: its revert isn't done
+        self.assertFalse((self.p.state / selfupdate.REVERTED).exists())
+
+    def test_a_revert_killed_before_it_lands_is_done_when_the_driver_starts_again(self):
+        self.update("broken\n")
+        self.killed(after_landing=False)
+        self.assertNotIn("Revert", self.main("log", "--format=%s", "main"))
+        with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
+            self.pilot().run(now() + timedelta(hours=2))  # the next start finishes it, then restarts on the good code
+        self.assert_reverted("crashed the driver twice on trial (it exited with code 1 before its run began)")
+
+    def test_a_revert_killed_after_it_landed_is_not_landed_twice(self):
+        self.update("broken\n")
+        self.killed(after_landing=True)
+        with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
+            self.pilot().run(now() + timedelta(hours=2))
+        self.assert_reverted("crashed the driver twice on trial (it exited with code 1 before its run began)")
+        self.assertEqual(sum(x.startswith("Revert") for x in self.main("log", "--format=%s", "main").splitlines()), 1)
         self.assertTrue((self.p.state / selfupdate.REVERTED).exists())  # the next bad update stops the run
 
     def test_a_trial_ends_after_an_hour(self):

@@ -144,7 +144,7 @@ def put_on_trial(state, good, new, merged):
 def on_trial(state):
     """The trial under way, or None (none, or it ran its hour: the code is kept)."""
     t = load_json(state / TRIAL, None)
-    if t and time.time() - t["since"] >= TRIAL_S:
+    if t and time.time() - t["since"] >= TRIAL_S and "reverting" not in t:
         end_trial(state)
         return None
     return t
@@ -228,6 +228,9 @@ def revert_update(p, cd, trial, how, log):
     from . import held, planner, worktree
     root, good, new = p.main_root(), trial["good"], trial["new"]
     net.git(root, "fetch", "-q", p.remote)
+    began = trial.get("reverting", {})
+    if "tid" in began and not run(["git", "diff", "--quiet", good, p.upstream, "--", *CODE], root).returncode:
+        return p.main, began["ids"], began["tid"], began["sha"]  # landed before a kill: only what follows is left
     commits = to_revert(root, p.upstream, good, new)
     if not commits:
         raise Unreverted(f"{new[:8]} isn't on {p.upstream}, so its change isn't this project's to revert"
@@ -248,6 +251,9 @@ def revert_update(p, cd, trial, how, log):
         with planner.id_lock(p):
             tid = planner.free_id(p, cd)
             fix_ticket(p, cd, tid, trial, how, commits, ids, revert)
+        if "reverting" in trial:  # what a driver killed while this lands finds landed (`undo_update`)
+            trial["reverting"].update(ids=ids, tid=tid, sha=revert)
+            save_json(p.state / TRIAL, trial)
         git(cd, "add", "-A", p.tickets_rel, p.queue_rel)
         git(cd, *held.author_ident(p), "commit", "-q", "-m", f"{tid}: find and fix what broke windvane {new[:8]}")
         ok, where = held.land(p, cd, planner.branch_name(p, cd, "revert"), title, body, commit=False, fresh=True)
