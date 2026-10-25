@@ -88,6 +88,10 @@ if hang and system.startswith(os.environ.get("FAKE_HANG_ROLE", "")):
     open(hang, "w").write("streamed")
     import time
     time.sleep(60)
+if os.environ.get("FAKE_JUDGE_LEFTOVER") and system.startswith("# windvane judge"):  # a judge's trial writes a file:
+    with open(os.environ["FAKE_JUDGE_LEFTOVER"], "a") as f:  # whether its tree held one already, a line a session
+        f.write(f"{os.path.exists('leftover.txt')}\n")
+    open("leftover.txt", "w").write("written by a trial\n")
 if os.environ.get("FAKE_ERROR_FOR") and re.search(os.environ["FAKE_ERROR_FOR"], prompt.split("\n")[0]):
     step = "error"  # FAKE_ERROR_FOR: a regex on the prompt's first line ("Ticket T-001.", "Critique T-001.")
 if os.environ.get("FAKE_MAX_TURNS") and system.startswith(os.environ["FAKE_MAX_TURNS"]) and \

@@ -321,11 +321,12 @@ def judge(sp, seed, tickets, checks, home, deny, env):
     own = home.parent / "judge" / seed["name"]
     own.mkdir(parents=True)
     tree = own / "tree"
-    judge_tree(home / "remote.git", tree)
     jp = copy.copy(sp)
     jp.state = own / "state"
     jp.state.mkdir()
     for _ in range(2):  # a session that failed (an API error, a crash) is the judge's, never the project's: once more
+        shutil.rmtree(tree, ignore_errors=True)  # in a fresh copy: never what an attempt's trial left behind
+        judge_tree(home / "remote.git", tree)
         until = time.time() + JUDGE_MINUTES * 60
         text, stopped_, error = run_claude(jp, "judge", f"judge-{seed['name']}",
                                            judge_prompt(seed, tickets, checks), session_rules(jp, "JUDGE.md"), tree,

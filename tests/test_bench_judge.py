@@ -95,7 +95,9 @@ class Judge(unittest.TestCase):
 
     def test_a_judge_that_fails_is_tried_again_then_shown_as_no_verdict(self):
         os.environ["FAKE_ERROR_FOR"] = "^Judge the project"  # every judge session dies of an API error
+        os.environ["FAKE_JUDGE_LEFTOVER"] = str(self.s.tmp / "leftover.log")  # ... after its trial wrote a file
         out = self.bench("--hours", "1")
+        self.assertEqual((self.s.tmp / "leftover.log").read_text(), "False\nFalse\n")  # the retry's tree is fresh
         r = json.loads((self.state / "bench.jsonl").read_text().splitlines()[0])
         calls = (self.s.tmp / "calls.jsonl").read_text()
         self.assertEqual(calls.count('"system": "# windvane judge run'), 2)  # once more, then given up
