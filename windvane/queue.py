@@ -21,11 +21,13 @@ import re
 import time
 from pathlib import Path
 
+from .phone import cut
 from .questions import blocks, part, ticket_of, waiting_on
 from .util import gout, log_has, log_paths, shell_path
 
 ANSWERED = "it's answered"  # (a quote can't go in an f-string's braces before Python 3.12)
 PEOPLE = ("the user", "user", "you")  # outside items that stand for someone's answer, not a milestone
+TITLE = 100  # bytes of a title in a listing row: cut at a word, so a row reads whole on one line
 
 
 def bullets(text, files, p):
@@ -297,19 +299,29 @@ class Queue:
                                "read")
         return out
 
-    def listing(self, blocked=(), hints=False, run=None):
+    def listing(self, blocked=(), hints=False, run=None, compact=False, keep=(),
+                more="grep before filing one that may repeat them"):
         """One row per ticket; with `hints`, a line for each wait that needs someone to act, under the first ticket
-        waiting on it (`hints`, `run`)."""
-        rows, said = [], self.hints(blocked, run) if hints else {}
-        for t in self.order:
+        waiting on it (`hints`, `run`). `compact` puts the open tickets first and leaves out the done ones but those an
+        open one depends on and those in `keep` (merged this run), counted in a last line that ends in `more`: the
+        done ones outnumber the open ones more with every merge, and a session re-reads its prompt on every turn."""
+        rows, said, order = [], self.hints(blocked, run) if hints else {}, self.order
+        if compact:
+            open_ = [t for t in self.order if self.status(t, blocked) != "done"]
+            kept = {*keep, *(d for t in open_ for d in self.deps.get(t, []) + self.branch_deps.get(t, []))}
+            order = open_ + [t for t in self.order if t in kept and t not in open_]
+        for t in order:
             s = self.status(t, blocked)
             on = (f"{x} (from its branch)" if x in self.branch_deps.get(t, []) else x for x in self.waits_on(t))
             why = {"waiting": f"waiting on: {', '.join(on)}",
                    "blocked": f"question: {self.asked[t][:60]}" if t in self.asked else ""}.get(s, "")
-            rows.append(f"{t:8} {s:8} {'(last) ' * (t in self.last)}{self.titles[t][:70]}"
+            rows.append(f"{t:8} {s:8} {'(last) ' * (t in self.last)}{cut(self.titles[t], TITLE)}"
                         + (f"  [{' '.join(self.wip[t])}{', stale' if t in self.stale else ''}]"
                            if t in self.wip else "") + (f"  ({why})" if why else ""))
             rows += [f"{'':8} hint: {h}" for h in said.get(t, [])]
+        hidden = len(self.order) - len(order)
+        if hidden:
+            rows.append(f"{hidden} done: their titles are in {self.p.tickets_rel}/ ({more})")
         return "\n".join(rows)
 
     def next_id(self, taken=()):

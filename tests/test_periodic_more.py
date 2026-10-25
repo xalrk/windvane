@@ -192,6 +192,17 @@ class Triage(Base):
         self.pilot().periodic(self.p.periodic["playtest"])
         self.assertNotIn("retry the upload", self.prompts()[3])
 
+    def test_the_triage_gets_the_compact_listing(self):
+        """T-295: the open tickets and one merged this run in full, the other done ones as a count."""
+        self.make(PLAYTEST + TRIAGE, queue="# Queue\n- T-003 three\n- done: T-001\n- done: T-002\n")
+        pilot = self.pilot()
+        pilot.merged = ["T-002"]
+        pilot.periodic(self.p.periodic["playtest"])
+        listing = self.prompts()[1].split("## Existing tickets (id, status, title)\n")[1].split("\n\n")[0]
+        self.assertEqual([r.split()[:2] for r in listing.splitlines()[:2]], [["T-003", "todo"], ["T-002", "done"]])
+        self.assertEqual(listing.splitlines()[2], "1 done: their titles are in .windvane/tickets/ "
+                                                  "(grep before filing one that may repeat them)")
+
     def test_notes_stay_for_the_plan_when_the_triage_does_not_finish(self):
         self.make(PLAYTEST + TRIAGE)
         self.s.write("tools/TRIAGE.md", "# Triage\nNO_LINE\n")
