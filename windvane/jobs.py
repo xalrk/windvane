@@ -321,6 +321,19 @@ def log_minutes(log, start):
     return round(max(0.0, log.stat().st_mtime - start) / 60, 2)
 
 
+def killed_times(log, start):
+    """A killed check's `minutes` (to its log's last write) and its wait for the machine (`waited_s`). A log with
+    only the heavy queue's lines was cancelled while it waited (`cancelled_queued`): all its minutes were wait, and it
+    never ran, so it isn't a check cut off. A head of only queue lines is read on to the end: a wait of hours fills
+    the head before its WAITED line."""
+    mins = log_minutes(log, start)
+    head = log.stat().st_size + 1 if heavy.waiting(log) else 65536
+    if heavy.waiting(log, head):
+        return {"minutes": mins, "waited_s": round(mins * 60), "cancelled_queued": True}
+    wait_s = heavy.waited(log, head)
+    return {"minutes": mins, **({"waited_s": wait_s} if wait_s else {})}
+
+
 def prune(p, logs, clock=time.time):
     """Delete check logs past their keep (`KEEP_PASSED`, `KEEP_ANY`), but never a locked one (its check runs) or
     one of the `KEEP_FAILED` newest that didn't pass. A killed check's log gets the end row it never wrote first, so
@@ -357,7 +370,7 @@ def prune_logs(p, logs, t):
 def close(p, start_row, log):
     """The end row a killed check never wrote (cut off, timed to its log's last write), dated like its start row so
     `stats --days` counts it where it happened."""
-    row = {"event": "check", "ticket": start_row["ticket"], "minutes": log_minutes(log, start_row["start"]),
+    row = {"event": "check", "ticket": start_row["ticket"], **killed_times(log, start_row["start"]),
            "passed": False, "reused": False, "start": start_row["start"], "finished": False}
     append_jsonl(p.state / "ledger.jsonl", {**({"at": start_row["at"]} if "at" in start_row else {}), **row})
 

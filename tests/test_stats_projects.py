@@ -67,13 +67,16 @@ class StatsProjects(unittest.TestCase):
                 dict(at=R, event="await", ticket="T-001", role="reviewer", seconds=300)]
         killed_start = time.time() - 3600
         rows += [dict(at=R, event="check-start", ticket="T-006", role="worker", start=killed_start, log="b.log"),
-                 dict(at=R, event="check-start", ticket="T-007", role="worker", start=time.time(), log="c.log")]
+                 dict(at=R, event="check-start", ticket="T-007", role="worker", start=time.time(), log="c.log"),
+                 dict(at=R, event="check-start", ticket="T-010", role="worker", start=killed_start, log="d.log")]
         for r in rows:
             append_jsonl(d / "ledger.jsonl", r)
         (d / "checks").mkdir()
         for name in ("a.log", "b.log", "c.log"):
             (d / "checks" / name).write_text("check output\n")
         os.utime(d / "checks/b.log", (killed_start + 600, killed_start + 600))  # cut off 10 minutes in
+        (d / "checks/d.log").write_text("heavy: waiting for the machine lock: pid 9 (render.sh); next in line\n")
+        os.utime(d / "checks/d.log", (killed_start + 1200, killed_start + 1200))  # cancelled after 20 min queued
         Rc = T(self.recent - timedelta(hours=1))
         for r in [dict(at=Rc, ticket="T-001", score=5, step="revise"), dict(at=Rc, ticket="T-001", score=8, step="pass"),
                   dict(at=Rc, ticket="T-006", score=9, step="pass"),
@@ -128,7 +131,8 @@ class StatsProjects(unittest.TestCase):
             "    critic 10% (5k), reviewer 10% (5k)",
             "  critic: 3 tickets, 1 passed first time, median score 5 first, 8 final, 1 final on the pass mark (8)",
             "  reviews after a critic pass: 2, 1 sent back",
-            "  checks: 4 runs (23 min per checked ticket), 1 failed, 1 cut off; workers 30 min in await",
+            "  checks: 4 runs (23 min per checked ticket), 20 min waiting for the machine, 1 failed, 1 cut off, "
+            "1 cancelled in the queue; workers 30 min in await",
             "  re-fixes: 1 (T-001 by T-002)",
             "  CALIBRATION.md: 5 lines added",
             "  failed T-004: the check kept failing on a missing font",
@@ -163,8 +167,8 @@ class StatsProjects(unittest.TestCase):
             "reviewer": {"share": 10.0, "per_merged": 5000}}})
         self.assertEqual(sb["critic"], {"tickets": 3, "bar": 8, "first_pass": 1, "median_first": 5, "median_final": 8,
                                         "final_on_bar": 1, "reviews": 2, "sent_back": 1})
-        self.assertEqual(sb["checks"], {"runs": 4, "tickets": 3, "per_ticket": 23.3, "failed": 1, "cut_off": 1,
-                                        "worker_await": 30.0})
+        self.assertEqual(sb["checks"], {"runs": 4, "tickets": 3, "per_ticket": 23.3, "minutes": 70.0, "waited": 20.0,
+                                        "failed": 1, "cut_off": 1, "cancelled_queued": 1, "worker_await": 30.0})
         self.assertEqual(sb["refixes"], [["T-001", "T-002"]])
         self.assertEqual(sb["calibration_lines"], 5)
         self.assertEqual(sb["failed"], {"T-004": "the check kept failing on a missing font"})
@@ -181,8 +185,8 @@ class StatsProjects(unittest.TestCase):
             "reviewer": {"share": 20.0, "per_merged": 10000}}})
         self.assertEqual(sb["critic"], {"tickets": 2, "bar": 8, "first_pass": 1, "median_first": 7,
                                         "median_final": 8.5, "final_on_bar": 1, "reviews": 2, "sent_back": 1})
-        self.assertEqual(sb["checks"], {"runs": 3, "tickets": 2, "per_ticket": 25.0, "failed": 1, "cut_off": 1,
-                                        "worker_await": 10.0})
+        self.assertEqual(sb["checks"], {"runs": 3, "tickets": 2, "per_ticket": 25.0, "minutes": 50.0, "waited": 20.0,
+                                        "failed": 1, "cut_off": 1, "cancelled_queued": 1, "worker_await": 10.0})
         self.assertEqual(sb["calibration_lines"], 3)
         out = self.run_cli("--since", self.since)
         self.assertIn(f"2 projects since {self.since}", out)

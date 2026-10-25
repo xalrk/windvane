@@ -56,7 +56,9 @@ class StatsWaits(unittest.TestCase):
         self.assertIn("waits, reviewer: 1.5 min in await\n", out)
         self.assertLess(out.index("waits, worker"), out.index("waits, driver"))  # the longest wait first
         self.assertIn("not-run checks: 2 (no bounce)\n", out)
-        self.assertIn("checks: 1 run, 9.0 min", out)
+        # the check's 5 min queued aren't its run; the not-run checks' waits count with it
+        self.assertIn("checks: 1 run, 4.0 min running (4.0 min a ticket checked), 10 min waiting for the machine\n",
+                      out)
 
     def test_no_wait_and_no_not_run_check_print_nothing(self):
         self.row(event="check", ticket="T-001", role="driver", minutes=4, passed=True, reused=False)

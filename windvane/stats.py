@@ -100,26 +100,44 @@ def bench_stats(p):
 
 def check_runs(p, checks, running=jobs.running):
     """(the checks that ran, reused passes, checks still running, heavy checks that never ran: their wait for the
-    machine timed out, which is no failure). Ran: the end rows that didn't reuse a pass or wait in vain, plus
-    a start row no end row matches (same ticket and start) whose check isn't running any more: it was killed, and
-    counts as cut off like an end row with `finished: false`, timed from its start to its log's last write (the
-    check's heartbeat keeps that within a minute of the kill; 0 with no log)."""
+    machine timed out, which is no failure, and those cancelled while they waited in the heavy queue). Ran: the end
+    rows that didn't reuse a pass or wait in vain, plus a start row no end row matches (same ticket and start) whose
+    check isn't running any more: it was killed, and counts as cut off like an end row with `finished: false`, timed
+    from its start to its log's last write (the check's heartbeat keeps that within a minute of the kill; 0 with no
+    log). A killed check whose log holds only the queue's lines never ran: cancelled, not cut off."""
     ends = [r for r in checks if r.get("event") == "check"]
     ended = {(r["ticket"], r.get("start")) for r in ends}
     open_ = [r for r in checks if r.get("event") == "check-start" and (r["ticket"], r.get("start")) not in ended]
     live = [r for r in open_ if running(p, r)]
-    killed = [{**r, "minutes": killed_minutes(p, r), "finished": False} for r in open_ if r not in live]
-    ran = [r for r in ends if not r.get("reused") and not r.get("not_run")]
+    killed = [{**r, **killed_times(p, r), "finished": False} for r in open_ if r not in live]
+    done = [r for r in ends + killed if not r.get("reused") and not r.get("not_run")]
+    ran = [r for r in done if not r.get("cancelled_queued")]
     not_run = [r for r in ends if r.get("not_run")]
-    return ran + killed, sum(bool(r.get("reused")) for r in ends), len(live), not_run
+    return ran, sum(bool(r.get("reused")) for r in ends), len(live), not_run, [r for r in done if r not in ran]
 
 
-def killed_minutes(p, start_row):
-    """A killed check's minutes: the check wrote its log up to the kill, so the log's last write is about when."""
+def killed_times(p, start_row):
+    """A killed check's minutes and wait (jobs.killed_times): the check wrote its log up to the kill."""
     try:
-        return jobs.log_minutes(p.state / "checks" / start_row["log"], start_row["start"])
+        return jobs.killed_times(p.state / "checks" / start_row["log"], start_row["start"])
     except (KeyError, OSError):  # no log: a row from before logs were named, or the log was cleared by hand
-        return 0
+        return {"minutes": 0}
+
+
+def waited_min(r):
+    """A check row's minutes in the heavy queue: its `waited_s`, or all its minutes for a not-run row from before
+    rows kept it."""
+    return (r.get("waited_s") or (60 * (r.get("minutes") or 0) if r.get("not_run") else 0)) / 60
+
+
+def run_min(r):
+    """A check row's minutes at work: its minutes less its wait for the machine."""
+    return max(0.0, (r.get("minutes") or 0) - waited_min(r))
+
+
+def queue_min(ran, not_run, cancelled):
+    """All the checks' minutes in the heavy queue: the ran ones' waits, and all of the never-run ones'."""
+    return sum(waited_min(r) for r in ran + not_run + cancelled)
 
 
 def check_stats(checks, by, p):
@@ -128,27 +146,30 @@ def check_stats(checks, by, p):
     the ticket whose checks took longest. Not in the table: a check spends time, not tokens."""
     if not checks:
         return
-    ran, reused, live, not_run = check_runs(p, checks)
-    mins = sum(r.get("minutes") or 0 for r in ran)
+    ran, reused, live, not_run, cancelled = check_runs(p, checks)
+    mins, waited = sum(run_min(r) for r in ran), queue_min(ran, not_run, cancelled)
     cut = sum(r.get("finished") is False for r in ran)
     failed = sum(not r.get("passed") for r in ran) - cut
     per = {}
     for r in ran:
         t = per.setdefault(r["ticket"], [0, 0.0])
         t[0] += 1
-        t[1] += r.get("minutes") or 0
-    print(f"checks: {plural(len(ran), 'run')}, {m(mins)} min" + (f" ({mins / len(per):.1f} min a ticket checked)"
-          if per else "") + (f", {failed} failed" if failed else "") + (f", {cut} cut off" if cut else "")
+        t[1] += run_min(r)
+    print(f"checks: {plural(len(ran), 'run')}, {m(mins)} min" + (" running" if waited else "")
+          + (f" ({mins / len(per):.1f} min a ticket checked)" if per else "")
+          + (f", {m(waited)} min waiting for the machine" if waited else "")
+          + (f", {failed} failed" if failed else "") + (f", {cut} cut off" if cut else "")
+          + (f", {len(cancelled)} cancelled in the queue" if cancelled else "")
           + (f", {reused} reused a pass" if reused else "") + (f", {live} still running" if live else ""))
     if not_run:  # the gate (or the session) ran each again rather than bounce the ticket: its wait is under "waits"
         print(f"not-run checks: {len(not_run)} (no bounce)")
     if by == "ticket" and per:
         top = max(per, key=lambda t: (per[t][1], per[t][0]))
         print(f"most check time: {top}, {plural(per[top][0], 'run')}, {m(per[top][1])} min")
-    wasted = [r for r in ran if not r.get("passed") and (r.get("minutes") or 0) > 0]
+    wasted = [r for r in ran if not r.get("passed") and run_min(r) > 0]
     if wasted:
-        w = max(wasted, key=lambda r: r["minutes"])
-        print(f"costliest wasted check: {w['ticket']}, {m(w['minutes'])} min, "
+        w = max(wasted, key=run_min)
+        print(f"costliest wasted check: {w['ticket']}, {m(run_min(w))} min, "
               + ("cut off" if w.get("finished") is False else "failed"))
 
 
@@ -166,7 +187,7 @@ def wait_stats(checks, awaits):
         per.setdefault(r.get("role") or "?", [0, 0])[0] += r.get("seconds") or 0
     for r in checks:
         if r.get("event") == "check":
-            s = r.get("waited_s") or (60 * (r.get("minutes") or 0) if r.get("not_run") else 0)
+            s = 60 * waited_min(r)
             per.setdefault(r.get("role") or "driver", [0, 0])[1] += s
     for role, (aw, hv) in sorted(per.items(), key=lambda kv: -sum(kv[1])):
         parts = [f"{m(aw / 60)} min in await"] * bool(aw) + [f"{m(hv / 60)} min for the heavy lock"] * bool(hv)
@@ -925,13 +946,15 @@ def written_lately(sp, row):
 
 
 def checks_digest(sp, rows):
-    ran, _, _, _ = check_runs(sp, [r for r in rows if r.get("event") in ("check", "check-start")], written_lately)
-    mins, tickets = sum(r.get("minutes") or 0 for r in ran), {r["ticket"] for r in ran}
+    ran, _, _, not_run, cancelled = check_runs(sp, [r for r in rows if r.get("event") in ("check", "check-start")],
+                                               written_lately)
+    mins, tickets = sum(run_min(r) for r in ran), {r["ticket"] for r in ran}
     cut = sum(r.get("finished") is False for r in ran)
     awaited = sum(r.get("seconds") or 0 for r in rows if r.get("event") == "await" and r.get("role") == "worker")
     return {"runs": len(ran), "tickets": len(tickets), "per_ticket": round(mins / len(tickets), 1) if tickets else None,
+            "minutes": round(mins, 1), "waited": round(queue_min(ran, not_run, cancelled), 1),
             "failed": sum(not r.get("passed") for r in ran) - cut, "cut_off": cut,
-            "worker_await": round(awaited / 60, 1)}
+            "cancelled_queued": len(cancelled), "worker_await": round(awaited / 60, 1)}
 
 
 def failed_in(ledger, log, since):
@@ -1052,8 +1075,10 @@ def print_project(d):
     if c["reviews"]:
         print(f"  reviews after a critic pass: {c['reviews']}, {c['sent_back']} sent back")
     per = f" ({m(ch['per_ticket'])} min per checked ticket)" if ch["per_ticket"] is not None else ""
-    print(f"  checks: {plural(ch['runs'], 'run')}{per}, {ch['failed']} failed, {ch['cut_off']} cut off; "
-          f"workers {m(ch['worker_await'])} min in await")
+    queued = f", {m(ch['waited'])} min waiting for the machine" if ch["waited"] else ""
+    cancelled = f", {ch['cancelled_queued']} cancelled in the queue" if ch["cancelled_queued"] else ""
+    print(f"  checks: {plural(ch['runs'], 'run')}{per}{queued}, {ch['failed']} failed, {ch['cut_off']} cut off"
+          f"{cancelled}; workers {m(ch['worker_await'])} min in await")
     if d["repo"] is None:
         print("  repo unknown: no re-fixes, CALIBRATION.md lines or parked tickets (it hasn't run since runs "
               "recorded their checkout)")

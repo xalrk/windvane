@@ -143,6 +143,10 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- `windvane stats` and `stats --projects` tell a heavy check's wait for the machine from its run: the `checks:` line
+  gives run minutes and minutes waiting for the machine apart (`minutes` and `waited` in `--json`), and the minutes per
+  checked ticket are run minutes. A check killed while it still waited in the queue counts as cancelled in the queue,
+  not cut off, so the cut-off count is only checks that really ran.
 - A provisional or open question's option wrapped onto an indented second line is read whole, in `status`, the
   summary and the question push, not cut at its first line's end.
 - `windvane stop` with no autopilot running says there's nothing to stop and leaves no stop request behind (a
