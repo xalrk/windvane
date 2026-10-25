@@ -11,11 +11,13 @@ phone, gh or GitHub token, and every run stream is searched afterwards for the h
 result contaminated, reported but never counted.
 """
 import ast
+import itertools
 import json
 import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -102,8 +104,10 @@ def pick(found, which):
 
 
 def deny_rules(bases):
-    """Every role's deny rules for the checkout's (and the ref worktree's) hidden tests and reference solutions."""
-    rules = []
+    """Every role's deny rules for the checkout's (and the ref worktree's) hidden tests and reference solutions: their
+    absolute paths for every tool, and any shell command naming a seed's hidden folder or the references, however
+    it gets there. A way round these (a glob, a `cd` first) is what the run streams are searched for afterwards."""
+    rules = ["Bash(*bench/*/hidden*)", "Bash(*fixtures/bench*)"]
     for base in bases:
         for rel in DENIED:
             d = Path(base) / rel
@@ -332,6 +336,45 @@ def plan_lines(chosen, hours, ref, sha):
     return out
 
 
+class Stopped(Exception):
+    """A SIGTERM or SIGHUP (a closed terminal, a dropped ssh): ended like a Ctrl-C."""
+
+
+def stopped(sig, _frame):
+    raise Stopped(signal.Signals(sig).name)
+
+
+def new_run(root):
+    """A fresh run dir: its id is the time, with -2, -3 ... for a second bench started in the same second."""
+    stamp = f"{datetime.now():%Y%m%d-%H%M%S}"
+    for n in itertools.count(1):
+        base = root / (stamp if n == 1 else f"{stamp}-{n}")
+        try:
+            base.mkdir(parents=True)
+            return base
+        except FileExistsError:
+            continue
+
+
+def end_all(procs, wait=300):
+    """End every seed run still going the way a signal ends `windvane run` (its sessions with it), killing one that
+    hasn't ended after `wait` seconds; a second signal meanwhile doesn't cut this short."""
+    old = {s: signal.signal(s, signal.SIG_IGN) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        live = [proc for *_, proc in procs if proc.poll() is None]
+        for proc in live:
+            proc.terminate()
+        for proc in live:
+            try:
+                proc.wait(wait)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+    finally:
+        for s, h in old.items():
+            signal.signal(s, h)
+
+
 def main(a, p):
     if a.last:
         runs = runs_of(p)
@@ -340,10 +383,9 @@ def main(a, p):
     before = week_now()
     which, why = size(a.full, a.small, before, limit)
     print(f"bench: {which} ({why})", flush=True)
-    run_id = f"{datetime.now():%Y%m%d-%H%M%S}"
-    base = state_root() / "_bench" / run_id
+    base = new_run(state_root() / "_bench")
     wt = base / "windvane"
-    base.mkdir(parents=True)
+    old = {s: signal.signal(s, stopped) for s in (signal.SIGTERM, signal.SIGHUP)}
     try:
         sha = ref_worktree(p, a.ref, wt)
         found = seeds(wt / "bench")
@@ -354,10 +396,15 @@ def main(a, p):
         if a.dry_run:
             return print(earlier(p, which))
         return run(p, a, chosen, base, wt, sha, which, before)
+    except (KeyboardInterrupt, Stopped):  # before any seed ran
+        print("bench: stopped before any seed ran", file=sys.stderr)
+        return 130
     finally:
         drop_worktree(p, wt)
         if a.dry_run or not any(base.iterdir()):  # nothing ran: nothing to keep
             shutil.rmtree(base, ignore_errors=True)
+        for s, h in old.items():
+            signal.signal(s, h)
 
 
 def run(p, a, chosen, base, wt, sha, which, before):
@@ -370,42 +417,42 @@ def run(p, a, chosen, base, wt, sha, which, before):
     path = os.pathsep.join([str(first), clean_path(os.environ.get("PATH", ""), base / "bin")])
     caps = [x for k_, v in (("--cap", a.cap), ("--week-cap", a.week_cap)) if v is not None for x in (k_, f"{v:g}")]
     procs = []
-    for s, ts in chosen:
-        home = base / s["name"]
-        home.mkdir()
-        sp = make_repo(s, ts, home, rules)
-        env = child_env(home, path)
-        log = open(home / "run.log", "w")
-        cmd = [*exe, "-C", str(sp.root), "run", "--for", f"{round(a.hours * 60)}m", "--no-preflight", *caps]
-        procs.append((s, ts, sp, home, env, time.time(),
-                      subprocess.Popen(cmd, cwd=sp.root, env=env, stdin=subprocess.DEVNULL, stdout=log,
-                                       stderr=subprocess.STDOUT)))
-        print(f"{s['name']}: running, log in {home / 'run.log'}", flush=True)
-    ended = {}
+    recs = []
     try:
+        for s, ts in chosen:
+            home = base / s["name"]
+            home.mkdir()
+            sp = make_repo(s, ts, home, rules)
+            env = child_env(home, path)
+            log = open(home / "run.log", "w")
+            cmd = [*exe, "-C", str(sp.root), "run", "--for", f"{round(a.hours * 60)}m", "--no-preflight", *caps]
+            procs.append((s, ts, sp, home, env, time.time(),
+                          subprocess.Popen(cmd, cwd=sp.root, env=env, stdin=subprocess.DEVNULL, stdout=log,
+                                           stderr=subprocess.STDOUT)))
+            print(f"{s['name']}: running, log in {home / 'run.log'}", flush=True)
+        ended = {}
         for s, *_, began, proc in procs:
             proc.wait()
             ended[s["name"]] = time.time()
-    finally:  # a Ctrl-C ends every seed's run the way `windvane stop --now` would, before the worktree goes
-        for s, *_, proc in procs:
-            if proc.poll() is None:
-                proc.terminate()
-                proc.wait()
-    after = week_now([sp.state / "usage.json" for _, _, sp, *_ in procs])
-    recs = []
-    for s, ts, sp, home, env, began, proc in procs:
-        weighted_, usd, per = costs(sp, ts)
-        hits = contamination(sp.state, needles(s, [p.main_root(), wt]))
-        hidden = score(s, ts, home / "remote.git", home / "score", env)
-        tickets = fates(sp, ts)
-        rec = {"run": base.name, "ref": a.ref, "sha": sha, "size": which, "seed": s["name"], "tickets": tickets,
-               "hidden": hidden, "passed": sum(h["passed"] for h in hidden.values()),
-               "total": sum(h["total"] for h in hidden.values()), "weighted": weighted_, "usd": usd,
-               "per_merged": {t: per[t] for t in tickets["merged"]},
-               "minutes": round((ended.get(s["name"], time.time()) - began) / 60, 1), "week_before": before,
-               "week_after": after, "contaminated": bool(hits), "hits": [f"{f}: {w}" for f, w in hits[:5]],
-               "exit": proc.returncode}
-        append_jsonl(results(p), rec)
-        recs.append(rec)
+        after = week_now([sp.state / "usage.json" for _, _, sp, *_ in procs])
+        for s, ts, sp, home, env, began, proc in procs:
+            weighted_, usd, per = costs(sp, ts)
+            hits = contamination(sp.state, needles(s, [p.main_root(), wt]))
+            hidden = score(s, ts, home / "remote.git", home / "score", env)
+            tickets = fates(sp, ts)
+            rec = {"run": base.name, "ref": a.ref, "sha": sha, "size": which, "seed": s["name"], "tickets": tickets,
+                   "hidden": hidden, "passed": sum(h["passed"] for h in hidden.values()),
+                   "total": sum(h["total"] for h in hidden.values()), "weighted": weighted_, "usd": usd,
+                   "per_merged": {t: per[t] for t in tickets["merged"]},
+                   "minutes": round((ended.get(s["name"], time.time()) - began) / 60, 1), "week_before": before,
+                   "week_after": after, "contaminated": bool(hits), "hits": [f"{f}: {w}" for f, w in hits[:5]],
+                   "exit": proc.returncode}
+            append_jsonl(results(p), rec)
+            recs.append(rec)
+    except (KeyboardInterrupt, Stopped) as e:  # Ctrl-C, or a closed terminal: no seed run goes on alone
+        end_all(procs)
+        print(f"bench: stopped ({str(e) or 'SIGINT'}): every seed run was ended; {len(recs)} of {len(procs)} seeds "
+              f"scored{' (see bench --last)' if recs else ''}; their logs are in {base}", file=sys.stderr)
+        return 130
     print(table(recs))
     return 0

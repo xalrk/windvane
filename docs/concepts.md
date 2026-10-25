@@ -241,9 +241,11 @@ it") and one never `yes` ("lower it"). Each verdict's answers are kept in `criti
 says yes, so its scores can't tell a better windvane from a worse one. `windvane bench` measures what windvane is
 for, the projects it builds: small seed projects (a command-line tool, a web app, a text game) in `bench/`, each
 built by the real pipeline from its first tickets, then scored on acceptance tests that check only what the
-tickets promise, with what each merged ticket cost. The tests are held out: no session of the run can read them
-(the roles are denied `bench/`), they are copied only into a scratch clone of the final `main`, and a seed whose
-sessions' streams name one anyway is reported as contaminated and not counted. A score the builders could see would
+tickets promise, with what each merged ticket cost. The tests are held out: every role's sessions are denied them by
+path (reading anything under `bench/` or the reference solutions, and any shell command that names a seed's hidden
+folder), they are copied only into a scratch clone of the final `main`, and since a deny rule matches paths, not
+intent, every session's stream is searched afterwards: a seed whose streams name a hidden test file or folder is
+reported as contaminated and not counted. A score the builders could see would
 be trained to; one they never see shows whether a prompt or pipeline change made the built project better.
 
 ## Questions and quiet times

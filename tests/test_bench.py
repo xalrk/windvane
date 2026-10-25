@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -11,7 +12,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from helpers import REPO, Sandbox, tmpdir  # noqa: E402
+from helpers import REPO, Sandbox, running, tmpdir  # noqa: E402
 
 from windvane import bench  # noqa: E402
 
@@ -76,6 +77,7 @@ class Bench(unittest.TestCase):
         self.assertTrue(worker["cwd"].startswith(str(home)), worker["cwd"])
         self.assertIn(f"Read(/{self.s.root}/bench/**)", worker["deny"])
         self.assertIn(f"Bash(*{home.parent / 'windvane'}/bench*)", worker["deny"])
+        self.assertIn("Bash(*bench/*/hidden*)", worker["deny"])  # a relative path from the seed's repo too
         env = json.loads((self.s.tmp / "env.jsonl").read_text().splitlines()[0])["env"]
         found = next(Path(d, "windvane") for d in env["PATH"].split(os.pathsep) if os.path.lexists(Path(d, "windvane")))
         self.assertEqual(os.readlink(found), str(home.parent / "windvane/bin/windvane"))  # the ref's, gone now
@@ -107,6 +109,38 @@ class Bench(unittest.TestCase):
         self.assertEqual(self.bench("--dry-run").splitlines()[0], "bench: small (weekly usage 50% > 40%)")
         self.assertFalse(list((self.s.tmp / "state/windvane/_bench").glob("*/*")))  # a dry run leaves nothing behind
         self.assertFalse(self.tools.exists())
+
+    def test_a_signal_ends_every_seed_run_and_the_worktree(self):
+        before = self.checkout()
+        hang = self.s.tmp / "hang"
+        os.environ.update(FAKE_HANG=str(hang), FAKE_HANG_ROLE="# windvane worker run")
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(sig=sig):
+                hang.unlink(missing_ok=True)
+                proc = subprocess.Popen(["windvane", "-C", str(self.s.root), "bench", "--hours", "1"],
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                end = time.time() + 60
+                while not hang.exists() and time.time() < end:  # the seed's worker is mid-session
+                    time.sleep(0.05)
+                worker = int((self.s.tmp / "hang.pid").read_text())
+                proc.send_signal(sig)
+                out, err = proc.communicate(timeout=120)
+                self.assertEqual(proc.returncode, 130, out + err)
+                self.assertRegex(err, rf"^bench: stopped \({sig.name}\): every seed run was ended; 0 of 1 seeds "
+                                      r"scored; their logs are in \S+/_bench/\d{8}-\d{6}\S*\n$")
+                self.assertNotIn("Traceback", err)
+                end = time.time() + 30
+                while running(worker) and time.time() < end:
+                    time.sleep(0.05)
+                self.assertFalse(running(worker))  # its session ended with it: no paid run goes on alone
+                self.assertEqual(self.checkout(), before)  # the ref's worktree is gone
+        self.assertFalse(self.state.joinpath("bench.jsonl").exists())
+
+    def test_two_benches_in_one_second_get_their_own_run(self):
+        root = self.s.tmp / "runs"
+        made = [bench.new_run(root) for _ in range(3)]
+        self.assertEqual(len(set(made)), 3)
+        self.assertTrue(all(d.is_dir() for d in made))
 
     def test_a_stream_naming_a_hidden_file_marks_the_seed_contaminated(self):
         os.environ["FAKE_SAY"] = "I peeked at accept_tiny_greeting.py"  # the reviewer's reply says so
