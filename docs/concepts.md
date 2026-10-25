@@ -273,8 +273,9 @@ and its PR body. Otherwise it is rejected: not merged, its branch kept, `- rejec
 and a record in `.windvane/EXPERIMENTS.md` (the idea, its files, both sides' numbers) that the planner and the
 periodic sessions get, so an idea the bench turned down isn't planned again unless the ticket says what's different.
 If `main` moves on during the bench, the head is compared with the new `main`, benching only its side again when its
-results are missing. A bench that doesn't fit before the deadline sets the ticket aside for the next run; one cut off
-by a stop is run again by the next, reusing every run recorded meanwhile.
+results are missing. The approved head is saved until its bench ends: a bench run that doesn't fit before the
+deadline (checked before the critic, too) sets the ticket aside, and the next run, or this one after a restart, goes
+straight to the bench with no worker, critic or review paid for again, reusing every run recorded meanwhile.
 
 ## Questions and quiet times
 

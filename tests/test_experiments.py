@@ -25,7 +25,9 @@ from test_merge_draft import GH, args  # noqa: E402
 FAKE = ("import json, sys, time\n"
         "with open(sys.argv[2], 'a') as f:\n"
         "    for r in json.loads(sys.argv[1]):\n"
-        "        f.write(json.dumps({**r, 'run': f'{time.time_ns()}-fake'}) + '\\n')\n")
+        "        f.write(json.dumps({**r, 'run': f'{time.time_ns()}-fake'}) + '\\n')\n"
+        "if sys.argv[3:]:\n"  # then a stop, as `windvane stop` leaves it
+        "    open(sys.argv[3], 'w').close()\n")
 # main's recorded run: 4 of 10 hidden tests, 3 of 6 judge yeses, 100k weighted tokens over one merged ticket
 MAIN = {"passed": 4, "yes": 3, "weighted": 100_000, "merged": 1}
 # `pr view --json body` and `pr edit --body` on top of the fake gh of test_merge_draft
@@ -56,7 +58,7 @@ class Experiment(unittest.TestCase):
         self.p = Project(self.s.root)
         self.main = self.s.git("rev-parse", "HEAD")
         append_jsonl(bench.results(self.p), rec(self.main, seed="tiny", **MAIN))
-        self.calls, self.moved = [], None
+        self.calls, self.moved, self.stop_after_first = [], None, False
         self.addCleanup(setattr, experiment, "POLL", experiment.POLL)
         experiment.POLL = 0.05
         self.addCleanup(setattr, driver, "NAP", driver.NAP)
@@ -77,12 +79,16 @@ class Experiment(unittest.TestCase):
                     self.s.publish("Merge T-009: something else")
                     self.moved = self.s.git("rev-parse", "HEAD")
             return [sys.executable, "-c", FAKE, json.dumps([rec(sha, seed="tiny", **numbers)]),
-                    str(bench.results(p))]
+                    str(bench.results(p)), *[str(p.state / "STOP")] * self.stop_after_first]
         with mock.patch.object(experiment, "bench_command", command):
             pilot = driver.Pilot(self.p, args())
             pilot.sleep = lambda s: None
             pilot.run(now() + timedelta(hours=6))  # the bench's 240 min fit
         return pilot
+
+    def sessions(self, role):
+        calls = [json.loads(x) for x in (self.s.tmp / "calls.jsonl").read_text().splitlines()]
+        return sum(c["system"].startswith(f"# windvane {role} run") for c in calls)
 
     def head(self):
         """The experiment's head, as the bench was given it (a merged branch is gone from the remote)."""
@@ -155,15 +161,32 @@ class Experiment(unittest.TestCase):
         self.assertIn("- rejected: T-001 (hidden 7→6, judge 3→3, tokens/ticket +0%)",
                       self.on_main(".windvane/QUEUE.md").splitlines())
 
-    def test_a_bench_that_doesnt_fit_before_the_deadline_sets_the_ticket_aside(self):
+    def test_a_bench_that_doesnt_fit_before_the_deadline_sets_the_ticket_aside_before_its_review(self):
         self.make()
         with mock.patch.object(experiment, "bench_command", lambda p, a: self.fail("no bench should start")):
             pilot = driver.Pilot(self.p, args())
-            pilot.run(now() + timedelta(hours=1))
+            pilot.run(now() + timedelta(hours=1))  # a run is 60 min of seed runs and 30 for its one seed's judge
         self.assertEqual(pilot.merged, [])
-        self.assertIn("T-001: the experiment's bench (240 min) doesn't fit before the deadline", self.log())
-        self.assertEqual(self.log().count("T-001: worker run"), 1)  # set aside, not worked again and again
+        self.assertIn("T-001: the experiment's next bench run (up to 90 min) doesn't fit before the deadline",
+                      self.log())
+        self.assertEqual((self.sessions("worker"), self.sessions("review")), (1, 0))  # no review paid for, no rework
         self.assertIn("T-001", pilot.aside)
+
+    def test_a_bench_cut_off_by_a_stop_goes_on_in_the_next_run_without_a_worker_or_review(self):
+        self.make()
+        better = {**MAIN, "passed": 6}
+        self.stop_after_first = True
+        self.run_pilot([better, better])
+        self.assertEqual((len(self.calls), self.sessions("worker"), self.sessions("review")), (1, 1, 1))
+        self.assertIn("the next run benches it", self.log())  # a stop ends its job, or comes between two runs
+        (self.p.state / "STOP").unlink(missing_ok=True)  # the run that stopped may have cleared it
+        self.stop_after_first = False
+        pilot = self.run_pilot([better, better])
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.assertIn("T-001: t-001-work is still at its approved head", self.log())
+        self.assertEqual((self.calls, self.sessions("worker"), self.sessions("review")),
+                         ([self.head(), self.head()], 1, 1))  # the recorded run reused; nothing paid for twice
+        self.assertEqual(json.loads((self.p.state / "state.json").read_text()).get("benching"), {})
 
     def test_a_ticket_without_kind_experiment_merges_without_a_bench(self):
         self.make(kind="")

@@ -414,6 +414,7 @@ class Pilot(Desk, Periodic, Experiments):
         # ticket -> {"branch", "sha", "paths"}: a head held for the user for changing protected paths (protected_aside)
         self.held_protected = s.get("protected", {})
         self.landing = s.get("landing", {})  # ticket -> {"branch", "sha"}: an approved head whose merge failed
+        self.benching = s.get("benching", {})  # ticket -> {"branch", "sha"}: an approved experiment its bench owes
         # ticket -> when to try its merge again: kept in `landing` while its PR's required checks still run
         self.checking = {}
         # ticket -> {"since", "pr", "names", "quiet"}: when the run's wait for those checks began, what it waits on, and
@@ -516,6 +517,7 @@ class Pilot(Desk, Periodic, Experiments):
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
+                                        "benching": dict(self.benching),
                                         "protected": dict(self.held_protected),
                                         "refused": dict(self.refused),
                                         "checks": dict(self.check_wait), "scale_told": self.scale_told,
@@ -873,7 +875,7 @@ class Pilot(Desk, Periodic, Experiments):
         with self.lock:
             if self.checking.pop(tid, None) is None:  # not a wait's own retry: a new wait starts its clock over
                 self.check_wait.pop(tid, None)
-        if self.land_again(tid):
+        if self.land_again(tid) or self.bench_again(tid):
             return
         start_five = self.usage.five
         limit, kill_at, wrap = self.worker_times()
@@ -1161,6 +1163,8 @@ class Pilot(Desk, Periodic, Experiments):
         paths = self.protected_paths(sha)  # before the critic: no paid-for verdict on a head that can't merge
         if paths:
             return self.protected_aside(tid, branch, sha, paths)
+        if self.queue.kinds.get(tid) == "experiment" and not self.bench_fits(tid, sha):  # nor on one it can't bench
+            return
         ap = self.approved.get(tid)
         res = ap and critic.resolution(self.cd, ap["sha"], sha, p.upstream, ap.get("why"))
         if ap and not res:
@@ -1869,6 +1873,7 @@ class Pilot(Desk, Periodic, Experiments):
         scratch.drop(self.p, tid)
         self.failed.append(tid)
         self.approved.pop(tid, None)
+        self.benching.pop(tid, None)
         self.log(f"{tid}: FAILED: {why}" + (f"; once {once}, `windvane retry {tid}` merges the kept approval" if once
                                             else ""))
         self.save()  # `windvane queue` hints how to retry it to the tickets waiting on it

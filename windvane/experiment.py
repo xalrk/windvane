@@ -32,11 +32,13 @@ class Experiments:
 
     def experiment(self, tid, branch, sha):
         """Bench an approved experiment's head against main and keep or reject it: True to merge it now, None when it
-        isn't (rejected, failed, or cut off by a stop or the deadline: the next run benches it again, reusing every
-        run recorded meanwhile)."""
+        isn't (rejected, failed, or cut off by a stop or the deadline). Until it settles the head is saved
+        (`benching`), so the next run, or this one after a restart, benches it with no worker, critic or review run
+        again, reusing every bench run recorded meanwhile."""
         p = self.p
-        week = self.usage.week
-        which, said = bench.size(False, False, bench.week_now() if week is None else week, bench.week_limit())
+        self.benching[tid] = {"branch": branch, "sha": sha}
+        self.save()
+        which, said = self.bench_size()
         repeat = max(1, int(p.ap["experiment_repeat"]))
         for _ in range(MOVES):
             self.fetch()
@@ -44,10 +46,8 @@ class Experiments:
             if not bench.planned(p, base, which):
                 self.log(f"{tid}: Kind: experiment, but {p.main} has no bench seeds to measure it with; merged as "
                          "usual")
-                return True
-            todo = [(p.main, base)] * (not bench_runs(p, base, which)) + [("the head", sha)] * max(
-                0, repeat - len(bench_runs(p, sha, which)))
-            if todo and not self.bench_for(tid, todo, which, said):
+                return self.settled(tid)
+            if not self.bench_for(tid, todo(p, base, sha, which, repeat), which, said):
                 return None
             self.fetch()
             if gout(p.main_root(), "rev-parse", p.upstream) == base:
@@ -60,41 +60,85 @@ class Experiments:
         if lack:
             return self.fail(tid, f"the experiment's bench left no run of {' or '.join(lack)} to compare; log {log}")
         kept, numbers, why = bench.experiment_verdict(both, float(p.ap["experiment_saving"]))
-        table = bench.compare_table(both, which)
         if kept is None:
             return self.fail(tid, f"the experiment's bench counted no seed on both sides; log {log}")
         if not kept:
             return self.reject(tid, branch, sha, both, numbers, why)
         self.log(f"{tid}: experiment kept by the bench ({why}): {numbers}")
-        self.bench_body(tid, branch, numbers, why, table)
+        self.bench_body(tid, branch, numbers, why, bench.compare_table(both, which))
+        return self.settled(tid)
+
+    def settled(self, tid):
+        """The experiment's bench is over: nothing is owed on its head any more. True, for `experiment` to return."""
+        self.benching.pop(tid, None)
+        self.save()
         return True
 
-    def bench_for(self, tid, todo, which, said):
-        """One `windvane bench --ref <sha>` for each (side, sha) of `todo`, one after another, `experiment_minutes`
-        shared out among them. True once all ran (each records itself, or a judge failure shows as a run missing), else None:
-        a stop or the deadline ends the job, and a bench that doesn't fit before the deadline doesn't start."""
+    def bench_again(self, tid):
+        """An approved experiment whose bench didn't end (a stop, the deadline, a restart): while its branch still has
+        that head, straight to the bench and on to the merge if it's kept. True when it went there."""
+        p, owed = self.p, self.benching.get(tid)
+        if not owed:
+            return False
+        branch, sha = owed["branch"], owed["sha"]
+        if gout(p.main_root(), "rev-parse", "-q", "--verify", f"{p.remote}/{branch}") != sha:
+            self.benching.pop(tid)
+            self.save()
+            self.log(f"{tid}: {branch} moved off its approved head {sha[:7]}: the worker takes it up again")
+            return False
+        self.log(f"{tid}: {branch} is still at its approved head {sha[:7]}: straight to its bench")
+        if self.bench_fits(tid, sha) and self.experiment(tid, branch, sha):
+            self.integrate(tid, branch, sha)
+        return True
+
+    def bench_size(self):
+        """("full" or "small", why): by the weekly usage, as `windvane bench` sizes itself."""
+        week = self.usage.week
+        return bench.size(False, False, bench.week_now() if week is None else week, bench.week_limit())
+
+    def run_minutes(self, sha, which):
+        """The most one bench run at `sha` takes: its seeds build for `experiment_minutes` side by side, then each
+        seed's judge has up to JUDGE_MINUTES, one after another."""
+        return int(self.p.ap["experiment_minutes"]) + len(bench.planned(self.p, sha, which)) * bench.JUDGE_MINUTES
+
+    def bench_fits(self, tid, sha):
+        """Whether the experiment's next bench run fits before the deadline (or none is owed); if not, the ticket is
+        set aside for the rest of the run. Asked before the critic too, so no verdict is paid for on a head this run
+        can't bench."""
         p = self.p
-        minutes = int(p.ap["experiment_minutes"])
-        hours = (minutes - len(todo) * bench.JUDGE_MINUTES) / 60 / len(todo)
-        if hours < 0.25:
-            return self.fail(tid, f"`experiment_minutes` = {minutes} leaves under 15 min for each of the bench's "
-                                  f"{len(todo)} runs")
-        if now() + timedelta(minutes=minutes) > self.end():  # not worked again this run: its head waits as it is
-            held = self.put_aside(tid, f"its bench ({minutes} min) didn't fit before the deadline",
-                                  "a run with `experiment_minutes` left before its deadline benches it")
-            return self.log(f"{tid}: the experiment's bench ({minutes} min) doesn't fit before the deadline "
-                            f"({hhmm(self.end())}); set aside, the next run benches it{held}")
+        which, _ = self.bench_size()
+        base = gout(p.main_root(), "rev-parse", p.upstream)
+        left = todo(p, base, sha, which, max(1, int(p.ap["experiment_repeat"])))
+        need = left and self.run_minutes(left[0][1], which)
+        if not need or now() + timedelta(minutes=need) <= self.end():
+            return True
+        held = self.put_aside(tid, f"its next bench run ({need} min) didn't fit before the deadline",
+                              f"a run with {need} min left before its deadline benches it")
+        self.log(f"{tid}: the experiment's next bench run (up to {need} min) doesn't fit before the deadline "
+                 f"({hhmm(self.end())}); set aside, the next run benches it{held}")
+        return False
+
+    def bench_for(self, tid, runs, which, said):
+        """One `windvane bench --ref <sha>` for each (side, sha) of `runs`, one after another, each only once it fits
+        before the deadline. True once all ran (each records itself; a judge failure shows as a run missing), else
+        None: a run that doesn't fit sets the ticket aside, and a stop or the deadline ends the job."""
+        p = self.p
         name = job_name(tid)
         base = jobs.job_base(p, name)
-        for i, (side, sha) in enumerate(todo, 1):
+        hours = int(p.ap["experiment_minutes"]) / 60
+        for i, (side, sha) in enumerate(runs, 1):
+            if self.stopping_now() or (p.state / "STOP").exists():
+                return self.log(f"{tid}: the run stops before the experiment's bench ended; the next run benches it")
+            if not self.bench_fits(tid, sha):
+                return None
             args = ["--ref", sha, f"--{which}", "--hours", f"{hours:.3g}", "--cap", f"{self.a.cap:g}", "--week-cap",
                     f"{self.a.week_cap:g}"]
             try:
                 jobs.bg(p, name, bench_command(p, args), p.main_root(), quiet=True)
             except SystemExit as err:  # `bg` refuses with an exit; the driver goes on
                 return self.fail(tid, f"the experiment's bench didn't start: {err}")
-            self.log(f"{tid}: experiment bench {i} of {len(todo)}, {side} at {sha[:7]} ({which}: {said}; "
-                     f"{hours:.3g} h a seed); `windvane await {name}` follows it")
+            self.log(f"{tid}: experiment bench {i} of {len(runs)}, {side} at {sha[:7]} ({which}: {said}; up to "
+                     f"{self.run_minutes(sha, which)} min); `windvane await {name}` follows it")
             while jobs.alive(base):
                 if self.stopping_now() or (p.state / "STOP").exists() or now() >= self.end():
                     jobs.end_job(base, "windvane: the experiment's bench ended with the run")
@@ -121,6 +165,7 @@ class Experiments:
         p, cd = self.p, self.cd
         self.skip.add(tid)
         self.approved.pop(tid, None)
+        self.settled(tid)
         append_jsonl(p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "rejected"})
         self.log(f"{tid}: experiment rejected by the bench ({why}): {numbers}; branch {branch} kept, not merged")
         files = gout(p.main_root(), "diff", "--name-only", f"{p.upstream}...{sha}").split()
@@ -143,6 +188,13 @@ class Experiments:
             self.log(f"{tid}: its rejection record isn't on {p.main} ({where}): the next run benches it again")
         push(f"Rejected: {self.name(tid)}", f"The bench found it no better than {p.main} ({why}: {numbers}). Not "
              f"merged; branch {branch} kept" + ("." if ok else f"; the record waits on {where}."), 3, "test_tube")
+
+
+def todo(p, base, sha, which, repeat):
+    """The bench runs still owed, [(side, sha)]: main's when none is recorded at `base`, then the head's up to
+    `repeat`."""
+    return [(p.main, base)] * (not bench_runs(p, base, which)) + [("the head", sha)] * max(
+        0, repeat - len(bench_runs(p, sha, which)))
 
 
 def job_name(tid):
