@@ -2486,6 +2486,8 @@ class Pilot(Desk, Periodic, Experiments):
                 self.stop_reason = why
                 return
             waits = self.trial_check()  # first: a revert a killed driver began is finished before any pull
+            if self.halt:  # it couldn't be: the next pass stops the run, on this code
+                continue
             self.self_update()
             if waits or self.draining():
                 self.pause()
@@ -3147,7 +3149,7 @@ def undo_update(p, cd, home, trial, how, log):
     on the good code that way, else why it stops. Never two reverts without a ticket merged between them: a second bad
     update in a row stops the run, as only the user can tell what goes on. The trial stays (`reverting`) until the
     revert has landed: a driver killed meanwhile finishes it when it starts again (`trial_check`)."""
-    st, new, good = p.state, trial["new"][:8], trial["good"][:8]
+    st, new = p.state, trial["new"][:8]
     shas = [c[0][:8] for c in selfupdate.to_revert(p.main_root(), p.upstream, trial["good"], trial["new"]) or []]
     by_hand = (f". To go on, revert {', '.join(shas) or new} on {p.main} by hand (`git revert -m 1 <sha>` for a merge) "
                "or fix it, push, then start the run again")
@@ -3161,19 +3163,22 @@ def undo_update(p, cd, home, trial, how, log):
         _, ids, tid, sha = selfupdate.revert_update(p, cd, trial, how, log)
     except (selfupdate.Unreverted, SetupFailed) as e:
         selfupdate.end_trial(st)  # nothing reached main
-        then = "; land it, then start the run again" if str(e).startswith("the revert waits") else by_hand
+        waits = str(e).startswith("the revert waits")
+        if waits:  # once it merges, it counts: the next bad update stops the run
+            save_json(st / selfupdate.REVERTED, {"good": trial["good"], "waits": str(e)})
+        then = "; land it, then start the run again" if waits else by_hand
         return f"windvane {new} {how}, and it couldn't be reverted: {e}{then}"
     save_json(st / selfupdate.REVERTED, {"good": trial["good"], "revert": sha, "tickets": ids, "fix": tid})
     selfupdate.end_trial(st)
     said = []
     selfupdate.pull(home, said, trial["new"])
-    if selfupdate.code_changed(home, trial["good"]):
+    if not selfupdate.landed(home, "HEAD", trial["new"], trial["reverting"]):
         return (f"windvane {new} {how}; it is reverted on {p.main} ({sha[:8]}), but the install didn't take that "
                 f"up ({'; '.join(said) or 'it is elsewhere'})")
     back = f"; {', '.join(ids)} go{'es' * (len(ids) == 1)} again after it" if ids else ""
-    log(f"windvane {new} {how}: reverted on {p.main} in {sha[:8]}; {tid} is to fix it{back}; the run goes on on {good}")
+    log(f"windvane {new} {how}: reverted on {p.main} in {sha[:8]}; {tid} is to fix it{back}; the run goes on without it")
     push("windvane update reverted", whole(f"windvane {new} ", how, f". Reverted on {p.main} ({sha[:8]}); {tid} is to "
-                                                                     f"fix it{back}. The run goes on on {good}.",
+                                                                     f"fix it{back}. The run goes on without it.",
                                            log=log), 4, "rewind", ("Status=status",))
     return None
 

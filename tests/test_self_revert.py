@@ -126,7 +126,7 @@ class Crashes(Trial):
         self.assertEqual(self.titles(), ["windvane restarted", "windvane update reverted"])  # the 1st crash's, the revert's
         title, msg = self.pushes[-1]
         self.assertIn(f"Reverted on main", msg)
-        self.assertIn(f"The run goes on on {self.good[:8]}", msg)
+        self.assertIn("The run goes on without it.", msg)
         self.assertFalse((self.p.state / selfupdate.TRIAL).exists())
         self.assertTrue((self.p.state / selfupdate.REVERTED).exists())  # until a ticket merges
 
@@ -295,6 +295,12 @@ class Tickets(Trial):
     def test_a_revert_killed_after_it_landed_is_not_landed_twice(self):
         self.update("broken\n")
         self.killed(after_landing=True)
+        self.s.git("pull", "-q", "--ff-only", "origin", "main")
+        self.s.write("windvane/other.py", "x\n")  # more driver code lands meanwhile
+        self.s.git("add", "-A")
+        self.s.git("commit", "-qm", "other")
+        self.s.git("push", "-q", "origin", "main")
+        self.checkout = self.users_checkout()
         with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
             self.pilot().run(now() + timedelta(hours=2))
         self.assert_reverted("crashed the driver twice on trial (it exited with code 1 before its run began)")

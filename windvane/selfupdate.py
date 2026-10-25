@@ -229,7 +229,7 @@ def revert_update(p, cd, trial, how, log):
     root, good, new = p.main_root(), trial["good"], trial["new"]
     net.git(root, "fetch", "-q", p.remote)
     began = trial.get("reverting", {})
-    if "tid" in began and not run(["git", "diff", "--quiet", good, p.upstream, "--", *CODE], root).returncode:
+    if "tid" in began and landed(root, p.upstream, new, began):
         return p.main, began["ids"], began["tid"], began["sha"]  # landed before a kill: only what follows is left
     commits = to_revert(root, p.upstream, good, new)
     if not commits:
@@ -252,7 +252,7 @@ def revert_update(p, cd, trial, how, log):
             tid = planner.free_id(p, cd)
             fix_ticket(p, cd, tid, trial, how, commits, ids, revert)
         if "reverting" in trial:  # what a driver killed while this lands finds landed (`undo_update`)
-            trial["reverting"].update(ids=ids, tid=tid, sha=revert)
+            trial["reverting"].update(ids=ids, tid=tid, sha=revert, title=title)
             save_json(p.state / TRIAL, trial)
         git(cd, "add", "-A", p.tickets_rel, p.queue_rel)
         git(cd, *held.author_ident(p), "commit", "-q", "-m", f"{tid}: find and fix what broke windvane {new[:8]}")
@@ -263,6 +263,14 @@ def revert_update(p, cd, trial, how, log):
         raise Unreverted(f"the revert waits on {where}")
     log(f"windvane {new[:8]} reverted on {p.main} ({', '.join(ids) or 'no ticket'}); {tid} is to fix it")
     return where, ids, tid, revert
+
+
+def landed(root, upstream, new, began):
+    """Whether the revert a killed driver began (`began`: its commit and title) is on `upstream`: its commit, or one
+    with its title since `new` (a replay onto a main that moved has another sha), whatever landed after it."""
+    if not run(["git", "merge-base", "--is-ancestor", began["sha"], upstream], root).returncode:
+        return True
+    return any(s.startswith(began["title"]) for s in gout(root, "log", "--format=%s", f"{new}..{upstream}").splitlines())
 
 
 def fix_ticket(p, cd, tid, trial, how, commits, ids, revert):

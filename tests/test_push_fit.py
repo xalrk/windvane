@@ -236,7 +236,7 @@ def update_reverted(p, patch, s):
         (p.state / "crash.json").write_text(json.dumps({"error": LONG, "summary": "Merged: none."}))
         return 1
     driver.supervise(p, ["run"], now() + timedelta(hours=2), start=start, sleep=lambda s: None, home=home)
-    return {"windvane update reverted": ("crashed the driver twice", "Reverted on main", "The run goes on on")}
+    return {"windvane update reverted": ("crashed the driver twice", "Reverted on main", "The run goes on without it")}
 
 
 def restarted(p, patch, s):
