@@ -4,7 +4,7 @@ weekly usage is under `week_below`, and while what they spent this week plus the
 `week_share` points of the weekly limit, plus whatever the user allowed for this week (`windvane experiments allow`,
 or the one phone question a week at the cap).
 
-The account is the machine's, not a project's, so all of it is machine-wide, under `<state root>/_bench/`:
+The account is the machine's, not a project's, so all of it is machine-wide, under `<state root>/_budget/`:
 `spend.jsonl` gets a row at the end of every bench run (what it spent), `budget.json` this week's allowance and the
 caps already asked about. A bench's spend is the weekly reading's rise across its span times its share of the
 weighted tokens every windvane ledger on the machine logged in that span: work by hand at the same time isn't in any
@@ -31,11 +31,11 @@ def root():
 
 
 def spend_file():
-    return root() / "_bench" / "spend.jsonl"
+    return root() / "_budget" / "spend.jsonl"
 
 
 def state_file():
-    return root() / "_bench" / "budget.json"
+    return root() / "_budget" / "budget.json"
 
 
 def reading(extra=()):

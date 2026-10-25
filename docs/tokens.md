@@ -163,7 +163,7 @@ above`). `windvane stats --bench` lists every recorded run, a line each.
 
 **What the bench spends of the week.** A bench run's spend is the weekly usage reading's rise across its span, times
 its share of the weighted tokens every windvane ledger on the machine logged in that span, its judges included (a row
-per run in `_bench/spend.jsonl`, added up over the usage window's week by the [experiment
+per run in `_budget/spend.jsonl`, added up over the usage window's week by the [experiment
 budget](configuration.md#experiments)). Work by hand at the same time is in no ledger, so it counts as the bench's,
 which errs on the safe side.
 
