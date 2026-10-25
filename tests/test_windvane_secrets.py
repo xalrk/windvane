@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -16,16 +17,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import cli, doctor, driver, held, preflight, privacy  # noqa: E402
+from windvane import cli, doctor, driver, held, preflight, privacy, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import git, now  # noqa: E402
-from windvane.worktree import clean_detach, ensure_worktree  # noqa: E402
+from windvane.worktree import clean_detach, ensure_worktree, guard_pushes  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_plan_retry import Base  # noqa: E402
 from test_preflight import QUESTION  # noqa: E402
 
 TOKEN = "ghp_" + "Zq7" * 12
 TOPIC = "wv" + "bell" + "4417"
+NAME = "Ac" + "me"  # a project's own name, listed as a private word
+WORD = "Quillmoor"  # another private word
 GH = '#!/bin/sh\ncase "$*" in\n  "repo view"*) [ -n "$GH_VIS" ] || exit 1; echo "$GH_VIS";;\nesac\nexit 0\n'
 
 
@@ -195,6 +198,108 @@ class Land(Base):
         self.assertEqual(self.pushes, [])
 
 
+    def test_the_projects_own_name_is_no_private_word_in_its_own_repo(self):
+        terms = Path(os.environ["XDG_CONFIG_HOME"]) / "windvane/private-terms.txt"
+        terms.parent.mkdir(parents=True, exist_ok=True)
+        terms.write_text(f"Sandbox\nproj\n{WORD}\n")  # its config's name and its checkout's directory, and a word
+        self.assertTrue(self.land("Sandbox.Cart.Totals runs in proj")[0])
+        self.assertEqual(self.on_main(), "Sandbox.Cart.Totals runs in proj")
+
+
+class OwnName(unittest.TestCase):
+    """A private word that is a project's own name: its own repo holds it everywhere, other repos still mustn't."""
+
+    def setUp(self):
+        self.s = Sandbox()
+        self.addCleanup(self.s.close)
+        terms = Path(os.environ["XDG_CONFIG_HOME"]) / "windvane/private-terms.txt"
+        terms.parent.mkdir(parents=True)
+        terms.write_text(f"{NAME}\n{WORD}\n")
+        self.other = Project(self.s.root)  # named "sandbox"
+        self.acme = self.project(self.s.root, NAME.lower())
+
+    def project(self, root, name):
+        cfg = root / ".windvane/config.toml"
+        cfg.write_text(re.sub(r'(?m)^name = ".*"$', f'name = "{name}"', cfg.read_text()))
+        return Project(root)
+
+    def git(self, cwd, *args, env=None):
+        return subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True)
+
+    def commit(self, repo, text, env=None):
+        Path(repo, "spec.txt").write_text(text + "\n")
+        self.git(repo, "add", "spec.txt", env=env)
+        self.git(repo, "commit", "-qm", "spec", env=env)
+        return self.git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    def test_the_repro_is_refused_in_another_project_and_passes_in_its_own(self):
+        lines = [f'describe("{NAME}.Cart.Totals")', f"exec {NAME}.Order.Submit"]
+        for line in lines:
+            self.assertEqual(privacy.scan_text(line, privacy.SURE, privacy.own_names(self.other)), ["private-term"])
+            self.assertEqual(privacy.refusal(self.acme, line), "")
+            self.assertEqual(privacy.censor(line, privacy.own_names(self.acme)), line)  # a PR body in its own repo
+            self.assertNotIn(NAME, privacy.censor(line, privacy.own_names(self.other)))
+        self.assertEqual(privacy.scan_text(f"class F{NAME}Thing"), [])
+        self.assertIn("a word from private-terms.txt", privacy.refusal(self.acme, f"{NAME} and {WORD}"))
+        self.assertIn("a word from private-terms.txt", privacy.refusal(self.other, lines[1]))
+
+    def test_its_own_names_are_its_config_its_checkout_and_its_remotes_repo_exactly(self):
+        self.s.write(".windvane/config.toml", f'display_name = "{NAME} Shop"\n'
+                     + self.s.root.joinpath(".windvane/config.toml").read_text())
+        self.s.git("remote", "set-url", "origin", f"git@github.com:someone/{NAME}-Store.git")
+        self.assertEqual(privacy.own_names(Project(self.s.root)),
+                         {NAME.lower(), f"{NAME} Shop".lower(), "proj", f"{NAME}-store".lower()})
+        for url in (f"https://github.com/o/{NAME}", f"https://github.com/o/{NAME}.git/", f"/srv/git/{NAME}.git"):
+            self.assertEqual(privacy.repo_name(url), NAME)
+        tools = self.project(self.s.root, f"{NAME.lower()}-tools")  # `acme` isn't `acme-tools`, nor the reverse
+        self.assertEqual(privacy.scan_text(NAME, privacy.SURE, privacy.own_names(tools)), ["private-term"])
+        (Path(os.environ["XDG_CONFIG_HOME"]) / "windvane/private-terms.txt").write_text(f"{NAME}-tools\n")
+        self.assertEqual(privacy.scan_text(f"{NAME}-tools", privacy.SURE, privacy.own_names(self.acme)),
+                         ["private-term"])
+
+    def test_two_projects_and_one_term_naming_one_of_them(self):
+        tools = self.s.tmp / "tools"
+        self.git(self.s.tmp, "clone", "-q", str(self.s.remote), str(tools))
+        other = self.project(tools, "tools")
+        for p, repo in ((self.acme, self.s.root), (other, tools)):
+            self.git(repo, "switch", "-q", "-c", "t-001-spec")
+            head = self.commit(repo, f"{NAME}.Cart.Totals")
+            found = privacy.branch_found(p, repo, head)
+            self.assertEqual(found, [] if p is self.acme else [("private-term", f"spec.txt:1 in {head[:7]}")])
+            self.assertEqual(privacy.outgoing(repo, p.upstream, head, ".", privacy.guarded(p), privacy.own_names(p)),
+                             found)
+
+    def test_a_hook_push_of_its_own_name_from_its_worktree_goes_through_and_another_word_doesnt(self):
+        self.s.git("commit", "-qam", "acme")
+        self.s.git("push", "-q", "origin", "main")
+        wt = self.s.tmp / "work-1"
+        ensure_worktree(self.acme, wt, setup=False)
+        env = runner.env(guard_pushes(self.acme, wt), self.acme)
+        self.commit(wt, f"exec {NAME}.Order.Submit", env)
+        r = self.git(wt, "push", "-q", "origin", "HEAD:refs/heads/t-001-launch", env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.commit(wt, f"ask {WORD}", env)
+        r = self.git(wt, "push", "-q", "origin", "HEAD:refs/heads/t-001-launch", env=env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("a word from private-terms.txt at spec.txt:1", r.stderr)
+        self.project(self.s.root, "sandbox")  # the same line from a project of another name
+        self.git(wt, "reset", "-q", "--hard", "origin/main", env=env)
+        self.commit(wt, f"exec {NAME}.Order.Submit", env)
+        r = self.git(wt, "push", "-q", "origin", "HEAD:refs/heads/t-002-launch", env=env)
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_a_submodules_push_goes_by_its_remotes_name_not_the_outer_projects(self):
+        for remote, outer, ok in ((NAME, self.other, True), ("engine", self.acme, False)):
+            bare, sub = self.s.tmp / f"{remote}.git", self.s.tmp / f"sub-{remote}"
+            self.git(self.s.tmp, "init", "-q", "--bare", "-b", "main", str(bare))
+            self.git(self.s.tmp, "clone", "-q", str(bare), str(sub))
+            head = self.commit(sub, f"exec {NAME}.Order.Submit")
+            hook = sub / "pre-push"
+            hook.write_text(privacy.hook_script(outer.root, "", "", own_remote=True))
+            r = subprocess.run(["sh", str(hook), "origin", str(bare)], cwd=sub, capture_output=True, text=True,
+                               input=f"refs/heads/main {head} refs/heads/main {'0' * 40}\n")
+            self.assertEqual(r.returncode == 0, ok, (remote, r.stderr))
+
 class Merge(unittest.TestCase):
     def setUp(self):
         self.s = Sandbox()
@@ -318,6 +423,25 @@ class Public(unittest.TestCase):
         self.assertIn("a token: 1 place(s): .windvane/IDEAS.md:1 in ", out.getvalue())
         self.assertNotIn(TOKEN, out.getvalue())
 
+    def test_public_check_doesnt_count_the_repos_own_name_and_says_it_skipped_it(self):
+        terms = Path(os.environ["XDG_CONFIG_HOME"]) / "windvane/private-terms.txt"
+        terms.parent.mkdir(parents=True)
+        terms.write_text("Sandbox\n")
+        self.s.write("README", "Sandbox.Cart.Totals\n")
+        self.s.publish("spec")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(["-C", str(self.s.root), "public-check"])
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("Not counted: private-terms.txt lists this repository's own name", out.getvalue())
+        terms.write_text("Sandbox\n" + WORD + "\n")
+        self.s.write("README", WORD + "\n")
+        self.s.publish("word")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(["-C", str(self.s.root), "public-check"])
+        self.assertEqual(code, 1)
+        self.assertIn("a word from private-terms.txt: 1 place(s): README:1 in ", out.getvalue())
 
 if __name__ == "__main__":
     unittest.main()

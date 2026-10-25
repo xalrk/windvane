@@ -904,7 +904,7 @@ def comment(p, entry, pr):
         score = f"{'-' if s is None else f'{s:g}'}/10{f' ({dims})' if dims else ''}"
         r = net.call(["gh", "pr", "comment", pr, "--body", privacy.censor(
             f"**windvane critic: {score}, {entry['step']}** at {entry['sha']}\n\n"
-            f"{entry.get('critique', '').strip()[-6000:]}")], p.main_root())
+            f"{entry.get('critique', '').strip()[-6000:]}", privacy.own_names(p))], p.main_root())
         return r.returncode == 0
     return True
 

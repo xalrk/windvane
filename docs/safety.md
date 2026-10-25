@@ -279,7 +279,10 @@ project's logs, transcripts, critic packs and usage ledger (`~/.local/state/wind
 
 Never type a password, a token or a personal detail into an answer or a ticket. windvane catches the obvious ones:
 `windvane answer` refuses text holding a token, an ntfy URL or topic, a personal email address, or a word you listed
-in `~/.config/windvane/private-terms.txt` (one per line: a name, a client, an address). A change windvane is about to
+in `~/.config/windvane/private-terms.txt` (one per line: a name, a client, an address). A word that is exactly a
+project's own name (its `name` or `display_name`, its checkout's directory or its remote's repository name, ignoring
+case) is no private word in that project's own repository, which is named after it, and is still refused everywhere
+else: list a project there to keep your other repositories from naming it. A change windvane is about to
 push to main whose new `.windvane/` lines hold one stays on its local branch instead, and a ticket holding one isn't
 merged; either way your phone hears the kind and the file and line, never the text. These checks match patterns, so
 they can't catch everything you'd rather keep to yourself. A repository that stays private can let a kind through
@@ -333,7 +336,8 @@ private word, and this machine's home path, username and hostname. Each finding 
 in <commit>`, `message of <commit>`, `PR #12 comment`), never the text. It also checks workflows that hand a fork's
 pull request secrets, and on GitHub secret scanning and push protection, existing Actions runs and artifacts (they
 turn public too), and whether your account keeps its email private. Without `--github` it reads only the local
-repository; `windvane doctor --leaks` is the same check.
+repository; `windvane doctor --leaks` is the same check. It doesn't count the repository's own name as a private
+word (going public publishes it anyway), and says so when your `private-terms.txt` lists it.
 
 A later commit that deletes a secret doesn't help. Rewriting history doesn't reach forks, clones or GitHub's cached
 pull request refs, so [GitHub's advice](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)

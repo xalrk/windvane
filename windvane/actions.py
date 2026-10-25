@@ -734,9 +734,11 @@ def censored(a):
         return a
     try:
         sys.path.insert(0, WINDVANE)
-        from windvane.privacy import censor
+        from windvane import privacy
+        own = privacy.own_names_in(".")  # the repo the worker's PR or issue goes to
     except Exception:
         return a
+    censor = lambda text: privacy.censor(text, own)
 
     def body_file(path):
         try:

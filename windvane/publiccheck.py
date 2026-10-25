@@ -31,17 +31,18 @@ class ScanFailed(Exception):
     """A part of the scan couldn't run: the result would read as clean when it isn't."""
 
 
-def history(root):
+def history(root, own=frozenset()):
     """(findings, commits) for every commit on every ref, in one `git log -p` pass: [(kind, place)] for the lines each
     adds (by its diff to its first parent, as `privacy.added` reads it), the files it adds named like secrets, its
-    message, and its author's and committer's emails. A line added on two branches is listed once."""
+    message, and its author's and committer's emails. A line added on two branches is listed once. `own`: the repo's
+    own names (`privacy.own_names`), no private terms here."""
     cmd = ["git", "-c", "core.quotepath=off", "log", "--all", "-p", "-U0", "--no-color", "--no-ext-diff",
            "--no-textconv", "--no-renames", "--diff-merges=first-parent", "--format=%x01%h%x00%ae%x00%ce%n%B%x02"]
     try:  # streamed: a big repo's whole history needn't fit in memory; stderr to a file, so it can't fill a pipe
         with tempfile.TemporaryFile() as errf, \
                 subprocess.Popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=errf) as p, \
                 io.TextIOWrapper(p.stdout, encoding="utf-8", errors="replace", newline="\n") as out:
-            found, commits = parse(out)
+            found, commits = parse(out, own)
             p.wait()
             errf.seek(0)
             err = errf.read().decode("utf-8", "replace").strip()
@@ -52,9 +53,9 @@ def history(root):
     return found, commits
 
 
-def parse(lines):
+def parse(lines, own=frozenset()):
     """`history`'s reading of `git log -p` output, line by line."""
-    r = privacy.rules(tuple(privacy.NAMES))
+    r = privacy.rules(tuple(privacy.NAMES), own)
     found, seen, commits = [], set(), 0
     sha, name, n, head, message = "", "", 0, False, False
 
@@ -121,10 +122,10 @@ def why(e):
     return str(e) if isinstance(e, ScanFailed) else "gh's answer couldn't be read"
 
 
-def pull_requests(root):
+def pull_requests(root, own=frozenset()):
     """[(kind, place)] for the titles, bodies, comments and reviews of every pull request, open or closed, and the
     review comments on their lines."""
-    r = privacy.rules(tuple(privacy.NAMES))
+    r = privacy.rules(tuple(privacy.NAMES), own)
     prs = json.loads(gh(root, "pr", "list", "--state", "all", "--limit", "100000", "--json",
                         "number,title,body,comments,reviews", timeout=300) or "[]")
     texts = []
@@ -246,11 +247,15 @@ NEXT = f"""What to do next, in this order:
 def main(root, github=False):
     """Print the check; 0 when clean, 1 on a leak or a workflow to fix, 2 when the history or (with `github`) the PR
     scan failed. GitHub's settings warn without changing it: a private repo can't turn push protection on, and runs
-    already read stay counted."""
+    already read stay counted. The repo's own name isn't counted as a private term: going public publishes it."""
     print(f"windvane public-check: what {Path(root).name} would expose if its repository went public")
+    own = privacy.own_names_in(root)
+    if privacy.private_terms() - privacy.terms(own):
+        print("Not counted: private-terms.txt lists this repository's own name, which going public publishes anyway "
+              "(it is still refused in your other repositories)")
     failed, found, leaks = False, 0, 0
     try:
-        hist, commits = history(root)
+        hist, commits = history(root, own)
         print(f"History: {commits} commit(s) on every branch and tag, deleted files included")
         print("\n".join(grouped(hist)) or "  ok       nothing found")
         leaks += len(hist)
@@ -262,7 +267,7 @@ def main(root, github=False):
     if github:
         print("Pull requests: titles, bodies, comments and reviews")
         try:
-            prs = pull_requests(root)
+            prs = pull_requests(root, own)
             print("\n".join(grouped(prs)) or "  ok       nothing found")
             leaks += len(prs)
         except (ScanFailed, ValueError) as e:
