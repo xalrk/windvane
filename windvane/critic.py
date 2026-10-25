@@ -85,6 +85,7 @@ MAX_TURNS = "CLAUDE_CODE_MAX_TURNS"  # how a session's turns are capped (the dri
 TRIAL = "trial"  # what `critique` returns, with the reason, for a light read that asks for the full trial
 TRIAL_RE = re.compile(r"CRITIC: (\S+) trial\b[ \t:]*(.*)")
 SENT_BACK = "sent_back.jsonl"  # the state dir's record of the check's and the reviewer's send-backs
+ASKED = "a light read asking for the trial"  # its line there: every later critique of the ticket is the trial
 COVERED_RE = re.compile(r"[(\[]?[ \t]*covered by[ \t]+([A-Za-z]+-\d+[a-z]?)[ \t]*[)\]]?", re.I)
 NEW_TAG_RE = re.compile(r"[ \t]*[(\[][ \t]*new[ \t]*[)\]][ \t.]*$", re.I)
 
@@ -749,14 +750,16 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
             return got
         why = f"the light read asked for it: {got[1]}"
         told = {"depth": "full", "depth_why": cut(why), "asked_trial": cut(got[1])}
+        sent_back(p, tid, ASKED)  # before the trial: one that dies or gives no verdict is no way back to a light pass
     with tried(p, tid, cwd, rev, stop_if) as (tree, git_env, note):
         return critique(p, tid, cwd, rev, prompt("full", why), n, lad, usage, stop_if, retry, tree, git_env, note,
                         told)
 
 
 def sent_back(p, tid, by):
-    """Notes that `by` (the check, the reviewer) sent `tid` back, so `depth` gives its next critic the full trial: a
-    worker's own `windvane critic` runs outside the driver, which keeps its count of send-backs to itself."""
+    """Notes that `by` (the check, the reviewer, a light read's ASKED) sent `tid` back, so `depth` gives its next
+    critic the full trial: a worker's own `windvane critic` runs outside the driver, which keeps its count of
+    send-backs to itself."""
     append_jsonl(p.state / SENT_BACK, {"ticket": tid, "by": by})
 
 
@@ -801,7 +804,8 @@ def depth_part(tid, deep, why):
         return f"## Depth: full ({why})"
     return (f"## Depth: light ({why})\nA light read: no copy, no commands, at most {LIGHT_TURNS} turns. Judge on the "
             f"change above and the pack (`read: ...`, not `ran:`). If a fault could hide where only running it would "
-            f"show, reply with only `CRITIC: {tid} trial <what to try, and why>`: you then get the full trial.")
+            f"show, or a check needs a run to answer, reply with only `CRITIC: {tid} trial <what to try, and why>`: "
+            f"you then get the full trial.")
 
 
 def asked_trial(text, tid, norm):

@@ -178,6 +178,30 @@ class Depth(unittest.TestCase):
         self.assertEqual((rec["step"], rec["depth"]), ("none", "full"))
         self.assertIn("CRITIC STEP: none", out)
 
+    def test_a_trial_that_gives_no_verdict_is_still_owed_on_the_rerun(self):
+        self.change(3)
+        os.environ["FAKE_CRITIC_LIGHT"] = ASKS
+        os.environ["FAKE_CRITIC_TEXT"] = ASKS
+        out, _, rec = self.critic()
+        self.assertEqual(rec["step"], "none")
+        self.assertIn("run `windvane critic T-001` again", out)
+        os.environ["FAKE_CRITIC_TEXT"] = PASSES  # the rerun, as that line says, and the trial passes
+        _, calls, rec = self.critic()
+        self.assertEqual(self.labels()[3:], ["T-001-critic"], "straight to the trial: no second light read")
+        self.assertEqual((rec["depth"], rec["step"], rec["trial"]), ("full", "pass", "ran"))
+        self.assertIn(f"## Depth: full (sent back before, by {critic.ASKED})", calls[-1]["prompt"])
+
+    def test_a_light_read_out_of_turns_gets_the_trial(self):
+        self.change(3)
+        os.environ["FAKE_MAX_TURNS"] = "# windvane critic"
+        os.environ["FAKE_MAX_TURNS_IN"] = "## Depth: light"
+        self.addCleanup(os.environ.pop, "FAKE_MAX_TURNS", None)
+        self.addCleanup(os.environ.pop, "FAKE_MAX_TURNS_IN", None)
+        _, calls, rec = self.critic()
+        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic"])
+        self.assertEqual((rec["depth"], rec["step"]), ("full", "pass"))
+        self.assertEqual(rec["asked_trial"], f"it ran out of its {critic.LIGHT_TURNS} turns")
+
     def test_a_light_read_for_another_ticket_is_no_trial_ask(self):
         self.assertIsNone(critic.asked_trial(ASKS.replace("{tid}", "T-009"), "T-001", self.p.norm))
         self.assertIsNone(critic.asked_trial(READS.replace("{tid}", "T-001"), "T-001", self.p.norm))

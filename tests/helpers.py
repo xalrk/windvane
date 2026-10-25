@@ -90,7 +90,8 @@ if hang and system.startswith(os.environ.get("FAKE_HANG_ROLE", "")):
     time.sleep(60)
 if os.environ.get("FAKE_ERROR_FOR") and re.search(os.environ["FAKE_ERROR_FOR"], prompt.split("\n")[0]):
     step = "error"  # FAKE_ERROR_FOR: a regex on the prompt's first line ("Ticket T-001.", "Critique T-001.")
-if os.environ.get("FAKE_MAX_TURNS") and system.startswith(os.environ["FAKE_MAX_TURNS"]):
+if os.environ.get("FAKE_MAX_TURNS") and system.startswith(os.environ["FAKE_MAX_TURNS"]) and \
+        os.environ.get("FAKE_MAX_TURNS_IN", "") in prompt:  # FAKE_MAX_TURNS_IN: only a prompt holding these words
     emit({"type": "result", "subtype": os.environ.get("FAKE_LIMIT", "error_max_turns"), "is_error": True, "num_turns": 5,
           "result": ""})  # FAKE_LIMIT: which of its own limits it hit
     sys.exit(1)

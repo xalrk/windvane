@@ -152,7 +152,7 @@ class Gate(unittest.TestCase):
         last = read_jsonl(p.state / "critic.jsonl")[-1]
         self.assertEqual((last["score"], last["step"], last["unanswered"]), (2, "revise", ["safe"]))
         log = (p.state / "autopilot.log").read_text()
-        self.assertIn("T-001: critic 2/10 (works=2) (revise)", log)
+        self.assertIn("T-001: critic 2/10 (works=2) (revise, full)", log)
         self.assertIn("T-001: the critic left safe unanswered (counted as no)", log)
 
 
