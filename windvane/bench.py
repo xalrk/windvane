@@ -360,6 +360,32 @@ def ref_worktree(p, ref, path):
     return sha
 
 
+# What a bench run's numbers rest on in the measured worktree: the seeds and their hidden tests, and the scoring.
+YARDSTICK = ("bench", "windvane/bench_score.py")
+
+
+def yardstick_changed(wt, sha):
+    """The files of YARDSTICK in the worktree `wt` that differ from `sha`'s committed tree (edited, added, deleted or
+    committed on top), sorted: hidden tests or scoring changed after the worktree was made would score a run on
+    something other than the ref's own yardstick."""
+    diff = subprocess.run(["git", "diff", "--name-only", "--no-renames", sha, "--", *YARDSTICK], cwd=wt,
+                          capture_output=True, text=True)
+    new = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "--", *YARDSTICK], cwd=wt,
+                         capture_output=True, text=True)
+    if diff.returncode or new.returncode:
+        return [f"(git can't tell: {(diff.stderr or new.stderr).strip()[:200]})"]
+    return sorted(set((diff.stdout + new.stdout).split()))
+
+
+def refuse_changed(wt, sha):
+    """Stop the bench, saying why, rather than score with a yardstick that isn't `sha`'s committed one."""
+    changed = yardstick_changed(wt, sha)
+    if changed:
+        more = f" and {len(changed) - 5} more" if len(changed) > 5 else ""
+        raise SystemExit(f"bench: refusing to score: {', '.join(changed[:5])}{more} in the measured worktree {wt} "
+                         f"differ from {sha[:7]}'s committed tree; hidden tests and scoring must be the ref's own")
+
+
 def drop_worktree(p, path):
     subprocess.run(["git", "worktree", "remove", "--force", str(path)], cwd=p.main_root(), capture_output=True)
     shutil.rmtree(path, ignore_errors=True)
@@ -441,6 +467,7 @@ def one(p, a, ref, which, before):
     old = {s: signal.signal(s, stopped) for s in (signal.SIGTERM, signal.SIGHUP)}
     try:
         sha = ref_worktree(p, ref, wt)
+        refuse_changed(wt, sha)
         found = seeds(wt / "bench")
         if not found:
             raise SystemExit(f"bench: no seeds in bench/ at {ref}")
@@ -490,6 +517,7 @@ def run(p, a, chosen, base, wt, ref, sha, which, before):
             proc.wait()
             ended[s["name"]] = time.time()
         after = week_now([sp.state / "usage.json" for _, _, sp, *_ in procs])
+        refuse_changed(wt, sha)  # the seed runs are over: nothing is scored on a yardstick they could have edited
         for s, ts, sp, home, env, began, proc in procs:
             weighted_, usd, per = costs(sp, ts)
             hits = contamination(sp.state, needles(s, [p.main_root(), wt]))

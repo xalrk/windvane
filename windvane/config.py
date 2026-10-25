@@ -5,6 +5,7 @@ In git (shared by every checkout): `.windvane/config.toml`, `tickets/`, `QUEUE.m
 ledger, critic verdicts, check passes, background jobs, quiet times, and the autopilot's two worktrees.
 """
 import copy
+import fnmatch
 import os
 import re
 import subprocess
@@ -46,6 +47,9 @@ DEFAULTS = {
     "heavy_reuses": [],  # process-name regexes of helpers its heavy jobs reuse (an emulator): their memory counts free
     "overview_extra": "",  # a command whose output `windvane overview` adds (the project's own milestones)
     "shared_notes": [],  # notes files every ticket appends to: no Touches overlap, appended sections merge on their own
+    # path prefixes no ticket, plan or periodic branch may change (each `<file>:<key glob>`: that TOML file's keys);
+    # unset: PROTECTED when the project has bench/, else nothing
+    "protected": None,
     "scan_allow": [],  # leak kinds the guards on answers, pushes and merges let through (["private-term"]: a private repo)
     "models": {"worker": "opus", "worker_effort": "high", "reviewer": "opus", "reviewer_effort": "high",
                "critic": "opus", "critic_effort": "high", "planner": "opus", "planner_effort": "high",
@@ -368,6 +372,75 @@ def github_token(p):
     return token
 
 
+# What a benchmark's numbers rest on, protected by default when the project has `bench/`: the seeds and their hidden
+# tests, the judge's rules, the scoring, and the config keys that set protection and the experiments' budget.
+PROTECTED = ("bench/", "prompts/JUDGE.md", "windvane/bench_score.py", f"{DIR}/config.toml:experiment_*")
+# Always protected while anything is: a branch that could edit this key could unprotect the rest.
+SELF = f"{DIR}/config.toml:protected"
+
+
+def protected(v, root):
+    """`protected` as a list: the project's own (or PROTECTED when it has bench/ and sets none), plus SELF."""
+    if v is None:
+        v = list(PROTECTED) if (Path(root) / "bench").is_dir() else []
+    if not isinstance(v, list) or not all(isinstance(x, str) and x.strip("/ ") for x in v):
+        raise SystemExit(f"windvane: protected = {v!r} in config.toml: use a list of path prefixes, e.g. "
+                         f'protected = ["bench/", "{DIR}/config.toml:experiment_*"]')
+    return list(dict.fromkeys(v + [SELF])) if v else []
+
+
+def toml_keys(text):
+    """{dotted key: value} of every key in a TOML text, tables' keys included; None when it doesn't parse."""
+    try:
+        data = tomllib.loads(text or "")
+    except tomllib.TOMLDecodeError:
+        return None
+    out = {}
+
+    def walk(d, at):
+        for key, v in d.items():
+            out[at + key] = v
+            if isinstance(v, dict):
+                walk(v, f"{at}{key}.")
+            elif isinstance(v, list) and v and all(isinstance(x, dict) for x in v):  # [[array of tables]]
+                for i, x in enumerate(v):
+                    walk(x, f"{at}{key}.{i}.")
+    walk(data, "")
+    return out
+
+
+def protected_changes(root, base, head, rules):
+    """What `head` changes of the protected paths `rules` since `base`, sorted: each path under a prefix, and
+    `<file> (key)` for a protected key of a TOML file whose value differs (a file that no longer parses counts as
+    changing them all). Renames count on both sides. Git alone, no network."""
+    if not rules:
+        return []
+    r = subprocess.run(["git", "diff", "--name-only", "--no-renames", base, head], cwd=root, capture_output=True,
+                       text=True)
+    names = r.stdout.split("\n") if r.returncode == 0 else []
+    names = [n for n in names if n]
+    under = lambda path, rule: path == rule.rstrip("/") or path.startswith(rule.rstrip("/") + "/")  # noqa: E731
+    hits = {n for n in names for rule in rules if ":" not in rule and under(n, rule)}
+    keyed = {}
+    for rule in (x for x in rules if ":" in x):
+        f, glob = rule.split(":", 1)
+        keyed.setdefault(f, []).append(glob)
+    for f, globs in keyed.items():
+        if f not in names:
+            continue
+        sides = [toml_keys(subprocess.run(["git", "show", f"{rev}:{f}"], cwd=root, capture_output=True,
+                                          text=True).stdout) for rev in (base, head)]
+        if sides[1] is None:
+            hits |= {f"{f} ({g})" for g in globs}
+            continue
+        old = sides[0] or {}
+        for key in sorted(set(old) | set(sides[1])):
+            if any(fnmatch.fnmatchcase(key.rsplit(".", 1)[-1], g) for g in globs) and \
+                    old.get(key) != sides[1].get(key):
+                hits.add(f"{f} ({key})")
+    return sorted(hits)
+
+
 def toplevel(start=None):
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=start or os.getcwd(), capture_output=True,
                        text=True)
@@ -409,6 +482,7 @@ class Project:
         self.shared_notes = notes(c["shared_notes"])
         env_keep(c["env"]["keep"])
         token_path(self)
+        self.protected = protected(c["protected"], self.root)
 
     def main_root(self):
         """The main checkout, also when `root` is one of its worktrees."""

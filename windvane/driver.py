@@ -34,11 +34,11 @@ from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .heavy import minutes
 from .held import (CHECK_FIELDS, MERGE_STATES, author_ident, base_required, blocked_by, check_name, merge_state,
-                   never_started, push_held, required_checks, running_checks, start_hint)
+                   merge_words, never_started, push_held, required_checks, running_checks, start_hint)
 from .periodic import Periodic, clear_asked, live_benches
 from .phone import NTFY, REASON, cut, whole
 from .planner import plan
-from .config import CHECKOUT, DIR, HOME, TokenError, exe, slots
+from .config import CHECKOUT, DIR, HOME, TokenError, exe, protected_changes, slots
 from .jobs import check, tail, waited
 from .questions import (answered, desk_answers, drop_answers, give_answer, keys, mode, note, parts, phone_answer,
                         provisional, qkey, quiet_note, quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on,
@@ -100,6 +100,7 @@ SELF_INFLICTED = (("prompt is too long", "Split the ticket, or trim what it read
 MAX_TURNS = "CLAUDE_CODE_MAX_TURNS"  # an environment variable: windvane's own reaches every session
 NEW_MAX_TURNS = f"This run keeps its {MAX_TURNS}: set the new one, then start `windvane run` again once it ends."
 REWRITE = "Rewrite its branch without the secret, as its push says: runs leave it be until then."  # a secret's set-aside fix, for the queue hint
+LAND_BY_HAND = "Land it by hand if the change is right, or drop its protected changes: runs leave it be until then."
 
 
 
@@ -329,6 +330,27 @@ def dropped_unseen(p):
     return out
 
 
+def land_by_hand(p, branch):
+    """The commands that land a ticket branch held for changing protected paths: its PR's merge on github (the worker
+    opened it), else a merge into main."""
+    if p.cfg["forge"] == "github":
+        return f"review its PR and merge it: `gh pr merge {branch} --merge`"
+    return merge_words(p.cfg["forge"], p.remote, branch, p.main)
+
+
+def protected_lines(p):
+    """`windvane status`'s lines on the tickets held for changing protected paths, read only: one main has since
+    taken (landed by hand) isn't listed."""
+    root, out = p.main_root(), []
+    for tid, g in sorted(load_json(p.state / "state.json", {}).get("protected", {}).items()):
+        if subprocess.run(["git", "merge-base", "--is-ancestor", g["sha"], p.upstream], cwd=root,
+                          capture_output=True).returncode == 0:
+            continue
+        out.append(f"held for you: {tid} ({g['branch']}) changes protected paths ({', '.join(g['paths'])}); "
+                   f"if it's right, {land_by_hand(p, g['branch'])}")
+    return out
+
+
 def merged(p, key, done):
     """Whether a question's ticket has merged (`T-003`, or `T-003.q2` of several), by `done` (a Queue's is_done)."""
     tid = p.norm(key.split(".")[0])
@@ -383,6 +405,8 @@ class Pilot(Desk, Periodic):
         self.costs = s.get("costs", [])  # 5-hour-window points each ticket took
         self.approved = s.get("approved", {})  # ticket -> its approved head bounced off main: {"sha", "why"}
         self.secrets = s.get("secrets", {})  # ticket -> {"branch", "sha"}: a head set aside for a secret (secret_aside)
+        # ticket -> {"branch", "sha", "paths"}: a head held for the user for changing protected paths (protected_aside)
+        self.held_protected = s.get("protected", {})
         self.landing = s.get("landing", {})  # ticket -> {"branch", "sha"}: an approved head whose merge failed
         # ticket -> when to try its merge again: kept in `landing` while its PR's required checks still run
         self.checking = {}
@@ -486,6 +510,7 @@ class Pilot(Desk, Periodic):
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
+                                        "protected": dict(self.held_protected),
                                         "refused": dict(self.refused),
                                         "checks": dict(self.check_wait), "scale_told": self.scale_told,
                                         "settled_as": dict(self.settled_as), "late": list(self.late),
@@ -771,6 +796,46 @@ class Pilot(Desk, Periodic):
             with self.lock:
                 self.secrets.pop(tid, None)
             self.log(f"{tid}: {s['branch']} {why}; back in the queue")
+
+    def protected_paths(self, rev):
+        """The protected paths (`protected` in config.toml) `rev` changes since it left main: what measures windvane,
+        which no session's branch may change, or its numbers could improve without anything else doing so."""
+        root, p = self.p.main_root(), self.p
+        return protected_changes(root, gout(root, "merge-base", p.upstream, rev) or p.upstream, rev, p.protected)
+
+    def protected_aside(self, tid, branch, sha, paths):
+        """Hold a ticket whose branch changes protected paths for the user: not merged, its branch kept, and later
+        runs leave it be while its head stays `sha` (`protected_unchanged`), so no session is paid for it again. One
+        push names the paths and how to land it by hand; `windvane status` lists it until it is landed or changed."""
+        p = self.p
+        with self.lock:
+            self.held_protected[tid] = {"branch": branch, "sha": sha, "paths": paths}
+        held = self.put_aside(tid, f"it changes protected paths ({', '.join(paths)})", LAND_BY_HAND)
+        self.log(f"{tid}: not merged: {branch} changes protected paths: {', '.join(paths)}; held for you{held}")
+        push(f"Held: {self.name(tid)}",
+             whole("Not merged: it changes protected paths: ", ", ".join(paths), ".", log=self.log)
+             + f"\nIf the change is right, land it by hand: {land_by_hand(p, branch)}. Until its branch changes, runs "
+             "leave it be." + self.held_line(tid), 4, "warning")
+
+    def protected_unchanged(self):
+        """Hold again, without a session, each ticket `protected_aside` held whose branch still changes protected
+        paths; one landed by hand, deleted, or rid of those changes goes back to the queue as usual."""
+        root = self.p.main_root()
+        for tid, g in list(self.held_protected.items()):
+            if tid in self.skip:
+                continue
+            head = gout(root, "rev-parse", "-q", "--verify", f"{self.p.remote}/{g['branch']}")
+            paths = head and (g["paths"] if head == g["sha"] else self.protected_paths(head))
+            if paths:
+                with self.lock:
+                    self.held_protected[tid] = {**g, "sha": head, "paths": paths}
+                held = self.put_aside(tid, f"it changes protected paths ({', '.join(paths)})", LAND_BY_HAND)
+                self.log(f"{tid}: {g['branch']} still changes protected paths ({', '.join(paths)}); left be{held}")
+                continue
+            with self.lock:
+                self.held_protected.pop(tid, None)
+            self.log(f"{tid}: {g['branch']} {'no longer changes protected paths' if head else 'is gone'}; back in "
+                     "the queue")
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
@@ -1084,6 +1149,9 @@ class Pilot(Desk, Periodic):
                                   "Push the final head, then finish READY with its full sha.")
             return self.log(f"{tid}: READY head {sha[:12]} isn't pushed; back to the worker")
         self.refused.pop(tid, None)
+        paths = self.protected_paths(sha)  # before the critic: no paid-for verdict on a head that can't merge
+        if paths:
+            return self.protected_aside(tid, branch, sha, paths)
         ap = self.approved.get(tid)
         res = ap and critic.resolution(self.cd, ap["sha"], sha, p.upstream, ap.get("why"))
         if ap and not res:
@@ -1343,6 +1411,9 @@ class Pilot(Desk, Periodic):
                 self.conflicted(tid)
                 return self.bounce(tid, "conflict")
             merge = gout(cd, "rev-parse", "HEAD")
+            paths = protected_changes(cd, p.upstream, merge, p.protected)  # what the merge itself would change
+            if paths:
+                return self.protected_aside(tid, branch, sha, paths)
             found = privacy.outgoing(cd, p.upstream, merge, DIR, privacy.guarded(p), privacy.own_names(p))
             if found:  # before the check: no paid-for check on a merge that can't go out
                 return self.secret_aside(tid, branch, sha, found)
@@ -2161,6 +2232,7 @@ class Pilot(Desk, Periodic):
         busy = sorted(self.running)
         # merged this run: a slot can merge and free itself after this pass's fetch, so the queue may not show it yet
         self.secrets_unchanged()
+        self.protected_unchanged()
         avoid = set(self.skip) | set(busy) | set(self.merged)
         waits = []  # set whole at the end: another thread may read `self.waits` while this pass runs git
         for t, at in dict(self.checking).items():

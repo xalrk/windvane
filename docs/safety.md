@@ -91,6 +91,17 @@ call the real `gh` by its full path; for a hard stop, log `gh` in with a token t
   week, stopping new work `min_slot` minutes before the deadline, and stopping any session at the deadline.
 - **Talking to your phone**: sessions never see the topics; every push is censored first.
 
+### The yardstick is protected
+
+A project that measures itself, as windvane does with `windvane bench`, can be made to look better by changing the
+measure instead of the work: a looser hidden test, a kinder judge, a seed left out. So no session's change may touch
+the paths in `protected`: by default, when the project has `bench/`, the seeds and their hidden tests, the judge's
+rules (`prompts/JUDGE.md`), the scoring (`windvane/bench_score.py`), and the config keys that set protection and the
+experiments' budget. The driver checks a ticket's branch before its critic run and again before the merge, and a
+plan's or periodic round's before it lands; one that changes a protected path isn't merged. Its branch is kept and
+held for you, with one push naming the paths and how to land it by hand, and `windvane status` lists it. The bench
+itself refuses to score when its measured worktree's `bench/` or scoring differs from the ref's committed tree.
+
 `windvane stop` ends a run after its current ticket; `windvane stop --now` kills every session of the run (workers,
 reviewers, the critics and background jobs they started) and leaves the worktrees, so the next run resumes the work. A
 nested session that ignores the stop is killed outright a few seconds later, and if the driver itself dies, the next

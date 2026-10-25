@@ -7,6 +7,11 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `protected` in `.windvane/config.toml`: paths no session's change may touch. By default, in a project with
+  `bench/`, the benchmark's seeds and hidden tests, the judge's rules, the scoring and the config keys that set
+  protection and the experiments' budget. A ticket, plan or periodic branch that changes one isn't merged: its branch
+  is kept and held for you, one push names the paths and how to land it by hand, and `windvane status` lists it. The
+  bench refuses to score when its measured worktree's `bench/` or scoring differs from the ref's committed tree.
 - `windvane bench` has a blind judge: after the hidden tests, one session per seed tries a copy of the finished
   project as its user would, on about eight yes/no checks in the seed's `hidden/JUDGE.md`, knowing its goal and
   tickets but not the critic's scale or verdicts, the pass mark or the windvane ref. Its yes count, answers and
