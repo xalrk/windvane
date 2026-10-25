@@ -23,7 +23,7 @@ from pathlib import Path
 
 from .phone import cut
 from .questions import blocks, part, ticket_of, waiting_on
-from .util import gout, log_has, log_paths, shell_path
+from .util import git, gout, log_has, log_paths, shell_path
 
 ANSWERED = "it's answered"  # (a quote can't go in an f-string's braces before Python 3.12)
 PEOPLE = ("the user", "user", "you")  # outside items that stand for someone's answer, not a milestone
@@ -321,13 +321,23 @@ class Queue:
             rows += [f"{'':8} hint: {h}" for h in said.get(t, [])]
         hidden = len(self.order) - len(order)
         if hidden:
-            rows.append(f"{hidden} done: their titles are in {self.p.tickets_rel}/ ({more})")
+            rows.append(f"{hidden} more done: their titles are in {self.p.tickets_rel}/ ({more})")
         return "\n".join(rows)
 
     def next_id(self, taken=()):
         """The id after every ticket on the ref and every id in `taken`. A path that writes a ticket calls
         `planner.free_id` instead, which counts every place an id can be claimed."""
         return id_after(self.p, [*self.files, *taken])
+
+
+def mend_queue(p, cd):
+    """QUEUE.md in checkout `cd` with a line break where a session's shell `>>` joined its first bullet onto the last
+    line of HEAD's QUEUE.md, which didn't end in one: joined, that ticket would lose its place in the queue."""
+    f, head = cd / p.queue_rel, git(cd, "show", f"HEAD:{p.queue_rel}")
+    before = head.stdout if head.returncode == 0 else ""
+    after = f.read_text() if before and not before.endswith("\n") and f.is_file() else ""
+    if after.startswith(before) and after[len(before):].strip():
+        f.write_text(before + "\n" + after[len(before):])
 
 
 def id_after(p, ids):

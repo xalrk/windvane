@@ -46,14 +46,14 @@ class Listing(unittest.TestCase):
         self.assertEqual([r.split()[0] for r in rows[:5]], ["T-204", "T-201", "T-202", "T-203", "T-205"])
         self.assertTrue(all(r.split()[1] in ("todo", "waiting") for r in rows[:5]))
         self.assertEqual(rows[5].split()[:2], ["T-050", "done"])  # T-203 depends on it
-        self.assertEqual(rows[6], "199 done: their titles are in .windvane/tickets/ "
+        self.assertEqual(rows[6], "199 more done: their titles are in .windvane/tickets/ "
                                   "(grep before filing one that may repeat them)")
         self.assertEqual(len(rows), 7)
 
     def test_a_ticket_merged_this_run_stays(self):
         rows = Queue(self.p).listing(compact=True, keep=["T-007"]).splitlines()
         self.assertIn("T-007", [r.split()[0] for r in rows])
-        self.assertTrue(rows[-1].startswith("198 done:"))
+        self.assertTrue(rows[-1].startswith("198 more done:"))
 
     def test_a_long_title_is_cut_at_a_word(self):
         row = next(r for r in Queue(self.p).listing(compact=True).splitlines() if r.startswith("T-202"))
@@ -69,7 +69,7 @@ class Listing(unittest.TestCase):
     def test_queue_leads_with_the_open_tickets_and_all_lists_every_one(self):
         rows = self.queue_cli().splitlines()
         self.assertEqual(rows[0].split()[0], "T-204")
-        self.assertIn("199 done: their titles are in .windvane/tickets/ (`windvane queue --all` lists them)", rows)
+        self.assertIn("199 more done: their titles are in .windvane/tickets/ (`windvane queue --all` lists them)", rows)
         self.assertLess(len(rows), 10)
         every = [r.split()[0] for r in self.queue_cli("--all").splitlines() if r.startswith("T-")]
         self.assertEqual(len(every), 205)
@@ -82,7 +82,15 @@ class Listing(unittest.TestCase):
         listing = prompt.split("## Existing tickets (id, status, title)\n")[1].split("\n\n")[0].splitlines()
         self.assertEqual([r.split()[0] for r in listing[:7]], ["T-204", "T-201", "T-202", "T-203", "T-205", "T-007",
                                                                 "T-050"])
-        self.assertTrue(listing[7].startswith("198 done:"))
+        self.assertTrue(listing[7].startswith("198 more done:"))
+
+    def test_a_bullet_appended_to_a_queue_without_a_last_newline_gets_its_own_line(self):
+        self.s.write(".windvane/QUEUE.md", "# Queue\n- T-204 four")  # a shell `>>` would join onto it
+        self.s.publish("no newline")
+        planner.plan(self.p, "more", use_followups=False)
+        branch = self.s.git("ls-remote", "--heads", "origin", "plan-*").split("refs/heads/")[1]
+        self.assertEqual(self.s.git("show", f"origin/{branch}:.windvane/QUEUE.md"),
+                         "# Queue\n- T-204 four\n- T-206 planned")
 
 
 if __name__ == "__main__":

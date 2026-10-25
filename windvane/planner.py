@@ -10,7 +10,7 @@ from pathlib import Path
 from . import actions, critic, login, net, privacy, requests
 from .held import OWN_BRANCHES, author_ident, free_name, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
-from .queue import Queue, folder_ids, id_after, ref_ids
+from .queue import Queue, folder_ids, id_after, mend_queue, ref_ids
 from .runner import NO_REQUEST, plain_error, rules, run_claude
 from .util import edit_json, git, gout, last_match, load_json, log, now, push, run, same_process, save_json, stamp
 from .worktree import clean_detach, ensure_worktree
@@ -345,6 +345,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=()):
         m = last_match(PLAN_RE, again)  # a re-ask cut off or failed has none: the plan is dropped and kept below
         if m:  # the commit and the PR still carry the first reply: the re-ask's is only the line
             text = f"{text.rstrip()}\n{m.group(0)}"
+    mend_queue(p, cd)
     changed = changed_paths(cd)
     if killed or not m or not changed:
         why = killed or error or (m.group(0) if m else "no PLAN line")

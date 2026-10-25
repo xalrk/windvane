@@ -58,7 +58,9 @@ release on the same day adds a number (`2026.10.9.1`).
 - Plan and periodic triage sessions get only the open tickets in their listing, with the done ones as a count
   (one an open ticket depends on, or merged this run, stays): thousands of tokens less on every turn on a repository
   with a few hundred done tickets, and it no longer grows with every merge. `windvane queue` shows the same, open tickets
-  first; `windvane queue --all` lists every ticket. Titles in both are cut at a word.
+  first; `windvane queue --all` lists every ticket. Titles in both are cut at a word. Sessions append their queue
+  lines without reading QUEUE.md; one that didn't end in a line break no longer gets a ticket joined onto its
+  last line.
 - The run's last push puts what needs you first (questions, provisional answers, failures, tickets set aside, the
   heavy-job settings to change), then what merged as a count and ids, then the critic's scores; no title shows twice.
   One past ntfy's 4,096 bytes loses the critic's scores, then merge ids, never a line you have to act on.
