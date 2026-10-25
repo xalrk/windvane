@@ -62,7 +62,9 @@ class Periodic:
         run, never loops), or None."""
         e = self.asked_due()
         if e:
-            return dict(e, bench="start") if e["builtin"] == "bench" else e
+            if e["builtin"] == "bench":  # a regression's ticket first: a new round would overwrite its verdict
+                return dict(e, bench="land" if self.bench_due(e) == "land" else "start")
+            return e
         for e in self.p.periodic.values():
             if e["builtin"] == "bench":
                 due = self.bench_due(e)
@@ -533,6 +535,7 @@ class Periodic:
         why = ("stopped" if (p.state / "STOP").exists() else
                f"weekly usage at {week:g}% (cap {self.a.week_cap:g}%)" if week is not None and week >= self.a.week_cap
                else "a bench round is running already" if st.get("job") and jobs.alive(Path(st["job"]))
+               else "the last round's regression is still to be ticketed" if st.get("verdict") == "regression"
                else f"{head[:7]} is the windvane last benchmarked: nothing to compare" if base == head else "")
         if why or not self.periodic_fits(e):
             if why:
@@ -578,7 +581,9 @@ class Periodic:
             lack = (f"no run of {st['head'][:7]}" if not head else f"no run of {st['base'][:7]}" if not base
                     else "no seed counted on both sides")
             self.log(f"{name}: bench ended (exit {code}) with {lack} to compare; log {st['job']}.log")
-            self.periodic_failed(name, f"the bench ended (exit {code}) with {lack} to compare; log {st['job']}.log")
+            self.periodic_failed(name, f"the bench ended (exit {code}) with {lack} to compare; log {st['job']}.log. "
+                                 f"It runs again after the next change to its paths, or now with `windvane periodic "
+                                 f"{name}`.")
             st["verdict"] = "failed"
         elif not st["base"]:
             self.log(f"{name}: bench baseline recorded at {st['head'][:7]}: {bench.summary(head[-1])}")

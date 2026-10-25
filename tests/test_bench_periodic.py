@@ -207,6 +207,24 @@ class Rounds(Base):
         _, pushed = self.start([])
         self.assertEqual(pushed.call_count, 1)
         self.assertIn("bench round failed", pushed.call_args[0][0])
+        self.assertIn("It runs again after the next change to its paths, or now with `windvane periodic bench`.",
+                      pushed.call_args[0][1])
+
+    def test_an_ask_while_a_regression_waits_lands_its_ticket_first(self):
+        self.make()
+        self.record(rec(self.first))
+        self.merge("Merge T-006: a shorter worker prompt", "prompts/WORKER.md")
+        pilot = self.pilot()
+        with self.fake([{"passed": 4}]), mock.patch.object(periodic, "push"):
+            pilot.periodic(pilot.periodic_due())
+            self.ended()
+            self.assertEqual(pilot.periodic_due()["bench"], "land")
+            periodic.ask(self.p, "bench")
+            due = pilot.periodic_due()
+            self.assertEqual((due["bench"], due.get("asked")), ("land", True))
+            pilot.periodic(due)
+            self.assertEqual(Queue(self.p).order, ["T-001"])
+            self.assertEqual(periodic.asked(self.p), ["bench"])  # still asked: a round starts at the next gap
 
 
 class Caps(Base):
