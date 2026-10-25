@@ -708,9 +708,7 @@ def num(v, key, sign=False):
 def compare_table(both, which):
     """Per seed and in all: each measure's mean on A and B and B minus A. With repeats, a difference past the spread
     of either side's own runs is marked; without them, a line says one run can't tell a small one from noise."""
-    counted = lambda rs: {r["seed"]: r for r in rs if not r["contaminated"]}
-    per = [[counted(rs) for rs in s["runs"]] for s in both]
-    common = sorted(set.intersection(*(set(c) for side in per for c in side)))
+    per, common = counted(both)
     seen = sorted({r["seed"] for s in both for rs in s["runs"] for r in rs})
     A, B = both
     if not common:
@@ -722,10 +720,7 @@ def compare_table(both, which):
     for seed in common + ["all"]:
         names = common if seed == "all" else [seed]
         for i, (key, label) in enumerate(MEASURES):
-            vals = [[value([c[n] for n in names], key) for c in side] for side in per]
-            means = [None if not v or None in v else sum(v) / len(v) for v in vals]
-            spread = max((max(v) - min(v) for v in vals if v and None not in v), default=0)
-            delta = None if None in means else means[1] - means[0]
+            means, spread, delta = measure(per, names, key)
             past = repeats and delta is not None and abs(delta) > spread
             marked += past
             tot = [out_of([c[n] for n in names], key) for c in (per[0][0], per[1][0])]
@@ -740,3 +735,83 @@ def compare_table(both, which):
     elif not marked:
         out.append("no difference past the spread of either side's own runs")
     return "\n".join(out)
+
+
+def counted(both):
+    """Each side's runs as {seed: record} without the contaminated ones, and the seeds counted in every run of both."""
+    per = [[{r["seed"]: r for r in rs if not r["contaminated"]} for rs in s["runs"]] for s in both]
+    common = sorted(set.intersection(*(set(c) for side in per for c in side))) if all(per) else []
+    return per, common
+
+
+def measure(per, names, key):
+    """One measure over the seeds `names`: (each side's mean over its runs, the wider spread of either side's own
+    runs, B minus A), None where a run has no value (no judge, nothing merged)."""
+    vals = [[value([c[n] for n in names], key) for c in side] for side in per]
+    means = [None if not v or None in v else sum(v) / len(v) for v in vals]
+    spread = max((max(v) - min(v) for v in vals if v and None not in v), default=0)
+    return means, spread, None if None in means else means[1] - means[0]
+
+
+COST_UP = 25  # a [[periodic]] bench's `bench_cost_up`: % more weighted tokens per merged ticket that is a regression
+QUALITY = (("hidden", "hidden tests"), ("judge", "judge yes"))
+
+
+def past_noise(delta, spread, repeats):
+    """T-277's noise rule: with repeats, a difference wider than either side's own spread; with one run a side, more
+    than one hidden test or judge check."""
+    return delta is not None and abs(delta) > (spread if repeats else 1)
+
+
+def regression(both, cost_up=COST_UP):
+    """Whether B (the newer side) did worse than A past the noise: hidden tests or judge yeses down, or weighted
+    tokens per merged ticket up more than `cost_up` % with neither quality number up. (the reasons, [] when it
+    didn't, or None when no seed was counted on both sides; a line per seed that moved)."""
+    per, common = counted(both)
+    if not common:
+        return None, []
+    repeats = max(len(s["runs"]) for s in both) > 1
+    why, up = [], False
+    for key, label in QUALITY:
+        _, spread, d = measure(per, common, key)
+        if past_noise(d, spread, repeats):
+            up |= d > 0
+            why += [f"{label} down {num(-d, key)}"] if d < 0 else []
+    (a, _), spread, d = measure(per, common, "per_merged")
+    if not up and d is not None and a and d > a * cost_up / 100 and (not repeats or d > spread):
+        why.append(f"weighted tokens per merged ticket up {d / a:.0%} (more than {cost_up:g}%)")
+    return why, [line for seed in common if (line := moved(per, seed, cost_up))]
+
+
+def moved(per, seed, cost_up):
+    """`seed: hidden tests 5/8 → 3/8, ...` for the measures that changed on this seed, or ""."""
+    parts = []
+    for key, label in (("merged", "merged"), *QUALITY, ("per_merged", "tokens/merged")):
+        (a, b), _, d = measure(per, [seed], key)
+        if not d or (key == "per_merged" and not (a and abs(d) > a * cost_up / 100)):
+            continue
+        tot = [out_of([side[0][seed]], key) for side in per]
+        parts.append(f"{label} {num(a, key)}{tot[0]} → {num(b, key)}{tot[1]}")
+    return f"{seed}: {', '.join(parts)}" if parts else ""
+
+
+def headline(both):
+    """`hidden tests 12/14 → 10/14, judge yes 5/6 → 5/6, tokens/merged 410k → 520k` over the seeds both counted."""
+    per, common = counted(both)
+    if not common:
+        return "no seed counted on both sides"
+    parts = []
+    for key, label in (*QUALITY, ("per_merged", "tokens/merged")):
+        (a, b), _, _ = measure(per, common, key)
+        tot = [out_of([side[0][n] for n in common], key) for side in per]
+        parts.append(f"{label} {num(a, key)}{tot[0] * (a is not None)} → {num(b, key)}{tot[1] * (b is not None)}")
+    return ", ".join(parts)
+
+
+def summary(recs):
+    """`hidden tests 12/14, judge yes 5/6, 410k tokens/merged` of one run, its counted seeds only."""
+    good = [r for r in recs if not r["contaminated"]]
+    if not good:
+        return "no seed counted"
+    parts = [f"{label} {num(value(good, key), key)}{out_of(good, key)}" for key, label in QUALITY]
+    return ", ".join(parts + [f"{num(value(good, 'per_merged'), 'per_merged')} tokens/merged"])

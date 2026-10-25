@@ -18,20 +18,27 @@ then, and is dropped when the run ends.
 
 An entry with `builtin = "project-critic"` needs no prompt: it runs the critic on the whole project (`critic.project`),
 whose points an open ticket covers land as that ticket's notes, and whose new ones a `then` triage gets.
+
+An entry with `builtin = "bench"` measures windvane itself after changes to what its sessions are told or do: once
+tickets touching its `after_touch` paths have merged since the last recorded bench run, it starts `windvane bench
+compare <that run's commit> <main>` as a background job (the first time, a baseline: `bench --ref <main>`), and the
+run goes on with tickets meanwhile. When the job ends, a regression past the noise rule (`bench.regression`) is
+written up as one ticket and one push; anything else is one log line. It never reverts anything.
 """
 import difflib
 import os
 import re
 import tomllib
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import critic, phone, requests
-from .config import DIR, periodic as periodic_entries, permissions
+from . import bench, critic, jobs, phone, requests
+from .config import DIR, exe, periodic as periodic_entries, permissions
 from .questions import quiet_now
 from .queue import Queue, mend_queue, title as title_of
 from .runner import NO_REQUEST, plain_error
-from .util import append_jsonl, edit_json, git, gout, hhmm, last_match, load_json, now, push, run_limited
+from .util import (append_jsonl, edit_json, git, gout, hhmm, last_match, load_json, now, push, read_jsonl, run_limited,
+                   save_json)
 
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
 SCORE_RE = re.compile(r"\bscore=(-?\d+(?:\.\d+)?)\b")
@@ -55,8 +62,13 @@ class Periodic:
         run, never loops), or None."""
         e = self.asked_due()
         if e:
-            return e
+            return dict(e, bench="start") if e["builtin"] == "bench" else e
         for e in self.p.periodic.values():
+            if e["builtin"] == "bench":
+                due = self.bench_due(e)
+                if due:
+                    return dict(e, bench=due)
+                continue
             if e["every"] and len(self.merged) - self.periodic_at.get(e["name"], 0) >= e["every"]:
                 return e
             if e["after_group"] and len(self.merged) > self.groups_wait.get(e["name"], -1) and self.groups_finished(e):
@@ -137,6 +149,8 @@ class Periodic:
         land the tickets they wrote. Whatever else they changed is discarded with the tree."""
         from .planner import release_ids, snapshot
         from .worktree import clean_detach
+        if e["builtin"] == "bench":
+            return self.bench_land(e) if e.get("bench") == "land" else self.bench_start(e)
         p, cd, done, prev = self.p, self.p.ci_dir, set(), None
         entries = self.asked_chain if e.get("asked") else p.periodic
         if cd == p.work_dir and any(self.owner.values()):
@@ -483,6 +497,138 @@ class Periodic:
         self.log(f"{name}: no answer; the tickets are held")
         return "hold"
 
+    def bench_due(self, e):
+        """A bench entry's turn: "land" once its finished job found a regression (a ticket to write, in a quiet gap),
+        "start" when tickets touching its `after_touch` paths merged since the windvane last benchmarked (or since
+        the last round started, so a failed one waits for new changes), or nothing is recorded yet (a baseline);
+        else None. A finished job's verdict is read here, once. Main's head is looked at only when it moved."""
+        p, name = self.p, e["name"]
+        st = load_json(bench_file(p, name), {})
+        if st.get("job") and jobs.alive(Path(st["job"])):
+            return None
+        if st.get("job") and not st.get("verdict"):
+            st = self.bench_verdict(e, st)
+        if st.get("verdict") == "regression":
+            return "land" if len(self.merged) > self.bench_wait.get(name, -1) else None
+        head = gout(p.main_root(), "rev-parse", p.upstream)
+        if not (e["after_touch"] and head):
+            return None
+        if self.bench_seen.get(name, ("",))[0] != head:
+            base = last_benched(p, head)
+            since = newer(p, base, st.get("head"), head)
+            due = (since is None or since != head and bool(touching(p, since, head, e["after_touch"]))) and "start"
+            self.bench_seen[name] = (head, due or None)
+        return self.bench_seen[name][1]
+
+    def bench_start(self, e):
+        """Start the bench on main as it is now, in the background: a compare with the windvane last benchmarked,
+        sized by the weekly usage (`bench.size`), with the run's caps, its `minutes` shared out among the runs to do.
+        Not over the weekly cap, after a stop, or when its `minutes` don't fit before the deadline."""
+        p, name = self.p, e["name"]
+        self.fetch()
+        head = gout(p.main_root(), "rev-parse", p.upstream)
+        self.bench_seen[name] = (head, None)  # tried at this head, started or not: due again after a new change
+        base, week = last_benched(p, head), self.usage.week
+        st = load_json(bench_file(p, name), {})
+        why = ("stopped" if (p.state / "STOP").exists() else
+               f"weekly usage at {week:g}% (cap {self.a.week_cap:g}%)" if week is not None and week >= self.a.week_cap
+               else "a bench round is running already" if st.get("job") and jobs.alive(Path(st["job"]))
+               else f"{head[:7]} is the windvane last benchmarked: nothing to compare" if base == head else "")
+        if why or not self.periodic_fits(e):
+            if why:
+                self.log(f"{name}: bench not started: {why}")
+                if e.get("asked"):
+                    self.asked_taken(e, f"{why}.")
+            return
+        which, said = bench.size(False, False, bench.week_now() if week is None else week, bench.week_limit())
+        todo = 1 if base is None else 1 + (not bench_runs(p, base, which))
+        hours = (e["minutes"] - todo * bench.JUDGE_MINUTES) / 60 / todo
+        if hours < 0.25:
+            self.log(f"{name}: bench not started: {e['minutes']} min leave under 15 min for each of its {todo} runs")
+            return
+        if e.get("asked"):
+            self.asked_taken(e)
+        args = (["--ref", head] if base is None else ["compare", base, head]) + [
+            f"--{which}", "--hours", f"{hours:.3g}", "--cap", f"{self.a.cap:g}", "--week-cap", f"{self.a.week_cap:g}"]
+        touched = touching(p, base, head, e["after_touch"]) if base else []
+        job = bench_job(p, name)
+        jobs.bg(p, job.name, bench_command(p, args), p.main_root(), quiet=True)
+        save_json(bench_file(p, name), {"job": str(job), "base": base, "head": head, "size": which,
+                                        "after": f"{datetime.now():%Y%m%d-%H%M%S}", "touched": touched})
+        self.bench_mine.add(name)
+        what = (f"a baseline at {head[:7]}" if base is None else f"{base[:7]} against {head[:7]}, after "
+                + ", ".join(t for t, *_ in touched) if touched else f"{base[:7]} against {head[:7]}")
+        self.log(f"{name}: bench started in the background ({what}; {which}: {said}; up to {e['minutes']} min); "
+                 f"log {job}.log")
+
+    def bench_verdict(self, e, st):
+        """The ended job's verdict, saved with the round: a baseline or no regression is one log line, a regression
+        waits for a quiet gap to be ticketed (`bench_land`), a job that left nothing to compare is one push."""
+        p, name = self.p, e["name"]
+        head = bench_runs(p, st["head"], st["size"], st["after"])
+        base = st["base"] and bench_runs(p, st["base"], st["size"])
+        both = [{"name": st[k][:7], "sha": st[k], "runs": rs[-1:]} for k, rs in (("base", base), ("head", head)) if rs]
+        why, moved = bench.regression(both, e["bench_cost_up"]) if len(both) == 2 else (None, [])
+        if not head or st["base"] and why is None:
+            code = jobs.exit_code(Path(f"{st['job']}.exit"), 0)
+            lack = (f"no run of {st['head'][:7]}" if not head else f"no run of {st['base'][:7]}" if not base
+                    else "no seed counted on both sides")
+            self.log(f"{name}: bench ended (exit {code}) with {lack} to compare; log {st['job']}.log")
+            self.periodic_failed(name, f"the bench ended (exit {code}) with {lack} to compare; log {st['job']}.log")
+            st["verdict"] = "failed"
+        elif not st["base"]:
+            self.log(f"{name}: bench baseline recorded at {st['head'][:7]}: {bench.summary(head[-1])}")
+            st["verdict"] = "baseline"
+        elif why:
+            st.update(verdict="regression", why=why, moved=moved, numbers=bench.headline(both),
+                      table=bench.compare_table(both, st["size"]))
+            self.log(f"{name}: bench regression, {st['base'][:7]} → {st['head'][:7]}: {'; '.join(why)} "
+                     f"({st['numbers']}); a ticket follows at the next quiet gap")
+        else:
+            self.log(f"{name}: bench {st['base'][:7]} → {st['head'][:7]}: no regression ({bench.headline(both)})")
+            st["verdict"] = "flat"
+        save_json(bench_file(p, name), st)
+        return st
+
+    def bench_land(self, e):
+        """Write the regression up as one ticket, landed where the entry's `land` says (near by default), and one
+        push. Nothing is reverted: the ticket names what merged in between, both sides' numbers and the seeds that
+        moved, for a worker to find the cause."""
+        from .planner import pick_ids, release_ids
+        from .worktree import clean_detach
+        p, cd, name = self.p, self.p.ci_dir, e["name"]
+        if cd == p.work_dir and any(self.owner.values()) or not self.keep_changes(f"the {name} round"):
+            self.log(f"{name}: the bench regression's ticket waits for the next gap: the checkout is busy")
+            self.bench_wait[name] = len(self.merged)
+            return
+        st = load_json(bench_file(p, name), {})
+        self.fetch()
+        clean_detach(p, cd, p.upstream)
+        try:
+            tid = pick_ids(p, "periodic", 1, cd, own="periodic")[0]
+            self.handed = {tid}
+            old_q = gout(cd, "show", f"HEAD:{p.queue_rel}")
+            try:
+                landed, held = self.land_periodic(cd, {f"{p.tickets_rel}/{tid}.md": regression_ticket(tid, st)}, [tid],
+                                                  (old_q, old_q), {}, e["land"] or "near", name, st["numbers"])
+            finally:
+                clean_detach(p, cd, p.upstream)
+        finally:
+            release_ids(p, "periodic")
+        save_json(bench_file(p, name), dict(st, verdict="ticketed", ticket=tid))
+        where = "queued" if landed else f"on {held[tid]}, not merged" if tid in held else "not landed"
+        push(f"{name}: bench regression", phone.cut(f"{'; '.join(st['why'])} after {after_list(st)}. {tid} written "
+                                                    f"({where}); nothing was reverted.", log=self.log), 4, "warning")
+
+    def bench_at_end(self):
+        """The run's end ends the bench jobs it started (one a desk's `windvane periodic` started runs on): the round
+        fitted before the deadline when it started, and no run would be left to read its verdict."""
+        for name in sorted(self.bench_mine):
+            st = load_json(bench_file(self.p, name), {})
+            if st.get("job") and jobs.end_job(Path(st["job"]), "windvane: bench ended with the run"):
+                save_json(bench_file(self.p, name), dict(st, verdict="ended"))
+                self.log(f"{name}: bench ended with the run ({self.stop_reason or 'its end'}); nothing compared")
+
 
 def asked(p):
     """The names asked for with `windvane periodic <name>` while a run was on, oldest first."""
@@ -643,3 +789,94 @@ def output(text, cd):
             body = "(not text: open it yourself)"
         out.append(f"### {path} ({f})\n{body}")
     return "\n\n".join(out)
+
+
+def bench_file(p, name):
+    """A bench entry's round, carried across restarts: its job, the commits it compares, then its verdict."""
+    return p.state / f"bench-{name}.json"
+
+
+def bench_job(p, name):
+    """The background job a bench entry starts: `windvane await periodic-<name>` follows it from the desk."""
+    return p.state / "bg" / f"periodic-{name}"
+
+
+def bench_command(p, args):
+    """The command a bench round runs: this windvane's `bench`, on the project's own checkout."""
+    return [*exe(), "-C", str(p.main_root()), "bench", *args]
+
+
+def bench_runs(p, sha, size, after=""):
+    """The recorded bench runs of `sha` at `size` a compare would reuse (no judge failed), from run id `after` on."""
+    return [rs for rs in bench.runs_of(p).values() if rs[0].get("sha") == sha and rs[0].get("size") == size
+            and str(rs[0].get("run")) >= after and not any(map(bench.judge_failed, rs))]
+
+
+def last_benched(p, head):
+    """The newest commit in `head`'s history with a recorded bench run (the windvane last benchmarked), or None."""
+    shas = {r.get("sha") for r in read_jsonl(bench.results(p))} - {None}
+    for sha in gout(p.main_root(), "rev-list", head).split() if shas else ():
+        if sha in shas:
+            return sha
+    return None
+
+
+def newer(p, a, b, head):
+    """The later of commits `a` and `b` (either may be None) in `head`'s history; one not in it doesn't count."""
+    on = [c for c in (a, b) if c and git(p.main_root(), "merge-base", "--is-ancestor", c, head).returncode == 0]
+    if len(on) == 2 and git(p.main_root(), "merge-base", "--is-ancestor", on[0], on[1]).returncode == 0:
+        return on[1]
+    return on[0] if on else None
+
+
+def touching(p, since, head, prefixes):
+    """[[ticket (or short sha), subject, [paths]]] for each change on main's first-parent line after `since` (a
+    ticket's merge, or a commit pushed to main) that touched a path under one of `prefixes`, oldest first."""
+    text = gout(p.main_root(), "log", "--first-parent", "-m", "--name-only", "--reverse", "--format=%x01%H%x00%s",
+                f"{since}..{head}")
+    out = []
+    for chunk in text.split("\x01")[1:]:
+        top, *paths = chunk.strip("\n").split("\n")
+        sha, subject = top.split("\x00", 1)
+        hit = [f for f in paths if f and any(f.startswith(x) for x in prefixes)]
+        if hit:
+            m = re.search(rf"\b{p.id_re}\b", subject, re.I)
+            out.append([p.norm(m.group(0)) if m else sha[:7], subject, hit])
+    return out
+
+
+def after_list(st, most=4):
+    """`T-277, T-278 and 3 more`: the changes a bench round came after, or its commit."""
+    names = [t for t, *_ in st.get("touched", [])]
+    return (", ".join(names[:most]) + (f" and {len(names) - most} more" if len(names) > most else "")
+            or st["head"][:7])
+
+
+def regression_ticket(tid, st):
+    """The ticket a bench regression writes: what got worse, what merged in between, both sides' numbers."""
+    base, head = st["base"][:7], st["head"][:7]
+    merged = [f"- {t}: {subject} ({', '.join(paths[:5])}{', …' * (len(paths) > 5)})"
+              for t, subject, paths in st.get("touched", [])]
+    return "\n".join([
+        f"# {tid}: Bench regression after {after_list(st)}", "Depends on: nothing.", "",
+        "## Goal",
+        f"The bench of main at {head} did worse than at {base}, the windvane last benchmarked: {'; '.join(st['why'])}."
+        " Find which change in between caused it and fix it, or show why it is worth its cost. Nothing was reverted.",
+        "", "## Merged in between", *(merged or ["- (none recorded)"]), "",
+        f"## The numbers: `windvane bench compare {base} {head}` ({st['size']})", "```", st["table"], "```", "",
+        "## Seeds that moved", *([f"- {m}" for m in st["moved"]] or ["- none alone: the difference is in the total"]),
+        "", "## Done when",
+        f"- `windvane bench compare {base} HEAD` shows no regression past the noise, or the PR shows why the new cost "
+        "is worth it.", ""])
+
+
+def bench_status(p):
+    """`windvane status`'s lines on the bench rounds running in the background."""
+    out = []
+    for name, e in p.periodic.items():
+        st = load_json(bench_file(p, name), {}) if e["builtin"] == "bench" else {}
+        if st.get("job") and jobs.alive(Path(st["job"])):
+            began = datetime.fromtimestamp(Path(st["job"] + ".start").stat().st_mtime)
+            what = f"{st['base'][:7]} against {st['head'][:7]}" if st["base"] else f"a baseline at {st['head'][:7]}"
+            out.append(f"bench: periodic {name} running since {began:%H:%M} ({what}); log {st['job']}.log")
+    return out
