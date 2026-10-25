@@ -70,7 +70,7 @@ def partials(p, patch, s):
     pl = pilot(p, worktree=True)
     pl.partials["T-001"] = p.ap["partials"] - 1
     pl.handle("T-001", f"RESULT: PARTIAL T-001 {LONG}", None)
-    return {"Set aside": ("ran out of time", "Split it.", "Branch kept.")}
+    return {"Set aside": ("ran out of time", "`windvane new`", "Branch kept.")}
 
 
 def held_for_good(p, patch, s):

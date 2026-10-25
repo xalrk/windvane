@@ -106,7 +106,8 @@ class SetupText(unittest.TestCase):
         titles = [t for t, _ in self.pushes]
         self.assertEqual(titles[-1], "windvane stopped")
         self.assertNotIn("couldn't start", " ".join(titles))
-        self.assertTrue(self.pushes[-1][1].startswith("Why: asked to stop.\nMerged: do T-001"), self.pushes[-1][1])
+        self.assertTrue(self.pushes[-1][1].startswith("Why: asked to stop.\nWaiting on you: none.\nFailed: none.\n"), self.pushes[-1][1])
+        self.assertIn("\nMerged 1: T-001.", self.pushes[-1][1])
 
 
 if __name__ == "__main__":

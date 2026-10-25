@@ -178,7 +178,7 @@ class CalledOff(unittest.TestCase):
         self.assertEqual(self.sessions(), [])
         self.assertEqual(self.stopped_pushes(), [
             "Why: asked to stop as this window (daily 12:00-20:00) started; nothing ran; the schedule ends: no later "
-            "window starts.\nMerged: none.\nWaiting on you: none.\nFailed: none.\n"])
+            "window starts.\nWaiting on you: none.\nFailed: none.\nMerged: none."])
 
 
 if __name__ == "__main__":

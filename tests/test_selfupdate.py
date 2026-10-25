@@ -247,7 +247,7 @@ class Driver(unittest.TestCase):
         self.assertEqual(again.merged, ["T-001", "T-003"])
         self.assertEqual((again.failed, again.plans), (["T-002"], 1))
         self.assertNotIn("T-002: worker run", self.log())
-        self.assertIn("Merged: do T-001 (T-001); do T-003 (T-003). Waiting on you: none. Failed: do T-002 (T-002)", self.log())
+        self.assertIn("Waiting on you: none. Failed: do T-002 (T-002). 5h 10% · week 20%. Merged 2: T-001, T-003.", self.log())
         self.assertFalse((self.p.state / "restart.json").exists())
 
     def test_a_fresh_start_forgets_an_old_restart_file(self):

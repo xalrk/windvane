@@ -90,11 +90,21 @@ class FailedPush(Base):
         self.assertTrue(msg.endswith(f". Branch kept, run goes on.\nOnce fixed, it merges the kept approval: {RETRY}"),
                         msg)
 
-    def test_the_workers_own_failed_has_no_retry(self):
+    def test_the_workers_own_failed_names_the_log_and_the_retry(self):
         os.environ["FAKE_WORKER"] = "failed"
         pilot = self.run_pilot()
         self.assertEqual(pilot.failed, ["T-001"])
-        self.assertEqual(self.pushed("Failed"), "the API it needs is gone. Branch kept, run goes on.")
+        log = shell_path(self.p.state / "autopilot.log")
+        self.assertEqual(self.pushed("Failed"), "the API it needs is gone. Branch kept, run goes on.\n"
+                                                f"Log: {log}; once fixed, {RETRY}")
+        self.assertIn("T-001: FAILED: the API it needs is gone", self.log())  # the line the log holds for it
+
+    def test_a_failure_as_the_run_ends_names_the_log_without_a_retry(self):
+        pilot = driver.Pilot(self.p, args())
+        pilot.ending = True
+        pilot.fail("T-001", "the API it needs is gone")
+        self.assertEqual(self.pushed("Failed"), "the API it needs is gone. Branch kept.\n"
+                                                f"Log: {shell_path(self.p.state / 'autopilot.log')}.")
 
 
 class PushRefused(Base):
