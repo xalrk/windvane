@@ -90,7 +90,7 @@ release on the same day adds a number (`2026.10.9.1`).
 ### Changed
 - The heavy queue lets a short job go before a long one: a job that usually runs 5 minutes or less goes ahead of a
   waiting one at least three times as long, so a 1-minute check no longer waits behind a 25-minute render. The long
-  job is passed over 15 minutes in all at most (or its own run time, if less); jobs never timed keep arrival order,
+  job is passed over 15 minutes in all at most (or its own run time, if less); jobs with no recorded time or `--expect` keep arrival order,
   and a measurement is never passed. Both jobs' logs and `heavy --status` say who was let by.
 - The critic no longer fails a check for want of the project's check or full suite passing: its rules say the
   driver runs the check on the final head after it, so it judges the tests it ran on the change. A scale check

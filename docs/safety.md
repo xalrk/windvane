@@ -151,8 +151,8 @@ it wait until it has run, or until the load has stayed up `measure_hold` minutes
 load isn't theirs: it lets them by again). A short job goes before a long one too: one that usually runs 5 minutes
 or less goes ahead of one that runs at least three times as long (a 1-minute check behind a 25-minute render), while
 that long job has been passed over less than 15 minutes in all, or its own run time if less, so a stream of short
-jobs can't starve it. Both need a known time (recorded runs, else `--expect`); a job never timed keeps its place, and
-a measurement is never passed. The long job's log says `letting pid 41 by, a short job (1 min; this job 25 min)` and
+jobs can't starve it. Both need a known time (recorded runs, else `--expect`); a job with neither keeps its place, and
+a measurement is never passed. The long job's log says `letting pid 41 by, a short job (1 min; this job 25 min, passed over 3 min of 15 min at most)` and
 the short job's `going ahead of pid 12 (25 min) as a short job (1 min)`. Only these let a job by: one that a `busy`
 process holds up keeps everyone behind it waiting.
 While it waits, its log says who holds the lock (pid, command, since when), how many jobs are ahead of it and about

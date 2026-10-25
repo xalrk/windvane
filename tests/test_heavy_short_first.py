@@ -105,11 +105,10 @@ class Queue(unittest.TestCase):
         f.write_text(json.dumps({heavy.job_key(self.cmd(n, then), str(self.d)): [m]
                                  for n, (m, then) in minutes.items()}))
 
-    def job(self, cmd, cap=15):
+    def job(self, cmd, cap=15, log=None):
         p = subprocess.Popen([sys.executable, "-c", RUN, cmd, str(cap), str(self.d)], env=self.env,
-                             stderr=subprocess.PIPE, text=True)
-        n = len(self.queued())
-        self.until(lambda: len(self.queued()) > n)  # in line before the next one comes
+                             stderr=open(log, "w") if log else subprocess.PIPE, text=True)
+        self.until(lambda: any(n.endswith(f"-{p.pid}") for n in self.queued()))  # in line before the next comes
         return p
 
     def queued(self):
@@ -122,10 +121,14 @@ class Queue(unittest.TestCase):
             self.assertLess(time.time(), end, "timed out")
             time.sleep(0.05)
 
-    def hold(self):
+    def hold(self, stale=None):
+        """Hold the lock until `go` appears, as an older windvane's job would (no line of its own); with `stale`, a
+        line a killed holder left in the lock file stays in it."""
         go = self.d / "go"
-        holder = subprocess.Popen([sys.executable, "-c", HOLD, str(self.d / "windvane-heavy.lock"),
-                                   str(self.d / "held"), str(go)])
+        if stale:
+            (self.d / "windvane-heavy.lock").write_text(json.dumps(stale))
+        holder = subprocess.Popen([sys.executable, "-c", HOLD.replace("'w'", "'a'", 1),
+                                   str(self.d / "windvane-heavy.lock"), str(self.d / "held"), str(go)])
         self.until((self.d / "held").exists)
         return holder, go
 
@@ -140,7 +143,7 @@ class Queue(unittest.TestCase):
         go.touch(), holder.wait()
         err_long, err_short = self.finish(long, short)
         self.assertEqual(self.order.read_text().split(), ["short", "long"])
-        self.assertIn(f"letting pid {short.pid} by, a short job (1 min; this job 25 min)", err_long)
+        self.assertIn(f"letting pid {short.pid} by, a short job (1 min; this job 25 min, passed over under 1 min of 15 min at most)", err_long)
         self.assertIn(f"going ahead of pid {long.pid} (25 min) as a short job (1 min)", err_short)
 
     def test_jobs_with_no_recorded_time_keep_arrival_order(self):
@@ -163,6 +166,59 @@ class Queue(unittest.TestCase):
         go.touch(), holder.wait()
         self.finish(*jobs)
         self.assertEqual(self.order.read_text().split(), ["one", "long", "two"])
+
+
+    def test_two_short_jobs_in_one_wait_both_go_first(self):
+        self.timed(long=(25, ""), one=(1, "sleep 0.5; "), two=(1, ""))
+        holder, go = self.hold()
+        jobs = [self.job(self.cmd("long")), self.job(self.cmd("one", "sleep 0.5; ")), self.job(self.cmd("two"))]
+        time.sleep(0.5)
+        go.touch(), holder.wait()
+        err_long = self.finish(*jobs)[0]
+        self.assertEqual(self.order.read_text().split(), ["one", "two", "long"])
+        self.assertIn(f"letting pid {jobs[2].pid} by", err_long)  # said again for the second one
+
+    def test_a_short_job_killed_while_let_by_gives_the_long_one_its_turn(self):
+        self.timed(long=(25, ""), short=(1, ""))
+        holder, go = self.hold()
+        log = self.d / "long.log"
+        long, short = self.job(self.cmd("long"), log=log), self.job(self.cmd("short"))
+        self.until(lambda: f"letting pid {short.pid} by" in log.read_text())
+        short.kill(), short.wait()
+        go.touch(), holder.wait()
+        self.assertEqual(long.wait(30), 0)
+        self.assertEqual(self.order.read_text().split(), ["long"])
+        self.assertEqual(self.queued(), [])
+
+    def test_a_dead_holders_line_isnt_counted_as_passing_over(self):
+        """A killed holder leaves its line in the lock file, `queued` included: its pid is gone, so the long job
+        waiting behind whoever holds the lock now isn't counted as passed over, and a short job still goes first."""
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        self.timed(long=(25, ""), short=(1, ""))
+        holder, go = self.hold(stale={"pid": dead.pid, "since": time.time(), "queued": "9" * 20})
+        long, short = self.job(self.cmd("long")), self.job(self.cmd("short"))
+        time.sleep(1.5)
+        entry = self.d / "windvane-heavy.queue" / min(self.queued())
+        self.assertNotIn("passed", json.loads(entry.read_text()))
+        go.touch(), holder.wait()
+        self.finish(long, short)
+        self.assertEqual(self.order.read_text().split(), ["short", "long"])
+
+    def test_a_long_job_restarted_mid_wait_starts_its_count_again_at_the_back(self):
+        """Its passed-over time lives in its queue entry, which dies with it: started again, it's a new arrival."""
+        self.timed(long=(25, ""), short=(1, "sleep 2; "))
+        holder, go = self.hold()
+        long, short = self.job(self.cmd("long")), self.job(self.cmd("short", "sleep 2; "))
+        go.touch(), holder.wait()
+        q = self.d / "windvane-heavy.queue"
+        self.until(lambda: any("passed" in (q / n).read_text() for n in self.queued()))
+        long.kill(), long.wait()
+        again = self.job(self.cmd("long"))
+        mine = next(n for n in self.queued() if n.endswith(f"-{again.pid}"))
+        self.assertIsNone(json.loads((q / mine).read_text()).get("passed"))
+        self.finish(short, again)
+        self.assertEqual(self.order.read_text().split(), ["short", "long"])
 
 
 if __name__ == "__main__":

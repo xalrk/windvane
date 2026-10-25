@@ -48,7 +48,7 @@ from .util import same_process, stamp, started_at
 DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb": 6, "heavy_wait": 60, "measure_hold": 20}
 # A wait that timed out: the exit code, and the start of the line said just before it (`gave_up` reads it back).
 TIMED_OUT = 75
-LETTING = "letting pid {} by, a short job ({}; this job {}): passed over {} so far, {} at most"
+LETTING = "letting pid {} by, a short job ({}; this job {}, passed over {} of {} at most)"
 GOING = "going ahead of {} as a short job ({})"
 GAVE_UP = "heavy: gave up waiting for the machine"
 # A wait cut short by the project's STOP file (its path in this env var, set by the check's runner): its last line.
@@ -644,13 +644,22 @@ def job_key(cmd, cwd):
     return f"{project_dir(cwd or os.getcwd())} {' '.join(text.split())}"
 
 
+_times_seen = {}  # {file: (its stat, what it held)}: every waiter looks each second, the file changes once a job
+
+
 def load_times():
-    """{job key: its last few run times in minutes, oldest first}; {} when there are none yet."""
+    """{job key: its last few run times in minutes, oldest first}; {} when there are none yet. Read again only when
+    the file changed (`record` replaces it whole), and a copy, for `record` to change."""
+    f = times_file()
     try:
-        times = json.loads(times_file().read_text())
+        st = f.stat()
+        seen = (st.st_ino, st.st_mtime_ns, st.st_size)
+        if _times_seen.get(f, (None,))[0] != seen:
+            _times_seen[f] = (seen, json.loads(f.read_text()))
+        times = _times_seen[f][1]
     except (OSError, ValueError):
         return {}
-    return times if isinstance(times, dict) else {}
+    return dict(times) if isinstance(times, dict) else {}
 
 
 def record(key, minutes):
@@ -949,7 +958,7 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
     limit_told, hot_since, free_since, hold = False, None, None, hold_minutes(cfg)
     holding_it = let_go = False
     too = due = None
-    me, passed, last, written = entry[1], 0, time.time(), 0
+    me, passed, last, written = entry[1], 0, time.monotonic(), 0
     while True:
         (line, after), mem, load, times = waiters(entry), free_gb(), load_avg(), load_times()
         turn = lets_by(me, line, mem, load, times)  # the head, or all ahead wait on memory or a quiet CPU, or are long
@@ -959,8 +968,9 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
         info = holder(lock)
         lead = None if turn else next((w for w in line if not (held_up(w, mem, load) or passes(w, me, times))), None)
         # The time a job that arrived after this one holds the lock, kept in its entry for the short jobs behind it
-        # (`passes`): it is passed over PASS_CAP minutes in all at most.
-        now = time.time()
+        # (`passes`): it is passed over PASS_CAP minutes in all at most. A monotonic clock: a step in the wall clock
+        # mustn't count as hours passed over, or none.
+        now = time.monotonic()
         if str(info.get("queued") or "") > me.name and info.get("pid") and still_held(info):
             passed += now - last
             if int(passed) > written:
