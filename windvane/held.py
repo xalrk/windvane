@@ -219,10 +219,11 @@ def land(p, cd, branch, title, body, commit=True, tries=2, close=False, fresh=Fa
     local branch, or whose PR can't merge, is noted as one to land; with `close`, a PR that can't merge is closed
     instead and the result is (None, why). `fresh`: as `push_branch`'s."""
     own_branch(branch)
-    title, body = actions.tag(p, privacy.censor(title), cd), privacy.censor(body)  # a periodic or plan session's reply
+    own = privacy.own_names(p)
+    title, body = actions.tag(p, privacy.censor(title, own), cd), privacy.censor(body, own)  # a periodic or plan session's reply
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
-    found = privacy.outgoing(cd, p.upstream, "HEAD", DIR, privacy.guarded(p))
+    found = privacy.outgoing(cd, p.upstream, "HEAD", DIR, privacy.guarded(p), own)
     ok, where, branch = (False, kept_secret(p, cd, branch, title, found), branch) if found \
         else _land(p, cd, branch, title, body, tries, close, fresh)
     if is_local(where):

@@ -708,7 +708,8 @@ class Pilot(Desk, Periodic):
             ref = f"{remote}/{s['branch']}"
             if gout(root, "rev-parse", "-q", "--verify", ref) != s["sha"]:
                 why = "changed since it was set aside for a secret"
-            elif not privacy.outgoing(root, self.p.upstream, ref, DIR, privacy.guarded(self.p)):
+            elif not privacy.outgoing(root, self.p.upstream, ref, DIR, privacy.guarded(self.p),
+                                       privacy.own_names(self.p)):
                 why = "holds nothing the guard refuses now"
             else:
                 held = self.put_aside(tid, f"its {DIR}/ lines still hold a secret: {s['branch']} unchanged since it "
@@ -1198,7 +1199,8 @@ class Pilot(Desk, Periodic):
         self.log(f"{tid}: review {m.group(1).lower()}: {m.group(3)}")
         if pr:
             net.sh(p.main_root(), "gh", "pr", "comment", pr, "--body",
-                   privacy.censor(f"**windvane review: {m.group(1)}** at {sha[:7]}\n\n{text.strip()[-6000:]}"))
+                   privacy.censor(f"**windvane review: {m.group(1)}** at {sha[:7]}\n\n{text.strip()[-6000:]}",
+                                  privacy.own_names(p)))
         return m.group(1), text
 
     def integrate(self, tid, branch, sha):
@@ -1215,7 +1217,7 @@ class Pilot(Desk, Periodic):
                 return None
             self.fetch()
             clean_detach(p, cd, p.upstream)
-            msg = actions.tag(p, privacy.censor(f"Merge {tid}: {title} (branch {branch})"), cd)
+            msg = actions.tag(p, privacy.censor(f"Merge {tid}: {title} (branch {branch})", privacy.own_names(p)), cd)
             self.hook_refused = ""
             ok, renumbered = self.merge_main(sha, msg)
             if not ok:
@@ -1229,11 +1231,11 @@ class Pilot(Desk, Periodic):
                 self.conflicted(tid)
                 return self.bounce(tid, "conflict")
             merge = gout(cd, "rev-parse", "HEAD")
-            found = privacy.outgoing(cd, p.upstream, merge, DIR, privacy.guarded(p))
+            found = privacy.outgoing(cd, p.upstream, merge, DIR, privacy.guarded(p), privacy.own_names(p))
             if found:  # before the check: no paid-for check on a merge that can't go out
                 return self.secret_aside(tid, branch, sha, found)
             found = privacy.branch_found(p, cd, sha)  # the branch's own commits: places the worker can find
-            if found and privacy.pushed(cd, p.upstream, ["-1", merge], privacy.guarded(p)):  # still in what it adds
+            if found and privacy.pushed(cd, p.upstream, ["-1", merge], privacy.guarded(p), privacy.own_names(p)):  # still in what it adds
                 return self.secret_bounce(tid, sha, found)
             if found:  # a later commit took it out: the branch as one commit keeps the one that added it off main
                 squashed = self.squash(tid, branch, sha, merge, found)
@@ -1474,7 +1476,7 @@ class Pilot(Desk, Periodic):
         body = (f"Its commits as one: one of them added {', '.join(sorted({privacy.NAMES[k] for k, _ in found}))}, "
                 "which a later one took out.")
         new = gout(cd, *author_ident(p), "commit-tree", f"{merge}^{{tree}}", "-p", p.upstream,
-                   "-m", privacy.censor(f"{tid}: {title}"), "-m", body)
+                   "-m", privacy.censor(f"{tid}: {title}", privacy.own_names(p)), "-m", body)
         if not new or net.git(cd, "push", "-q", f"--force-with-lease=refs/heads/{branch}:{sha}", p.remote,
                               f"{new}:refs/heads/{branch}").returncode:
             self.log(f"{tid}: couldn't push its branch as one commit to {branch}; trying again")

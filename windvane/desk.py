@@ -189,7 +189,7 @@ class Desk:
 
     def desk_comment(self, n, body):
         """A comment on desk PR `n`, censored: a check log's tail holds this machine's paths and names."""
-        net.sh(self.p.main_root(), "gh", "pr", "comment", n, "--body", privacy.censor(body))
+        net.sh(self.p.main_root(), "gh", "pr", "comment", n, "--body", privacy.censor(body, privacy.own_names(self.p)))
 
     def desk_problem(self, pr, d, head, problem, details):
         """Comment the problem, then a fix session while the PR has tries left; else leave it for the desk."""

@@ -84,6 +84,41 @@ def private_terms():
     return {t.strip() for t in lines if len(t.strip()) >= 3 and not t.strip().startswith("#")}
 
 
+def repo_name(url):
+    """The repository a remote's URL names, `.git` stripped: `git@host:owner/acme.git` and `/srv/acme` are `acme`."""
+    tail = re.split(r"[/:\\]", url.strip().rstrip("/"))[-1]
+    return tail[:-4] if tail.lower().endswith(".git") else tail
+
+
+def names_of(root, remote, *more):
+    """`root`'s own names, lower-cased: its directory, its `remote`'s repository name, and `more`."""
+    url = subprocess.run(["git", "remote", "get-url", remote], cwd=root, capture_output=True, text=True).stdout
+    return frozenset(n.lower() for n in (Path(root).resolve().name, repo_name(url) if url.strip() else "", *more) if n)
+
+
+def own_names(p):
+    """The names project `p` goes by: its config's `name` and `display_name`, its main checkout's directory and its
+    upstream remote's repository name. A private term that is one of them, exactly, isn't private in its own repo:
+    the repo is named after it and holds it everywhere, while other repos (another project, a public one) still
+    mustn't name it."""
+    return names_of(p.main_root(), p.remote, p.cfg["name"], p.display)
+
+
+def own_names_in(root):
+    """`own_names` for the repository at `root`, windvane's project or not (its config unreadable: its directory and
+    origin's repository name)."""
+    from .config import Project
+    try:
+        return own_names(Project(root))
+    except (Exception, SystemExit):
+        return names_of(root, "origin")
+
+
+def terms(own=frozenset()):
+    """private_terms() but the ones that are, ignoring case, one of `own`, the names of the repo being scanned."""
+    return {t for t in private_terms() if t.lower() not in own}
+
+
 def literal(words):
     """One case-insensitive regex, matching whole words (`_` and `-` count as breaks), for a set of literal strings,
     or None."""
@@ -101,9 +136,9 @@ def username():
         return ""
 
 
-def rules(kinds=SURE):
-    """kind -> regex for `kinds` ("email" needs none: `kinds_in` checks it). The machine's own ones are built here,
-    at run time, and only kept in memory."""
+def rules(kinds=SURE, own=frozenset()):
+    """kind -> regex for `kinds` ("email" needs none: `kinds_in` checks it), for text in the repo named `own`
+    (`own_names`). The machine's own ones are built here, at run time, and only kept in memory."""
     home = os.path.expanduser("~").rstrip("/")
     ci = bool(os.environ.get("CI"))  # a CI machine's user and host (`runner`) are nobody's, and common words
     make = {"home-path": lambda: re.compile(re.escape(home) + r"(?![\w.-])") if home.count("/") >= 2 else None,
@@ -111,7 +146,7 @@ def rules(kinds=SURE):
             "hostname": lambda: literal({h} if len(h := socket.gethostname().split(".")[0]) >= 4
                                         and h.lower() not in COMMON_HOSTS and not ci else set()),
             "mnt-path": lambda: MNT_PATH, "ntfy-url": lambda: NTFY_URL, "ntfy-topic": lambda: literal(topics()),
-            "private-term": lambda: literal(private_terms()), "token": lambda: TOKEN,
+            "private-term": lambda: literal(terms(own)), "token": lambda: TOKEN,
             "private-key": lambda: PRIVATE_KEY, "email": lambda: None, "secret-file": lambda: None}
     built = {k: make[k]() for k in kinds}
     return {k: v for k, v in built.items() if v or k == "email"}
@@ -139,9 +174,9 @@ def guarded(p):
     return tuple(k for k in PUSHED if k not in p.cfg["scan_allow"])
 
 
-def scan_text(text, kinds=SURE):
+def scan_text(text, kinds=SURE, own=frozenset()):
     """The kinds of leak in `text`, sorted."""
-    r = rules(kinds)
+    r = rules(kinds, own)
     return sorted({k for line in text.splitlines() for k in kinds_in(line, r)})
 
 
@@ -179,15 +214,15 @@ def on(repo, rev, path):
     return set(out.decode("utf-8", "replace").splitlines())
 
 
-def outgoing(repo, base, head="HEAD", path=".windvane", kinds=SURE):
+def outgoing(repo, base, head="HEAD", path=".windvane", kinds=SURE, own=frozenset()):
     """[(kind, "file:line in commit")] for leaks in the lines head's new commits add under `path`. A line already on
     `base` (an old leak a commit only moves, as answering a question moves it in QUESTIONS.md) doesn't count: one
     old leak mustn't stop every later push. Reading `base`'s files only happens when something was found."""
-    return lines_found(repo, base, [f"{base}..{head}"], path, kinds)
+    return lines_found(repo, base, [f"{base}..{head}"], path, kinds, own)
 
 
-def lines_found(repo, base, revs, path, kinds):
-    r = rules(kinds)
+def lines_found(repo, base, revs, path, kinds, own=frozenset()):
+    r = rules(kinds, own)
     found = [(k, sha, name, n, text) for sha, name, n, text in added(repo, revs, path)
              for k in sorted(kinds_in(text, r))]
     old = on(repo, base, path or ".") if found and base else set()
@@ -214,10 +249,10 @@ def new_files(repo, revs):
     return files
 
 
-def pushed(repo, base, revs, kinds=PUSHED):
+def pushed(repo, base, revs, kinds=PUSHED, own=frozenset()):
     """[(kind, place)] for what pushing the commits `revs` name (`[head, "^origin/main"]`) makes public: leaks in the
     lines they add anywhere (a line already on `base` doesn't count), and files named like secrets."""
-    found = lines_found(repo, base, revs, None, kinds)
+    found = lines_found(repo, base, revs, None, kinds, own)
     if "secret-file" in kinds:
         found += [("secret-file", f"{name} in {sha}") for sha, name in new_files(repo, revs) if secret_file(name)]
     return found
@@ -226,7 +261,7 @@ def pushed(repo, base, revs, kinds=PUSHED):
 def branch_found(p, repo, head):
     """`pushed` for a branch's commits beyond upstream, with the kinds the project's guards refuse: the scan before
     windvane merges anything, for a branch whose push got past the pre-push hook (or was made without one)."""
-    return pushed(repo, p.upstream, [head, f"^{p.upstream}"], guarded(p))
+    return pushed(repo, p.upstream, [head, f"^{p.upstream}"], guarded(p), own_names(p))
 
 
 def said(found, most=3):
@@ -237,7 +272,7 @@ def said(found, most=3):
 
 def refusal(p, text):
     """Why free text the user typed can't be committed, or "" when it can: the kinds it holds, never the text."""
-    kinds = scan_text(text, guarded(p))
+    kinds = scan_text(text, guarded(p), own_names(p))
     return (f"it holds {' and '.join(NAMES[k] for k in kinds)}, and answers are committed and pushed with {DIR}/"
             if kinds else "")
 
@@ -247,14 +282,15 @@ MASKS = {"token": "[token]", "ntfy-url": "[ntfy URL]", "ntfy-topic": "[ntfy topi
          "home-path": "~", "mnt-path": "/mnt/<dir>", "username": "<user>", "hostname": "<host>"}
 
 
-def censor(text):
+def censor(text, own=frozenset()):
     """`text` with every kind of leak masked, for what windvane posts to GitHub or writes into a commit message (a
     review, a critique, a log's tail, a session's reply). Unlike the scans of pushes it masks this machine's home path,
     username and hostname too: a log tail is full of them, and nobody needs them in a comment. Commit hashes, IPs and
-    words like "password:" stay as they are: the phone's own censor is the stricter one."""
+    words like "password:" stay as they are: the phone's own censor is the stricter one. `own`: the names of the repo
+    the text goes to (`own_names`), which needn't be masked there."""
     text = KEY_BLOCK.sub("[private key]", text)
     text = EMAIL.sub(lambda m: m.group(0) if not personal_email(m.group(0)) else "[email]", text)
-    r = rules(tuple(MASKS))
+    r = rules(tuple(MASKS), own)
     for kind, mask in MASKS.items():
         if r.get(kind):
             text = r[kind].sub(mask, text)
@@ -290,13 +326,14 @@ def pre_push(args, root, upstream, theirs="", own_remote=False):
     places only (the refusal reaches a session's transcript and a log). Then the repo's own pre-push, given the same
     arguments and refs. A config that can't be read refuses every kind: a push is no time to guess. `own_remote`, for a
     submodule's push: its remote is another repo, so what that remote is known to have (its remote-tracking refs, its
-    default branch for lines already there) stands in for the project's upstream, and its own pre-push is found here."""
+    default branch for lines already there) stands in for the project's upstream, its repository name for the project's
+    own names, and its own pre-push is found here."""
     from .config import Project
     try:
         p = Project(root)
-        upstream, kinds = p.upstream, guarded(p)
+        upstream, kinds, own = p.upstream, guarded(p), own_names(p)
     except (Exception, SystemExit):
-        kinds = PUSHED
+        kinds, own = PUSHED, frozenset()
     refs = sys.stdin.read()
     have = lambda rev: subprocess.run(["git", "rev-parse", "-q", "--verify", f"{rev}^{{commit}}"],
                                       capture_output=True).returncode == 0
@@ -304,6 +341,7 @@ def pre_push(args, root, upstream, theirs="", own_remote=False):
     if own_remote:
         from .worktree import their_hooks
         theirs, remote = str(their_hooks(".") / "pre-push"), remote_named(args)
+        own = frozenset({repo_name(args[1]).lower()} if len(args) > 1 and args[1] else ())  # that repo's name
         upstream = ""  # a remote this repo doesn't track: only each ref's value there is known
         if remote:
             upstream = f"refs/remotes/{remote}/HEAD"
@@ -316,7 +354,7 @@ def pre_push(args, root, upstream, theirs="", own_remote=False):
         if len(parts) != 4 or not parts[1].strip("0"):  # a deletion pushes nothing
             continue
         head, there = parts[1], parts[3] if parts[3].strip("0") and have(parts[3]) else ""
-        new = pushed(".", base, [head, *[f"^{r}" for r in (base, there, *known) if r]], kinds)
+        new = pushed(".", base, [head, *[f"^{r}" for r in (base, there, *known) if r]], kinds, own)
         if new:
             found += new
             fix = fix or there or (base and subprocess.run(["git", "merge-base", head, base], capture_output=True,

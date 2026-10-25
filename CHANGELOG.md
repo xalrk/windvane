@@ -77,6 +77,11 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A project's own name in `private-terms.txt` no longer blocks work in that project's own repository: the sessions'
+  pre-push hook, the scans before windvane pushes or merges, `windvane answer` and the masking of what windvane posts
+  there let it through, while every other private word is still refused, and the name still is in every other
+  repository (a submodule goes by its own remote's name). `windvane public-check` doesn't count it either, and says
+  so.
 - Nothing a run starts reaches your tmux server any more. Sessions, the project check and `setup`/`teardown` got the
   driver's `TMUX` and `TMUX_PANE` under `run --detach`, and tmux goes by `$TMUX` before `TMUX_TMPDIR`: a session that
   made a scratch tmux server and ended it with `tmux kill-server` ended yours, and every detached run on it.

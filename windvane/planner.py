@@ -270,7 +270,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
     branch = branch_name(p, cd, "plan")
     git(cd, "add", "-A", ".windvane")
     title = actions.tag(p, f"Plan: {n_tickets(n)} ({m.group(3)[:60]})", cd)
-    text = privacy.censor(text)  # in the commit and the PR body: the session's own words, quoting what it read
+    text = privacy.censor(text, privacy.own_names(p))  # in the commit and the PR body: the session's own words, quoting what it read
     git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", text.strip()[-3000:])
     if notes:
         from .util import append_jsonl
