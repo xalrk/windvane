@@ -56,8 +56,15 @@ class CheckAsked(unittest.TestCase):
     def test_a_bare_one_word_command_counts_only_in_backticks_or_passing(self):
         for cmd in ("make", "pytest", "tox"):
             self.assertEqual(critic.check_asked(scale(f"it doesn't {cmd} the page slower"), "x", cmd), [], cmd)
-            for q in (f"`{cmd}` shows no failure", f"{cmd} passes on the head"):
+            self.assertEqual(critic.check_asked(scale(f"`{cmd}` builds the docs"), "x", cmd), [], cmd)
+            for q in (f"`{cmd}` passes", f"{cmd} passes on the head"):
                 self.assertEqual(len(critic.check_asked(scale(q), "x", cmd)), 1, q)
+
+    def test_a_wrapper_script_counts_only_with_its_command_or_passing(self):
+        cmd = "./gradlew check"
+        self.assertEqual(critic.check_asked(scale("`./gradlew assembleDebug` builds the APK"), "x", cmd), [])
+        for q in ("`./gradlew check` shows no failure", "./gradlew passes on the head"):
+            self.assertEqual(len(critic.check_asked(scale(q), "x", cmd)), 1, q)
 
     def test_the_shipped_scale_is_clean(self):
         self.assertEqual(critic.check_asked((REPO / "templates/CRITIC.md").read_text(), "x", "make check"), [])
@@ -139,6 +146,16 @@ class Warned(unittest.TestCase):
                 pass
         log = (self.p.state / "autopilot.log").read_text()
         self.assertEqual(log.count("asks for the project's check"), 1, log)
+
+    def test_a_run_start_that_warned_keeps_the_first_critique_quiet(self):
+        self.s.write(".windvane/CRITIC.md", "## works\n- 10 works: the full test suite passes\n")
+        critic.told_check(self.p, self.s.root)  # what the run's start does after logging `scale_warnings`
+        critic.scale_check_note(self.p, "T-001", self.s.root)
+        log = self.p.state / "autopilot.log"
+        self.assertFalse(log.exists() and "asks for" in log.read_text())
+        self.s.write(".windvane/CRITIC.md", "## works\n- 10 works: the full suite is green\n")  # a changed scale warns
+        critic.scale_check_note(self.p, "T-001", self.s.root)
+        self.assertIn("asks for the project's check", log.read_text())
 
     def test_the_critic_start_log_is_quiet_otherwise(self):
         log = self.critique("what the ticket promises happens, and again on a second pass")

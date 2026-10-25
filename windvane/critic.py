@@ -330,17 +330,15 @@ ASKS_CHECK = re.compile(r"(?:^|\b(?:the|its|all|every|a|project's|full|whole|ent
 
 def check_asked(text, rel, cmd=""):
     """[(what, fix)] for each check asking for the project's check or full suite passing: the check's command `cmd`
-    (or its script, a first word with a path in it; a bare word like `make` only in backticks or followed by
-    "passes", as "doesn't make it slower" is prose), or "check passed", "the test suite passes", "a passing suite"
+    anywhere, or its first word only followed by "passes" and the like, as "doesn't make it slower" and
+    "`./gradlew assembleDebug` builds" are no asking for `make` or `./gradlew check`), or "check passed", "the test suite passes", "a passing suite"
     and the like. The driver runs the check on the final head after the critic, so a critic can't see it pass and
     such a check reads as a `no` on every ticket, and sends it back only for
     a pack that didn't quote the check passing. "health check passes" names a product's check and is no warning."""
-    words = cmd.split()
-    names = [cmd.strip()] + [w for w in words[:1] if len(words) > 1 and any(c in w for c in "/.")]
-    bare = len(words) == 1 and not any(c in cmd for c in "/.")
-    named = [re.compile(f"`{re.escape(n)}`" if bare else r"(?<![\w/.-])" + re.escape(n) + r"(?![\w/-])")
-             for n in names if n]
-    named += [re.compile(r"(?<![\w/.-])" + re.escape(words[0]) + PASSES, re.I)] if bare else []
+    words, edge = cmd.split(), r"(?<![\w/.-])`?"
+    whole = len(words) > 1 or any(c in cmd for c in "/.")  # a lone `make` is a word of prose, `tools/check` isn't
+    named = [re.compile(edge + re.escape(cmd.strip()) + r"(?![\w/-])")] * whole
+    named += [re.compile(edge + re.escape(words[0]) + "`?" + PASSES, re.I)] if words else []
     out = []
     for cs in ladder(text).values():
         for _, cid, q in cs:
@@ -358,13 +356,23 @@ def scale_check_note(p, tid, cwd):
     The scale's hash in SCALE_TOLD keeps every later critique on it quiet."""
     f = Path(cwd) / p.rubric_rel
     warns = check_asked(f.read_text(), p.rubric_rel, p.cfg["check"] or "") if f.is_file() else []
-    told = hashlib.sha256(f"{scale(p, cwd)} {p.cfg['check']}".encode()).hexdigest()[:12]
-    if not warns or (p.state / SCALE_TOLD).is_file() and (p.state / SCALE_TOLD).read_text() == told:
+    if not warns or (p.state / SCALE_TOLD).is_file() and (p.state / SCALE_TOLD).read_text() == check_told(p, cwd):
         return
     for what, fix in warns:
         log(p, f"{tid}: {what}: {fix}")
+    told_check(p, cwd)
+
+
+def check_told(p, cwd):
+    """The key SCALE_TOLD holds: the scale's hash and the check command, so either changing warns again."""
+    return hashlib.sha256(f"{scale(p, cwd)} {p.cfg['check']}".encode()).hexdigest()[:12]
+
+
+def told_check(p, cwd):
+    """Note that the log has `check_asked()`'s warnings on this scale: the run's start logs them too
+    (`scale_warnings`), and its first critique needn't again."""
     p.state.mkdir(parents=True, exist_ok=True)
-    (p.state / SCALE_TOLD).write_text(told)
+    (p.state / SCALE_TOLD).write_text(check_told(p, cwd))
 
 
 def scale_warnings(p, cwd):
