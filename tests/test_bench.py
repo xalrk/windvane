@@ -1,5 +1,6 @@
 """`windvane bench`: seed projects built by the pipeline (the fake `claude` here), scored on hidden tests no session
 sees; and the real seeds' hidden tests, which must pass on a reference solution and fail on the bare seed."""
+import ast
 import json
 import os
 import shlex
@@ -224,11 +225,11 @@ class RealSeeds(unittest.TestCase):
             for tid, mods in seed["bench"]["tickets"].items():
                 ticket = (seed["dir"] / f"seed/.windvane/tickets/{tid}.md").read_text()
                 for m in mods:
-                    tree = bench.ast.parse((seed["dir"] / f"hidden/{m}.py").read_text())
-                    for c in (n for n in tree.body if isinstance(n, bench.ast.ClassDef)):
-                        for f in (n for n in c.body if isinstance(n, bench.ast.FunctionDef)
+                    tree = ast.parse((seed["dir"] / f"hidden/{m}.py").read_text())
+                    for c in (n for n in tree.body if isinstance(n, ast.ClassDef)):
+                        for f in (n for n in c.body if isinstance(n, ast.FunctionDef)
                                   and n.name.startswith("test")):
-                            doc = bench.ast.get_docstring(f) or ""
+                            doc = ast.get_docstring(f) or ""
                             with self.subTest(seed=name, test=f.name):
                                 self.assertTrue(doc.startswith(f"{tid}: "), doc)
                                 line = doc.split(": ", 1)[1].split("\n")[0]

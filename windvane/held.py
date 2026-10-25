@@ -8,7 +8,7 @@ import time
 from urllib.parse import quote
 
 from . import actions, net, privacy
-from .config import DIR, author
+from .config import DIR, author, protected_changes
 from .doctor import dispatched_checks
 from .phone import cut, whole
 from .util import git, gout, load_json, locked, log, push, save_json
@@ -224,8 +224,12 @@ def land(p, cd, branch, title, body, commit=True, tries=2, close=False, fresh=Fa
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
     found = privacy.outgoing(cd, p.upstream, "HEAD", DIR, privacy.guarded(p), own)
-    ok, where, branch = (False, kept_secret(p, cd, branch, title, found), branch) if found \
-        else _land(p, cd, branch, title, body, tries, close, fresh)
+    paths = not found and protected_changes(cd, gout(cd, "merge-base", p.upstream, "HEAD") or p.upstream, "HEAD",
+                                            p.protected)
+    if found or paths:
+        ok, where = False, (kept_secret if found else kept_protected)(p, cd, branch, title, found or paths)
+    else:
+        ok, where, branch = _land(p, cd, branch, title, body, tries, close, fresh)
     if is_local(where):
         hold(p, branch, "land")
     return Landed(ok, where, branch)
@@ -267,6 +271,21 @@ def kept_secret(p, cd, branch, title, found):
     log(p, f"{branch}: {why}")
     if not told:
         push(f"Not pushed: {title}", whole("", why[:1].upper() + why[1:], ".", log=lambda m: log(p, m)), 4, "warning")
+    return f"the local branch {branch} ({why})"
+
+
+def kept_protected(p, cd, branch, title, paths):
+    """Keep a change to protected paths (`protected` in config.toml: what measures windvane) on its local branch,
+    held with the reason, and tell the phone once: no session's change may land there on its own. The next run's
+    `push_held` checks it again, so one whose protected changes are taken out lands as usual."""
+    why = (f"it changes protected paths ({', '.join(paths)}); if that's right, land it by hand: `git push {p.remote} "
+           f"{branch}`, then {merge_step(p, branch)}")
+    told = branch in load_json(p.state / "held.json", {})
+    git(cd, "branch", "-f", branch, "HEAD")
+    hold(p, branch, "land", why)
+    log(p, f"{branch}: {why}")
+    if not told:
+        push(f"Not landed: {title}", whole("", why[:1].upper() + why[1:], ".", log=lambda m: log(p, m)), 4, "warning")
     return f"the local branch {branch} ({why})"
 
 

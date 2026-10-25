@@ -349,7 +349,7 @@ def cmd_status(a, p):
     for q in questions.with_ids(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"), p):
         print(f"provisional: {q['ticket']}: {q['question']} Built {q['built'] or '?'}"
               + (f": {q['option']}" if q["option"] else "") + f". To change: windvane answer {q['id']} <letter>")
-    for line in driver.dropped_unseen(p):
+    for line in driver.protected_lines(p) + driver.dropped_unseen(p):
         print(line)
     for line in requests.unseen(p):
         print(f"windvane request {line}")
