@@ -2,6 +2,7 @@
 that they couldn't answer; a question asked just before a quiet time waited all night for an answer; and the worker
 only learned about a quiet time from one line of its prompt, never when one was about to start."""
 import os
+import subprocess
 import sys
 import time
 import unittest
@@ -78,6 +79,25 @@ class Told(Base):
         self.assertEqual(questions.mode(self.p, D("2026-10-09 12:00")), "ask")
         self.assertTrue(questions.mode(self.p, D("2026-10-09 23:10")).startswith(
             "provisional (the user is in a quiet time until Sat 08:00)"))
+
+    def test_status_says_what_happens_to_questions_in_words(self):
+        self.user_file.write_text(NIGHT)
+        with mock.patch.object(phone, "can_ask", return_value=True):
+            self.assertEqual(questions.told(self.p, D("2026-10-09 12:00")),
+                             "questions: pushed to your phone as they come")
+            self.assertEqual(questions.told(self.p, D("2026-10-09 22:10")),
+                             "questions: pushed to your phone as they come; a quiet time starts Fri 23:00")
+            self.assertEqual(questions.told(self.p, D("2026-10-09 23:10")),
+                             "questions: none pushed until Sat 08:00 (quiet time); workers build their recommendation")
+        self.assertEqual(questions.told(self.p, D("2026-10-09 12:00")),  # the sandbox has no phone
+                         "questions: no phone set up; they wait for `windvane answer`")
+
+    def test_status_prints_the_line_in_words(self):
+        self.user_file.write_text(around_now())
+        out = subprocess.run(["windvane", "status"], cwd=self.s.root, capture_output=True, text=True).stdout
+        self.assertIn("\nquestions: none pushed until ", out)
+        self.assertIn(" (quiet time); workers build their recommendation\n", out)
+        self.assertNotIn("provisional (the user", out)
 
     def test_the_note_says_when_it_ends_inside_one(self):
         self.user_file.write_text(NIGHT)

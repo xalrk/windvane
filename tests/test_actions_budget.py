@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import actions, driver  # noqa: E402
+from windvane import actions, doctor, driver  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now as local_now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -269,25 +269,32 @@ class Budget(unittest.TestCase):
         self.assertNotIn("Actions", out)
         self.assertEqual(self.gh_calls(), [])  # nothing counted, nothing asked of GitHub
 
-    def test_status_and_overview_show_the_months_minutes(self):
+    def test_status_and_overview_leave_the_months_minutes_out(self):
         self.add("me/proj", 1, [job(1983 * 60)])
-        self.project(minutes=2000)
+        p = self.project(minutes=2000)
         actions.count(self.s.root)  # as the driver does at its start and at each merge
         Path(os.environ["FAKE_GH_LOG"]).unlink()
         for cmd in (["status", "--line"], ["status"], ["overview"]):
             out = subprocess.run(["windvane", *cmd], cwd=self.s.root, capture_output=True, text=True).stdout
-            self.assertIn("Actions 1,983/2,000 min", out, cmd)
-        self.assertEqual(self.gh_calls(), [])  # they read the cache: the phone never waits on 18 repos' runs
+            self.assertNotIn("Actions", out, cmd)
+            self.assertNotIn("1,983", out, cmd)
+        self.assertEqual(self.gh_calls(), [])
+        # where the count is asked for or acted on, it stays
+        self.data["workflows"]["me/proj"] = [{"name": "test", "path": ".github/workflows/test.yml", "state": "active"}]
+        self.serve()
+        self.assertIn("1,983 of 2,000 min used; the cap is 1,800 (90%), 0 left.", self.ci("--dry-run")[1])
+        wf = self.s.root / ".github/workflows/test.yml"
+        wf.parent.mkdir(parents=True)
+        wf.write_text("on: push\njobs:\n  t:\n    runs-on: x\n")
+        self.assertIn("1,983 counted this month", doctor.ci_warnings(self.s.root, p)[0][0])
+        self.assertTrue(actions.tag(p, "Merge T-001: x").endswith(actions.SKIP))
 
-    def test_status_shows_when_an_old_count_was_made_without_recounting(self):
+    def test_the_caps_line_says_when_an_old_count_was_made(self):
         self.add("me/proj", 1, [job(1983 * 60)])
-        self.project(minutes=2000)
+        p = self.project(minutes=2000)
         self.stale_cache()
-        (self.s.bin / "gh").write_text("#!/bin/sh\nsleep 30\n")  # a recount would hang the phone's status
-        t = time.time()
-        out = subprocess.run(["windvane", "status", "--line"], cwd=self.s.root, capture_output=True, text=True).stdout
-        self.assertLess(time.time() - t, 10)
-        self.assertRegex(out, r"Actions 1,983/2,000 min \(counted (\w{3} \d+ )?\d\d:\d\d\)")  # dated after midnight
+        self.assertRegex(actions.line(p),  # dated after midnight
+                         r"Actions 1,983/2,000 min \(counted (\w{3} \d+ )?\d\d:\d\d\)")
 
     def stale_cache(self):
         """This month's count, made two hours ago."""

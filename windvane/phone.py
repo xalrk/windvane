@@ -123,6 +123,11 @@ def on(c):
     return bool(c.get("enabled") and c.get("topic") and c.get("reply_topic"))
 
 
+
+def can_ask():
+    """Whether a question reaches the phone at all: through `notify-ask`, or the ntfy settings `ask` uses without it."""
+    return bool(shutil.which("notify-ask")) or on(conf())
+
 def save_conf(c):
     """Written mode 600 from the start: the topics are the only lock on them."""
     f = conf_path()

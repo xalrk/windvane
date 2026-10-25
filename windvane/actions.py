@@ -323,9 +323,9 @@ def fmt(n):
 
 
 def line(p, total=None):
-    """`Actions 1,983/2,000 min` for status and overview (with the count's time once it's over an hour old, and its
-    date when it's another day's; past STALE_S only the date, marked stale: workers tag), or "" with the budget off
-    or nothing counted yet."""
+    """`Actions 1,983/2,000 min` for the log line and the push at the cap (with the count's time once it's over an
+    hour old, and its date when it's another day's; past STALE_S only the date, marked stale: workers tag), or ""
+    with the budget off or nothing counted yet."""
     b = budget(p)
     total = total or (cached() if b else None)
     if not (b and total):

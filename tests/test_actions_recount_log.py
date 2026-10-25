@@ -4,7 +4,6 @@ import contextlib
 import io
 import re
 import shlex
-import subprocess
 import sys
 import time
 import unittest
@@ -66,10 +65,6 @@ class RecountLog(unittest.TestCase):
     def cache(self, used, age):
         save_json(actions.cache_file(), {"month": actions.month(), "runs": {},
                                          "total": {"used": used, "at": time.time() - age}})
-
-    def status_line(self):
-        return subprocess.run(["windvane", "status", "--line"], cwd=self.s.root, capture_output=True,
-                              text=True).stdout
 
     def test_a_logged_out_gh_is_logged_at_once_with_its_cause(self):
         self.refresh()
@@ -152,16 +147,16 @@ class RecountLog(unittest.TestCase):
         self.refresh()  # the lock is free again: now gh is asked, and fails
         self.assertEqual(len(self.log()), 1, self.log())
 
-    def test_status_line_says_stale_past_a_day(self):
+    def test_the_caps_line_says_stale_past_a_day(self):
         self.cache(1234, actions.STALE_S + 3600)
-        out = self.status_line()
+        out = actions.line(self.p)
         self.assertRegex(out, r"Actions 1,234/2,000 min \(stale: counted [A-Z][a-z]{2} \d{1,2}, workers skip "
                               r"CI\)")
         self.assertNotRegex(out, r"\d\d:\d\d")  # the date says enough: the line stays short
 
-    def test_status_line_under_an_hour_old_has_no_time_or_date(self):
+    def test_the_caps_line_under_an_hour_old_has_no_time_or_date(self):
         self.cache(1234, 600)
-        out = self.status_line()
+        out = actions.line(self.p)
         self.assertIn("Actions 1,234/2,000 min", out)
         self.assertNotIn("stale", out)
         self.assertNotRegex(out, r"\d\d:\d\d|counted|" + re.escape(time.strftime("%b ")))
