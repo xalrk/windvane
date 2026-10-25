@@ -48,6 +48,8 @@ from .util import same_process, stamp, started_at
 DEFAULTS = {"busy": ["UnrealEditor", "ShaderCompile", "blender"], "min_free_gb": 6, "heavy_wait": 60, "measure_hold": 20}
 # A wait that timed out: the exit code, and the start of the line said just before it (`gave_up` reads it back).
 TIMED_OUT = 75
+LETTING = "letting pid {} by, a short job ({}; this job {}): passed over {} so far, {} at most"
+GOING = "going ahead of {} as a short job ({})"
 GAVE_UP = "heavy: gave up waiting for the machine"
 # A wait cut short by the project's STOP file (its path in this env var, set by the check's runner): its last line.
 STOP_ENV, STOPPED = "WINDVANE_HEAVY_STOP", "heavy: stopped while waiting for the machine"
@@ -523,6 +525,53 @@ def held_up(path, mem, load):
     return short(need_of(path), mem) or (None if holds(path) else too_busy(limit_of(path), load))
 
 
+# A short job goes before a long one ahead of it: one that usually runs SHORT_MIN minutes or less, ahead of one that
+# runs LONG_TIMES times as long, while the long one has been passed over less than PASS_CAP minutes in all (or its
+# own run time, if less), so a stream of short jobs can't starve it.
+SHORT_MIN, LONG_TIMES, PASS_CAP = 5, 3, 15
+
+
+def time_of(path, times):
+    """A waiter's run time in minutes (`run_time`: its usual, else its `--expect`), or None when never timed."""
+    key, expect = job_of(path)
+    return run_time(key, times, expect)[0]
+
+
+def passed_of(path):
+    """The seconds the waiter whose queue entry is `path` has been passed over so far (`take` counts them)."""
+    return entry_number(path, "passed") or 0
+
+
+def passes(head, path, times):
+    """Whether the waiter `path` may go before the waiter `head` ahead of it for being short: both have known run
+    times, its own is SHORT_MIN minutes or less and `head`'s LONG_TIMES as long, and running it keeps `head`'s total
+    time passed over within PASS_CAP minutes (or `head`'s own time). Never past a measurement, which waits for a
+    quiet CPU the short job would take, nor (unknown times) out of arrival order."""
+    if limit_of(head) is not None:
+        return False
+    mine, theirs = time_of(path, times), time_of(head, times)
+    if mine is None or theirs is None or mine > SHORT_MIN or theirs < LONG_TIMES * mine:
+        return False
+    return passed_of(head) / 60 + mine <= min(theirs, PASS_CAP)
+
+
+def lets_by(path, line, mem, load, times):
+    """Whether each waiter in `line` (the live ones ahead of `path`) lets `path` by: held up itself (`held_up`), or
+    long where `path` is short (`passes`)."""
+    return all(held_up(w, mem, load) or passes(w, path, times) for w in line)
+
+
+def short_first(path, line, after, mem, load, times):
+    """The first waiter behind `path` (`after`, oldest first) that goes before it for being short: ready to run (its
+    memory and load met), `passes` it, and let by by every other waiter ahead of it too. None when there's none, and
+    `path`, whose turn it is, takes the lock. The short one judges the same and tries the lock, so only one does."""
+    for i, b in enumerate(after):
+        if not short(need_of(b), mem) and not too_busy(limit_of(b), load) and passes(path, b, times) \
+                and lets_by(b, line + after[:i], mem, load, times):
+            return b
+    return None
+
+
 def holds(path):
     """Whether the measurement whose queue entry is `path` has waited on load long enough to hold the line."""
     try:
@@ -532,11 +581,16 @@ def holds(path):
 
 
 def hold_line(entry, on=True):
-    """Mark this waiter's queue entry as holding the line, or (`on` false) no longer. Written over the old text in one
-    go, never shorter than it ("false" is longer than "true"), so a scan reads the old entry or the new one (or, at
+    """Mark this waiter's queue entry as holding the line, or (`on` false) no longer."""
+    mark(entry, hold=on)
+
+
+def mark(entry, **fields):
+    """Write `fields` into this waiter's queue entry. Written over the old text in one go, never shorter than it
+    ("false" is longer than "true", and `passed` only grows), so a scan reads the old entry or the new one (or, at
     worst, nothing: a waiter that can't be read is waited on)."""
     fd, path = entry
-    os.pwrite(fd, json.dumps({**json.loads(path.read_text()), "hold": on}).encode(), 0)
+    os.pwrite(fd, json.dumps({**json.loads(path.read_text()), **fields}).encode(), 0)
 
 
 def holding(path, load, hold):
@@ -722,7 +776,13 @@ def ahead(entry):
     way (and a waiter's hidden one left by a kill between creating and renaming it). A paused waiter (Ctrl-Z) isn't
     in it: it keeps its entry, but would hold up the whole line until its wait times out; resumed, it gets in line
     again."""
-    q, mine, needs = entry[1].parent, entry[1].name, []
+    return waiters(entry)[0]
+
+
+def waiters(entry):
+    """The queue entries of the live waiters before this one and after it, each oldest first, as `ahead` reads
+    them."""
+    q, mine, before, after = entry[1].parent, entry[1].name, [], []
     for name in sorted(os.listdir(q)):
         path = q / name
         if name.startswith("."):
@@ -731,9 +791,9 @@ def ahead(entry):
                     alive(path)
             except OSError:
                 pass
-        elif name < mine and alive(path) and not paused(entry_pid(name)):
-            needs.append(path)
-    return needs
+        elif name != mine and alive(path) and not paused(entry_pid(name)):
+            (before if name < mine else after).append(path)
+    return before, after
 
 
 def holder(lock):
@@ -745,14 +805,16 @@ def holder(lock):
         return {}
 
 
-def claim(lock, cmd, cwd, key=None, expect=None, measure=None, held=False):
-    """Write this job into the lock it now holds, for the waiters' log line, and whether it held the line as it
-    waited (`held`), for a measurement that then becomes the head to hold it at once (`take`)."""
+def claim(lock, cmd, cwd, key=None, expect=None, measure=None, held=False, queued=None):
+    """Write this job into the lock it now holds, for the waiters' log line, whether it held the line as it waited
+    (`held`), for a measurement that then becomes the head to hold it at once (`take`), and its queue entry's name
+    (`queued`), for a waiter that arrived before it to count the time it is passed over."""
     text = cmd if isinstance(cmd, str) else shlex.join(cmd)
     text = " ".join(text.split())
     where = Path(cwd or os.getcwd()).resolve().parts[-2:]
     info = {"pid": os.getpid(), "start": started_at(os.getpid()), "stamp": stamp(os.getpid()), "since": time.time(), "cmd": text if len(text) <= 60 else text[:59] + "…",
-            "cwd": "/".join(where), "key": key, "expect": expect, "measure": measure, "held": held}
+            "cwd": "/".join(where), "key": key, "expect": expect, "measure": measure, "held": held,
+            "queued": queued}
     os.ftruncate(lock, 0)
     os.lseek(lock, 0, os.SEEK_SET)
     os.write(lock, json.dumps(info).encode())
@@ -801,14 +863,14 @@ def paused_note(pid, who):
     return f"paused, so {who}: resume it with kill -CONT {target}"
 
 
-def waiting_line(info, n, est=None, past=None):
+def waiting_line(info, n, est=None, past=None, over=""):
     """A job about to wait, as said once. With the holder gone it waits only on the jobs ahead, so it says the lock
     is free rather than "waiting for the machine lock: free". Said again once the last line's estimate ran out
-    (`past`, its end), it says that estimate is overdue."""
+    (`past`, its end), it says that estimate is overdue. `over` names the long jobs it goes ahead of (`GOING`)."""
     holder = held_by(info)
     lock = "the machine lock is free" if holder == "free" else f"waiting for the machine lock: {holder}"
-    return f"heavy: {lock}; " + (f"{n} ahead of this job" if n else "next in line") + (f"; {est}" if est else "") \
-        + (f"; the last estimate is {OVERDUE.format(clock(past))}" if past else "")
+    return f"heavy: {lock}; " + (f"{n} ahead of this job" if n else "next in line") + (f"; {over}" if over else "") \
+        + (f"; {est}" if est else "") + (f"; the last estimate is {OVERDUE.format(clock(past))}" if past else "")
 
 
 def gave_up(log):
@@ -887,14 +949,29 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
     limit_told, hot_since, free_since, hold = False, None, None, hold_minutes(cfg)
     holding_it = let_go = False
     too = due = None
+    me, passed, last, written = entry[1], 0, time.time(), 0
     while True:
-        line, mem, load = ahead(entry), free_gb(), load_avg()
-        turn = all(held_up(w, mem, load) for w in line)  # the head, or all ahead wait on memory or a quiet CPU
+        (line, after), mem, load, times = waiters(entry), free_gb(), load_avg(), load_times()
+        turn = lets_by(me, line, mem, load, times)  # the head, or all ahead wait on memory or a quiet CPU, or are long
         low = short(need, mem, helpers_gb(reuse) if mem is not None else 0) if turn else None
         hot = too_busy(measure, load) if turn and not low else None
         mine = low or hot
         info = holder(lock)
-        lead = None if turn else next((w for w in line if not held_up(w, mem, load)), None)
+        lead = None if turn else next((w for w in line if not (held_up(w, mem, load) or passes(w, me, times))), None)
+        # The time a job that arrived after this one holds the lock, kept in its entry for the short jobs behind it
+        # (`passes`): it is passed over PASS_CAP minutes in all at most.
+        now = time.time()
+        if str(info.get("queued") or "") > me.name and info.get("pid") and still_held(info):
+            passed += now - last
+            if int(passed) > written:
+                written = int(passed)
+                mark(entry, passed=written)
+        last = now
+        let = turn and not mine and short_first(me, line, after, mem, load, times)
+        letting = let and LETTING.format(entry_pid(let.name), minutes(time_of(let, times)),
+                                         minutes(time_of(me, times)), minutes(passed / 60),
+                                         minutes(min(time_of(me, times), PASS_CAP)))
+        over = [w for w in line if not held_up(w, mem, load)] if turn else []  # the long jobs it goes ahead of
         held = lead and holding(lead, load, hold)
         hot_since = hot_since or (time.time() if hot else None)  # its wait on load, from its first moment
         if hot_since and not holding_it and not let_go and time.time() - hot_since >= hold * 60:
@@ -917,7 +994,7 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
             hold_line(entry, False)
             say(LET_GO.format(f"{hold:.10g}"))
             holding_it, let_go = False, True
-        if turn and not mine and time.time() >= retry:
+        if turn and not mine and not let and time.time() >= retry:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
@@ -928,10 +1005,11 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
                     return True
                 fcntl.flock(lock, fcntl.LOCK_UN)  # no one runs beside it anyway; it looks again in 10 s
                 busy_why, retry = f"'{b}' is running", time.time() + 10
-        why = mine or (busy_why if turn else held)
-        n = 0 if turn else len(line)
-        key = "memory" if low else "load" if hot else f"held by {lead.name}" if held else why or (
-            info.get("pid"), info.get("since"), n)
+        why = mine or letting or (busy_why if turn else held)
+        wait_on = [] if turn else [w for w in line if not passes(w, me, times)]  # those it can't go ahead of
+        n = len(wait_on)
+        key = "memory" if low else "load" if hot else f"letting {let.name}" if let else \
+            f"held by {lead.name}" if held else why or (info.get("pid"), info.get("since"), n, tuple(w.name for w in over))
         # A holder gone, the next yet to claim it (it looks once a second), or the measurement it waited behind taking
         # the lock and yet to write itself in: an empty line for that moment says nothing new.
         if key[:1] == (None,) and (isinstance(said, tuple) and said[2] == n or str(said).startswith("held by ")):
@@ -940,7 +1018,8 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
             say("heavy: " + too)
             too = None
         if key != said or time.time() >= looked + 60:  # the wrap-up is looked at again each minute as time passes
-            work, looked = work_ahead(info, [job_of(w) for w in line[:n]], load_times()), time.time()
+            work, looked = work_ahead(info, [job_of(w) for w in [let] if let] or [job_of(w) for w in wait_on],
+                                      times), time.time()
             past = due if key == said and due is not None and looked >= due + 60 else None  # its end came and went
             extra, too = f"; {too}" if too else "", None  # said on the wait line it changes, not a line of its own
             if key != said and low:
@@ -959,7 +1038,10 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
                 limit_told = True
             elif key != said or past:  # reprinted when what it waits on changes or its estimate ran out, not every
                 # second (nor as free memory drifts)
-                say((f"heavy: waiting: {why}" if why else waiting_line(info, n, estimate(work), past)) + extra)
+                say((f"heavy: waiting: {why}" if why else waiting_line(
+                    info, n, estimate(work), past, over and GOING.format(", ".join(
+                        f"pid {entry_pid(w.name)} ({minutes(time_of(w, times))})" for w in over),
+                        minutes(time_of(me, times))))) + extra)
             if key != said or past:
                 due = None if why else until_of(work)
             wrap, now = wrap_up(), time.time()
@@ -1044,11 +1126,11 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None, measure=F
     try:
         if not take(lock, entry, need, cfg, until, say, stopped, reuse, default=mem is None, measure=limit):
             return TIMED_OUT
-        held = holds(entry[1])
+        held, queued = holds(entry[1]), entry[1].name
         leave_queue(entry)  # the next waiter becomes the head and waits on the lock
         entry = None
         try:
-            claim(lock, cmd, cwd, key, expect, limit, held)
+            claim(lock, cmd, cwd, key, expect, limit, held, queued)
             if (s := round(time.time() - t0)) >= 1:
                 say(WAITED.format(s))
             t1 = time.time()
@@ -1144,13 +1226,15 @@ def own_job(path, reuse):
 def queue_view(info, times, reuse=None, big=True):
     """Each live waiter, oldest first, as {pid, job, since, measuring, place, why, est, big}, judged the way its own
     wait (`take`) judges it, so what `status` and `await` say is what the waiter does: it's next in line when every
-    live waiter ahead lets it by (`held_up`), and then waits on its own memory (this project's helpers, `reuse`,
-    counting as free for this project's jobs alone) or a quiet CPU; else on the jobs ahead, or a measurement ahead
-    holding the line. Its work ahead counts the jobs it waits behind. The first waiter short of memory or a quiet
-    CPU lists the processes holding most (`big`: false skips that look, which takes a second)."""
+    live waiter ahead lets it by (`lets_by`), and then waits on its own memory (this project's helpers, `reuse`,
+    counting as free for this project's jobs alone), a quiet CPU or a short job it lets by (`short_first`); else on
+    the jobs ahead, or a measurement ahead holding the line. Its work ahead counts the jobs it waits behind. The first
+    waiter short of memory or a quiet CPU lists the processes holding most (`big`: false skips that look, which takes
+    a second)."""
     q, out, line, listed = queue_dir(), [], [], not big
     mem, load, hold = free_gb(), load_avg(), hold_minutes(machine())
     helpers = None
+    live = []
     for name in sorted(os.listdir(q)) if q.is_dir() else []:
         path, pid = q / name, entry_pid(name)
         if name.startswith(".") or not pid or not alive(path):
@@ -1160,11 +1244,15 @@ def queue_view(info, times, reuse=None, big=True):
         out.append(w)
         if paused(pid):
             w["why"] = paused_note(pid, "skipped")
-            continue
-        turn = all(held_up(a, mem, load) for a in line)
-        n = 0 if turn else len(line)
+        else:
+            live.append((path, w))
+    for i, (path, w) in enumerate(live):
+        turn = lets_by(path, line, mem, load, times)
+        let = turn and short_first(path, line, [p for p, _ in live[i + 1:]], mem, load, times)
+        wait_on = [] if turn else [a for a in line if not passes(a, path, times)]
+        n = len(wait_on)
         w["place"] = f"{n} ahead of it" if n else "next in line"
-        w["est"] = estimate(work_ahead(info, [job_of(a) for a in line[:n]], times))
+        w["est"] = estimate(work_ahead(info, [job_of(a) for a in ([let] if let else wait_on)], times))
         need, limit = need_of(path), limit_of(path)
         if turn:
             mine = 0
@@ -1184,8 +1272,12 @@ def queue_view(info, times, reuse=None, big=True):
                 w["why"] = f"waiting for load ≤ {limit:.10g}, now {loadf(load)}; {by}"
                 w["big"] = [] if listed else [f"uses CPU: {b}" for b in busiest()]
             listed = listed or bool(w["why"])
+            if not w["why"] and let:
+                w["why"] = f"letting pid {entry_pid(let.name)} by, a short job"
+            elif not w["why"] and (over := [a for a in line if not held_up(a, mem, load)]):
+                w["why"] = "going ahead of " + ", ".join(f"pid {entry_pid(a.name)}" for a in over) + " as a short job"
         else:
-            lead = next((a for a in line if not held_up(a, mem, load)), None)
+            lead = next((a for a in line if not (held_up(a, mem, load) or passes(a, path, times))), None)
             if lead and holding(lead, load, hold):
                 w["why"] = f"behind pid {entry_pid(lead.name)}, a --measure job holding the line for a quiet CPU"
         line.append(path)
