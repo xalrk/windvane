@@ -133,8 +133,8 @@ class StatsProjects(unittest.TestCase):
             "  reviews after a critic pass: 2, 1 sent back",
             "  checks: 4 runs (23 min per checked ticket), 20 min waiting for the machine, 1 failed, 1 cut off, "
             "1 cancelled in the queue; workers 30 min in await",
-            "  checks averaged 23 min per checked ticket: set `check_quick` for a first pass that shows a failure",
-            "    in a minute (docs/configuration.md#the-checks-environment)",
+            "  checks averaged 23.3 min per checked ticket: set `check_quick` for a first pass that shows a",
+            "    failure in a minute (docs/configuration.md#the-checks-environment)",
             "  re-fixes: 1 (T-001 by T-002)",
             "  CALIBRATION.md: 5 lines added",
             "  failed T-004: the check kept failing on a missing font",

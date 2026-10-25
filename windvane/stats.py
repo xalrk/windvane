@@ -967,7 +967,7 @@ def quick_hint(per_ticket, has_quick):
     unknown (it may be set)."""
     if per_ticket is None or per_ticket <= QUICK_HINT_MIN or has_quick is not False:
         return None
-    return (f"checks averaged {m(per_ticket)} min per checked ticket: set `check_quick` for a first pass that shows "
+    return (f"checks averaged {per_ticket:g} min per checked ticket: set `check_quick` for a first pass that shows "
             "a failure in a minute (docs/configuration.md#the-checks-environment)")
 
 
