@@ -7,6 +7,11 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane stats --projects [--since DATE] [--json]`: every project on the machine in one digest, read from each
+  project's state dir and repo: tickets merged, failed and parked with their reasons, each role's share of
+  weighted tokens and its cost per merged ticket, the critic's first-pass rate and median first and final
+  scores, reviews that bounced a critic pass, check and `await` minutes, re-fixes and `CALIBRATION.md` lines
+  added; then each measure's spread across projects and the projects at either end. It only reads.
 - `windvane bench`: builds three small seed projects (a command-line ledger, a notes web app, a text maze game) with
   the real pipeline, side by side, each in a fresh repo with a local remote and a state dir of its own, then scores
   them on acceptance tests no session sees, run in a scratch clone of each final `main`. It records tickets merged,

@@ -1,15 +1,20 @@
 """`windvane stats`: what the runs cost, from the ledger (tokens per role or ticket, checks, the gh guard's refusals,
-periodic scores), and how the critic's scores spread (`--critic`)."""
+periodic scores), how the critic's scores spread (`--critic`), and every project on the machine side by side
+(`--projects`)."""
 import json
 import re
+import statistics
 import sys
 import textwrap
+import time
 from collections import Counter
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from . import critic as critic_mod
-from . import jobs
+from . import jobs, phone
+from .config import DEFAULTS, Project, user_dir
 from .queue import Queue
 from .util import PARTIAL_LOG, gout, last_log, log_has, log_paths, now, read_jsonl, shell_path
 
@@ -39,9 +44,9 @@ def plural(n, word):
     return f"{n} {word}{'s' * (n != 1)}"
 
 
-def note(text):
+def note(text, indent=" "):
     """A footnote, wrapped to the table's 100 columns."""
-    print(textwrap.fill(text, 100, subsequent_indent=" "))
+    print(textwrap.fill(text, 100, subsequent_indent=indent))
 
 
 def cmd_stats(a, p):
@@ -67,7 +72,7 @@ def cmd_stats(a, p):
         session_stats(a, p, rows, swept, checks, refusals, awaits)
 
 
-def check_runs(p, checks):
+def check_runs(p, checks, running=jobs.running):
     """(the checks that ran, reused passes, checks still running, heavy checks that never ran: their wait for the
     machine timed out, which is no failure). Ran: the end rows that didn't reuse a pass or wait in vain, plus
     a start row no end row matches (same ticket and start) whose check isn't running any more: it was killed, and
@@ -76,7 +81,7 @@ def check_runs(p, checks):
     ends = [r for r in checks if r.get("event") == "check"]
     ended = {(r["ticket"], r.get("start")) for r in ends}
     open_ = [r for r in checks if r.get("event") == "check-start" and (r["ticket"], r.get("start")) not in ended]
-    live = [r for r in open_ if jobs.running(p, r)]
+    live = [r for r in open_ if running(p, r)]
     killed = [{**r, "minutes": killed_minutes(p, r), "finished": False} for r in open_ if r not in live]
     ran = [r for r in ends if not r.get("reused") and not r.get("not_run")]
     not_run = [r for r in ends if r.get("not_run")]
@@ -756,3 +761,269 @@ def shared_line(p, lad):
     dup = [f"{cid} ({', '.join(ds)})" for cid, ds in critic_mod.shared(lad).items()]
     return (f"Critic scale reuses check ids, so one answer scores both: {'; '.join(dup)}; rename one in "
             f"{p.rubric_rel}." if dup else "")
+
+
+# ---------- `stats --projects`: every project on this machine, side by side
+
+SHARED_DIRS = ("phone",)  # state-root folders every project shares; `_`-prefixed ones are windvane's own as well
+ID = r"[A-Z][A-Z0-9]*-\d+[a-z]?"
+MERGED_RE = re.compile(rf"(\S+ \S+) ({ID}): merged [0-9a-f]{{7}}\b")
+FAILED_RE = re.compile(rf"\S+ \S+ ({ID}): FAILED: (.*)")
+# A later ticket's text naming a merged one as what it fixes ("fixes T-12", "a bug in T-12's check") or as broken
+# ("T-12 broke", "T-12's cap is wrong"), the words next to the id: a "fix" further off is mostly about something else.
+FIXES = r"(?:fix|fixes|fixing|re-?fix\w*|revert|reverts|reverting|undo|undoes)(?:\s+(?:for|what|in|the|to))?"
+BROKEN_BY = r"(?:broken|bugs?|regression|regressed)\s+(?:\w+\s+)?(?:by|in|from|of)"
+BROKEN = r"(?:broke|broken|bugs?|buggy|regress\w*|wrong|reverted)"
+CHECK_ALIVE_S = 120  # a running check's heartbeat writes its log at least once a minute
+
+
+def projects_stats(a):
+    """`stats --projects`: each project's state dir under the state root (one with a ledger) read side by side over
+    `--since` (default 30 days), then each measure's spread across them. Reads only: no lock is taken, so a run in
+    another project never waits on it, and no file is written."""
+    since = projects_since(a.since)
+    repos = phone.projects()  # every run records its checkout there as it starts
+    rows = [project_digest(d, repos.get(d.name), since) for d in project_dirs(user_dir("XDG_STATE_HOME", ".local/state"))]
+    digest = {"since": since, "projects": rows, "across": across(rows)}
+    if a.json:
+        return print(json.dumps(digest, indent=1))
+    print_digest(digest)
+
+
+def projects_since(when):
+    if when is None:
+        return f"{now() - timedelta(days=30):%Y-%m-%d %H:%M}"
+    if not re.fullmatch(r"\d{4}-\d\d-\d\d", when):
+        sys.exit(f"--since: {when!r} isn't a date (YYYY-MM-DD); with --projects a commit means nothing")
+    return when
+
+
+def project_dirs(root):
+    try:
+        dirs = sorted(d for d in root.iterdir() if d.is_dir())
+    except OSError:
+        return []
+    return [d for d in dirs if not d.name.startswith("_") and d.name not in SHARED_DIRS
+            and (d / "ledger.jsonl").is_file()]
+
+
+def load_project(repo):
+    """The project at `repo`, for its config and queue; None when its config no longer loads."""
+    try:
+        return Project(repo)
+    except (SystemExit, Exception):
+        return None
+
+
+def project_digest(d, repo, since):
+    """One project's measures over the window, as plain data: the table prints it, `--json` dumps it."""
+    sp = SimpleNamespace(state=d)  # all the log and ledger readers need
+    ledger = read_jsonl(d / "ledger.jsonl")
+    rows = [r for r in ledger if r.get("at", "") >= since]
+    log = last_log(sp, None)
+    merged = list(dict.fromkeys(m[2] for line in log if (m := MERGED_RE.match(line)) and m[1] >= since))
+    p = load_project(repo) if repo else None
+    q = queue_of(p)
+    failed = failed_in(ledger, log, since)
+    parked = {t: re.sub(rf"^\s*-\s*parked:\s*{re.escape(t)}\s*", "", line, flags=re.I).strip(" ()") or "no reason given"
+              for t, line in q.parked_lines.items()} if q else None
+    return {
+        "name": d.name, "repo": str(repo) if repo else None,
+        "tickets": {"merged": len(merged), "failed": len(failed), "parked": None if parked is None else len(parked)},
+        "tokens": token_shares(rows, len(merged)),
+        "critic": critic_digest(sp, d, since, p.critic["pass"] if p else DEFAULTS["critic"]["pass"]),
+        "checks": checks_digest(sp, rows),
+        "refixes": refixes(q, merged) if q else None,
+        "calibration_lines": calibration_lines(p, since) if p else None,
+        "failed": failed, "parked": parked,
+    }
+
+
+def queue_of(p):
+    try:
+        return Queue(p) if p else None
+    except Exception:  # no remote branch to read the queue from
+        return None
+
+
+def token_shares(rows, merged):
+    """Weighted tokens in all and per merged ticket, and each role's share of them (a `periodic:<name>` or
+    `critic:project` session counts under its role)."""
+    by = Counter()
+    for r in rows:
+        if not r.get("event") and r.get("role"):
+            by[r["role"].split(":")[0]] += weighted(r)
+    total = sum(by.values())
+    per = lambda w: round(w / merged) if merged else None
+    return {"weighted": round(total), "per_merged": per(total),
+            "roles": {role: {"share": round(100 * w / total, 1), "per_merged": per(w)} for role, w in by.most_common()}}
+
+
+def critic_digest(sp, d, since, bar):
+    """The critic on tickets it first judged in the window: how many passed first time, the median first and final
+    score, the final scores exactly on the pass mark; and the reviews after a critic pass that still sent work back."""
+    by = {}
+    for r in read_jsonl(d / "critic.jsonl"):
+        if critic_mod.ticketed(r) and r.get("ticket"):
+            by.setdefault(r["ticket"], []).append(r)
+    by = {t: rs for t, rs in by.items() if rs[0].get("at", "") >= since}
+    scored = {t: [r for r in rs if r.get("score") is not None] for t, rs in by.items()}
+    scored = {t: rs for t, rs in scored.items() if rs}
+    med = lambda xs: statistics.median(xs) if xs else None
+    seen = reviewed(sp, by, since)
+    return {"tickets": len(scored), "bar": bar,
+            "first_pass": sum(rs[0].get("step") in PASSED for rs in scored.values()),
+            "median_first": med([rs[0]["score"] for rs in scored.values()]),
+            "median_final": med([rs[-1]["score"] for rs in scored.values()]),
+            "final_on_bar": sum(rs[-1]["score"] == bar for rs in scored.values()),
+            "reviews": len(seen), "sent_back": sum(m[3] == "changes" for m, _ in seen)}
+
+
+def written_lately(sp, row):
+    """A check still running, told without its lock (taking one, even to test it, is the running project's): its
+    heartbeat wrote its log within CHECK_ALIVE_S."""
+    try:
+        return time.time() - (sp.state / "checks" / row["log"]).stat().st_mtime < CHECK_ALIVE_S
+    except (KeyError, OSError):
+        return False
+
+
+def checks_digest(sp, rows):
+    ran, _, _, _ = check_runs(sp, [r for r in rows if r.get("event") in ("check", "check-start")], written_lately)
+    mins, tickets = sum(r.get("minutes") or 0 for r in ran), {r["ticket"] for r in ran}
+    cut = sum(r.get("finished") is False for r in ran)
+    awaited = sum(r.get("seconds") or 0 for r in rows if r.get("event") == "await" and r.get("role") == "worker")
+    return {"runs": len(ran), "tickets": len(tickets), "per_ticket": round(mins / len(tickets), 1) if tickets else None,
+            "failed": sum(not r.get("passed") for r in ran) - cut, "cut_off": cut,
+            "worker_await": round(awaited / 60, 1)}
+
+
+def failed_in(ledger, log, since):
+    """{ticket: its one-line reason} for the tickets that failed in the window and weren't run again since: the
+    ledger's `outcome: failed` row, unless a later worker run retried it, with the log's `<ID>: FAILED:` reason."""
+    last = {}
+    for r in ledger:
+        t = r.get("ticket")
+        if t and r.get("event") == "outcome":
+            last[t] = r if r.get("outcome") == "failed" else None
+        elif t and r.get("role") == "worker" and not r.get("event"):
+            last[t] = None
+    why = {m[1]: m[2] for line in log if (m := FAILED_RE.match(line))}
+    return {t: critic_mod.clip(why.get(t, "no reason in the log"), 100)
+            for t, r in sorted(last.items()) if r and r.get("at", "") >= since}
+
+
+def refixes(q, merged):
+    """[[merged ticket, the later ticket that fixes it]]: a ticket numbered after one merged in the window whose text
+    names it in a sentence about a fix, a bug or something broken."""
+    num = lambda t: int(re.search(r"\d+", t).group())
+    out = []
+    for m in merged:
+        pat = refix_re(m)
+        by = next((t for t in sorted(q.text, key=num) if num(t) > num(m) and pat.search(q.text[t])), None)
+        if by:
+            out.append([m, by])
+    return out
+
+
+def refix_re(tid):
+    """What a later ticket says when it re-fixes `tid`: a fix word just before its id, or a broken word within three
+    words after it, in the same sentence."""
+    t = rf"(?<![\w-]){re.escape(tid)}(?![\w-])"
+    return re.compile(rf"\b(?:{FIXES}|{BROKEN_BY})\s+{t}|{t}(?:'s)?[^\w.!?;\n]{{0,3}}(?:\w+[^\S\n]+){{0,3}}?{BROKEN}\b",
+                      re.I)
+
+
+def calibration_lines(p, since):
+    """Lines added to the project's CALIBRATION.md on its main branch in the window: the user tuning or overruling
+    the critic."""
+    out = gout(p.main_root(), "log", p.upstream, f"--since={since}", "--numstat", "--format=", "--",
+               p.calibration_rel)
+    return sum(int(n) for n, *_ in (line.split("\t") for line in out.splitlines() if line.strip()) if n.isdigit())
+
+
+# Each measure `across` compares: (label, how to read it from a project's digest, how to print a value).
+pct = lambda a, b: round(100 * a / b) if b else None
+MEASURES = [
+    ("merged tickets", lambda d: d["tickets"]["merged"], "{:g}"),
+    ("worker share of tokens", lambda d: d["tokens"]["roles"].get("worker", {}).get("share"), "{:g}%"),
+    ("critic share of tokens", lambda d: d["tokens"]["roles"].get("critic", {}).get("share"), "{:g}%"),
+    ("weighted per merged ticket", lambda d: d["tokens"]["per_merged"], "k"),
+    ("critic first-pass rate", lambda d: pct(d["critic"]["first_pass"], d["critic"]["tickets"]), "{:g}%"),
+    ("median first critic score", lambda d: d["critic"]["median_first"], "{:g}"),
+    ("median final critic score", lambda d: d["critic"]["median_final"], "{:g}"),
+    ("final scores on the pass mark", lambda d: pct(d["critic"]["final_on_bar"], d["critic"]["tickets"]), "{:g}%"),
+    ("reviews sent back after a pass", lambda d: pct(d["critic"]["sent_back"], d["critic"]["reviews"]), "{:g}%"),
+    ("check min per checked ticket", lambda d: d["checks"]["per_ticket"], "{:g}"),
+    ("worker min in await", lambda d: d["checks"]["worker_await"], "{:g}"),
+    ("re-fixes", lambda d: None if d["refixes"] is None else len(d["refixes"]), "{:g}"),
+    ("CALIBRATION.md lines added", lambda d: d["calibration_lines"], "{:g}"),
+    ("failed tickets", lambda d: d["tickets"]["failed"], "{:g}"),
+]
+
+
+def show(value, fmt):
+    return k(value) if fmt == "k" else fmt.format(value)
+
+
+def across(rows):
+    """Each measure's lowest and highest value with the projects that have it, over the projects that have the
+    measure at all; none for a measure fewer than two projects have."""
+    out = []
+    for label, get, fmt in MEASURES:
+        have = [(get(d), d["name"]) for d in rows if get(d) is not None]
+        if len(have) < 2:
+            continue
+        lo, hi = min(v for v, _ in have), max(v for v, _ in have)
+        out.append({"measure": label, "low": lo, "low_projects": [n for v, n in have if v == lo],
+                    "high": hi, "high_projects": [n for v, n in have if v == hi]})
+    return out
+
+
+def print_digest(digest):
+    rows = digest["projects"]
+    print(f"{plural(len(rows), 'project')} since {digest['since']}")
+    for d in rows:
+        print()
+        print_project(d)
+    if digest["across"]:
+        print()
+        print("across projects       lowest                      highest")
+        fmts = {label: fmt for label, _, fmt in MEASURES}
+        names = lambda ns: ", ".join(ns[:3]) + (f" +{len(ns) - 3}" if len(ns) > 3 else "")
+        for x in digest["across"]:
+            f = fmts[x["measure"]]
+            lo, hi = f"{show(x['low'], f)} {names(x['low_projects'])}", f"{show(x['high'], f)} {names(x['high_projects'])}"
+            print(f"  {x['measure']:30} {lo:27} {hi}")
+
+
+def print_project(d):
+    t, w, c, ch = d["tickets"], d["tokens"], d["critic"], d["checks"]
+    print(f"{d['name']}  {d['repo'] or 'repo unknown'}")
+    print(f"  tickets: {t['merged']} merged, {t['failed']} failed"
+          + (f", {t['parked']} parked now" if t["parked"] is not None else ""))
+    each = lambda x: f", {k(x)} a merged ticket" if x is not None else ""
+    roles = ", ".join(f"{r} {v['share']:g}%" + (f" ({k(v['per_merged'])})" if v["per_merged"] is not None else "")
+                      for r, v in w["roles"].items())
+    note(f"  weighted tokens: {k(w['weighted'])}{each(w['per_merged'])}" + (f"; {roles}" if roles else ""), "    ")
+    if c["tickets"]:
+        print(f"  critic: {plural(c['tickets'], 'ticket')}, {c['first_pass']} passed first time, median score "
+              f"{c['median_first']:g} first, {c['median_final']:g} final, {c['final_on_bar']} final on the pass "
+              f"mark ({c['bar']:g})")
+    if c["reviews"]:
+        print(f"  reviews after a critic pass: {c['reviews']}, {c['sent_back']} sent back")
+    per = f" ({m(ch['per_ticket'])} min per checked ticket)" if ch["per_ticket"] is not None else ""
+    print(f"  checks: {plural(ch['runs'], 'run')}{per}, {ch['failed']} failed, {ch['cut_off']} cut off; "
+          f"workers {m(ch['worker_await'])} min in await")
+    if d["repo"] is None:
+        print("  repo unknown: no re-fixes, CALIBRATION.md lines or parked tickets (it hasn't run since runs "
+              "recorded their checkout)")
+    elif d["refixes"] is None:
+        print("  repo's config or queue doesn't load: no re-fixes, CALIBRATION.md lines or parked tickets")
+    else:
+        print(f"  re-fixes: {len(d['refixes'])}" + (f" ({', '.join(f'{a} by {b}' for a, b in d['refixes'])})"
+                                                     if d["refixes"] else ""))
+        print(f"  CALIBRATION.md: {plural(d['calibration_lines'], 'line')} added")
+    for what, items in (("failed", d["failed"]), ("parked", d["parked"] or {})):
+        for tid, why in items.items():
+            print(f"  {what} {tid}: {critic_mod.clip(why, 80)}")

@@ -23,7 +23,7 @@ from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
 from .config import periodic as periodic_entries
 from .queue import Queue
 from .runner import LIVE, ROLE, Usage, inherited_stop, plain_error, scope_github
-from .stats import cmd_stats, shared_line  # cmd_stats: main runs `stats` by its name
+from .stats import cmd_stats, projects_stats, shared_line  # cmd_stats: main runs `stats` by its name
 from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 
 
@@ -942,7 +942,11 @@ def parser():
     s.add_argument("--critic", action="store_true", help="the spread of the critic's scores instead")
     s.add_argument("--periodic", action="store_true", help="the scores [[periodic]] sessions gave, oldest first")
     s.add_argument("--last", type=int, default=10, help="with --critic: over the last N tickets (default 10)")
-    s.add_argument("--since", help="with --critic: only verdicts at or after a date (YYYY-MM-DD) or a commit")
+    s.add_argument("--since", help="with --critic: only verdicts at or after a date (YYYY-MM-DD) or a commit; "
+                   "with --projects: from a date (default: 30 days ago)")
+    s.add_argument("--projects", action="store_true", help="every project on this machine side by side: what went "
+                   "wrong where, and each measure's spread")
+    s.add_argument("--json", action="store_true", help="with --projects: the same as JSON")
     s = sub.add_parser("bench", help="build the bench/ seed projects with the real pipeline and score them on "
                        "tests no session sees")
     s.add_argument("--ref", default="HEAD", help="the windvane commit to measure (default: HEAD)")
@@ -1003,6 +1007,8 @@ def main(argv=None):
             reuse = heavy.reuse_of(p)
         sys.exit(heavy.run(cmd, None if a.wait is None else a.wait * 60, mem=a.mem, reuse=reuse, expect=a.expect,
                            measure=a.measure))
+    if a.cmd == "stats" and a.projects:  # every project's state dir, wherever it's run from
+        return projects_stats(a)
     p = find()
     phone.use(p)
     try:
