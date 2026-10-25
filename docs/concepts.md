@@ -102,7 +102,8 @@ the order), and **open** otherwise. `windvane queue` shows all three.
    worktree's top level, as the driver's gate does, from whatever directory it's called in.
    The check is the gate, on your machine, so hosted CI isn't needed: a workflow on `push` or `pull_request` runs
    twice per ticket (its PR, its merge) and can use up a month's Actions minutes in days. Test other versions in the
-   check (windvane's own runs every Python 3.11 to 3.14 installed, `tools/check_pythons.sh`), keep workflows
+   check (windvane's own, `tools/check_pythons.sh`, runs the suite on the oldest Python installed and imports every
+   module on the newest; `--all` runs the suite on all of 3.11 to 3.14), keep workflows
    `workflow_dispatch` only, and `windvane doctor` warns about any that run on their own.
    With `actions_minutes` set (your plan's monthly minutes), windvane counts the month's billed minutes itself from
    the run history of your private and internal repos (every job that started this month, a re-run of an older run

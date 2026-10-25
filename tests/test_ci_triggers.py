@@ -1,4 +1,4 @@
-"""Testing every Python here instead of on hosted CI: tools/check_pythons.sh on a trimmed PATH with fake Pythons, and
+"""Testing the Pythons here instead of on hosted CI: tools/check_pythons.sh on a trimmed PATH with fake Pythons, and
 `windvane doctor`'s warning for a workflow that runs on every push or pull request (it spends the user's minutes)."""
 import contextlib
 import io
@@ -23,12 +23,18 @@ SCRIPT = REPO / "tools/check_pythons.sh"
 # What the script may use besides the Pythons: a PATH of only these keeps the machine's real python3.1x out.
 TOOLS = ("bash", "sh", "dirname", "mktemp", "rm", "mkdir", "ln", "grep", "tr", "tail")
 # A fake Python passes only when the run's `python3` is itself, as the tests' `windvane` and tools rely on. The
-# script's closing `--fold` (the reruns line and log) finds no reruns in a fake's log, so it prints nothing.
+# script's closing `--fold` (the reruns line and log) finds no reruns in a fake's log, so it prints nothing. Its
+# import pass prints what `imports` says, "OK" or a broken module's line.
 FAKE_PY = """#!/bin/sh
 [ "$1" = "--version" ] && {{ echo "fake {v}"; exit 0; }}
 [ "$2" = "--fold" ] && exit 0
 [ "$(python3 --version)" = "fake {v}" ] || {{ echo "FAILED (python3 isn't me)"; exit 1; }}
 echo "args: $*"
+[ "$2" = "--imports" ] && {{
+    echo "Ran 9 imports in 0.1s"
+    [ "{imports}" = OK ] && {{ echo OK; exit 0; }}
+    echo "import failed: {imports}"; echo "FAILED (errors=1)"; exit 1
+}}
 echo "tmp: $TMPDIR"
 : > "$TMPDIR/leaked-by-{v}"
 echo "Ran 3 tests in 0.1s"
@@ -39,9 +45,10 @@ echo "{result}"
 
 
 class CheckPythons(unittest.TestCase):
-    def run_script(self, *args, **pythons):
+    def run_script(self, *args, imports=None, **pythons):
         """The script's output and exit code with a PATH of the basic tools and the fake Pythons given as
-        python3_11="OK" (or a failing "FAILED (failures=1)")."""
+        python3_11="OK" (or a failing "FAILED (failures=1)"); `imports` maps a version to the module its import pass
+        names as broken."""
         bindir = Path(tempfile.mkdtemp(prefix="windvane-pythons-"))
         self.addCleanup(shutil.rmtree, bindir)
         for tool in TOOLS:
@@ -49,7 +56,8 @@ class CheckPythons(unittest.TestCase):
         for name, result in pythons.items():
             v = name.removeprefix("python").replace("_", ".")
             exit_line = "exit 0" if result == "OK" else "exit 1"
-            (bindir / f"python{v}").write_text(FAKE_PY.format(v=v, result=result, exit=exit_line))
+            broken = (imports or {}).get(v, "OK")
+            (bindir / f"python{v}").write_text(FAKE_PY.format(v=v, result=result, exit=exit_line, imports=broken))
             (bindir / f"python{v}").chmod(0o755)
         self.tmp = bindir / "tmp"
         self.tmp.mkdir()
@@ -57,17 +65,55 @@ class CheckPythons(unittest.TestCase):
                            env={"PATH": str(bindir), "HOME": str(bindir), "TMPDIR": str(self.tmp)})
         return r.stdout + r.stderr, r.returncode
 
-    def test_a_missing_version_is_named_as_not_installed(self):
-        """Not "skipped": that word is unittest's, for tests it skipped, in each version's summary line."""
-        out, code = self.run_script(python3_11="OK", python3_13="OK")
+    def test_the_suite_runs_on_the_oldest_and_the_imports_on_the_newest(self):
+        """Not "skipped" for a missing version: that word is unittest's, for tests it skipped, in each summary line."""
+        out, code = self.run_script(python3_12="OK", python3_13="OK", python3_14="OK")
         self.assertEqual(code, 0, out)
-        self.assertIn("python3.11: Ran 3 tests in 0.1s OK\n", out)
-        self.assertIn("not installed: python3.12 python3.14\n", out)
+        self.assertIn("python3.12: Ran 3 tests in 0.1s OK\n", out)
+        self.assertIn("python3.14 imports: Ran 9 imports in 0.1s OK\n", out)
+        self.assertNotIn("python3.13:", out)
+        self.assertNotIn("python3.13 imports", out)
+        self.assertIn("not installed: python3.11\n", out)
         self.assertNotIn("skipped", out)
+        self.assertTrue(out.endswith("passed: the suite on python3.12, imports on python3.14\n"), out)
+
+    def test_a_suite_failing_only_on_a_newer_version_isnt_run_there(self):
+        out, code = self.run_script(python3_11="OK", python3_14="FAILED (failures=1)")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.endswith("passed: the suite on python3.11, imports on python3.14\n"), out)
+
+    def test_an_import_failing_only_on_the_newest_fails_the_check_and_is_named(self):
+        broken = "tests.test_x: ModuleNotFoundError: No module named 'imp'"
+        out, code = self.run_script(python3_11="OK", python3_13="OK", imports={"3.13": broken})
+        self.assertEqual(code, 1, out)
+        self.assertIn("python3.11: Ran 3 tests in 0.1s OK\n", out)
+        self.assertIn("python3.13 imports: Ran 9 imports in 0.1s FAILED (errors=1)\n", out)
+        self.assertIn(f"--- python3.13 imports, the end of its output:\nargs: tools/test_pool.py --imports windvane "
+                      f"tests\nRan 9 imports in 0.1s\nimport failed: {broken}\n", out)
+        self.assertTrue(out.endswith("FAILED: imports on python3.13\n"), out)
+
+    def test_a_failing_suite_on_the_oldest_fails_the_check_and_shows_its_output(self):
+        out, code = self.run_script(python3_11="FAILED (failures=1)", python3_14="OK")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--- python3.11, the end of its output:\nargs: tools/test_pool.py --jobs ", out)
+        self.assertTrue(out.endswith("FAILED: the suite on python3.11\n"), out)
+
+    def test_with_one_python_both_run_on_it(self):
+        out, code = self.run_script(python3_13="OK")
+        self.assertEqual(code, 0, out)
+        self.assertIn("python3.13: Ran 3 tests in 0.1s OK\npython3.13 imports: Ran 9 imports in 0.1s OK\n", out)
+        self.assertTrue(out.endswith("passed: the suite on python3.13, imports on python3.13\n"), out)
+
+    def test_all_runs_the_suite_on_every_version_and_names_a_missing_one(self):
+        out, code = self.run_script("--all", python3_11="OK", python3_13="OK")
+        self.assertEqual(code, 0, out)
+        self.assertIn("python3.11: Ran 3 tests in 0.1s OK\npython3.13: Ran 3 tests in 0.1s OK\n", out)
+        self.assertIn("not installed: python3.12 python3.14\n", out)
+        self.assertNotIn("imports", out)
         self.assertTrue(out.endswith("passed on: python3.11 python3.13\n"), out)
 
-    def test_one_failing_version_fails_the_check_and_shows_its_output(self):
-        out, code = self.run_script(python3_12="OK", python3_14="FAILED (failures=1)")
+    def test_all_with_one_failing_version_fails_the_check_and_shows_its_output(self):
+        out, code = self.run_script("--all", python3_12="OK", python3_14="FAILED (failures=1)")
         self.assertEqual(code, 1, out)
         self.assertIn("python3.14: Ran 3 tests in 0.1s FAILED (failures=1)\n", out)
         self.assertIn("--- python3.14, the end of its output:\nargs: tools/test_pool.py --jobs ", out)
@@ -83,10 +129,18 @@ class CheckPythons(unittest.TestCase):
             self.assertRegex(d, rf"^{re.escape(str(self.tmp))}/windvane-check-\w+/tmp3\.1[12]$")
         self.assertEqual(list(self.tmp.iterdir()), [])
 
-    def test_arguments_go_to_unittest(self):
-        out, code = self.run_script("tests.test_units", python3_11="FAILED")
+    def test_all_may_come_after_unittest_arguments(self):
+        out, code = self.run_script("tests.test_units", "--all", python3_11="FAILED")
         self.assertEqual(code, 1)
         self.assertIn("args: -m unittest tests.test_units\n", out)
+
+    def test_arguments_go_to_unittest_on_every_version(self):
+        out, code = self.run_script("tests.test_units", python3_11="FAILED", python3_14="OK")
+        self.assertEqual(code, 1)
+        self.assertIn("python3.14: Ran 3 tests in 0.1s OK\n", out)
+        self.assertIn("--- python3.11, the end of its output:\nargs: -m unittest tests.test_units\n", out)
+        self.assertNotIn("imports", out)
+        self.assertTrue(out.endswith("FAILED on: python3.11\n"), out)
 
     def test_no_supported_python_fails(self):
         out, code = self.run_script()
