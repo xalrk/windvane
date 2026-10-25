@@ -49,7 +49,8 @@ prompt = args[args.index("-p") + 1]
 system = args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else ""
 emit = lambda ev: print(json.dumps(ev), flush=True)
 emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {
-    "five_hour": {"utilization": float(os.environ.get("FAKE_FIVE", "0.1")), "resetsAt": 0}, "seven_day": {"utilization": 0.2}}}})
+    "five_hour": {"utilization": float(os.environ.get("FAKE_FIVE", "0.1")), "resetsAt": 0},
+    "seven_day": {"utilization": float(os.environ.get("FAKE_WEEK", "0.2"))}}}})
 sh = lambda *c: subprocess.run(c, capture_output=True, text=True).stdout.strip()
 log = os.environ.get("FAKE_LOG")
 if log:

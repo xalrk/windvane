@@ -161,6 +161,12 @@ seed's: its tokens and API $ are its own (`judge.weighted`, `judge.usd` in the r
 per merged ticket, and the run's table ends with them on a line of their own (`the judge's own cost, not in the
 above`). `windvane stats --bench` lists every recorded run, a line each.
 
+**What the bench spends of the week.** A bench run's spend is the weekly usage reading's rise across its span, times
+its share of the weighted tokens every windvane ledger on the machine logged in that span, its judges included (a row
+per run in `_budget/spend.jsonl`, added up over the usage window's week by the [experiment
+budget](configuration.md#experiments)). Work by hand at the same time is in no ledger, so it counts as the bench's,
+which errs on the safe side.
+
 ## Tuning
 
 - **Turns per worker run high?** Tickets may be too big or too vague. Split them, and make "Done when" points

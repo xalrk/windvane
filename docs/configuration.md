@@ -37,7 +37,7 @@ matching keys for one run.
 | `overview_extra` | `""` | A shell command, run in the checkout, whose output `windvane overview` (and so the phone's `overview`) adds below its own lines: the project's own milestones. First 15 lines, 30 s at most; a failure shows as one line. |
 | `shared_notes` | `[]` | Notes files every ticket appends its findings to (e.g. `["NOTES.md"]`; paths in the repo, globs like `docs/*.md`, or a directory ending in `/`). They don't count when deciding which tickets may run side by side, whether on a Touches line or among the files a running branch changed. When a merge (a ticket's, or a desk PR's) conflicts only in these and `[[append_only]]` files, and in these files every conflict hunk only adds lines on both sides, the driver resolves it without a session: main's text, then the branch's added sections in order (a section starts at a Markdown heading, or is the added text itself). It's named in the merge commit, the log and the PR (`NOTES.md: kept main's, appended 2 sections`). A hunk that changes or deletes an existing line, on either side, or a conflict in any other file, goes back to the worker as before. Workers are told to add a new section and not rewrite existing text. |
 | `scan_allow` | `[]` | Leak kinds that `windvane answer`, the sessions' pre-push hook and the checks before windvane pushes or merges let through: `"token"`, `"private-key"`, `"ntfy-url"`, `"ntfy-topic"`, `"private-term"`, `"email"`, `"secret-file"`. Only for a repository that stays private, e.g. `["private-term"]` when its tickets name your other projects ([what `.windvane/` holds](safety.md#what-windvane-holds)). A project's own name needs no allow: it is no private word in its own repository. |
-| `protected` | see right | Path prefixes no ticket, plan or periodic branch may change (`"bench/"`, `"prompts/JUDGE.md"`); an entry `"<file>:<key>"` protects only that TOML file's keys of that name, in any table, with `*` globs (`".windvane/config.toml:experiment_*"`). A branch that changes one is held for you instead of merged ([why](safety.md#the-yardstick-is-protected)). Unset: when the project has `bench/`, that, `prompts/JUDGE.md`, `windvane/bench_score.py` and the config's `experiment_*` keys; otherwise nothing. Whenever it protects anything, the config's own `protected` key is protected too. `[]` turns it off. |
+| `protected` | see right | Path prefixes no ticket, plan or periodic branch may change (`"bench/"`, `"prompts/JUDGE.md"`); an entry `"<file>:<key>"` protects only that TOML file's keys of that name, in any table, with `*` globs (`".windvane/config.toml:experiment_*"`). A branch that changes one is held for you instead of merged ([why](safety.md#the-yardstick-is-protected)). Unset: when the project has `bench/`, that, `prompts/JUDGE.md`, `windvane/bench_score.py` and the config's `experiment_*`, `week_below` and `week_share` keys; otherwise nothing. Whenever it protects anything, the config's own `protected` key is protected too. `[]` turns it off. |
 | `heavy_check` | `false` | The check itself is machine-heavy (a game engine, a render): run it under `windvane heavy`, one at a time on this machine. A check that waited in vain for the machine is not run, not failed. |
 | `heavy_mem` | unset | GB of free memory this project's heavy jobs (`windvane heavy`, `bg --heavy`) and its `heavy_check` wait for; unset: `machine.toml`'s `min_free_gb`. A job's own `--mem` (`check --mem` for the check) overrides it. A job that needs less can go by one at the head of the line that waits for more. |
 | `heavy_keep_hours` | `0` | Hours a kept heavy job (`bg --heavy --keep`) may go on past the run's stop; `0`: the stop kills it, and the next run resumes its ticket. A job still running then is ended when that time comes, or by `windvane stop`; the next run keeps its ticket's worktree and resumes the ticket when it ends. |
@@ -110,6 +110,25 @@ See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 | `experiment_repeat` | `2` | Runs of an experiment ticket's head its bench takes before the merge ([experiments](concepts.md#the-critic-and-calibration)); `main`'s side reuses its recorded runs, making one when there are none. Protected with the bench. |
 | `experiment_saving` | `10` | Percent fewer weighted tokens per merged ticket that keep an experiment whose hidden tests and judge yeses held. |
 | `experiment_minutes` | `60` | How long each of an experiment's bench runs lets its seeds build (`bench --hours`); each seed's judge may take 30 minutes more, one after another. A run that doesn't fit before the deadline sets the ticket aside, before its critic when it's the first; the next run benches its approved head with no worker, critic or review again. |
+
+## [experiments]
+
+The bench's budget, for experiment tickets and the periodic bench alike. Every bench run costs part of the account's
+week, so a run of experiments with no end could spend all of it; both numbers are percent points of the weekly limit,
+and the budget is the machine's (one account), so the project whose run starts a bench applies its own numbers to
+what every project's benches spent.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `week_below` | `75` | A bench starts only while the weekly usage is below this. |
+| `week_share` | `30` | The most of a week benches may use: one starts only while this week's bench spend plus its estimate (the mean of the last three runs of its size) stays within it, plus what you allowed for this week. |
+
+A bench that doesn't fit isn't started: an experiment ticket waits, set aside but not failed, and the run goes on
+with other tickets; `windvane status` says so on one line. At the share, the run asks once a week per cap on the
+phone (`+10%`, `+20%`, or wait for the reset; no answer in `answer_wait`: wait). `windvane experiments` prints this
+week's spend, the cap, what you allowed and when the week resets; `windvane experiments allow +10` allows 10 points
+more, this week only. The week is the usage window's own, ending at its seven-day reset. Both keys are protected with
+the bench.
 
 ## [[periodic]]
 

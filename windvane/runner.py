@@ -259,6 +259,7 @@ class Usage:
         self.path = p.state / "usage.json"
         s = load_json(self.path, {})
         self.five, self.week, self.five_reset, self.at = s.get("five"), s.get("week"), s.get("five_reset"), s.get("at", 0)
+        self.week_reset = s.get("week_reset")  # the seven-day window's reset: the experiment budget's week
         self.rejected = False
 
     def update(self, info):
@@ -268,9 +269,11 @@ class Usage:
             self.five_reset = wins["five_hour"].get("resetsAt")
         if "seven_day" in wins:
             self.week = round(100 * wins["seven_day"]["utilization"], 1)
+            self.week_reset = wins["seven_day"].get("resetsAt") or self.week_reset
         self.rejected = info.get("status") not in (None, "allowed", "allowed_warning")
         self.at = time.time()
-        save_json(self.path, {"five": self.five, "week": self.week, "five_reset": self.five_reset, "at": self.at})
+        save_json(self.path, {"five": self.five, "week": self.week, "five_reset": self.five_reset,
+                              "week_reset": self.week_reset, "at": self.at})
 
     def text(self):
         f = lambda v: "?" if v is None else f"{v:g}"
