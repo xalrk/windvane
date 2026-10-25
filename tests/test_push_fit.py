@@ -310,6 +310,21 @@ def kept_secret(p, patch, s):
                            "then the next run pushes it.")}
 
 
+def protected_aside(p, patch, s):
+    pilot(p).protected_aside("T-001", "t-001-x", "0" * 40, [f"bench/{'x' * 250}/hidden/test_a.py"])
+    return {"Held": ("Not merged: it changes protected paths: bench/", "test_a.py.")}
+
+
+def kept_protected(p, patch, s):
+    p.protected = ["bench/"]  # as in a project with a bench
+    ensure_worktree(p, p.plan_dir, setup=False)
+    (p.plan_dir / "bench").mkdir()
+    (p.plan_dir / f"bench/{'x' * 250}.py").write_text("seed\n")
+    s.git("add", "-A", cwd=p.plan_dir)
+    held_mod.land(p, p.plan_dir, "periodic-1", LONG, "body")
+    return {"Not landed": ("It changes protected paths (bench/", "land it by hand: `git push origin periodic-1`")}
+
+
 def tmp_full(p, patch, s):
     patch(scratch, "fullness", lambda path=None: (93.4, 20))
     pilot(p).clean_tmp()
@@ -331,7 +346,7 @@ def scale_warned(p, patch, s):
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
          held, secret_aside, push_refused, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned,
-         plan_dropped, tmp_full,
+         plan_dropped, tmp_full, protected_aside, kept_protected,
          not_taken_up, scale_warned]
 
 
