@@ -390,6 +390,9 @@ class Parts(unittest.TestCase):
         self.assertEqual(landed(log(plain + 'Revert "Revert "Merge T-001: x (branch t-001-x)""',
                                     plain + 'Revert "Merge T-001: x (branch t-001-x)"',
                                     merge + "Merge T-001: x (branch t-001-x)"), "t"), ["t-001"])  # and its revert
+        self.assertEqual(landed(log(plain + 'Revert "Revert T-001: windvane abc crashed"',
+                                    plain + "Revert T-001: windvane abc crashed",
+                                    merge + "Merge T-001: x (branch t-001-x)"), "t"), ["t-001"])  # the user undid ours
         self.assertEqual(landed(plain + "Merge T-001: squashed by hand (branch t-001-x)", "t"), [])  # not a merge
 
     def test_signature_reads_two_tickets_failing_alike_the_same(self):
