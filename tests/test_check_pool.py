@@ -454,5 +454,182 @@ class Pool(unittest.TestCase):
                     self.fail(f"pid {pid} outlived the stopped pool")
 
 
+# A module that imports the changed lib/widget.py; the import is guarded, as the fixture has no lib/ to import.
+WIDGET = "try:\n    from lib import widget\nexcept ImportError:\n    pass\n"
+
+
+def module(name, *, fails=False, uses_widget=False, sleep=0):
+    head = RECORD + WIDGET if uses_widget else RECORD
+    body = f"        import time; time.sleep({sleep})\n" if sleep else ""
+    body += f'        record("{name}")\n' + (f'        self.fail("boom from {name}")\n' if fails else "")
+    return head + f"class T(unittest.TestCase):\n    def test_it(self):\n{body}"
+
+
+class QuickPass(unittest.TestCase):
+    """`--quick`: the modules likely to fail for this change, on the oldest Python, stopping at the first real
+    failure."""
+    setUp, start_script, processes = CheckPool.setUp, CheckPool.start_script, CheckPool.processes
+
+    def tests(self, **modules):
+        for f in (self.root / "tests").iterdir():
+            f.unlink()
+        for name, body in modules.items():
+            (self.root / "tests" / f"{name}.py").write_text(body)
+
+    def run_quick(self, changed=(), jobs="3"):
+        self.seen = self.root / "seen"
+        for f in self.seen.iterdir():
+            f.unlink()
+        self.checks = self.root / "state/checks"  # windvane writes the change list beside the check's log
+        self.checks.mkdir(parents=True, exist_ok=True)
+        listed = self.checks / "now.changed"
+        listed.write_text("".join(f"{c}\n" for c in changed))
+        env = {"PATH": str(self.bin), "HOME": str(self.root / "home"), "TMPDIR": str(self.root / "tmp"),
+               "POOL_SEEN": str(self.seen), "CHECK_JOBS": jobs, "WINDVANE_CHANGED": str(listed)}
+        proc = subprocess.run([str(self.root / "tools/check_pythons.sh"), "--quick"], capture_output=True,
+                              text=True, env=env, timeout=120)
+        out = proc.stdout + proc.stderr
+        self.assertNotIn("imports", out.splitlines()[0], "no import pass in a quick one")
+        return out, proc.returncode
+
+    def test_it_runs_the_modules_importing_the_change_and_the_sweeps_not_the_rest(self):
+        self.tests(test_gadget=module("gadget", uses_widget=True), test_push_sweep=module("sweep"),
+                   test_unrelated=module("unrelated"), test_broken=module("broken", fails=True))
+        out, code = self.run_quick(["lib/widget.py"])
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(self.processes()), ["gadget", "sweep"], out)
+        self.assertIn("quick: 2 of 4 modules (1 sweeps, 1 importing or naming a change)\n", out)
+        self.assertRegex(out, rf"^python{V} quick pass: Ran 2 tests in [\d.]+s OK\n")
+        self.assertTrue(out.endswith(f"passed: the quick pass on python{V}\n"), out)
+        self.assertFalse((self.root / "home/.cache/windvane-check/reruns.log").exists(), "the full check's log")
+
+    def test_it_stops_at_the_first_module_that_fails_alone_too_with_its_tail(self):
+        self.tests(test_a_gadget=module("a", fails=True, uses_widget=True),
+                   **{f"test_{c}_gadget": module(c, uses_widget=True, sleep=3) for c in "bcd"})
+        out, code = self.run_quick(["lib/widget.py"], jobs="2")
+        self.assertEqual(code, 1, out)
+        self.assertEqual(sorted(self.processes()), ["a"], "b, beside it, is stopped; c and d never start")
+        self.assertIn("rerun alone: test_a_gadget failed again (a real failure: see below); added ", out)
+        self.assertIn("quick: stopped at test_a_gadget (imports or names lib/widget.py), 1 of 4 modules run\n", out)
+        self.assertIn(f"--- python{V} quick pass, the end of its output:\n--- test_a_gadget:\n", out)
+        self.assertIn("AssertionError: boom from a", out)
+        self.assertTrue(out.endswith(f"FAILED: the quick pass on python{V}\n"), out)
+
+    def test_a_module_failing_beside_others_but_passing_alone_does_not_stop_it(self):
+        self.tests(test_flaky=WIDGET + FLAKY, test_slow=module("slow", uses_widget=True, sleep=3),
+                   test_other=module("other", uses_widget=True))
+        (self.root / "home/.cache/windvane-check").mkdir(parents=True)
+        (self.root / f"home/.cache/windvane-check/times{V}.json").write_text(
+            json.dumps({"test_slow": 3, "test_flaky": 2, "test_other": 1}))  # slow and flaky start together
+        out, code = self.run_quick(["lib/widget.py"], jobs="2")
+        self.assertEqual(code, 0, out)
+        self.assertIn("rerun alone: test_flaky passed (flaky beside others, no action); added ", out)
+        self.assertEqual(sorted(self.processes()), ["other", "slow"], "the module stopped for the rerun ran again")
+        self.assertTrue(out.endswith(f"passed: the quick pass on python{V}\n"), out)
+
+    def test_with_no_changes_it_runs_the_sweeps_and_the_recent_real_failures(self):
+        self.tests(test_push_fit=module("sweep"), test_logged=module("logged"), test_in_a_log=module("in_a_log"),
+                   test_flaked=module("flaked"), test_unrelated=module("unrelated"))
+        cache = self.root / "home/.cache/windvane-check"
+        cache.mkdir(parents=True)
+        (cache / "reruns.log").write_text(f"2026-10-01T10:00:00 windvane-check-a test_logged failed again ({V}); "
+                                          "added 3s\n2026-10-01T11:00:00 windvane-check-b test_flaked passed "
+                                          f"({V}); added 2s\n2026-10-01T12:00:00 windvane-check-c no reruns\n")
+        self.checks = self.root / "state/checks"
+        self.checks.mkdir(parents=True)
+        (self.checks / "20261001-120000-1-1.log").write_text(
+            "rerun alone: test_in_a_log failed again on every Python (a real failure: see below); added 4s\n")
+        out, code = self.run_quick([])
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(self.processes()), ["in_a_log", "logged", "sweep"], out)
+        self.assertIn("quick: 3 of 5 modules (1 sweeps, 2 recent failures)\n", out)
+
+
+class Pick(unittest.TestCase):
+    def setUp(self):
+        self.tests = Path(tempfile.mkdtemp(prefix="windvane-pick-")) / "tests"
+        self.tests.mkdir()
+        self.addCleanup(shutil.rmtree, self.tests.parent)
+
+    def write(self, **modules):
+        for name, body in modules.items():
+            (self.tests / f"{name}.py").write_text(body)
+
+    def test_why_each_module_is_picked_in_order(self):
+        self.write(test_new="", test_driver_push="", test_uses="from windvane import driver, util\n",
+                   test_reads='PROMPTS / "WORKER.md"\n', test_util="", test_push_fit="", test_often="",
+                   test_helper_user="from helpers import Sandbox\n", test_none="import os\n", test_bad="def (:\n")
+        chosen = test_pool.pick(self.tests, ["tests/test_new.py", "windvane/driver.py", "prompts/WORKER.md",
+                                             "tests/helpers.py"], {"test_often": 3, "test_none": 0}, {}, 10 ** 6)
+        self.assertEqual(chosen, [
+            ("test_new", "changed"), ("test_driver_push", "named after windvane/driver.py"),
+            ("test_push_fit", "sweep"), ("test_often", "failed for real in 3 of the recent checks"),
+            ("test_bad", "touches tests/test_new.py, windvane/driver.py and 2 more"),
+            ("test_helper_user", "imports or names tests/helpers.py"),
+            ("test_reads", "imports or names prompts/WORKER.md"),
+            ("test_uses", "imports or names windvane/driver.py")])
+
+    def test_the_budget_keeps_the_first_and_skips_what_does_not_fit_for_smaller_ones(self):
+        self.write(test_a="", test_b="", test_c="", test_d="")
+        failures = {"test_a": 4, "test_b": 3, "test_c": 2, "test_d": 1}
+        times = {"test_a": 50, "test_b": 40, "test_c": 4}
+        self.assertEqual([m for m, _ in test_pool.pick(self.tests, [], failures, times, 60, sweeps=())],
+                         ["test_a", "test_c"], "test_d, never timed, counts as the median, 40s: no room")
+        self.assertEqual([m for m, _ in test_pool.pick(self.tests, [], failures, times, 1, sweeps=())], ["test_a"])
+
+    def test_real_failures_are_the_ones_failing_alone_or_on_every_version(self):
+        rerun = "rerun alone: test_a passed (flaky), test_b failed again (real); added 3s\n--- test_b:\n--- test_c:\n"
+        self.assertEqual(test_pool.real_failures(rerun), {"test_b"})
+        versions = ("--- python3.11, the end of its output:\n--- test_x:\nFAIL: test_it (test_y.T.test_it)\n"
+                    "--- python3.12, the end of its output:\nERROR: test_y (unittest.loader._FailedTest.test_y)\n"
+                    "--- and 2 more failed: test_x, test_z\n")
+        self.assertEqual(test_pool.real_failures(versions), {"test_x", "test_y"})
+        self.assertEqual(test_pool.real_failures("FAIL: test_it (test_one.T.test_it)\n"), {"test_one"})
+        self.assertEqual(test_pool.real_failures("CHECK FAILED\n"), set())
+
+
+class Replay(unittest.TestCase):
+    """tools/quick_replay.py over a made-up project: a ticket's failed checks, caught when the pick holds a module that
+    failed there for real."""
+    def test_it_counts_the_failed_checks_the_pick_would_have_caught(self):
+        root = Path(tempfile.mkdtemp(prefix="windvane-replay-"))
+        self.addCleanup(shutil.rmtree, root)
+        repo, state = root / "repo", root / "state"
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+        def git(*args):
+            subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True)
+        (repo / "lib").mkdir(parents=True)
+        (repo / "tests").mkdir()
+        (repo / "lib/widget.py").write_text("x = 1\n")
+        (repo / "tests/test_gadget.py").write_text("from lib import widget\n")
+        (repo / "tests/test_other.py").write_text("")
+        git("init", "-q", "-b", "main")
+        git("add", ".")
+        git("commit", "-qm", "start")
+        git("checkout", "-qb", "t-001-widget")
+        (repo / "lib/widget.py").write_text("x = 2\n")
+        git("commit", "-qam", "T-001: widget")
+        (state / "checks").mkdir(parents=True)
+        start = time.time() + 5
+        rows = []
+        for n, failed in enumerate(["test_gadget", "test_other", "test_other"]):
+            log = f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(start + n))}-{n}-1.log"
+            (state / "checks" / log).write_text(f"rerun alone: {failed} failed again (a real failure: see below)\n")
+            rows += [{"event": "check-start", "ticket": "T-001", "start": start + n, "log": log},
+                     {"event": "check", "ticket": "T-001", "start": start + n, "passed": False, "reused": False}]
+        (state / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        out = subprocess.run([sys.executable, str(REPO / "tools/quick_replay.py"), "--state", str(state),
+                              "--main", "main", "--repo", str(repo), "--jobs", "2"],
+                             capture_output=True, text=True, timeout=60).stdout
+        lines = out.splitlines()
+        self.assertRegex(lines[0], r"^T-001 \S+ caught real=test_gadget by=test_gadget \(imports or names "
+                                   r"lib/widget.py\) picked=1 ")
+        self.assertRegex(lines[1], r"^T-001 \S+ MISSED real=test_other by=- ")
+        self.assertRegex(lines[2], r"^T-001 \S+ caught real=test_other by=test_other \(failed for real in 1 ",
+                         "the second check's failure is in the third's history")
+        self.assertTrue(lines[3].startswith("caught 2 of 3 failed checks (67%); first catch by: "), out)
+
+
 if __name__ == "__main__":
     unittest.main()
