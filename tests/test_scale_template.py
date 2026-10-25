@@ -58,8 +58,8 @@ class EvidenceWording(unittest.TestCase):
     def test_a_check_that_grades_the_pack_is_warned_naming_it_and_the_fix(self):
         self.assertEqual(critic.evidence_graded(GRADES_PACK, ".windvane/CRITIC.md"),
                          [('critic scale: check `quoted` reads as grading the evidence ("the pack quotes"), not what '
-                           'trying the change shows', "reword it in .windvane/CRITIC.md as what a user meets when the change is "
-                           "run, broken or read")])
+                           'trying the change shows',
+                           "reword it in .windvane/CRITIC.md as what a user meets when the change is run, broken or read")])
 
     def test_the_old_template_wording_is_caught_once_per_check(self):
         old = ("## works\n- 2 shown: a test or transcript in the pack shows the main promise working.\n"
@@ -70,9 +70,9 @@ class EvidenceWording(unittest.TestCase):
         self.assertEqual(got, ["shown", "failures", "class", "said", "tested"])
 
     def test_other_ways_of_asking_for_evidence_are_caught(self):
-        for q in ("the evidence shows the crash handled", "a unit test covers the crash", "a transcript shows it working",
-                  "tests pass for every failure path", "it quotes every line it prints", "the message is quoted verbatim",
-                  "an end-to-end test proves it"):
+        for q in ("the evidence shows the crash handled", "a unit test covers the crash",
+                  "a transcript shows it working", "tests pass for every failure path", "it quotes every line it prints",
+                  "the message is quoted verbatim", "an end-to-end test proves it"):
             self.assertTrue(critic.evidence_graded(f"## works\n- 2 runs: {q}.\n", "x"), q)
 
     def test_mentioning_the_pack_the_tests_or_a_quote_is_no_warning(self):
