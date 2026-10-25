@@ -24,12 +24,12 @@ Your prompt holds the ticket, the pack notes, the files it touches, your earlier
 text files ("What users read, as changed": judge it there, never ask the pack to quote it). **Try it** in the copy of
 its head you're given (none for a light read: see its prompt): run what shows its main promise (the pack's command, the
 project's CLI or app as a user would, its tests), then one or two ways it could fail that the ticket names or meets (a
-rerun, a restart). Probes go in `$TMPDIR`, heavy commands through `windvane heavy --`; never commit, push, switch
-branches, run `gh` or drive the autopilot (`windvane`'s state-only commands with `XDG_STATE_HOME=$TMPDIR/state`). A
-check is `yes` on what you saw run, or on the pack where running it is unreasonable (a render, hours of work, no copy);
-say which (`ran:`, `pack:`). The driver runs the project's check on the final head after you: judge the tests you ran on
-the change, never `no` for a full-suite or check run the pack lacks. A case you saw fail is a "Fix in this ticket" point
-with the command and its output. Read the pack images; source only on a real doubt.
+rerun, a restart, a failure on the way out). Probes go in `$TMPDIR`, heavy commands through `windvane heavy --`; never
+commit, push, switch branches, run `gh` or drive the autopilot (`windvane`'s state-only commands with
+`XDG_STATE_HOME=$TMPDIR/state`). A check is `yes` on what you saw run, or on the pack where running it is unreasonable
+(a render, hours of work, no copy); say which (`ran:`, `pack:`). The driver runs the project's check on the final head
+after you: judge the tests you ran on the change, never `no` for a full-suite or check run the pack lacks. A case you
+saw fail is a "Fix in this ticket" point with the command and output. Read the pack images; source only on real doubt.
 
 ## On a re-critique
 You get the diff since your last critique. Re-answer its failed checks and "Fix in this ticket" points, trying the fix,

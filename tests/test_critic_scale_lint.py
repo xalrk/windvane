@@ -53,6 +53,12 @@ class CheckAsked(unittest.TestCase):
         self.assertEqual(critic.check_asked(scale("npm prints its version"), "x", "npm test"), [], "a bare tool word")
         self.assertEqual(critic.check_asked(scale("it runs"), "x", ""), [])
 
+    def test_a_bare_one_word_command_counts_only_in_backticks_or_passing(self):
+        for cmd in ("make", "pytest", "tox"):
+            self.assertEqual(critic.check_asked(scale(f"it doesn't {cmd} the page slower"), "x", cmd), [], cmd)
+            for q in (f"`{cmd}` shows no failure", f"{cmd} passes on the head"):
+                self.assertEqual(len(critic.check_asked(scale(q), "x", cmd)), 1, q)
+
     def test_the_shipped_scale_is_clean(self):
         self.assertEqual(critic.check_asked((REPO / "templates/CRITIC.md").read_text(), "x", "make check"), [])
 
@@ -123,6 +129,16 @@ class Warned(unittest.TestCase):
         self.assertEqual(log.count("asks for the project's check"), 1, log)
         self.assertIn("T-001: critic scale: check `works` asks for the project's check or suite passing (\"the full "
                       "test suite passes\"), which the critic can't see: drop it from its rung in .windvane/CRITIC.md", log)
+
+    def test_a_second_critique_on_the_same_scale_logs_nothing_more(self):
+        self.critique("it works, and the full test suite passes")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                cli.cmd_critic(argparse.Namespace(ticket="T-001", project=False), self.p)
+            except SystemExit:
+                pass
+        log = (self.p.state / "autopilot.log").read_text()
+        self.assertEqual(log.count("asks for the project's check"), 1, log)
 
     def test_the_critic_start_log_is_quiet_otherwise(self):
         log = self.critique("what the ticket promises happens, and again on a second pass")
