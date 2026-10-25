@@ -91,7 +91,7 @@ class RetryInRun(Base):
         pilot = driver.Pilot(self.p, args())
         pilot.failed, pilot.skip = [], set()
         pilot.take_retries()
-        self.assertIn("T-002: asked to retry it, but it hasn't failed in this run", self.log())
+        self.assertIn("T-002: asked to retry it, but it hasn't failed or been set aside in this run", self.log())
         self.assertFalse((self.p.state / driver.RETRY).exists())
 
 
@@ -153,17 +153,20 @@ class Refused(Base):
                                                    "rec": "A", "must_wait": False, "branch": "", "asked": None}})
         r = self.retry()
         self.assertEqual(r.returncode, 1)
-        self.assertIn("T-001 isn't retried: only a failed ticket is. T-001 has an open question: "
+        self.assertIn("T-001 isn't retried: only a failed or set-aside ticket is. T-001 has an open question: "
                       "`windvane answer T-001 <letter>`", r.stderr)
         self.assertFalse((self.p.state / driver.RETRY).exists())
 
-    def test_a_ticket_set_aside_is_refused_with_its_fix(self):
+    def test_a_ticket_set_aside_goes_back_once_its_cause_is_fixed_by_hand(self):
         self.hold_lock()
         self.state(failed=[], aside={"T-001": "PR #7 is a draft on purpose"}, fixes={"T-001": "`gh pr ready 7`"})
         r = self.retry()
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("T-001 was set aside this run (PR #7 is a draft on purpose); so it isn't set aside again, "
-                      "`gh pr ready 7`", r.stderr)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.p.state / driver.RETRY).read_text(), "T-001\n")
+        pilot = driver.Pilot(self.p, args())
+        pilot.skip, pilot.aside, pilot.fixes = {"T-001"}, {"T-001": "PR #7 is a draft on purpose"}, {"T-001": "x"}
+        pilot.take_retries()
+        self.assertEqual((pilot.skip, pilot.aside, pilot.fixes), (set(), {}, {}))
 
     def test_a_parked_ticket_is_refused_with_its_queue_line(self):
         self.s.write(".windvane/QUEUE.md", "# Queue\n- parked: T-001 (later)\n")
@@ -179,7 +182,7 @@ class Refused(Base):
         self.state(failed=["T-002"])
         r = self.retry()
         self.assertEqual(r.returncode, 1)
-        self.assertIn("T-001 isn't retried: it hasn't failed in this run", r.stderr)
+        self.assertIn("T-001 isn't retried: it hasn't failed or been set aside in this run", r.stderr)
 
     def test_with_no_run_going_it_says_so_and_writes_nothing(self):
         self.state(failed=["T-001"])

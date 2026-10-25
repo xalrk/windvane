@@ -154,19 +154,18 @@ class Restart(Base):
 
 
 class SecretRetry(Base):
-    def test_a_ticket_set_aside_for_a_secret_is_refused_with_what_lets_it_go(self):
+    def test_a_ticket_set_aside_for_a_secret_goes_back_with_its_head_still_watched(self):
         pilot = driver.Pilot(self.p, args())
         pilot.secret_aside("T-001", "t-001-work", "a" * 40, [("token", ".windvane/QUESTIONS.md:3 in 1a2b3c4")])
         fh = open(self.p.state / "lock", "a+")  # a running autopilot holds it
         self.addCleanup(fh.close)
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         r = subprocess.run(["windvane", "retry", "T-001"], cwd=self.s.root, capture_output=True, text=True)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("T-001 isn't retried: only a failed ticket is. T-001 was set aside this run (its .windvane/ "
-                      "lines hold a token at .windvane/QUESTIONS.md:3 in 1a2b3c4); so it isn't set aside again, "
-                      "rewrite its branch without the secret, as its push says", r.stderr)
-        self.assertFalse((self.p.state / driver.RETRY).exists())
-
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pilot.take_retries()
+        self.assertNotIn("T-001", pilot.skip)
+        self.assertIn("T-001: back in the queue (windvane retry)", self.log())
+        self.assertEqual(pilot.secrets["T-001"]["sha"], "a" * 40)  # `secrets_unchanged` sets it aside again if so
 
 if __name__ == "__main__":
     unittest.main()

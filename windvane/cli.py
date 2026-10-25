@@ -278,17 +278,17 @@ def cmd_deadline(a, p):
 
 
 def cmd_retry(a, p):
-    """A failed ticket back in the running autopilot's queue, once the cause is fixed by hand: the driver reads the
-    request between tickets (`Pilot.take_retries`). A ticket held for another reason is refused with what lets it go,
-    as `windvane queue` says it."""
+    """A failed or set-aside ticket back in the running autopilot's queue, once the cause is fixed by hand: the driver
+    reads the request between tickets (`Pilot.take_retries`). A ticket held for another reason is refused with what
+    lets it go, as `windvane queue` says it."""
     tid = p.norm(a.ticket) or sys.exit(f"windvane retry: {a.ticket} isn't a ticket id")
     if not driver.locked(p):
         return print(f"{p.display}: autopilot isn't running; the next `windvane run` takes {tid} up anyway")
     st = load_json(p.state / "state.json", {})
-    if tid not in st.get("failed", []):
+    if tid not in st.get("failed", []) and tid not in st.get("aside", {}):
         why = Queue(p).release(tid, questions.tickets(st.get("questions", {})), st)
-        sys.exit(f"{p.display}: {tid} isn't retried: " + (f"only a failed ticket is. {why}" if why else
-                                                         "it hasn't failed in this run"))
+        sys.exit(f"{p.display}: {tid} isn't retried: " + (f"only a failed or set-aside ticket is. {why}" if why else
+                                                         "it hasn't failed or been set aside in this run"))
     with open(p.state / driver.RETRY, "a") as f:
         f.write(tid + "\n")
     print(f"{p.display}: {tid} goes back in the queue; the autopilot takes it up between tickets")

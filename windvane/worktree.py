@@ -10,7 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from . import net, privacy
-from .util import git, log, now, run_limited, same_process, save_json, stamp
+from .util import git, load_json, log, now, run_limited, same_process, save_json, stamp
 
 
 def ensure_worktree(p, path, setup=True, stop=lambda: ""):
@@ -100,7 +100,8 @@ def guard_pushes(p, path):
             if hook.suffix != ".sample" and hook.name != "pre-push" and os.access(hook, os.X_OK):
                 (new / hook.name).symlink_to(hook)
         script = new / "pre-push"
-        script.write_text(privacy.hook_script(p.root, p.upstream, str(own) if os.access(own, os.X_OK) else ""))
+        script.write_text(privacy.hook_script(p.root, p.upstream, str(own) if os.access(own, os.X_OK) else "",
+                                              record=str(refusal_file(p, path))))
         script.chmod(0o755)
     return hooks_env(path, folder, submodule_hooks(p, path))
 
@@ -278,6 +279,22 @@ def quote_config(value):
 
 def hooks_folder(p, path):
     return p.state / HOOKS / Path(path).resolve().name
+
+
+REFUSALS = "push-refusals"  # under the state dir: the pre-push scan's last refusal in each worktree, `<tree>.json`
+
+
+def refusal_file(p, path):
+    return p.state / REFUSALS / f"{Path(path).resolve().name}.json"
+
+
+def last_refusal(p, mine):
+    """The newest refusal the pre-push scan noted in any of windvane's worktrees ({at, branch, line, base},
+    `privacy.note_refusal`) for a branch `mine(branch)` accepts, or None. Any tree: a ticket may run in another slot
+    than the one its push was refused in."""
+    found = [r for f in (p.state / REFUSALS).glob("*.json") for r in [load_json(f, None)]
+             if isinstance(r, dict) and r.get("line") and mine(r.get("branch", ""))]
+    return max(found, key=lambda r: r.get("at", ""), default=None)
 
 
 def their_hooks(path):

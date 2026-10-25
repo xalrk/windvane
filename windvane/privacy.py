@@ -9,12 +9,14 @@ and kept only in memory. On a public repository a branch is public once pushed, 
 pre-push hook that scans every push (`pre_push`), the driver scans a branch again before it merges it
 (`branch_found`), and the text it relays to GitHub goes through `censor`."""
 import getpass
+import json
 import os
 import re
 import shlex
 import socket
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from .config import DIR
@@ -297,15 +299,41 @@ def censor(text, own=frozenset()):
     return text
 
 
-def hook_script(root, upstream, theirs, own_remote=False):
+def hook_script(root, upstream, theirs, own_remote=False, record=""):
     """The pre-push hook windvane puts in its own worktrees: `pre_push` for the project at `root`, then the repo's own
-    pre-push (`theirs`), if it has one; `own_remote` for the submodules in them. sh starts it with this python, as a
-    shebang can't hold every path; it imports this package from where it is now."""
+    pre-push (`theirs`), if it has one; `own_remote` for the submodules in them; `record`, where it notes a refusal for
+    the driver. sh starts it with this python, as a shebang can't hold every path; it imports this package from where
+    it is now."""
     return (f"#!/bin/sh\n''''exec {shlex.quote(sys.executable)} \"$0\" \"$@\" # '''\n"
             "# windvane: refuses a push that would make a secret public (windvane/privacy.py)\n"
             f"import sys\nsys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})\n"
             "from windvane import privacy\n"
-            f"sys.exit(privacy.pre_push(sys.argv[1:], {str(root)!r}, {upstream!r}, {theirs!r}, {own_remote!r}))\n")
+            f"sys.exit(privacy.pre_push(sys.argv[1:], {str(root)!r}, {upstream!r}, {theirs!r}, {own_remote!r}"
+            f"{f', {record!r}' if record else ''}))\n")
+
+
+def note_refusal(record, branch, first, base):
+    """A refusal where the driver reads it (`record`, one file per worktree): when, the branch, the message's first
+    line (kinds and places, never the matched text) and the base `git reset --soft` takes. The driver never sees a
+    session's transcript, so without it a refused push only shows as a READY whose branch isn't on the remote."""
+    if not record:
+        return
+    try:
+        Path(record).parent.mkdir(parents=True, exist_ok=True)
+        Path(record).write_text(json.dumps({"at": datetime.now().isoformat(timespec="seconds"),
+                                            "branch": branch, "line": first, "base": base}))
+    except OSError:  # the push stays refused either way
+        pass
+
+
+def clear_refusals(record, branches):
+    """A push that got past the scan: the refusals noted for its branches, in any worktree's file, are old news."""
+    for f in Path(record).parent.glob("*.json") if record else ():
+        try:
+            if json.loads(f.read_text()).get("branch") in branches:
+                f.unlink()
+        except (OSError, ValueError, AttributeError):
+            pass
 
 
 def remote_named(args):
@@ -320,14 +348,15 @@ def remote_named(args):
     return name if name in urls else next((n for n, have in urls.items() if url in have), "")
 
 
-def pre_push(args, root, upstream, theirs="", own_remote=False):
+def pre_push(args, root, upstream, theirs="", own_remote=False, record=""):
     """git's pre-push hook: scan what each pushed ref adds beyond upstream and what the remote already has, with the
     kinds the project's config refuses now (`scan_allow` may change while a session runs), and refuse with kinds and
     places only (the refusal reaches a session's transcript and a log). Then the repo's own pre-push, given the same
     arguments and refs. A config that can't be read refuses every kind: a push is no time to guess. `own_remote`, for a
     submodule's push: its remote is another repo, so what that remote is known to have (its remote-tracking refs, its
     default branch for lines already there) stands in for the project's upstream, its repository name for the project's
-    own names, and its own pre-push is found here."""
+    own names, and its own pre-push is found here. `record`: the file a refusal is noted in (`note_refusal`), so the
+    driver hears of it too; a push that gets past the scan clears its branches' notes (`clear_refusals`)."""
     from .config import Project
     try:
         p = Project(root)
@@ -348,24 +377,29 @@ def pre_push(args, root, upstream, theirs="", own_remote=False):
             known = subprocess.run(["git", "for-each-ref", "--format=%(objectname)", f"refs/remotes/{remote}/"],
                                    capture_output=True, text=True).stdout.split()
     base = upstream if upstream and have(upstream) else ""
-    found, fix = [], ""
+    found, fix, branch, sent = [], "", "", []
     for line in refs.splitlines():
         parts = line.split()
         if len(parts) != 4 or not parts[1].strip("0"):  # a deletion pushes nothing
             continue
         head, there = parts[1], parts[3] if parts[3].strip("0") and have(parts[3]) else ""
+        sent.append(parts[2].removeprefix("refs/heads/"))
         new = pushed(".", base, [head, *[f"^{r}" for r in (base, there, *known) if r]], kinds, own)
         if new:
             found += new
+            branch = branch or parts[2].removeprefix("refs/heads/")
             fix = fix or there or (base and subprocess.run(["git", "merge-base", head, base], capture_output=True,
                                                            text=True).stdout.strip())
     if found:
-        print(f"windvane: push refused: it would make public {said(found, 10)}.\n"
+        first = f"windvane: push refused: it would make public {said(found, 10)}."
+        print(f"{first}\n"
               "Take it out of the commits that add it, not with a commit on top: `git commit --amend` for the last "
               f"one, or `git reset --soft {fix[:12] or '<the pushed base>'}` and commit again. Keep such files out "
               "with .gitignore. Then push again. If it's no secret, ask the user (a question) rather than get around "
               "this check.", file=sys.stderr)
+        note_refusal(record, branch, first, fix[:12])
         return 1
+    clear_refusals(record, sent)
     if theirs and os.access(theirs, os.X_OK):
         return subprocess.run([theirs, *args], input=refs.encode()).returncode
     return 0

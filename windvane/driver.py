@@ -48,17 +48,18 @@ from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude
 from .util import (PARTIAL_LOG, append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl,
                    save_json)
 from .worktree import (TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, clear_scrub_stubs, ensure_worktree,
-                       guard_pushes, teardown)
+                       guard_pushes, last_refusal, teardown)
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "fixes", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes", "opened", "heavy_waits",
-           "stuck_pushed", "retried")  # the run's own memory, handed to the driver a restart starts
+           "stuck_pushed", "retried", "refused")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
            "branch": ("a READY on no branch", "autopilot", "review_rounds", 0, ""),
+           "push": ("a branch not on the remote", "autopilot", "review_rounds", 0, ""),
            "critic": ("the critic", "critic", "revisions", 1, "one more for a READY without the evidence pack"),
            "check": ("the check", "autopilot", "check_retries", 0, ""),
            "conflict": ("a merge conflict", "autopilot", "conflict_retries", 0, ""),
@@ -103,6 +104,22 @@ REWRITE = "Rewrite its branch without the secret, as its push says: runs leave i
 
 def said_times(n):
     return f"{n} time{'s' * (n != 1)}"
+
+
+def refused_why(r):
+    """A noted refusal in a feedback line: its first line without the `windvane: push refused:` lead."""
+    return r["line"].removeprefix("windvane: push refused: ").rstrip(".")
+
+
+def unpushed_line(local, branches, r, remote):
+    """The prompt's line for a ticket branch with commits the remote lacks (`Pilot.unpushed`), or ""."""
+    if not local:
+        return ""
+    why = f": its last push was refused ({refused_why(r)}). Take that out of its commits, then" if r else \
+        " yet. Resume it, then"
+    lead = f"`{local}` has commits {remote} lacks" if local in branches else \
+        f"In progress on branch `{local}`, which isn't on {remote}"
+    return f"{lead}{why} push it (`git push -u {remote} {local}`)."
 
 
 def worker_perms(p):
@@ -373,6 +390,7 @@ class Pilot(Desk, Periodic):
         self.fixes = {}  # ticket set aside -> what keeps it from being set aside again, for `windvane queue`'s hint
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
         self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
+        self.refused = {}  # ticket -> the pre-push scan's refusal its last READY's branch was kept off the remote by
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
         self.digest_tried = 0.0  # when a push last tried the phone's missed provisional answers (see quiet_check)
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
@@ -780,6 +798,7 @@ class Pilot(Desk, Periodic):
         pr = pr_for(p, branches[0]) if branches else ""
         root = p.main_root().resolve()
         theirs = [b for b in branches if wd.resolve() != root and root in self.trees_on(b)]
+        local, refusal = self.unpushed(tid, branches, root)
         if pr and fb and fb.startswith(NO_PR):  # stale: the PR is open now
             fb = None
         known = self.answered(tid, ref)
@@ -795,11 +814,12 @@ class Pilot(Desk, Periodic):
             "## The user already answered these (under ## Answered in QUESTIONS.md): build them, don't ask again\n"
             + "\n\n".join(known) if known else "",
             (f"In progress on branch(es) {', '.join(branches)}" + (f", PR #{pr}" if pr else "") + ". Resume it.")
-            if branches else "A new ticket: branch it off " + p.upstream + ".",
+            if branches else "" if local else "A new ticket: branch it off " + p.upstream + ".",
+            unpushed_line(local, branches, refusal, p.remote),
             "".join(f"`{b}` is checked out in the user's checkout, so you can't switch to it here: work detached from "
                     f"`{p.remote}/{b}` and push with `git push {p.remote} HEAD:{b}`. " for b in theirs).strip(),
             f"The worktree is on `{here}` with uncommitted changes from an earlier run:\n{dirty[:1500]}" if dirty else
-            f"The worktree is on `{here}`, left by an earlier run." if here not in ("HEAD", *branches) else "",
+            f"The worktree is on `{here}`, left by an earlier run." if here not in ("HEAD", *branches, local) else "",
             (f"The critic is on: your evidence pack goes in {critic.pack_dir(p, tid)}/ (pass mark "
              f"{p.critic['pass']}/10)." if p.critic["enabled"] else "The critic is off for this run: skip rules step 6."),
             f"Check command (`windvane check` runs it): `{p.cfg['check']}`." if p.cfg["check"] else
@@ -919,12 +939,59 @@ class Pilot(Desk, Periodic):
         sha = next(iter(re.findall(r"\b[0-9a-f]{40}\b", rest)), "") or gout(self.wd, "rev-parse", "HEAD")
         if not branch:
             name = f"`{branches[0]}`" if branches else f"your ticket's branch (`{tid.lower()}-<short-name>`)"
+            r = last_refusal(self.p, lambda b: b in branches or b.startswith(f"{tid.lower()}-"))
+            why = f" Its last push was refused ({refused_why(r)}): fix that before you push." if r else ""
             self.feedback[tid] = (f"Your tree was detached, on no branch: switch to {name} or push HEAD to it, "
-                                  "then finish READY.")
-            self.log(f"{tid}: READY on no branch; back to the worker")
+                                  f"then finish READY.{why}")
+            self.log(f"{tid}: READY on no branch" + (f" (its push was refused: {refused_why(r)})" if r else "")
+                     + "; back to the worker")
             return self.bounce(tid, "branch")
         self.feedback.pop(tid, None)
         self.after(tid, branch, sha)
+
+    def not_pushed(self, tid, branch, sha):
+        """A READY whose branch isn't on the remote, or whose remote branch the pre-push scan kept behind its head:
+        sent back at once, before the critic and the check are paid for, with the refusal if one was noted (the
+        driver never sees the session's transcript). The same refusal twice in a row sets the ticket aside: the
+        worker can't get past it, and each round would cost a run. True when it was sent back or set aside."""
+        p = self.p
+        there = gout(p.main_root(), "rev-parse", "-q", "--verify", f"refs/remotes/{p.remote}/{branch}")
+        r = last_refusal(p, lambda b: b == branch)
+        if there and (there == sha or not r):
+            return False
+        where = f"`{p.remote}/{branch}` isn't at your head" if there else f"Your branch `{branch}` isn't on {p.remote}"
+        if not r:
+            self.feedback[tid] = f"{where}: push it (`git push -u {p.remote} {branch}`), then finish READY."
+            self.log(f"{tid}: READY, but {branch} isn't on {p.remote}; back to the worker")
+            self.bounce(tid, "push")
+            return True
+        why = refused_why(r)
+        if self.refused.get(tid) == r["line"]:
+            fix = (f"Take it out of the commits on {branch} that add it (`git commit --amend` for the last one, or "
+                   f"`git reset --soft {r.get('base') or p.upstream}` and commit again), then `git push -u "
+                   f"{p.remote} {branch}`.")
+            held = self.put_aside(tid, f"its push was refused twice in a row: {why}", fix)
+            self.log(f"{tid}: set aside: its push was refused twice in a row ({why}){held}")
+            push(f"Set aside: {self.name(tid)}", whole("Its push was refused twice: ", why, ".", log=self.log)
+                 + f"\n{fix} Then `windvane retry {tid}`. Its branch is only on this machine." + self.held_line(tid),
+                 3, "warning")
+            return True
+        self.refused[tid] = r["line"]
+        self.feedback[tid] = f"{where}: its push was refused ({why}). Fix that and push again, then finish READY."
+        self.log(f"{tid}: READY, but its push to {branch} was refused ({why}); back to the worker")
+        self.bounce(tid, "push")
+        return True
+
+    def unpushed(self, tid, branches, root):
+        """(the ticket's branch with commits only this machine has, the scan's last refusal for it) for the worker's
+        prompt: a refused push leaves the work on a local branch the queue, which reads the remote's, doesn't see.
+        A branch the user's checkout holds isn't one: the worker couldn't switch to it. ("", None) for none."""
+        wd, prefix = self.wd, f"{tid.lower()}-"
+        for b in gout(wd, "for-each-ref", "--format=%(refname:short)", "refs/heads/").split():
+            if (b in branches or b.startswith(prefix)) and root not in self.trees_on(b) and \
+                    gout(wd, "rev-list", "-1", b, "--not", f"--remotes={self.p.remote}"):
+                return b, last_refusal(self.p, lambda x: x == b)
+        return "", None
 
     def detached_on(self, tid, branches):
         """The ticket's branch a detached tree stands on: its HEAD is the branch's head on the remote, or reached from
@@ -991,11 +1058,14 @@ class Pilot(Desk, Periodic):
         if self.stopping_now():  # the next run's worker finds the head pushed and finishes READY again
             return
         self.fetch()
+        if branch and self.not_pushed(tid, branch, sha):
+            return
         if gout(p.main_root(), "rev-parse", "--verify", "-q", f"{sha}^{{commit}}") == "" or \
                 (branch and gout(p.main_root(), "rev-parse", f"{p.remote}/{branch}") != sha):
             self.feedback[tid] = (f"Your RESULT line named {sha[:12]}, but `{p.remote}/{branch or '?'}` isn't at it. "
                                   "Push the final head, then finish READY with its full sha.")
             return self.log(f"{tid}: READY head {sha[:12]} isn't pushed; back to the worker")
+        self.refused.pop(tid, None)
         ap = self.approved.get(tid)
         res = ap and critic.resolution(self.cd, ap["sha"], sha, p.upstream, ap.get("why"))
         if ap and not res:
@@ -2385,8 +2455,8 @@ class Pilot(Desk, Periodic):
                 self.poll_questions()
 
     def take_retries(self):
-        """Between tickets: the failed tickets `windvane retry` asked for go back in the queue, each counting its
-        rounds afresh. The request stays in the state dir until the run's state saying it was taken is saved, so a
+        """Between tickets: the failed or set-aside tickets `windvane retry` asked for go back in the queue, each counting
+        its rounds afresh. The request stays in the state dir until the run's state saying it was taken is saved, so a
         restart (a self-update, a crash) reads it again if it came first; `retried` tells a ticket taken then, now
         back in the queue, from one that never failed."""
         f = self.p.state / RETRY
@@ -2405,15 +2475,17 @@ class Pilot(Desk, Periodic):
                 with open(taking, "a") as h:
                     h.write(left)
         for tid in dict.fromkeys(filter(None, map(self.p.norm, taking.read_text().split()))):
-            if tid not in self.failed:
+            if tid not in self.failed and tid not in self.aside:
                 if tid not in self.retried:
-                    self.log(f"{tid}: asked to retry it, but it hasn't failed in this run")
+                    self.log(f"{tid}: asked to retry it, but it hasn't failed or been set aside in this run")
                 continue
             self.failed = [t for t in self.failed if t != tid]
+            self.aside.pop(tid, None)
+            self.fixes.pop(tid, None)
             self.retried += [tid] * (tid not in self.retried)
             self.skip.discard(tid)
             self.unfinished.discard(tid)
-            for counts in (self.reviews, self.bounces, self.partials, self.ticket_crashes):
+            for counts in (self.reviews, self.bounces, self.partials, self.ticket_crashes, self.refused):
                 counts.pop(tid, None)
             append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "retried"})
             land = self.landing.get(tid)
