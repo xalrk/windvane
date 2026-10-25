@@ -1009,6 +1009,8 @@ def main(argv=None):
                            measure=a.measure))
     if a.cmd == "stats" and a.projects:  # every project's state dir, wherever it's run from
         return projects_stats(a)
+    if a.cmd == "stats" and a.json:
+        sys.exit("stats: --json goes with --projects")
     p = find()
     phone.use(p)
     try:

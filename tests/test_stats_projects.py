@@ -40,7 +40,7 @@ class StatsProjects(unittest.TestCase):
         s.write(".windvane/tickets/T-002.md", "# T-002: start\nDepends on: nothing.\n\nFixes T-001's crash on start.\n")
         s.write(".windvane/tickets/T-008.md", "# T-008: more\nDepends on: nothing.\n\nT-005 is fine; the fix for "
                 "the menu comes later.\n")
-        s.write(".windvane/QUEUE.md", "# Queue\n- parked: T-003 (waits for a sound card)\n")
+        s.write(".windvane/QUEUE.md", "# Queue\n- parked: T-003 (waits for a sound card (T-001; D-4))\n")
         s.publish()
         for when, n in ((self.old, 5), (self.mid, 2), (self.recent, 3)):
             f = s.root / ".windvane/CALIBRATION.md"
@@ -132,7 +132,7 @@ class StatsProjects(unittest.TestCase):
             "  re-fixes: 1 (T-001 by T-002)",
             "  CALIBRATION.md: 5 lines added",
             "  failed T-004: the check kept failing on a missing font",
-            "  parked T-003: waits for a sound card"])
+            "  parked T-003: waits for a sound card (T-001; D-4)"])
         other = lines.index("other  repo unknown")
         self.assertEqual(lines[other + 1:other + 5], [
             "  tickets: 1 merged, 0 failed",
@@ -168,7 +168,7 @@ class StatsProjects(unittest.TestCase):
         self.assertEqual(sb["refixes"], [["T-001", "T-002"]])
         self.assertEqual(sb["calibration_lines"], 5)
         self.assertEqual(sb["failed"], {"T-004": "the check kept failing on a missing font"})
-        self.assertEqual(sb["parked"], {"T-003": "waits for a sound card"})
+        self.assertEqual(sb["parked"], {"T-003": "waits for a sound card (T-001; D-4)"})
         merged = next(x for x in d["across"] if x["measure"] == "merged tickets")
         self.assertEqual(merged, {"measure": "merged tickets", "low": 1, "low_projects": ["other"], "high": 2,
                                   "high_projects": ["sandbox"]})
@@ -189,9 +189,24 @@ class StatsProjects(unittest.TestCase):
         self.assertIn("median score 7 first, 8.5 final", out)
 
     def test_since_takes_only_a_date(self):
+        for bad in ("HEAD", "2026-13-45", "2026-10-32"):
+            with self.subTest(bad), self.assertRaises(SystemExit) as e:
+                self.run_cli("--since", bad)
+            self.assertIn("isn't a date", str(e.exception))
+
+    def test_json_goes_with_projects(self):
         with self.assertRaises(SystemExit) as e:
-            self.run_cli("--since", "HEAD")
-        self.assertIn("isn't a date", str(e.exception))
+            cli.main(["stats", "--json"])
+        self.assertIn("--json goes with --projects", str(e.exception))
+
+    def test_ends_alike_print_once(self):
+        append_jsonl(self.root / "other/ledger.jsonl", dict(at=T(self.recent), event="outcome", ticket="OP-002",
+                                                            outcome="failed"))
+        out = self.run_cli()
+        self.assertIn("  failed tickets                 1 in all 2", out.splitlines())
+        both = json.loads(self.run_cli("--json"))["across"][-1]
+        self.assertEqual(both, {"measure": "failed tickets", "low": 1, "low_projects": ["other", "sandbox"],
+                                "high": 1, "high_projects": ["other", "sandbox"]})
 
     def test_nothing_changes(self):
         before = self.snapshot()

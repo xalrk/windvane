@@ -8,7 +8,7 @@ import sys
 import textwrap
 import time
 from collections import Counter
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -793,9 +793,12 @@ def projects_stats(a):
 def projects_since(when):
     if when is None:
         return f"{now() - timedelta(days=30):%Y-%m-%d %H:%M}"
-    if not re.fullmatch(r"\d{4}-\d\d-\d\d", when):
-        sys.exit(f"--since: {when!r} isn't a date (YYYY-MM-DD); with --projects a commit means nothing")
-    return when
+    try:
+        ok = re.fullmatch(r"\d{4}-\d\d-\d\d", when) and date.fromisoformat(when)
+    except ValueError:  # 2026-13-45: an empty digest would read as a quiet month
+        ok = False
+    return when if ok else sys.exit(f"--since: {when!r} isn't a date (YYYY-MM-DD); with --projects a commit means "
+                                    "nothing")
 
 
 def project_dirs(root):
@@ -825,8 +828,7 @@ def project_digest(d, repo, since):
     p = load_project(repo) if repo else None
     q = queue_of(p)
     failed = failed_in(ledger, log, since)
-    parked = {t: re.sub(rf"^\s*-\s*parked:\s*{re.escape(t)}\s*", "", line, flags=re.I).strip(" ()") or "no reason given"
-              for t, line in q.parked_lines.items()} if q else None
+    parked = {t: parked_why(line, t) for t, line in q.parked_lines.items()} if q else None
     return {
         "name": d.name, "repo": str(repo) if repo else None,
         "tickets": {"merged": len(merged), "failed": len(failed), "parked": None if parked is None else len(parked)},
@@ -837,6 +839,14 @@ def project_digest(d, repo, since):
         "calibration_lines": calibration_lines(p, since) if p else None,
         "failed": failed, "parked": parked,
     }
+
+
+def parked_why(line, tid):
+    """A `- parked: <ID> (why)` line's why, without the one pair of brackets around it: a bracket inside stays."""
+    why = re.sub(rf"^\s*-\s*parked:\s*{re.escape(tid)}\s*", "", line, flags=re.I).strip()
+    if why.startswith("(") and why.endswith(")"):
+        why = why[1:-1].strip()
+    return why or "no reason given"
 
 
 def queue_of(p):
@@ -989,14 +999,14 @@ def print_digest(digest):
     if not digest["across"]:
         return
     fmts = {label: fmt for label, _, fmt in MEASURES}
-    names = lambda ns: ", ".join(ns[:3]) + (f" +{len(ns) - 3}" if len(ns) > 3 else "")
-    ends = [(x["measure"], f"{show(x['low'], fmts[x['measure']])} {names(x['low_projects'])}",
-             f"{show(x['high'], fmts[x['measure']])} {names(x['high_projects'])}") for x in digest["across"]]
-    w = max(len(lo) for _, lo, _ in ends) + 2
+    end = lambda x, e: f"{show(x[e], fmts[x['measure']])} {', '.join(x[e + '_projects'])}"
+    spread = [x for x in digest["across"] if x["low"] != x["high"]]
+    w = max((len(end(x, "low")) for x in spread), default=0) + 2
     print()
     print(f"{'across projects':32} {'lowest':{w}} highest")
-    for label, lo, hi in ends:
-        print(f"  {label:30} {lo:{w}} {hi}")
+    for x in digest["across"]:  # one where every project has the same value says so once, not as both ends
+        print(f"  {x['measure']:30} " + (f"{end(x, 'low'):{w}} {end(x, 'high')}" if x in spread else
+                                          f"{show(x['low'], fmts[x['measure']])} in all {len(x['low_projects'])}"))
 
 
 def print_project(d):
