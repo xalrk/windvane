@@ -266,6 +266,27 @@ class Run(Base):
         self.assertNotIn("ended with the run", log)
 
 
+    def test_a_bench_that_ends_during_the_runs_last_pass_is_read_before_the_run_ends(self):
+        self.make()
+        self.record(rec(self.first))
+        self.merge("Merge T-009: a shorter worker prompt", "prompts/WORKER.md")
+        first = self.pilot()
+        with self.fake([{"passed": 4}]):
+            first.periodic(first.periodic_due())
+        self.ended()
+        real, looks = driver.Pilot.periodic_due, []
+
+        def due(pilot):  # the pass's look came just before the bench ended: it saw nothing to do
+            looks.append(1)
+            return None if len(looks) == 1 else real(pilot)
+        pilot = driver.Pilot(self.p, args())
+        with mock.patch.object(driver.Pilot, "periodic_due", due), mock.patch.object(periodic, "push") as pushed:
+            pilot.run(now() + timedelta(hours=3))
+        self.assertIn("bench regression", self.log())
+        self.assertEqual(pushed.call_count, 1)
+        self.assertIn("T-001", pilot.merged)  # its ticket landed, and the run worked it
+
+
 class Unfinished(Base):
     def setUp(self):
         self.make()

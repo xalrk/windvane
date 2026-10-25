@@ -630,6 +630,18 @@ class Periodic:
         return [f"waiting for the {name} bench round to end (started {datetime.fromtimestamp(started):%H:%M}), "
                 f"at the latest until the deadline ({hhmm(self.end())})" for name, _, started in live_benches(self.p)]
 
+    def bench_unread(self):
+        """Whether a bench entry's round has ended with its verdict not yet read, or a regression's ticket not yet
+        written (and not put off by a busy checkout): a run about to end passes once more, so a bench that ended
+        during its last pass isn't left for the next run. Reading always gives a verdict, so this can't loop."""
+        for name, e in self.p.periodic.items():
+            st = load_json(bench_file(self.p, name), {}) if e["builtin"] == "bench" else {}
+            if st.get("job") and not jobs.alive(Path(st["job"])) and (
+                    not st.get("verdict") or st["verdict"] == "regression"
+                    and len(self.merged) > self.bench_wait.get(name, -1)):
+                return True
+        return False
+
     def bench_at_end(self):
         """The run's end (a stop, the deadline) ends every bench round still running, its own or one a desk's
         `windvane periodic` or a run before a restart started: no run would be left to read its verdict. One push

@@ -2468,6 +2468,8 @@ class Pilot(Desk, Periodic):
                     self.idle_note(self.bench_waits())
                     self.pause(60)
                     continue
+                if self.bench_unread():  # it ended during this pass: read it, and land its ticket, before the end
+                    continue
                 self.stop_reason = kind
                 return
             self.idle, self.said = False, set()
