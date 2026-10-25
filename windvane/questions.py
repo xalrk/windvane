@@ -66,11 +66,26 @@ def tickets(qs):
     return {ticket_of(k, q) for k, q in qs.items()}
 
 
+def options(body):
+    """{letter: option} of a question block, an option wrapped onto indented lines (workers wrap at the repo's width)
+    joined back with spaces, up to the next option or field: `OPT_RE` alone ends it at its first line's end."""
+    out, cur = {}, None
+    for line in body.splitlines():
+        if m := OPT_RE.match(line):
+            cur = m.group(1)
+            out[cur] = m.group(2).strip()
+        elif cur and line[:1].isspace() and line.strip():
+            out[cur] += " " + line.strip()
+        else:
+            cur = None
+    return out
+
+
 def parts(sec):
     """({letter: option}, recommended letter or "", must wait for the user, the one-line question)."""
     rec = re.search(r"^Recommendation:\s*\**([A-E])\b", sec, re.M)
     q = re.match(r"### \S+:?\s*(.*)", sec)
-    return (dict(OPT_RE.findall(sec)), rec.group(1) if rec else "",
+    return (options(sec), rec.group(1) if rec else "",
             bool(re.search(r"^Waits for the user:", sec, re.M)), q.group(1).strip() if q else "")
 
 
@@ -78,7 +93,7 @@ def provisional(text):
     """[{ticket, question, built, option}] under ## Provisional."""
     out = []
     for tid, q, body in blocks(part(text, "Provisional")):
-        opts = dict(OPT_RE.findall(body))
+        opts = options(body)
         built = re.search(r"^Built:\s*([A-E])", body, re.M)
         letter = built.group(1) if built else ""
         out.append({"ticket": tid, "question": q, "built": letter, "option": opts.get(letter, "")})

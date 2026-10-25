@@ -85,7 +85,7 @@ class Supervisor(unittest.TestCase):
         self.assertIn("KeyError: 'slot 7'", dict(self.pushes)["windvane restarted"])
         self.assertIn("driver crashed (KeyError: 'slot 7'); restart 1 of 3 this hour", self.log())
         # the restarted driver knew T-001 was merged before the crash: the final summary has both
-        self.assertIn("Merged: do T-001 (T-001); do T-002 (T-002)", self.pushes[-1][1])
+        self.assertIn("Merged 2: T-001, T-002.", self.pushes[-1][1])
         q = Queue(self.p)
         self.assertEqual((q.status("T-001"), q.status("T-002")), ("done", "done"))
 
@@ -105,7 +105,7 @@ class Supervisor(unittest.TestCase):
         log = self.log()
         self.assertLess(log.index("T-001: merged"), log.index("driver crashed"))  # finished before the exit
         self.assertEqual((log.count("T-001: worker run"), log.count("T-002: worker run")), (1, 1))
-        self.assertIn("Merged: do T-001 (T-001); do T-002 (T-002)", self.pushes[-1][1])
+        self.assertIn("Merged 2: T-001, T-002.", self.pushes[-1][1])
 
     def test_a_fourth_crash_in_an_hour_stops_with_one_push(self):
         self.crash_when(lambda pilot: True)
@@ -180,7 +180,7 @@ class Supervisor(unittest.TestCase):
         log = self.log()
         self.assertIn("driver crashed (RuntimeError: injected); restart 1 of 3 this hour", log)
         self.assertIn("autopilot restarted, until", log)
-        self.assertIn("Why: queue empty. Merged: do T-001 (T-001); do T-002 (T-002).", log)
+        self.assertIn("Why: queue empty. Waiting on you: none. Failed: none. 5h 10% · week 20%. Merged 2: T-001, T-002.", log)
         r = subprocess.run(["windvane", "run", "--help"], capture_output=True, text=True)
         self.assertNotIn("--supervise", r.stdout)  # internal: what --detach starts, not for the user
 

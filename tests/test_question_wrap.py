@@ -1,5 +1,6 @@
-"""A question's `Recommendation:`, `Built:` or `Waits for` line wrapped over several lines (workers wrap at the repo's
-width) reads as one line: none of it is left in the context, and the reason and the place to change it are whole."""
+"""A question's option, `Recommendation:`, `Built:` or `Waits for` line wrapped over several lines (workers wrap at
+the repo's width) reads as one line: none of it is left in the context, and the reason and the place to change it are
+whole."""
 import contextlib
 import io
 import os
@@ -114,6 +115,49 @@ class AtTheDesk(unittest.TestCase):
         self.assertNotIn("the sandbox stops it", text)
         followup = self.s.git("show", "origin/main:.windvane/tickets/T-008.md")
         self.assertIn("(where it lives: the deny list in windvane/sandbox.py)", followup)
+
+
+OPTION = """# Questions
+
+## Open
+
+## Provisional
+### T-007: Keep the new scale, or go back?
+The scale was rewritten.
+- **A**: Keep the new scale: 13 checks (works runs/safe/failures, clear
+  honest/followed, lean earns/counted), every one answered from the trial
+- **B**: Go back to the old scale
+Recommendation: A, because it scores the change.
+Built: A; to change it: CRITIC.md
+
+## Answered
+"""
+KEEP = ("Keep the new scale: 13 checks (works runs/safe/failures, clear honest/followed, lean earns/counted), every "
+        "one answered from the trial")
+
+
+class WrappedOption(unittest.TestCase):
+    """An option a worker wrapped onto an indented line comes back whole, as the Recommendation and Built lines do."""
+
+    def test_provisional_reads_the_whole_option(self):
+        (q,) = questions.provisional(OPTION)
+        self.assertEqual((q["built"], q["option"]), ("A", KEEP))
+
+    def test_an_open_questions_options_are_whole_too(self):
+        sec = questions.section(OPTION.replace("## Open\n\n## Provisional", "## Open"), "T-007")
+        self.assertEqual(questions.parts(sec)[0], {"A": KEEP, "B": "Go back to the old scale"})
+
+    def test_status_shows_the_whole_option(self):
+        s = Sandbox()
+        self.addCleanup(s.close)
+        s.ticket("T-007")
+        s.write(".windvane/QUESTIONS.md", OPTION)
+        s.publish("provisional")
+        self.addCleanup(os.chdir, os.getcwd())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["-C", str(s.root), "status"])
+        self.assertIn(f"provisional: T-007: Keep the new scale, or go back? Built A: {KEEP}. To change:", out.getvalue())
 
 
 class Flat(unittest.TestCase):

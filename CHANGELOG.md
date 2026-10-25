@@ -55,6 +55,13 @@ release on the same day adds a number (`2026.10.9.1`).
   that the token's user may read the reply topic, and a refused test names the one `ntfy access` line still to run.
 
 ### Changed
+- The run's last push puts what needs you first (questions, provisional answers, failures, tickets set aside, the
+  heavy-job settings to change), then what merged as a count and ids, then the critic's scores; no title shows twice.
+  One past ntfy's 4,096 bytes loses the critic's scores, then merge ids, never a line you have to act on.
+- A **Failed** push for a failure in the work itself ends with the run log's path and `windvane retry <ID>` for once
+  the cause is fixed, and a ticket set aside after too many runs ran out of time says how to split it (`windvane new`,
+  then `done:` in QUEUE.md).
+
 - The critic scale new projects start from (`templates/CRITIC.md`) asks what a user meets when the change is
   tried, not what the pack or a test shows, and has a starting ladder for an app with a UI, a game or visual
   output, and a library beside the command-line one. `windvane doctor` and a run's start warn of a check worded
@@ -85,6 +92,8 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A provisional or open question's option wrapped onto an indented second line is read whole, in `status`, the
+  summary and the question push, not cut at its first line's end.
 - `windvane stop` with no autopilot running says there's nothing to stop and leaves no stop request behind (a
   waiting schedule is still called off). `windvane retry` with none running says what the next run will do with that
   ticket, as main has it after a fetch: that it isn't a ticket there, is already merged, is parked, waits on another

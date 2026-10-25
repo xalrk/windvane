@@ -64,7 +64,7 @@ class SaidByMessage(Base):
         with mock.patch.object(net, "online", lambda: True):
             pilot.fail("T-002", ENVELOPE)
         [msg] = [m for t, m in self.pushes if t.startswith("Failed")]
-        self.assertEqual(msg, f"API Error 400: {MESSAGE[:-1]}. Branch kept, run goes on.")
+        self.assertEqual(msg.split("\n")[0], f"API Error 400: {MESSAGE[:-1]}. Branch kept, run goes on.")
         self.assertIn(f"T-002: FAILED: {ENVELOPE}", (self.p.state / "autopilot.log").read_text())
 
     def test_a_long_error_that_isnt_json_is_bounded_in_the_reason_and_the_summary(self):

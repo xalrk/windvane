@@ -129,7 +129,7 @@ class CleanMachine(unittest.TestCase):
         self.assertIn("would do nothing: give it longer (e.g. --for 2h)", out)
         out = self.sh("windvane run --for 2h", cwd=proj)
         self.assertIn("critic 8/10", out)
-        self.assertIn("Why: queue empty. Merged: Say hello (T-001).", out)
+        self.assertIn("Why: queue empty. Waiting on you: none. Failed: none. 5h 10% · week 20%. Merged 1: T-001.", out)
         self.sh("git pull -q", cwd=proj)
         log = self.sh("git log --format=%s origin/main", cwd=proj)
         self.assertIn("Merge T-001: Say hello", log, out)

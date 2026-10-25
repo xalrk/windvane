@@ -81,7 +81,7 @@ class Shown(unittest.TestCase):
         return pl
 
     def test_the_summary_shows_first_try_and_final(self):
-        self.assertIn("Critic (/10, first try→final): T-001 2→8, T-002 9.\n", self.pilot().summary())
+        self.assertTrue(self.pilot().summary().endswith("\nCritic (/10, first try→final): T-001 2→8, T-002 9."))
 
     def test_the_done_push_shows_the_first_try(self):
         pl = self.pilot()

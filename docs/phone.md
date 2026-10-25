@@ -115,12 +115,20 @@ Acme: paused
 
 Acme windvane stopped
 Why: deadline.
-Merged: Phone notifications that work for anyone (T-015).
-Waiting on you: none.
+Waiting on you: Pick the export format (T-019).
 Failed: none.
 Set aside: Retry with backoff (T-016) (hit its max turns).
 5h 31% · week 12%.
+Merged 3: T-015, T-017 (under the critic's bar), T-018.
+Critic (/10, first try→final): T-015 7, T-017 5→7, T-018 6→8.
 ```
+
+The summary puts what needs you first: why the run stopped, the questions waiting on you, provisional answers to
+check, failures, tickets set aside or parked, those stopped at the deadline, and settings that would have spared heavy
+jobs their waits on memory. Then the usage, and only then what merged, as ids (their titles are in `git log`), with
+those the critic let through only because its revisions ran out marked in that list, and the critic's scores last.
+A title shows once. A summary past ntfy's 4,096 bytes loses its end: the critic's scores, then merge ids (`and 12
+more`); the lines that need you stay whole, down to dropping their titles for ids if they alone are too long.
 
 Every push names its ticket by the whole title and leads with what happened, then the next step when there is one, in
 reading order: an error or other free text goes in whole, as a sentence, and ntfy wraps it. Only free text past 1,500
@@ -134,7 +142,11 @@ deadline mid-run, which the next run resumes. A `setup` that fails is quoted up 
 
 A **Failed** push says why and that the branch is kept. When the cause is yours to fix (a refused merge, a gh or push
 refusal after the review approved), its last line is the command that merges the kept approval once it's fixed:
-`windvane retry T-007`. A failure in the work itself, such as the worker's own `FAILED`, has no such line.
+`windvane retry T-007`. A failure in the work itself, such as the worker's own `FAILED`, ends with the run log's
+path instead (its `T-007: FAILED` line and the session's steps before it) and, once you've fixed the cause,
+`windvane retry T-007`.
+A ticket set aside after too many runs in a row ran out of time says to split it into smaller tickets (`windvane
+new`), then mark it `done:` in QUEUE.md.
 
 A **question** push carries buttons for options A and B and **Answer on computer**. Tap a letter to answer; options
 C to E are typed as the letter. "Answer on computer" tells the run to leave the question for `windvane answer`

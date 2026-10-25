@@ -45,8 +45,8 @@ from .questions import (answered, desk_answers, drop_answers, give_answer, keys,
                         with_ids)
 from .queue import Queue, branch_depends
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
-from .util import (PARTIAL_LOG, append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl,
-                   save_json)
+from .util import (PARTIAL_LOG, append_jsonl, git, gout, hhmm, last_match, load_json, log, log_paths, now, push,
+                   read_jsonl, save_json, shell_path)
 from .worktree import (TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, clear_scrub_stubs, ensure_worktree,
                        forget_refusals, guard_pushes, last_refusal, teardown)
 
@@ -73,6 +73,7 @@ WRAP_UP = 20  # minutes before its stop a worker is told to wrap up
 WRAP_LEAD = 5  # minutes a worker's wrap-up must still be ahead for it to start: less, and it ends PARTIAL at once
 DROPPED_SHOWN = "dropped-shown.json"  # in the state dir: the dropped late answers `windvane status` has shown
 DROPPED_MOST = 20  # dropped late answers state.json keeps for `windvane status`: older ones past it are only logged
+SPLIT = "Split it into smaller tickets (`windvane new`), then mark it `done:` in QUEUE.md"  # a too-big ticket's fix
 RETRY = "RETRY"  # in the state dir: the failed tickets `windvane retry` puts back in the running autopilot's queue
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
@@ -938,9 +939,9 @@ class Pilot(Desk, Periodic):
             self.partials[tid] = self.partials.get(tid, 0) + 1
             self.log(f"{PARTIAL_LOG.format(tid=tid)} ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
-                held = self.put_aside(tid, f"{self.partials[tid]} runs in a row ran out of time", "Split it.")
+                held = self.put_aside(tid, f"{self.partials[tid]} runs in a row ran out of time", SPLIT)
                 self.log(f"{tid}: set aside: {self.aside[tid]}{held}")
-                push(f"Set aside: {self.name(tid)}", f"{self.partials[tid]} runs in a row ran out of time. Split it. "
+                push(f"Set aside: {self.name(tid)}", f"{self.partials[tid]} runs in a row ran out of time. {SPLIT}. "
                      f"Branch kept.\nLeft: {rest}" + self.held_line(tid), 3, "hourglass")
             return
         if status == "FAILED":
@@ -1770,7 +1771,7 @@ class Pilot(Desk, Periodic):
         """`head`: the approved (branch, sha) a failed merge leaves, for a retry to merge without a worker run
         (`land_again`). A failure that keeps one is the user's to clear by hand (a refused merge, a gh or push
         refusal), so its push ends with the retry, and `once` says when it's due; any other failure is the work's
-        own, which a retry would only repeat."""
+        own, which a retry would only repeat until its cause is fixed: its push names the log that tells it."""
         self.skip.add(tid)
         with self.lock:  # whatever ended a merge wait, it no longer waits (`status`, a restart's `carry_over`)
             self.check_wait.pop(tid, None)
@@ -1792,8 +1793,11 @@ class Pilot(Desk, Periodic):
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
         ending = getattr(self, "ending", False)  # the run winds down: it neither goes on nor takes a retry
-        retry = (f"\nOnce {once or 'fixed'}, it merges the kept approval: `windvane retry {tid}`"
-                 if head and not ending else "")
+        if head:
+            retry = "" if ending else f"\nOnce {once or 'fixed'}, it merges the kept approval: `windvane retry {tid}`"
+        else:  # the work's own failure: the log says what its session did, and a fixed cause can be retried
+            retry = (f"\nLog: {shell_path(log_paths(self.p)[1])}"
+                     + ("." if ending else f"; once fixed, `windvane retry {tid}`"))
         push(f"Failed: {self.name(tid)}", whole("", plain_error(why), f". Branch kept{', run goes on' * (not ending)}.",
                                                 log=self.log) + retry, 4, "x")
 
@@ -2749,7 +2753,7 @@ class Pilot(Desk, Periodic):
             self.log(summary.replace("\n", " "))
             if crashed and os.environ.get(SUPERVISED):  # `supervise` restarts it, or pushes why it doesn't
                 self.hand_over()
-                rest = "Merged:" + summary.split("\nMerged:", 1)[1]  # past the why, which may run on to a 2nd line
+                rest = self.summary(why=False, most=NTFY - phone.MOST)  # under the supervisor's own why line
                 save_json(p.state / "crash.json", {"error": crashed, "summary": rest})
             elif not ready and self.halt:  # just why, once: nothing ran, so the summary's other lines say nothing
                 push("windvane couldn't start", whole("", self.halt[0].upper() + self.halt[1:], ".", log=self.log), 4,
@@ -2850,36 +2854,68 @@ class Pilot(Desk, Periodic):
                 raise Signalled(self.signalled)
 
 
-    def summary(self):
-        """The run's last push: what merged and what still needs the user (questions, provisional answers, merges
-        the critic only let through because its revisions ran out)."""
+    def summary(self, why=True, most=NTFY):
+        """The run's last push, in the order the user acts on it: why it stopped, then what needs them (questions,
+        provisional answers, failures, tickets set aside or held, the config fixes), and only then what merged, as
+        ids (the titles are in `git log`), and the critic's trail. Each title shows once. Past `most` bytes the end
+        goes first (the trail, then merge ids), never a line that needs the user. `why=False`: without the first
+        line, which a crashed driver's supervisor writes itself."""
         from . import schedule  # (it imports this module)
-        p = self.p
-        names = lambda ids: "; ".join(map(self.name, ids)) or "none"
-        crit = ", ".join(f"{t} {critic.trail(critic.first_score(p, t), s)}" for t, s in self.scores.items())
-        under = [t for t in self.merged if (h := critic.history(p, t)) and h[-1].get("step") == "accept"]
+        p, seen = self.p, set()
+
+        def names(ids, titled=True):
+            """The tickets' titles and ids, or only the id of one already named above."""
+            out = [self.name(t) if titled and t not in seen else t for t in ids]
+            seen.update(ids)
+            return "; ".join(out) or "none"
+
+        under = {t for t in self.merged if (h := critic.history(p, t)) and h[-1].get("step") == "accept"}
         picks = [(q["ticket"], f"{q['built'] or '?'}: {q['option']}" if q["option"] else q["built"] or "?")
                  for q in provisional(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"))]
-        side = (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
-                f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else "")
-        return (whole("Why: ", self.stop_reason, ".", log=self.log) + f"\nMerged: {names(self.merged)}.\n"
-                + (f"Merged under the critic's bar (out of revisions): {names(under)}.\n" if under else "")
-                + (f"Desk PRs merged: {', '.join('#' + n for n in self.desk_merged)}.\n" if self.desk_merged else "")
-                + (f"Critic (/10, first try→final): {crit}.\n" if crit else "") + side
-                + (f"Held for you (parked in QUEUE.md): {names(self.held)}.\n" if self.held else "")
-                + (f"Asked for, not run (the run ended first): {', '.join(self.asks_left)}.\n" if self.asks_left else "")
-                + f"Waiting on you: {names(sorted(tickets(self.questions)))}.\n"
-                + (f"Provisional answers to check: {'; '.join(f'{q[0]} (built {q[1]})' for q in picks[:6])}"
-                   + (f" and {len(picks) - 6} more" if len(picks) > 6 else "") + ". "
-                   "To change one: windvane answer <ID> <letter>.\n" if picks else "")
-                + f"Failed: {names(self.failed)}.\n"
-                + (f"Stopped at the deadline (resumes next run): {names(self.stopped)}.\n" if self.stopped else "")
-                + self.kept_note
-                + "".join(f"Set aside: {self.name(t)} ({why}{self.holds_up(t)}).\n" for t, why in self.aside.items())
-                + self.heavy_line()
-                + (f"{self.usage.text()}." if self.usage.five is not None else "")
-                + (f"\nwindvane {self.newer} is out: pipx upgrade windvane." if self.newer else "")
-                + schedule.next_line(p))
+
+        def needs(titled):
+            seen.clear()
+            return (f"Waiting on you: {names(sorted(tickets(self.questions)), titled)}.\n"
+                    + (f"Provisional answers to check: {'; '.join(f'{q[0]} (built {q[1]})' for q in picks[:6])}"
+                       + (f" and {len(picks) - 6} more" if len(picks) > 6 else "") + ". "
+                       "To change one: windvane answer <ID> <letter>.\n" if picks else "")
+                    + f"Failed: {names(self.failed, titled)}.\n"
+                    + "".join(f"Set aside: {names([t], titled)} ({reason}{self.holds_up(t)}).\n"
+                              for t, reason in self.aside.items())
+                    + (f"Held for you (parked in QUEUE.md): {names(self.held, titled)}.\n" if self.held else "")
+                    + (f"Stopped at the deadline (resumes next run): {names(self.stopped, titled)}.\n"
+                       if self.stopped else "")
+                    + (f"Asked for, not run (the run ended first): {', '.join(self.asks_left)}.\n"
+                       if self.asks_left else "")
+                    + self.kept_note + heavy
+                    + (f"windvane {self.newer} is out: pipx upgrade windvane.\n" if self.newer else ""))
+
+        heavy = self.heavy_line()
+        head = (whole("Why: ", self.stop_reason, ".", log=self.log) + "\n") * why
+        info = f"{self.usage.text()}.\n" if self.usage.five is not None else ""
+        window = schedule.next_line(p)  # the push's last line, as a window's run ends
+        merged = [t + " (under the critic's bar)" * (t in under) for t in self.merged]
+        tail = [(f"Desk PRs merged: {', '.join('#' + n for n in self.desk_merged)}.\n" if self.desk_merged else ""),
+                (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
+                 f"{'s' * (self.conflicts != 1)}.\n" if self.n > 1 else ""),
+                (f"Critic (/10, first try→final): "
+                 f"{', '.join(f'{t} {critic.trail(critic.first_score(p, t), s)}' for t, s in self.scores.items())}.\n"
+                 if self.scores else "")]
+
+        def merged_line(shown):
+            more = len(merged) - shown
+            return ("Merged: none.\n" if not merged else f"Merged {len(merged)}.\n" if not shown
+                    else f"Merged {len(merged)}: {', '.join(merged[:shown])}" + f" and {more} more" * bool(more) + ".\n")
+
+        # what goes, in turn, past `most`: the trail's lines from the end, then merge ids from the end
+        cuts = [(len(merged), n) for n in range(len(tail), -1, -1)] + [(k, 0) for k in range(len(merged) - 1, -1, -1)]
+        for titled in (True, False):  # a long list of what needs the user loses its titles, never a line, and
+            top = head + needs(titled)  # titles outrank every merge id and the trail
+            for shown, n in cuts if titled else [(0, 0)]:
+                text = (top + info + merged_line(shown) + "".join(tail[:n])).rstrip("\n") + window
+                if len(text.encode()) <= most:
+                    return text
+        return text  # the last guard, `phone.fit`, keeps its first lines
 
     def note_heavy(self, tid=None):
         """Keeps what the run's heavy jobs said while they waited on memory (`jobs.heavy_waits`): a ticket's bg logs
