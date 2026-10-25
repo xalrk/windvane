@@ -97,6 +97,24 @@ def attribute(up, mine, every):
     return round(up * mine / every, 2) if every > 0 else 0.0
 
 
+def runs():
+    """Every bench run's spend row, the last one of each run: a run's opening row until its end replaces it."""
+    return list({x.get("run"): x for x in read_jsonl(spend_file())}.values())
+
+
+def estimate(which):
+    """One run's spend at this size: the mean of the last ESTIMATE_RUNS that ended (any week); 0 with none."""
+    same = [x.get("spent") or 0 for x in runs() if x.get("size") == which and not x.get("open")][-ESTIMATE_RUNS:]
+    return round(sum(same) / len(same), 2) if same else 0.0
+
+
+def begin(base, which, before):
+    """The bench run in `base` starts: until `record` ends it, it counts as its size's estimate, so a run killed
+    before its end (SIGKILL, a reboot) still counts, and so does one still going when another asks for room."""
+    append_jsonl(spend_file(), {"run": base.name, "size": which, "started": round(time.time()), "open": True,
+                                "week_before": before.get("week"), "spent": estimate(which)})
+
+
 def record(base, started, before, which):
     """A spend row for the bench run in `base` (its seeds' and judges' ledgers and usage files are under it), from
     `started` until now; `before` is the usage reading at its start."""
@@ -124,25 +142,25 @@ class Budget:
         self.start = self.reset - WEEK if self.reset else self.at - WEEK
         # a reading from before this week began is last week's
         self.week = r.get("week") if r.get("at", 0) >= self.start else None
-        self.rows = [x for x in read_jsonl(spend_file()) if x.get("ended", 0) >= self.start]
+        self.rows = [x for x in runs() if x.get("ended", x.get("started", 0)) >= self.start]
         self.spent = round(sum(x.get("spent") or 0 for x in self.rows), 2)
         st = load_json(state_file(), {})
         mine = st.get("until") and (self.reset and abs(st["until"] - self.reset) < 3600
                                     or not self.reset and st["until"] > self.at)
         self.allowed = float(st.get("allowed", 0)) if mine else 0.0
-        self.asked = [float(c) for c in st.get("asked", [])] if mine else []
+        # the caps asked about on the phone this week: {"cap", "qid", "taken"} (its answer applied)
+        self.asked = [a for a in st.get("asked", []) if isinstance(a, dict)] if mine else []
         self.cap = self.share + self.allowed
 
-    def estimate(self, which):
-        """One run's spend at this size: the mean of the last ESTIMATE_RUNS recorded (any week); 0 with none."""
-        same = [x.get("spent") or 0 for x in read_jsonl(spend_file()) if x.get("size") == which][-ESTIMATE_RUNS:]
-        return round(sum(same) / len(same), 2) if same else 0.0
+    def question_at(self, cap):
+        """This week's phone question at `cap`, or None."""
+        return next((a for a in self.asked if a.get("cap") == cap), None)
 
     def blocks(self, which, runs=1):
         """Why the next `runs` bench runs of this size may not start: ("week", why), ("share", why), or None."""
         if self.week is not None and self.week >= self.below:
             return "week", f"weekly usage at {self.week:g}% (benches start below {self.below:g}%)"
-        need = self.estimate(which) * runs
+        need = estimate(which) * runs
         if self.spent + need > self.cap:
             return "share", (f"benches used {self.spent:g}% of this week, and the next run takes about {need:g}% "
                              f"(cap {self.cap:g}%)")
@@ -152,16 +170,25 @@ class Budget:
         """When this week resets, for people: "Thu 18:00", or "within 7 days" when no usage reply gave it yet."""
         return f"{datetime.fromtimestamp(self.reset):%a %H:%M}" if self.reset else "within 7 days"
 
-    def save(self, allowed=None, asked=None):
+    def save(self):
         """This week's allowance and asked caps, kept until the week resets."""
-        until = self.reset or self.at + WEEK
-        save_json(state_file(), {"until": until, "allowed": self.allowed if allowed is None else allowed,
-                                 "asked": self.asked if asked is None else asked})
+        save_json(state_file(), {"until": self.reset or self.at + WEEK, "allowed": self.allowed, "asked": self.asked})
 
-    def allow(self, more):
-        """`more` points on top of the share, for this week only."""
+    def allow(self, more, cap=None):
+        """`more` points on top of the share, for this week only; with `cap`, the answer to the question asked at that
+        cap, applied once however many times it is read."""
+        if cap is not None:
+            q = self.question_at(cap)
+            if not q or q.get("taken"):
+                return
+            q["taken"] = True
         self.allowed = round(self.allowed + more, 2)
         self.cap = self.share + self.allowed
+        self.save()
+
+    def asking(self, cap, qid):
+        """A question at `cap` went out: none is sent at that cap again this week."""
+        self.asked.append({"cap": cap, "qid": qid, "taken": False})
         self.save()
 
     def waiting(self, tids):
@@ -177,8 +204,8 @@ class Budget:
         out = [f"experiments: {self.spent:g}% of this week spent on benches ({len(self.rows)} "
                f"run{'s' * (len(self.rows) != 1)}), cap {self.cap:g}%{extra}",
                f"weekly usage {week}; benches start below {self.below:g}%; the week resets {self.ends()}"]
-        sizes = {x.get("size") for x in read_jsonl(spend_file())}
-        est = [f"{w} {self.estimate(w):g}%" if w in sizes else f"{w} ? (none recorded)" for w in ("small", "full")]
+        sizes = {x.get("size") for x in runs() if not x.get("open")}
+        est = [f"{w} {estimate(w):g}%" if w in sizes else f"{w} ? (none recorded)" for w in ("small", "full")]
         out.append(f"a run takes about: {', '.join(est)}")
         why = self.blocks("full") and self.blocks("small")
         out.append(f"benches wait: {why[1]}" if why else "benches may start")
@@ -187,7 +214,7 @@ class Budget:
 
 def question(b, which, runs=1):
     """The phone question at the cap: its text and options (A, B: more this week; C: wait)."""
-    need = b.estimate(which) * runs
+    need = estimate(which) * runs
     return (f"windvane experiments used {b.spent:g}% of this week (cap {b.cap:g}%), and the next bench run takes "
             f"about {need:g}%. Allow more this week?",
             [*(f"+{s}% this week" for s in STEPS), f"No, wait for the reset ({b.ends()})"])

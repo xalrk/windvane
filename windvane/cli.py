@@ -2,6 +2,7 @@
 ledger. `windvane <command> --help` for each command."""
 import argparse
 import json
+import math
 import os
 import re
 import shlex
@@ -712,7 +713,7 @@ def cmd_experiments(a, p):
         more = float(a.what[1].lstrip("+")) if a.what[0] == "allow" and len(a.what) == 2 else 0
     except ValueError:
         more = 0
-    if more <= 0:
+    if not (math.isfinite(more) and more > 0):
         sys.exit("experiments: `windvane experiments` shows this week's budget; `windvane experiments allow +10` "
                  "lets benches use 10% more of the weekly limit, this week only")
     b.allow(more)

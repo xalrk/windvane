@@ -533,6 +533,7 @@ def run(p, a, chosen, base, wt, ref, sha, which, before):
     procs = []
     recs = []
     started, start = time.time(), budget.reading()
+    budget.begin(base, which, start)
     try:
         for s, ts in chosen:
             home = base / s["name"]
@@ -575,8 +576,7 @@ def run(p, a, chosen, base, wt, ref, sha, which, before):
               f"scored{' (see bench --last)' if recs else ''}; their logs are in {base}", file=sys.stderr)
         return 130, recs
     finally:  # what it spent counts against the experiment budget, however it ended
-        if procs:
-            budget.record(base, started, start, which)
+        budget.record(base, started, start, which)
     print(table(recs))
     return 0, recs
 

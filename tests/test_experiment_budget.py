@@ -2,6 +2,7 @@
 the next run's estimate stays within `week_share` (plus what the user allowed this week); at the cap, one phone
 question a week per cap. The usage replies are the fake claude's (FAKE_WEEK) or usage.json files; the spend rows and
 ledgers are written by hand."""
+import itertools
 import json
 import os
 import subprocess
@@ -26,6 +27,7 @@ from windvane import driver  # noqa: E402
 
 CFG = {"week_below": 75, "week_share": 30}
 DAY = 86400
+RUN = itertools.count(1)
 
 
 def minute(t):
@@ -34,7 +36,8 @@ def minute(t):
 
 def spend(spent, size="full", ended=None):
     """A bench run's spend row, as `budget.record` writes it."""
-    append_jsonl(budget.spend_file(), {"run": "r", "size": size, "ended": ended or time.time(), "spent": spent})
+    append_jsonl(budget.spend_file(), {"run": f"r{next(RUN)}", "size": size, "ended": ended or time.time(),
+                                       "spent": spent})
 
 
 def usage(name, week, at, reset=None):
@@ -54,8 +57,9 @@ class Gate(unittest.TestCase):
         self.make()
         self.asks, self.answer = self.s.tmp / "asks.txt", self.s.tmp / "answer.txt"
         fake = self.s.bin / "notify-ask"  # records each question; `--get` prints answer.txt when there is one
+        self.down = self.s.tmp / "down"  # while it exists, a question doesn't send
         fake.write_text(f'#!/bin/sh\nif [ "$1" = --get ]; then cat {self.answer} 2>/dev/null; exit 0; fi\n'
-                        f'echo "$@" >> {self.asks}\n')
+                        f'[ -e {self.down} ] && exit 1\necho "$@" >> {self.asks}\n')
         fake.chmod(0o755)
         os.environ["FAKE_WEEK"] = "0.2"
         self.better = {**test_experiments.MAIN, "passed": 6}
@@ -97,8 +101,30 @@ class Gate(unittest.TestCase):
         self.assertIn("windvane experiments used 27% of this week (cap 30%), and the next bench run takes about 5%. "
                       "Allow more this week?", self.asked()[0])
         self.assertIn("No, wait for the reset", self.asked()[0])
-        self.assertIn("no answer on the experiment budget: no more this week", self.log())
-        self.run_with()  # the next run: the same cap was asked about this week, so no second question
+        self.assertIn("no answer on the experiment budget yet: no for now; a later answer is still taken", self.log())
+        self.assert_waits(self.run_with())  # the next run: this cap was asked about this week, so no second question
+        self.assertEqual(len(self.asked()), 1)
+
+    def test_an_answer_after_the_wait_counts_the_next_time_a_bench_asks_for_room(self):
+        for _ in range(3):
+            spend(5, ended=time.time() - 8 * DAY)
+        spend(27, size="small")
+        self.assert_waits(self.run_with())
+        self.answer.write_text("ANSWER A\t+10% this week\n")  # the user answers after the wait
+        pilot = self.run_with()
+        self.assertEqual((pilot.merged, len(self.asked())), (["T-001"], 1))
+        self.assertEqual(budget.Budget(CFG).cap, 40)
+        pilot.budget_holds("T-002", "full", 1)
+        self.assertEqual(budget.Budget(CFG).cap, 40)  # the same answer read again isn't applied twice
+
+    def test_a_question_that_didnt_send_is_sent_the_next_time(self):
+        spend(31, size="small")
+        self.down.touch()
+        self.assert_waits(self.run_with())
+        self.assertIn("the budget question did not send", self.log())
+        self.assertEqual(budget.Budget(CFG).asked, [])
+        self.down.unlink()
+        self.run_with()
         self.assertEqual(len(self.asked()), 1)
 
     def test_answer_a_lets_the_bench_run_and_past_40_percent_it_asks_again(self):
@@ -145,15 +171,16 @@ class Week(unittest.TestCase):
         spend(25, ended=t - 3600)
         b = budget.Budget(CFG, at=t)
         b.allow(10)
-        b.save(asked=[30])
+        b.asking(40, "q")
         b = budget.Budget(CFG, at=t)
-        self.assertEqual((b.spent, b.allowed, b.cap, b.asked, b.week), (25, 10, 40, [30], 50))
+        self.assertEqual((b.spent, b.allowed, b.cap, b.week), (25, 10, 40, 50))
+        self.assertEqual(b.question_at(40), {"cap": 40, "qid": "q", "taken": False})
         after = budget.Budget(CFG, at=reset + 60)  # no reply since: last week's reading isn't this week's
         self.assertEqual((after.spent, after.allowed, after.cap, after.asked, after.week), (0, 0, 30, [], None))
         usage("one", 2, reset + 60, reset + 7 * DAY)
         after = budget.Budget(CFG, at=reset + 120)
         self.assertEqual((after.spent, after.allowed, after.cap, after.week), (0, 0, 30, 2))
-        self.assertEqual(after.estimate("full"), 25)  # earlier weeks' runs still say what a run takes
+        self.assertEqual(budget.estimate("full"), 25)  # earlier weeks' runs still say what a run takes
 
     def test_the_spend_of_a_span_shared_with_another_projects_run_is_its_share_of_the_rise(self):
         started = time.time() - 600
@@ -203,7 +230,18 @@ class Week(unittest.TestCase):
         out = run().stdout
         self.assertIn("cap 40% (share 30% + 10% you allowed this week)", out)
         self.assertIn("benches may start", out)
-        self.assertEqual(run("allow", "lots").returncode, 1)
+        for bad in ("lots", "nan", "inf", "-5", "0"):
+            self.assertEqual(run("allow", bad).returncode, 1, bad)
+        self.assertEqual(budget.Budget(CFG).cap, 40)
+
+    def test_a_bench_killed_before_its_end_counts_as_its_estimate_until_it_ends(self):
+        for spent in (4, 6):
+            spend(spent, size="small", ended=time.time() - 8 * DAY)
+        base = budget.root() / "_bench" / "20261025-090000"
+        budget.begin(base, "small", {"week": 10})  # then SIGKILL: no record
+        self.assertEqual(budget.Budget(CFG).spent, 5)
+        budget.record(base, time.time() - 60, {"week": 10}, "small")  # a run that did end replaces its opening row
+        self.assertEqual(budget.Budget(CFG).spent, 0)
 
 
 if __name__ == "__main__":

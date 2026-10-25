@@ -141,39 +141,47 @@ class Experiments:
 
     def ask_budget(self, who, b, which, runs):
         """The phone question at the cap, once a week per cap (machine-wide): +10 or +20 points this week, or wait
-        for the reset. Waits up to `answer_wait` minutes, never past the deadline or a stop; no answer, "later", no
-        phone or a quiet time: no. True when the user allowed more."""
+        for the reset. Waits up to `answer_wait` minutes, never past the deadline or a stop; no answer yet, "later",
+        no phone or a quiet time: no for now, and an answer that comes later is read the next time a bench asks for
+        room. A push that failed is sent again then. True when the user allowed more."""
         p = self.p
-        if b.cap in b.asked:
-            return False
+        q = b.question_at(b.cap)
+        if q:
+            return not q.get("taken") and self.budget_answer(who, q["qid"], b.cap) is True
         if quiet_now(p)[0]:
             self.log(f"{who}: quiet time, so no question on {budget.MARK}")
             return False
-        b.save(asked=[*b.asked, b.cap])
         qid = p.qid(f"budget-{datetime.fromtimestamp(b.reset or b.at):%m%d}-{b.cap:g}")
         text, options = budget.question(b, which, runs)
-        sent = phone.ask(qid, f"{text} No answer in {self.a.answer_wait:g} min: no.", options)
+        sent = phone.ask(qid, f"{text} No answer in {self.a.answer_wait:g} min: no for now.", options)
         if not sent:
-            self.log(f"{who}: {'no phone' if sent is None else 'the budget question did not send'}, so no more "
-                     "this week; `windvane experiments allow +10` raises it")
+            self.log(f"{who}: {'no phone' if sent is None else 'the budget question did not send'}; "
+                     "`windvane experiments allow +10` raises the cap")
             return False
+        budget.Budget(p.cfg["experiments"]).asking(b.cap, qid)
         until = min(now() + timedelta(minutes=self.a.answer_wait), self.end())
         while now() < until and not (p.state / "STOP").exists() and not (self.signalled or self.kill_all):
-            got = phone.answer(qid)
-            if got.startswith("ANSWER"):
-                letter = (got.split()[1:] or [""])[0][:1].upper()
-                if letter and letter in "AB":
-                    more = budget.STEPS["AB".index(letter)]
-                    budget.Budget(self.p.cfg["experiments"]).allow(more)
-                    self.log(f"{who}: answered {letter}: experiments may use {more}% more of this week")
-                    return True
-                self.log(f"{who}: answered {letter}: no more this week")
-                return False
-            if got == "LATER":
-                break
+            got = self.budget_answer(who, qid, b.cap)
+            if got is not None:
+                return got
             self.sleep(min(5, max(0.0, (until - now()).total_seconds())))
-        self.log(f"{who}: no answer on {budget.MARK}: no more this week")
+        self.log(f"{who}: no answer on {budget.MARK} yet: no for now; a later answer is still taken")
         return False
+
+    def budget_answer(self, who, qid, cap):
+        """The phone's answer to the budget question at `cap`: True (A or B: more allowed, applied once), False (no,
+        or "later"), None (none yet)."""
+        got = phone.answer(qid)
+        if got == "LATER":
+            return False
+        if not got.startswith("ANSWER"):
+            return None
+        letter = (got.split()[1:] or [""])[0][:1].upper()
+        more = budget.STEPS["AB".index(letter)] if letter and letter in "AB" else 0
+        budget.Budget(self.p.cfg["experiments"]).allow(more, cap)  # a no is taken too: not read again
+        self.log(f"{who}: answered {letter}: " + (f"experiments may use {more}% more of this week" if more
+                                                   else "no more this week"))
+        return bool(more)
 
     def bench_for(self, tid, base, sha, which, said, repeat):
         """The bench runs owed (`todo`), one `windvane bench --ref <sha>` after another, each only once it fits before
