@@ -301,6 +301,15 @@ class WorkerPRText(unittest.TestCase):
         self.assertEqual(comment, ["pr", "comment", "4", "--body=see [token]"])
         self.assertEqual(view, ["pr", "view", "4", "--json", "body"])
 
+    def test_the_projects_own_name_is_left_in_its_own_repo_and_masked_in_one_that_r_names(self):
+        terms = Path(os.environ["XDG_CONFIG_HOME"]) / "windvane/private-terms.txt"
+        terms.parent.mkdir(parents=True, exist_ok=True)
+        terms.write_text("Sandbox\n")  # this project's own name
+        code, _, err = self.sh("gh pr comment 4 --body 'run Sandbox.Cart' && gh issue create -R me/tools --body "
+                               "'run Sandbox.Cart' && gh issue create --repo=me/sandbox --body 'run Sandbox.Cart'")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([c[-1] for c in self.calls()], ["run Sandbox.Cart", "run [private].Cart", "run Sandbox.Cart"])
+
 
 class Relayed(Base):
     def test_planner_text_is_masked_in_its_commit(self):
