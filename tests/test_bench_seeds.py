@@ -108,7 +108,7 @@ class SeedRound(Base):
         self.assertNotIn("stray", (self.p.ci_dir / "README").read_text() if (self.p.ci_dir / "README").exists()
                          else "")
         [(title, msg)] = self.pushes
-        self.assertEqual(title, "seed: seed refused")
+        self.assertEqual(title, "Bench seed refused")
         self.assertIn("the hidden tests fail on the reference solution: T-001 (0/1)", msg)
         self.assertEqual([r["verdict"] for r in self.ledger()], ["refused"])
         self.assertFalse(pilot.periodic_due())  # tried once a merge, refused or not
@@ -137,7 +137,8 @@ class SeedRound(Base):
         self.assertNotIn("stray", self.s.git("show", "origin/main:README"))  # the session wrote it
         self.assertEqual([r.get("seed") for r in self.ledger()], ["001-todo", "002-timer", "003-quiz"])
         self.assertEqual(self.ledger()[-1]["dropped"], ["001-todo"])
-        self.assertEqual(self.pushes[-1], ("seed: new seed", "Seed: 003-quiz joins the bench pool, 001-todo leaves."))
+        self.assertEqual(self.pushes[-1], ("Bench seed added", "Seed: 003-quiz joins the bench pool, 001-todo leaves. "
+                                                               "new-quiz: a seed for the test."))
         self.assertEqual(bench.planned(self.p, "origin/main", "full", True), ["002-timer", "003-quiz"])
         self.assertEqual(bench.planned(self.p, "origin/main", "full"), ["ledger"])  # the holdout is untouched
         self.assertEqual(self.s.git("log", "-1", "--format=%s", "origin/main"),

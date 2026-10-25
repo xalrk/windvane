@@ -691,16 +691,16 @@ class Periodic:
         clean_detach(p, cd, p.upstream)
         try:
             with tempfile.TemporaryDirectory(prefix="windvane-seed-") as keep:
-                new = self.seed_session(e, cd, Path(keep))
+                new, said = self.seed_session(e, cd, Path(keep))
                 if new:
                     clean_detach(p, cd, p.upstream)  # nothing else the session changed lands
-                    self.seed_land(e, cd, new)
+                    self.seed_land(e, cd, new, said)
         finally:
             clean_detach(p, cd, p.upstream)
 
     def seed_session(self, e, cd, keep):
-        """The seed session, then its seed checked (`pool.check`): a copy of it in `keep` when it may join, else None
-        (refused: one push and a `seed` event in the ledger)."""
+        """The seed session, then its seed checked (`pool.check`): (a copy of it in `keep`, its SEED line) when it may
+        join, else (None, "") (refused: one push and a `seed` event in the ledger)."""
         from .runner import rules
         p, name = self.p, e["name"]
         limit = now() + timedelta(minutes=e["minutes"])
@@ -721,23 +721,24 @@ class Periodic:
             if killed != "stop now":
                 self.periodic_failed(name, f"the seed session {'was cut off' if killed else 'failed'}: "
                                      f"{killed or phone.cut(plain_error(error), log=self.log)}.")
-            return None
+            return None, ""
         new, why = pool.staged(cd)
         why = why or pool.check(new)
         said = last_match(SEED_RE, text)
         if why:
             append_jsonl(p.state / "ledger.jsonl", {"event": "seed", "verdict": "refused", "why": why[:300]})
             self.log(f"{name}: seed refused: {why}")
-            push(f"{name}: seed refused", phone.cut(f"The new seed didn't join the bench pool: {why}.", log=self.log),
+            push("Bench seed refused", phone.cut(f"The new seed didn't join the bench pool: {why}.", log=self.log),
                  3, "warning")
-            return None
+            return None, ""
         self.log(f"{name}: seed {new.name} checked: its hidden tests fail on the bare seed and pass on its reference"
                  + (f"; SEED: {said.group(1)}" if said else ""))
         shutil.copytree(new, keep / new.name, ignore=pool.no_reference(new))
-        return keep / new.name
+        return keep / new.name, said.group(1).strip() if said else ""
 
-    def seed_land(self, e, cd, new):
-        """Put the checked seed in the pool on main (`pool.admit`) through the driver's own `seed-` branch."""
+    def seed_land(self, e, cd, new, said):
+        """Put the checked seed in the pool on main (`pool.admit`) through the driver's own `seed-` branch; `said`, the
+        session's SEED line, goes in the commit and the push."""
         from .held import land
         from .planner import branch_name
         p, name = self.p, e["name"]
@@ -745,7 +746,8 @@ class Periodic:
         git(cd, "add", "-A", POOL)
         title = f"Seed: {joined} joins the bench pool" + (f", {', '.join(dropped)} leaves" if dropped else "")
         body = (f"Written by the [[periodic]] session {name}: its hidden tests fail on the bare seed and pass on the "
-                f"session's reference solution (not committed). The pool keeps the newest {e['pool_size']}.")
+                f"session's reference solution (not committed). The pool keeps the newest {e['pool_size']}."
+                + (f"\n\nSEED: {said}" if said else ""))
         with self.critical():
             landed = land(p, cd, branch_name(p, cd, "seed"), title, body, fresh=True)
         ok, where = landed
@@ -753,8 +755,10 @@ class Periodic:
         if ok:
             append_jsonl(p.state / "ledger.jsonl", {"event": "seed", "verdict": "joined", "seed": joined,
                                                     "dropped": dropped})
-        push(f"{name}: new seed", phone.cut(f"{title}." if ok else f"{title}: not landed, it waits on {where}.",
-                                            log=self.log), 3, "seedling" if ok else "warning")
+        what = f" {said}." if said else ""
+        push("Bench seed added" if ok else "Bench seed not landed", phone.cut(
+            f"{title}.{what}" if ok else f"{title}: it waits on {where}.{what}", log=self.log), 3,
+            "seedling" if ok else "warning")
 
     def overfit_watch(self):
         """Between tickets: once a newer holdout run is recorded (by hand, or the weekly trend), read the week's pool
@@ -781,8 +785,9 @@ class Periodic:
         stop(p, f"the training pool rose while the frozen holdout fell this week ({pool_line}; {hold_line})")
         self.log("overfit: experiment planning stopped until `windvane experiments resume`")
         push("Experiments stopped: overfit", phone.cut(
-            f"No experiment is planned until `windvane experiments resume`: this week {pool_line}, {hold_line} (the "
-            "loop learns its training seeds, not how to build projects).", log=self.log), 4, "warning")
+            f"This week's bench runs: {pool_line}; {hold_line}. The loop is learning its training seeds, not how to "
+            "build projects: no experiment is planned until `windvane experiments resume`.", log=self.log), 4,
+            "warning")
 
     def bench_waits(self):
         """The idle lines of a run whose queue is done while a bench round runs: it waits for the verdict (and a
