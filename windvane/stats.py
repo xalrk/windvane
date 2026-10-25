@@ -824,6 +824,7 @@ FIXES = r"(?:fix|fixes|fixing|re-?fix\w*|revert|reverts|reverting|undo|undoes)(?
 BROKEN_BY = r"(?:broken|bugs?|regression|regressed)\s+(?:\w+\s+)?(?:by|in|from|of)"
 BROKEN = r"(?:broke|broken|bugs?|buggy|regress\w*|wrong|reverted)"
 CHECK_ALIVE_S = 120  # a running check's heartbeat writes its log at least once a minute
+QUICK_HINT_MIN = 10  # checks averaging more a checked ticket, with no `check_quick`, get its hint
 
 
 def projects_stats(a):
@@ -884,6 +885,7 @@ def project_digest(d, repo, since):
         "tokens": token_shares(rows, len(merged)),
         "critic": critic_digest(sp, d, since, p.critic["pass"] if p else DEFAULTS["critic"]["pass"]),
         "checks": checks_digest(sp, rows),
+        "check_quick": bool(p.cfg["check_quick"]) if p else None,
         "refixes": refixes(q, merged) if q else None,
         "calibration_lines": calibration_lines(p, since) if p else None,
         "failed": failed, "parked": parked,
@@ -957,6 +959,16 @@ def checks_digest(sp, rows):
             "minutes": round(mins, 1), "waited": round(queue_min(ran, not_run, cancelled), 1),
             "failed": sum(not r.get("passed") for r in ran) - cut, "cut_off": cut,
             "cancelled_queued": len(cancelled), "worker_await": round(awaited / 60, 1)}
+
+
+def quick_hint(per_ticket, has_quick):
+    """The one line that points a project with slow checks at `check_quick`: a failing check then ends at its quick
+    pass, in a minute, instead of the full length. None when the checks are short, it's set, or the config is
+    unknown (it may be set)."""
+    if per_ticket is None or per_ticket <= QUICK_HINT_MIN or has_quick is not False:
+        return None
+    return (f"checks averaged {per_ticket:g} min per checked ticket: set `check_quick` for a first pass that shows "
+            "a failure in a minute (docs/configuration.md#the-checks-environment)")
 
 
 def failed_in(ledger, log, since):
@@ -1081,6 +1093,8 @@ def print_project(d):
     cancelled = f", {ch['cancelled_queued']} cancelled in the queue" if ch["cancelled_queued"] else ""
     print(f"  checks: {plural(ch['runs'], 'run')}{per}{queued}, {ch['failed']} failed, {ch['cut_off']} cut off"
           f"{cancelled}; workers {m(ch['worker_await'])} min in await")
+    if hint := quick_hint(ch["per_ticket"], d.get("check_quick")):
+        note(f"  {hint}", "    ")
     if d["repo"] is None:
         print("  repo unknown: no re-fixes, CALIBRATION.md lines or parked tickets (it hasn't run since runs "
               "recorded their checkout)")

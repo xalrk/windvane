@@ -99,7 +99,9 @@ the order), and **open** otherwise. `windvane queue` shows all three.
    count as changes, so a pass recorded inside the sandbox is reused outside it. Neither do the mount points made
    for them, which a check outside the sandbox sees as empty dotfiles while a sandboxed command is alive.
    `windvane check` runs at the
-   worktree's top level, as the driver's gate does, from whatever directory it's called in.
+   worktree's top level, as the driver's gate does, from whatever directory it's called in. With `check_quick` set
+   it runs that first, and a failure there ends it in a minute instead of a full check's length; the gate runs
+   `check` alone, so the quick pass never decides a merge.
    The check is the gate, on your machine, so hosted CI isn't needed: a workflow on `push` or `pull_request` runs
    twice per ticket (its PR, its merge) and can use up a month's Actions minutes in days. Test other versions in the
    check (windvane's own, `tools/check_pythons.sh`, runs the suite on the oldest Python installed and imports every

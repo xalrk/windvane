@@ -34,6 +34,7 @@ DEFAULTS = {
     # GitHub Actions minutes a month (0: not counted) and the share of them windvane never passes (`windvane ci`)
     "actions_minutes": 0, "actions_cap": 0.9,
     "check": "",  # the project's CI command, run by `windvane check` (empty: no check)
+    "check_quick": "",  # run first by a session's `windvane check`: its failure ends the check (empty: none)
     "setup": "",  # run once in a fresh worktree (e.g. "npm ci"); failing stops the run
     "setup_minutes": 20,  # a setup still running then is killed and fails (a hung `npm ci` never wedges a run)
     "teardown": "",  # run once when a run ends (e.g. stopping a shared emulator its tools started); failing is logged

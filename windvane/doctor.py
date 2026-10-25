@@ -8,7 +8,9 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from . import actions, critic, heavy, install, phone, runner, scratch, selfupdate, statedir, util
 from .config import CHECKOUT, DIR, HOME, TOKEN_FIX, Project, author, github_token, user_dir
@@ -213,6 +215,19 @@ def ci_warnings(root, p=None):
     return out
 
 
+def quick_warnings(p, days=30):
+    """`stats --projects`' `check_quick` hint for this project, over the same 30 days: slow checks with no quick
+    first pass, which would end a failing one in a minute."""
+    if p is None or not getattr(p, "exists", False) or not getattr(p, "state", None):
+        return []
+    from . import stats  # here: stats imports the queue, which imports what imports this module
+    since = f"{util.now() - timedelta(days=days):%Y-%m-%d %H:%M}"
+    rows = [r for r in util.read_jsonl(p.state / "ledger.jsonl") if r.get("at", "") >= since]
+    hint = stats.quick_hint(stats.checks_digest(SimpleNamespace(state=p.state), rows)["per_ticket"],
+                            bool(p.cfg["check_quick"]))
+    return [("warn", hint, f"check_quick in {DIR}/config.toml")] if hint else []
+
+
 def checks(p=None):
     """(level, what, fix) per check: level "ok", "need" (windvane can't run without it), "optional" or "warn"
     (it runs, but at a cost the user should know of)."""
@@ -251,6 +266,7 @@ def checks(p=None):
             "fix them: Tool or Tool(specifier), in lists under <role>_allow / <role>_deny")
     if p and getattr(p, "root", None):
         out += [("warn", what, fix) for what, fix in ci_warnings(p.root, p) + critic.scale_warnings(p, p.root)]
+    out += quick_warnings(p)
     github = bool(p and p.exists and p.cfg["forge"] == "github")
     why = "this project's forge is github" if github else "for projects with forge = github"
     has_gh = bool(shutil.which("gh"))
