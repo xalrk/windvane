@@ -123,7 +123,7 @@ class Crashes(Trial):
         self.assertEqual(self.supervise(), 0)
         self.assertEqual(self.started, ["broken\n", "broken\n", "good\n"])
         self.assert_reverted("crashed the driver twice on trial (it exited with code 1 before its run began)")
-        self.assertEqual(self.titles(), ["windvane restarted", "windvane update reverted"])  # the 1st crash's, the revert's
+        self.assertEqual(self.titles(), ["windvane update reverted"])  # one push for both crashes
         title, msg = self.pushes[-1]
         self.assertIn(f"Reverted on main", msg)
         self.assertIn("The run goes on without it.", msg)
@@ -146,7 +146,7 @@ class Crashes(Trial):
                                   sleep=lambda s: None, home=self.home)
         self.assertEqual(rc, 1)
         self.assertEqual(self.main("rev-parse", "main"), head)  # nothing more reverted
-        self.assertEqual(self.titles(), ["windvane restarted", "windvane stopped"])
+        self.assertEqual(self.titles(), ["windvane stopped"])  # one push for both crashes
         self.assertIn("right after a revert, with no ticket merged since: nothing more is reverted. To go on, revert "
                       f"{self.new[:8]} on main by hand", self.pushes[-1][1])
         self.assertIn(f"`git -C {self.home} pull --ff-only`", self.pushes[-1][1])
@@ -174,7 +174,7 @@ class Crashes(Trial):
             self.assertEqual(self.supervise(), 1)
         finally:
             held.land = real
-        self.assertEqual(self.titles(), ["windvane restarted", "windvane stopped"])
+        self.assertEqual(self.titles(), ["windvane stopped"])  # one push for both crashes
         self.assertIn("the revert waits on PR #7; merge it, take it up", self.pushes[-1][1])
         self.take_up()
         self.assertEqual(self.users_checkout(), self.checkout)
@@ -209,6 +209,15 @@ class Crashes(Trial):
         self.assertIn("No such file or directory: '~/work/x.py'", landed_text)
         self.assertEqual(self.main("show", "main:.windvane/QUEUE.md").count("- T-010 "), 1)  # moved up, not listed twice
 
+    def test_a_failed_setup_on_trial_is_no_crash(self):
+        self.update("broken\n")
+        with redirect_stdout(io.StringIO()):
+            rc = driver.supervise(self.p, ["run"], now() + timedelta(hours=2), start=lambda a, e: driver.SETUP_FAILED,
+                                  sleep=lambda s: None, home=self.home)
+        self.assertEqual(rc, driver.SETUP_FAILED)
+        self.assertEqual(selfupdate.on_trial(self.p.state)["crashes"], 0)
+        self.assertNotIn("Revert", self.main("log", "--format=%s", "main"))
+
     def test_a_crash_off_trial_is_restarted_as_before(self):
         self.update("broken\n")
         selfupdate.end_trial(self.p.state)
@@ -234,14 +243,17 @@ class Tickets(Trial):
         pilot.execv = execv
         return pilot
 
-    def test_every_ticket_failing_the_check_the_same_way_is_reverted_and_the_run_goes_on(self):
-        # the driver's broken code is what fails the check here: it reads the install's code
+    def broken_check(self):
+        """The check fails while the install's driver is broken: the driver's code is what fails it here."""
         cfg = self.s.root / ".windvane/config.toml"
         broken = f"grep -q broken {self.s.tmp}/install/windvane/driver.py"
         cfg.write_text(cfg.read_text().replace('check = "test -f README"',
                                                f"check = 'if {broken}; then echo \"Error: the driver is broken\"; exit 1; fi'"))
         self.s.publish("config")
         self.good, self.p = self.s.git("rev-parse", "HEAD"), Project(self.s.root)
+
+    def test_every_ticket_failing_the_check_the_same_way_is_reverted_and_the_run_goes_on(self):
+        self.broken_check()
         self.update("broken\n")
         pilot = self.pilot()
         with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
@@ -258,6 +270,30 @@ class Tickets(Trial):
         self.assertLess(again.merged.index("T-011"), again.merged.index("T-010"))  # the fix, then what was reverted
         self.assertFalse((self.p.state / selfupdate.REVERTED).exists())  # a merge allows the next revert
         self.assertEqual(self.titles().count("windvane update reverted"), 1)
+        self.assertEqual(self.users_checkout(), self.checkout)
+
+    def test_a_ticket_this_run_merged_is_redone_in_it_once_reverted(self):
+        self.broken_check()
+        self.update("broken\n")  # merged by this run, which then restarted on it: T-010 is in what it carries
+        self.addCleanup(os.environ.pop, "WINDVANE_RESTARTED", None)
+        (self.p.state / "restart.json").write_text(json.dumps({"merged": ["T-010"]}))
+        selfupdate.put_on_trial(self.p.state, self.good, self.new, 1)
+        os.environ["WINDVANE_RESTARTED"] = "1"
+        pilot = self.pilot()
+        with redirect_stdout(io.StringIO()), self.assertRaises(Restarted):
+            pilot.run(now() + timedelta(hours=2))
+        self.assert_reverted("failed T-001, T-002 the same way at the check: CHECK FAILED (exit 1): Error: the driver is broken")
+        self.assertEqual((pilot.merged, pilot.reverted), ([], ["T-010"]))
+        summary = pilot.summary()
+        self.assertIn("Reverted (back in the queue): do T-010 (T-010).", summary)
+        self.assertIn("Merged: none.", summary)
+        again = self.pilot()  # the restarted driver, on the good code: the same run
+        with redirect_stdout(io.StringIO()):
+            again.run(now() + timedelta(hours=2))
+        self.assertEqual(sorted(again.merged), ["T-001", "T-002", "T-010", "T-011"])
+        self.assertLess(again.merged.index("T-011"), again.merged.index("T-010"))  # redone after its fix
+        self.assertEqual(again.reverted, [])
+        self.assertNotIn("Reverted", again.summary())
         self.assertEqual(self.users_checkout(), self.checkout)
 
     def test_a_good_update_passes_its_trial_and_is_kept(self):

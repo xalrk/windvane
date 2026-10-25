@@ -55,7 +55,7 @@ RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)"
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "fixes", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes", "opened", "heavy_waits",
-           "stuck_pushed", "retried")  # the run's own memory, handed to the driver a restart starts
+           "stuck_pushed", "retried", "reverted")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
@@ -80,6 +80,7 @@ NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
+SETUP_FAILED = 3  # the driver's exit code when it couldn't start (a failed setup): not a crash, even on trial
 # The environment variable set for a driver under `supervise`: it hands a crash over instead of pushing it
 SUPERVISED = "WINDVANE_SUPERVISED"
 BEGAN = "WINDVANE_BEGAN"  # when the supervisor started the run, for `run_began`
@@ -427,6 +428,7 @@ class Pilot(Desk, Periodic, Experiments):
         self.required_said = False  # that gh couldn't say which checks are required: logged once a run
         self.skip, self.merged, self.failed = set(), [], []
         self.retried = []  # failed tickets `windvane retry` put back in this run's queue (take_retries)
+        self.reverted = []  # tickets whose merge this run reverted (`trial_check`): back in the queue, not merged
         self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
         self.fixes = {}  # ticket set aside -> what keeps it from being set aside again, for `windvane queue`'s hint
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
@@ -1818,6 +1820,7 @@ class Pilot(Desk, Periodic, Experiments):
             if branch and git(wd, "merge-base", "--is-ancestor", branch, p.upstream).returncode == 0:
                 git(wd, "branch", "-q", "-D", branch)  # -d's own test would use the deleted remote branch
         self.merged.append(tid)
+        self.reverted = [t for t in self.reverted if t != tid]  # redone since its revert
         (p.state / selfupdate.REVERTED).unlink(missing_ok=True)  # a merge between two bad updates: the next is reverted too
         jobs.end_kept(p, tid, "its ticket merged")
         self.note_heavy(tid)
@@ -2769,6 +2772,10 @@ class Pilot(Desk, Periodic, Experiments):
         if stop:
             self.halt = stop
             return False
+        back = load_json(self.p.state / selfupdate.REVERTED, {}).get("tickets", [])
+        if back:  # merged earlier in this run, maybe: not any more, so the picker takes them up again after the fix
+            self.merged = [x for x in self.merged if x not in back]
+            self.reverted += [x for x in back if x not in self.reverted]
         failed = [x for x in t["seen"] if x in self.failed]
         if failed:  # theirs was the update's failure: they go again on the good code
             with open(self.p.state / RETRY, "a") as f:
@@ -3049,6 +3056,7 @@ class Pilot(Desk, Periodic, Experiments):
                     + f"Failed: {names(self.failed, titled)}.\n"
                     + "".join(f"Set aside: {names([t], titled)} ({reason}{self.holds_up(t)}).\n"
                               for t, reason in self.aside.items())
+                    + (f"Reverted (back in the queue): {names(self.reverted, titled)}.\n" if self.reverted else "")
                     + (f"Held for you (parked in QUEUE.md): {names(self.held, titled)}.\n" if self.held else "")
                     + (f"Stopped at the deadline (resumes next run): {names(self.stopped, titled)}.\n"
                        if self.stopped else "")
@@ -3174,7 +3182,7 @@ def undo_update(p, cd, home, trial, how, log):
     selfupdate.end_trial(st)
     said = []
     selfupdate.pull(home, said, trial["new"])
-    if not selfupdate.landed(home, "HEAD", trial["new"], trial["reverting"]):
+    if not selfupdate.revert_landed(home, "HEAD", trial["new"], trial["reverting"]):
         return (f"windvane {new} {how}; it is reverted on {p.main} ({sha[:8]}), but the install didn't take that "
                 f"up ({'; '.join(said) or 'it is elsewhere'}): fix that, {take_up}")
     back = f"; {', '.join(ids)} go{'es' * (len(ids) == 1)} again after it" if ids else ""
@@ -3191,8 +3199,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
     restart is logged and pushed with the error. A stop, the deadline, an empty queue or a failed setup end the run
     as they end the driver. A driver killed by the system (OOM) is only pushed: its sessions, in process groups of
     their own, may still be at work in the worktrees a restart would resume. New code on trial (a self-update's) that
-    crashes twice (an exit with an error before its run began counts as a crash) is reverted (`undo_update`), and the
-    driver restarted on the good code. Returns the driver's last exit code."""
+    crashes twice (an exit with an error before its run began counts as a crash, a failed setup's SETUP_FAILED doesn't)
+    is reverted (`undo_update`), and the driver restarted on the good code, with one push for both crashes. Returns the driver's last exit code."""
     start = start or (lambda args, env: subprocess.run([*runnable(exe()), *args], env=env).returncode)
     began = util.clock()  # now, not this process's start: a schedule's process supervises each window in turn
     env = {**os.environ, SUPERVISED: "1", **({BEGAN: repr(began)} if began is not None else {})}
@@ -3213,7 +3221,7 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
             tear_down(p, lock=True, tell=True)  # a driver that crashed before it left its helpers up
             return 1
         info, trial = load_json(crash, None), selfupdate.on_trial(p.state)
-        if info is None and trial and rc > 0:  # new code on trial that died before its run could say why: a crash too
+        if info is None and trial and rc > 0 and rc != SETUP_FAILED:  # new code on trial that died before its run could say why: a crash too
             info = {"error": f"it exited with code {rc} before its run began", "summary": ""}
         if info is None:
             if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
@@ -3244,11 +3252,13 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
             sleep(RESTART_PAUSE)
             stop = asked()
         elif not stop:
-            log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour")
-            push("windvane restarted", whole("The driver crashed: ", why,
-                                            f". Restart {len(crashes)} of {RESTARTS} this hour.",
-                                            log=lambda m: log(p, m))
-                 + f"\nIt goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
+            log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour"
+                   + "; new code on trial: pushed only if it crashes again" * bool(trial))
+            if not trial:  # a crash on trial is told once, by the revert's push, if a second one follows
+                push("windvane restarted", whole("The driver crashed: ", why,
+                                                f". Restart {len(crashes)} of {RESTARTS} this hour.",
+                                                log=lambda m: log(p, m))
+                     + f"\nIt goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
             sleep(RESTART_PAUSE)
             stop = asked()
         if stop:

@@ -73,8 +73,9 @@ class BranchName(unittest.TestCase):
             planner.branch_name(None, None, "hotfix")
 
     def test_every_site_names_its_branch_with_a_listed_kind(self):
-        """A plan, a periodic chain, the desk answers, a rejected experiment and a reverted update, each run for real: a new kind of
-        branch named any other way than `branch_name` (missing from `OWN_BRANCHES`) would hand its ids out again."""
+        """A plan, a periodic chain, the desk answers, a rejected experiment and a reverted update, each run for real:
+        a new kind of branch named any other way than `branch_name` (missing from `OWN_BRANCHES`) would hand its ids
+        out again."""
         import test_experiments
         import test_periodic  # the module, not its class: a class imported here would run all its tests again
         import test_self_revert

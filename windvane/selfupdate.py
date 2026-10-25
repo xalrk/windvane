@@ -230,7 +230,7 @@ def revert_update(p, cd, trial, how, log):
     how = privacy.censor(how, privacy.own_names(p))  # an exception's path or a check's line: it lands in a commit
     net.git(root, "fetch", "-q", p.remote)
     began = trial.get("reverting", {})
-    if "tid" in began and landed(root, p.upstream, new, began):
+    if "tid" in began and revert_landed(root, p.upstream, new, began):
         return p.main, began["ids"], began["tid"], began["sha"]  # landed before a kill: only what follows is left
     commits = to_revert(root, p.upstream, good, new)
     if not commits:
@@ -266,7 +266,7 @@ def revert_update(p, cd, trial, how, log):
     return where, ids, tid, revert
 
 
-def landed(root, upstream, new, began):
+def revert_landed(root, upstream, new, began):
     """Whether the revert a killed driver began (`began`: its commit and title) is on `upstream`: its commit, or one
     with its title since `new` (a replay onto a main that moved has another sha), whatever landed after it."""
     if not run(["git", "merge-base", "--is-ancestor", began["sha"], upstream], root).returncode:

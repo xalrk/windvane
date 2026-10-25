@@ -201,7 +201,7 @@ def cmd_run(a, p):
         signal.signal(pilot.signalled, signal.SIG_DFL)
         os.kill(os.getpid(), pilot.signalled)
     if not ready:
-        sys.exit(1)  # it couldn't start (a failed setup): scripts see it
+        sys.exit(driver.SETUP_FAILED)  # it couldn't start (a failed setup): scripts see it
 
 
 def ask_first(p, hours, parallel=None):

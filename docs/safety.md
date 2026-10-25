@@ -36,17 +36,19 @@ restart's log line says how much slot time that drain left idle. An installed wi
 never changed.
 
 New code a run on windvane itself took up this way is on trial until a ticket merges on it, or for an hour. If on
-trial the driver crashes twice (a detached run, whose supervisor outlives it), or two tickets or more all fail at the
-same step with the same error (the same driver error, or a red check with the same error lines while no ticket's
-check passes; nothing counts while the network is down), the update is bad: the run reverts the commits since the last good code that changed
-the driver's code, with a `git revert` landed on `main` the way the driver lands its own changes (a PR on GitHub, a
-push on plain git; never a force push or a rewrite). In the same change it writes a ticket with the error and the
-reverted commits (the error's home path, username and private words masked, as everything windvane commits),
-puts it at the top of `QUEUE.md`, and makes the reverted tickets wait for it: the revert's subject
-(`Revert T-012, T-013: ...`) puts them back in the queue as not done. One push says so, the install fast-forwards to
-the revert, and the run goes on on the good code, retrying the tickets the bad code failed. A second bad update
-without a ticket merged in between, or a revert that can't land, stops the run with one push instead, which names
-the commits to revert by hand and the `git pull` that takes the fix up in the install.
+trial the driver crashes twice (a detached run, whose supervisor outlives it; a failed setup isn't a crash), or two
+tickets or more all fail at the same step with the same error (the same driver error, or a red check with the same
+error lines while no ticket's check passes; nothing counts while the network is down), the update is bad: the run
+reverts the commits since the last good code that changed the driver's code, with a `git revert` landed on `main`
+the way the driver lands its own changes (a PR on GitHub, a push on plain git; never a force push or a rewrite). In
+the same change it writes a ticket with the error and the reverted commits (the error's home path, username and
+private words masked, as everything windvane commits), puts it at the top of `QUEUE.md`, and makes the reverted
+tickets wait for it: the revert's subject (`Revert T-012, T-013: ...`) puts them back in the queue as not done, and
+the run redoes them after the fix, even ones it merged itself; its summary lists them as reverted. One push says so
+(a first crash on trial isn't pushed of its own), the install fast-forwards to the revert, and the run goes on on
+the good code, retrying the tickets the bad code failed. A second bad update without a ticket merged in between, or
+a revert that can't land, stops the run with one push instead, which names the commits to revert by hand and the
+`git pull` that takes the fix up in the install.
 
 ## What sessions may and may not do
 
