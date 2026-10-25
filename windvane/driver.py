@@ -32,6 +32,7 @@ from . import (actions, critic, heavy, install, jobs, login, net, phone, privacy
                selfupdate, statedir, util, worktree)
 from .renumber import noted, old_numbers, said
 from .desk import Desk
+from .experiment import Experiments
 from .heavy import minutes
 from .held import (CHECK_FIELDS, MERGE_STATES, author_ident, base_required, blocked_by, check_name, merge_state,
                    merge_words, never_started, push_held, required_checks, running_checks, start_hint)
@@ -386,7 +387,7 @@ def aged(line, alone, when):
     return f"{line}; you answered {age}", alone.replace(CAME, f"your answer from {age} came", 1)
 
 
-class Pilot(Desk, Periodic):
+class Pilot(Desk, Periodic, Experiments):
     def __init__(self, p, a):
         self.p, self.a = p, a
         phone.use(p)
@@ -1192,6 +1193,9 @@ class Pilot(Desk, Periodic):
             if self.reviews[tid] >= p.ap["review_rounds"]:
                 return self.fail(tid, f"the reviewer asked for changes {said_times(self.reviews[tid])}, the most "
                                       f"`[autopilot] review_rounds` = {p.ap['review_rounds']} allows")
+            return
+        # an experiment merges only when the bench shows it better (a resolution's head: the kept verdict stands)
+        if not res and self.queue.kinds.get(tid) == "experiment" and not self.experiment(tid, branch, sha):
             return
         self.integrate(tid, branch, sha)
 

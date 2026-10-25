@@ -16,6 +16,7 @@ project was built (no critic scale or verdicts, pass mark, run log, ledger or wi
 score no session could aim at. Its tokens are the bench's own, kept out of the seed's cost per merged ticket.
 
 `bench compare A B` sets two windvane refs (or earlier runs) side by side, running only what isn't recorded yet.
+`experiment_verdict` reads one such pair as an experiment ticket's keep or reject (experiment.py).
 How a seed is scored and how two sides are compared live in `bench_score.py`, a protected path.
 """
 import copy
@@ -32,8 +33,9 @@ from datetime import datetime
 from pathlib import Path
 
 # the scoring, and what callers (`periodic`, the tests) read through this module
-from .bench_score import (NOISE, answers, compare_table, headline, judge_checks, judge_failed,  # noqa: F401
-                          judged, outcomes, regression, runs_n, score, summary, tally, yeses)
+from .bench_score import (NOISE, QUALITY, answers, compare_table, counted, headline, judge_checks,  # noqa: F401
+                          judge_failed, judged, measure, num, outcomes, past_noise, regression, runs_n, score,
+                          summary, tally, yeses)
 from .config import PERM_ROLES, Project, user_dir
 from .heavy import machine
 from .runner import rules as session_rules, run_claude
@@ -323,6 +325,35 @@ def table(recs):
 
 
 
+
+
+def experiment_verdict(both, saving):
+    """An experiment's head (B) against main (A), past the noise rule: (kept, `hidden 40→39, judge 21→21,
+    tokens/ticket +4%`, why), kept None when no seed was counted on both sides. Kept when neither hidden tests nor
+    judge yeses drop and one rises, or both hold and weighted tokens per merged ticket fall by `saving` % (past the
+    spread of either side's runs, with repeats). A side with no judge verdict holds its judge number."""
+    per, common = counted(both)
+    if not common:
+        return None, "no seed counted on both sides", "nothing to compare"
+    repeats = max(len(s["runs"]) for s in both) > 1
+    parts, down, up = [], [], []
+    for key, label in QUALITY:
+        (a, b), spread, d = measure(per, common, key)
+        parts.append(f"{key} {num(a, key)}→{num(b, key)}")
+        if past_noise(d, spread, repeats):
+            (up if d > 0 else down).append(label)
+    (a, _), spread, d = measure(per, common, "per_merged")
+    parts.append(f"tokens/ticket {d / a:+.0%}" if a and d is not None else "tokens/ticket -")
+    cheaper = bool(a) and d is not None and -d >= a * saving / 100 and (not repeats or -d > spread)
+    numbers = ", ".join(parts)
+    if down:
+        return False, numbers, f"{' and '.join(down)} down"
+    if up:
+        return True, numbers, f"{' and '.join(up)} up"
+    if cheaper:
+        return True, numbers, f"quality held, weighted tokens per merged ticket down {-d / a:.0%}"
+    return False, numbers, (f"quality held, tokens per merged ticket not down {saving:g}%" if a and d is not None
+                            else "quality held, and no cost per merged ticket on both sides")
 
 
 def fmt(v):

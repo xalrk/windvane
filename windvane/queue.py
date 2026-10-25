@@ -5,7 +5,7 @@ branches (fetch first).
   order    bullets in `.windvane/QUEUE.md` (`- T-003 ...` or `- **T-003** ...`) first, in order, then every other
            ticket by number; a bullet naming a split ticket's parent (T-004) stands for its parts (T-004a, T-004b)
   done     a merge on main from its branch (`t-003-...`, the whole branch name: `q-t-003-x` is another branch), or
-           `- done: T-003 (why)` in QUEUE.md
+           `- done: T-003 (why)` in QUEUE.md, or `- rejected: T-003 (numbers)`: an experiment the bench didn't keep
   last     `- last: T-003 (why)` in QUEUE.md: starts only once no ticket not marked last can (wip or todo, even if
            only waiting for a running ticket's files); among themselves in the order of these lines
   parked   `- parked: T-003 (why)` in QUEUE.md: never started
@@ -16,6 +16,7 @@ branches (fetch first).
   asked    a question for it under `## Open` in QUESTIONS.md, whoever wrote it: blocked until it's answered
   touches  `Touches: windvane/driver.py, prompts/` in the header: tickets whose lists don't overlap may run at once
   related  `Related: T-004.` in the header: the same feature through other files, so never run beside T-004
+  kind     `Kind: experiment` in the header: merged only when the bench shows it better than main (experiment.py)
 """
 import re
 import time
@@ -106,7 +107,7 @@ class Queue:
                 self.files[tid] = n
         self.text = {t: show(f) for t, f in self.files.items()}
         qmd = show(p.queue_rel)
-        listed = [t for t in bullets(re.sub(r"^\s*-\s*(done|parked|last):.*$", "", qmd, flags=re.M | re.I),
+        listed = [t for t in bullets(re.sub(r"^\s*-\s*(done|parked|last|rejected):.*$", "", qmd, flags=re.M | re.I),
                                          self.files, p) if t in self.files]
         last = [t for t in bullets("".join(f"- {x}\n" for x in re.findall(r"^\s*-\s*last:(.*)$", qmd, re.M | re.I)),
                                    self.files, p) if t in self.files]
@@ -120,11 +121,14 @@ class Queue:
         self.related = {t: depends_on(heads[t], p, "Related") for t in self.files}
         self.titles = {t: title(self.text[t], t) for t in self.files}
         self.touches = {t: touches(heads[t]) for t in self.files}
+        self.kinds = {t: " ".join(header_line(heads[t], "Kind").split()).strip(" .`*").lower() for t in self.files}
 
         bp = re.escape(p.prefix.lower())
         merges = gout(cwd, "log", ref, "--merges", "--format=%s")
         self.done = {p.norm(m) for m in merged_branches(merges, bp)}
         self.done |= {p.norm(m) for m in re.findall(rf"^\s*-\s*done:\s*({p.id_re})", qmd, re.M | re.I)}
+        self.rejected = {p.norm(m) for m in re.findall(rf"^\s*-\s*rejected:\s*({p.id_re})", qmd, re.M | re.I)}
+        self.done |= self.rejected  # never picked again; its branch stays, unmerged
         self.parked_lines = {p.norm(m): line.strip() for line, m in
                              re.findall(rf"^(\s*-\s*parked:\s*({p.id_re}).*)$", qmd, re.M | re.I)}
         self.parked = set(self.parked_lines)
