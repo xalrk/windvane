@@ -618,7 +618,7 @@ class Pilot(Desk, Periodic):
         no-op where the caller logs it itself)."""
         return whole("", plain_error(error), log=log or self.log, most=REASON)
 
-    def backoff(self, minutes, label):
+    def backoff(self, minutes, label, what="retry backoff"):
         """A retry's backoff; False when a stop, the deadline, a signal or `stop --now` came first. A slot's thread
         sits in it with no signal to interrupt it, so it wakes on `interrupted` within a second: the wind-down joins
         the slot, and a service manager's stop timeout (systemd's 90 s) mustn't run out before it ends."""
@@ -630,7 +630,7 @@ class Pilot(Desk, Periodic):
                 return False
             self.sleep(60)
             naps -= 1
-        self.log(f"{label}: retry backoff ended: {self.why_interrupted()}")
+        self.log(f"{label}: {what} ended: {self.why_interrupted()}")
         return False
 
     def why_interrupted(self):
@@ -1428,7 +1428,7 @@ class Pilot(Desk, Periodic):
             if not k:  # one line for the whole wait, and one when it ends
                 self.log(f"{tid}: gh couldn't {what}; asking again after 1, 2, 4, then every 5 min")
             wait = min(5, 2 ** k)
-            if not self.backoff(wait, tid):
+            if not self.backoff(wait, tid, "wait for gh"):
                 self.log(f"{tid}: gh still failing after {waited} min; stopped waiting; the next run resumes the ticket")
                 return None
             k, waited = k + 1, waited + wait

@@ -177,6 +177,24 @@ class Waits(unittest.TestCase):
         result, took = self.in_slot(self.pilot.wait_online)
         self.assertIs(result, False)
         self.assertLess(took, 3)
+        log = (self.p.state / "autopilot.log").read_text()
+        self.assertIn("network still down after 0 min; stopped waiting", log)  # the nap cut short isn't a minute
+
+    def test_a_login_wait_ends_without_counting_the_nap_it_cut(self):
+        gone = self.s.tmp / "login"
+        gone.write_text("out")  # the fake `claude auth status` says logged out
+        os.environ["FAKE_LOGIN"] = str(gone)
+        self.addCleanup(os.environ.pop, "FAKE_LOGIN", None)
+        result, took = self.in_slot(lambda: self.pilot.wait_login("T-001", "OAuth token has expired"))
+        self.assertIs(result, False)
+        self.assertLess(took, 3)
+        self.assertIn("Claude login still gone after 0 min; stopped waiting", (self.p.state / "autopilot.log").read_text())
+
+    def test_the_gh_wait_says_it_was_the_gh_wait(self):
+        result, took = self.in_slot(lambda: self.pilot.gh_wait("T-007", "list its PRs", lambda: None))
+        self.assertIsNone(result)
+        self.assertLess(took, 3)
+        self.assertIn("T-007: wait for gh ended: the driver got SIGTERM", self.lines)
 
     def test_a_periodic_land_question_ends(self):
         orig = (phone.ask, phone.answer, periodic.quiet_now)

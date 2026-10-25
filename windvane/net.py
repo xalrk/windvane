@@ -92,8 +92,7 @@ def wait(p, until, stopped, sleep=time.sleep):
                 if stopped() or now() >= until():
                     log(p, f"network still down after {waited} min; stopped waiting")
                     return False
-                sleep(60)
-                waited += 1
+                waited += sleep(60) is not True  # True: a signal cut the nap short (a driver's sleep), no minute waited
             k += 1
             if online():
                 break
