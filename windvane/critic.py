@@ -767,7 +767,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         sent_back(p, tid, ASKED)  # before the trial: one that dies or gives no verdict is no way back to a light pass
     with tried(p, tid, cwd, rev, stop_if) as (tree, git_env, note):
         if deep != "light":
-            shows[:] = look(p, tid, cwd, rev, tree, note, stop_if)
+            shows[:] = look(p, tid, cwd, rev, tree, note, stop_if, git_env)
             told |= shows[1]
         return critique(p, tid, cwd, rev, prompt("full", why), n, lad, usage, stop_if, retry, tree, git_env, note,
                         told, prior)
@@ -988,41 +988,44 @@ def show_dir(p, tid, cwd, rev):
     return pack_dir(p, tid) / f"show-{gout(cwd, 'rev-parse', f'{rev}^{{tree}}')[:12]}"
 
 
-def look(p, tid, cwd, rev, tree, note, stop_if=None):
+def look(p, tid, cwd, rev, tree, note, stop_if=None, git_env=None):
     """(the prompt's part on `[critic] show`, what the verdict records of it), both empty with no `show`. Kept from an
     earlier critique of this tree, else run in the critic's copy `tree`, or in a copy of its own when the critic has
-    none (a light read, `trial_minutes = 0`): the driver runs it, never the critic's session, so it costs no turns."""
+    none (a light read, `trial_minutes = 0`): the driver runs it, never the critic's session, so it costs no turns.
+    It runs code from the ticket's head, so behind the copy's hooks (`git_env`) that refuse commits and pushes."""
     if not p.critic["show"]:
         return "", {}
     d = show_dir(p, tid, cwd, rev)
     rec = load_json(d / "show.json", None)
     if rec and rec.get("cmd") == p.critic["show"]:
-        return show_part(p, d, rec), {"show": "reused", **({"show_failed": rec["failed"]} if rec["failed"] else {})}
+        return show_part(p, d, rec), {"show": "reused"}
     if tree is None and note:  # the critic's copy couldn't be made: neither can show's
         rec = {"failed": cut(note)}
     elif tree is None:
-        with worktree.trial(p, cwd, rev, tid, stop=stop_if or (lambda: "")) as (copy, _, why):
-            rec = show(p, tid, d, copy, stop_if) if copy else {"failed": cut(why)}
+        with worktree.trial(p, cwd, rev, tid, stop=stop_if or (lambda: "")) as (copy, env, why):
+            rec = show(p, tid, d, copy, env, stop_if) if copy else {"failed": cut(why)}
     else:
-        rec = show(p, tid, d, tree, stop_if)
+        rec = show(p, tid, d, tree, git_env or {}, stop_if)
     if rec["failed"]:
-        log(p, f"{tid}: the critic's show failed ({rec['failed']}): it judges on the pack")
+        log(p, f"{tid}: the critic's show failed ({rec['failed']}): it judges on the pack, and the next critique "
+               "runs the show again")
     return show_part(p, d, rec), {"show": "failed" if rec["failed"] else "ran", "show_minutes": rec.get("minutes", 0),
                                   **({"show_failed": rec["failed"]} if rec["failed"] else {})}
 
 
-def show(p, tid, d, tree, stop_if=None):
+def show(p, tid, d, tree, git_env, stop_if=None):
     """Runs `[critic] show` in `tree` with SHOW_ENV an empty folder in `d`, outside every worktree, and keeps the first
     SHOW_IMAGES images it leaves there and its last lines: the project knows how to show its output (a render, a
     recorded smoke run), so the critic judges what it really makes, not only a worker's screenshots. Under
-    `show_heavy` it queues for the machine like any heavy job, the wait within `show_minutes`. A record is kept for
-    the tree unless a stop cut it short (a timeout or a failure would come again)."""
+    `show_heavy` it queues for the machine like any heavy job, the wait within `show_minutes`. Only a show that worked
+    is kept for the tree: one that failed or ran out of time (a busy machine, a helper not up yet) runs again on the
+    next critique."""
     cmd, mins = p.critic["show"], p.critic["show_minutes"]
     for old in pack_dir(p, tid).glob("show-*"):  # an earlier tree's: only the head's is ever shown
         shutil.rmtree(old, ignore_errors=True)
     out = d / "images"
     out.mkdir(parents=True)
-    env = {SHOW_ENV: str(out)}
+    env = {**git_env, SHOW_ENV: str(out)}
     run = cmd
     if p.critic["show_heavy"]:
         run = shlex.join([*exe(), "heavy", "--", "sh", "-c", cmd])
@@ -1041,7 +1044,7 @@ def show(p, tid, d, tree, stop_if=None):
             f.unlink()
     rec = {"cmd": cmd, "failed": failed, "code": code, "minutes": minutes, "lines": [clip(x, 300) for x in lines],
            "images": [str(f.relative_to(d)) for f in images]}
-    if not why or why == "out of time":
+    if not failed:
         (d / "show.json").write_text(json.dumps(rec) + "\n")
     return rec
 

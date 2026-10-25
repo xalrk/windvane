@@ -24,8 +24,7 @@ reviewer reads your change, and the driver merges it.
      user will ever see or feel it, even via a later ticket (refactors, tooling, tests; logic a planned ticket shows is
      `yes`); the reviewer checks that. Then the command that shows the main promise, and only what the critic can't
      run itself or read in the diff: measurements over time, before/after numbers, a long or heavy run's output.
-   - Up to four images (`.png`) when there's something to see that `[critic] show` doesn't make (screenshots, one
-     contact sheet).
+   - Up to four images (`.png`) of what there is to see and `[critic] show` doesn't make (screenshots, a contact sheet).
    Reuse what you already ran. Then `windvane critic <ID>` (the bg job `critic`: call it again until it prints its
    last line, `CRITIC STEP`), and do what that says: fix the "Fix in this ticket" points, refresh the pack, ask again;
    it tells you when to go on. Its "Beyond this ticket" points aren't yours: put them in the PR body.

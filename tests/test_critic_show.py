@@ -167,6 +167,38 @@ class CriticShow(unittest.TestCase):
         [prompt] = self.prompts()
         self.assertIn("show failed: it ran past show_minutes = 0.05.", prompt)
 
+    def test_a_failed_or_timed_out_show_runs_again_next_time(self):
+        run_dir = self.s.tmp / "run"
+        run_dir.mkdir()
+        for k, v in {**machine(run_dir, 60), heavy.STOP_AT: str(time.time() + 600)}.items():
+            self.env(k, v)
+        holder = hold(self, run_dir)  # a busy machine: the show waits past its minutes
+        self.config('show = "python3 show.py"\nshow_heavy = true\nshow_minutes = 0.05')
+        self.critic()
+        (run_dir / "release").touch()
+        holder.wait()
+        self.critic()  # the same tree: tried again, and it gets the machine now
+        self.assertEqual((1, "ran"), (self.runs(), self.last()["show"]))
+        self.assertIn("rendered 2 frames", self.prompts()[-1])
+
+    def test_it_can_neither_commit_nor_push(self):
+        self.config('show = "git commit -q --allow-empty -m mine; echo commit=$?; '
+                    'git push -q origin HEAD:refs/heads/from-show; echo push=$?"')
+        head = self.s.git("rev-parse", "HEAD")
+        self.critic()
+        [prompt] = self.prompts()
+        self.assertIn("commit=1", prompt)
+        self.assertIn("push=1", prompt)
+        self.assertEqual("", self.s.git("ls-remote", str(self.s.remote), "refs/heads/from-show"))
+        self.assertEqual(head, self.s.git("rev-parse", "HEAD"))
+
+    def test_nor_from_a_light_read_s_copy(self):
+        self.plain = self.plain.replace('depth = "full"', 'depth = "light"')
+        self.config('show = "git push -q origin HEAD:refs/heads/from-show; echo push=$?"')
+        self.critic()
+        self.assertIn("push=1", self.prompts()[0])
+        self.assertEqual("", self.s.git("ls-remote", str(self.s.remote), "refs/heads/from-show"))
+
     def test_a_light_read_gets_it_from_a_copy_of_its_own(self):
         self.plain = self.plain.replace('depth = "full"', 'depth = "light"')
         self.config('show = "python3 show.py"')
