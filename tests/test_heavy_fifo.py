@@ -102,11 +102,11 @@ class HeavyFifo(unittest.TestCase):
         reads = [{"pid": os.getpid(), "since": 5.0}, {}, {}, {"pid": os.getppid(), "since": 6.0}]
         lines, looked = [], []
         with mock.patch.dict(os.environ, self.env, clear=True), \
-                mock.patch.object(heavy, "ahead", lambda e: [self.d / "x"]), \
+                mock.patch.object(heavy, "waiters", lambda e: ([self.d / "x"], [])), \
                 mock.patch.object(heavy, "free_gb", lambda: None), \
                 mock.patch.object(heavy.time, "sleep", lambda s: None), \
                 mock.patch.object(heavy, "holder", lambda lock: looked.append(1) or reads[len(looked) - 1]):
-            heavy.take(None, None, None, {"busy": []}, lambda: time.time() + 30, lines.append,
+            heavy.take(None, (None, self.d / "y"), None, {"busy": []}, lambda: time.time() + 30, lines.append,
                        lambda: len(looked) == len(reads))
         held = r"lock: (held by (pid \d+|another heavy job)).*; 1 ahead"
         said = [m.group(1) for ln in lines if (m := re.search(held, ln))]
