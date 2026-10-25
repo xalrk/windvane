@@ -7,6 +7,10 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `[critic] show`: a project whose output is visual or slow to make gives the critic a command that shows it (a
+  screenshot script, a headless render). windvane runs it once per tree in the critic's copy of the head, and the
+  critic gets the images it leaves in `$WINDVANE_SHOW_DIR` and its last lines of output. `show_heavy` runs it under
+  `windvane heavy`, `show_minutes` limits it; a show that fails is no verdict on the ticket.
 - `windvane periodic <name>` while a run is on asks that run for the round instead of refusing: it runs at the run's
   next gap between tickets, from the config on `main` as it is then, without stopping the run. `--cancel` takes the
   ask back, and `windvane status` shows it.
