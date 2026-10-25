@@ -35,6 +35,8 @@ from .util import append_jsonl, edit_json, git, gout, hhmm, last_match, load_jso
 
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
 SCORE_RE = re.compile(r"\bscore=(-?\d+(?:\.\d+)?)\b")
+PERIODIC_LINE = "`PERIODIC: <one-line summary of what you found and the tickets you wrote>`"
+REASK_TIME = timedelta(minutes=3)  # a re-ask for the end line, past a session that ended at its limit
 ASKED = "asked.json"  # the state dir's `windvane periodic <name>` asks a run holds for its next gap: {name: when}
 ASK_LAND = (("near", "queue them right after the ticket in progress"), ("end", "queue them after everything else"),
             ("hold", "hold them, parked in QUEUE.md, for you at the desk"))
@@ -133,7 +135,7 @@ class Periodic:
     def periodic(self, e):
         """Run `e` and the entries its `then` chains to, one after another in the ci tree on current main, then
         land the tickets they wrote. Whatever else they changed is discarded with the tree."""
-        from .planner import release_ids
+        from .planner import release_ids, snapshot
         from .worktree import clean_detach
         p, cd, done, prev = self.p, self.p.ci_dir, set(), None
         entries = self.asked_chain if e.get("asked") else p.periodic
@@ -147,6 +149,7 @@ class Periodic:
         kept, reply = None, ""  # what the last session that finished leaves; a cut-off one's changes are dropped
         land, last = "", e["name"]  # `land` is inherited along the chain: an entry's own setting wins
         self.handed = set()  # the ticket ids the chain's sessions were given: only those land
+        self.chain_base = "HEAD"  # the tree the last session that finished left: a dropped one's patch starts there
         self.triaged = []  # (the requests a session was given, its final reply, its name): verdicts after the land
         try:  # the ids its sessions were handed stay claimed until they've landed or been dropped
             while e and e["name"] not in done and not (p.state / "STOP").exists():
@@ -163,6 +166,7 @@ class Periodic:
                     break
                 reply, prev = got
                 kept, last = self.periodic_keep(cd, e["name"]), e["name"]
+                self.chain_base = snapshot(cd)
                 e = entries.get(e["then"])
             self.save()
             try:
@@ -200,7 +204,7 @@ class Periodic:
         started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
         it due, {group: its tickets}, named in its prompt; `entries`: the chain's (main's for an asked round). An
         asked round's ask is taken once its session starts or is skipped for good (`asked_taken`)."""
-        from .planner import pick_ids
+        from .planner import end_reask, files, keep_dropped, pick_ids, reapply
         from .runner import rules
         name, p = e["name"], self.p
         entries = entries or p.periodic
@@ -258,23 +262,36 @@ class Periodic:
         deny = ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
                 "Bash(git reset *)", "Bash(gh *)", NO_REQUEST] + ([] if p.ap["subagents"] else ["Agent"])
         system = rules(p, "PERIODIC.md") + "\n" + own_rules
+        session = {}
         text, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}", prompt, system, cd, limit,
-                                          ["Bash(windvane *)"], deny)
-        m = last_match(PERIODIC_RE, text)
+                                          ["Bash(windvane *)"], deny, session=session)
+        m, said = last_match(PERIODIC_RE, text), text
+        if not (killed or error or m) and session.get("id"):  # ended well but without its line: asked once, tree as is
+            more = " (your `REQUEST:` lines first)" if reqs else ""
+            asked = end_reask(PERIODIC_LINE, more)  # cut off or failed, it's said as such below
+            again, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}-reask", asked, system, cd,
+                                               max(limit, now() + REASK_TIME), deny=critic.DENY, resume=session["id"])
+            m = last_match(PERIODIC_RE, again)
+            if m:  # the reply stays the first one's; a verdict the re-ask repeats wins over its first one
+                said = f"{again}\n{text}"
+                text = f"{text.rstrip()}\n{m.group(0)}"
         if killed or error or not m:
             why = killed or error or "no PERIODIC line"
-            self.log(f"{name}: no result ({why}); its changes are dropped")
+            n, kept = keep_dropped(p, cd, name, self.chain_base)
+            self.log(f"{name}: {why}; dropped {files(n)} (kept in {kept})" if kept
+                     else f"{name}: no result ({why}); its changes are dropped")
             if killed != "stop now":  # the user stopped it: nothing to tell
                 what = (f"it was cut off ({killed})" if killed else f"the session failed ({phone.cut(plain_error(error), log=self.log)})"
                         if error else "it ended without its PERIODIC line")
-                self.periodic_failed(name, f"{what}; its changes were dropped.")
+                self.periodic_failed(name, f"{what}; its changes were dropped" + (
+                    f" ({files(n)}): {reapply(kept)}" if kept else "."))
             return None
         self.log(f"{name}: PERIODIC: {m.group(1)}")
         push(name, phone.cut(m.group(1), log=self.log) or "done", 3, "mag")
         if notes:  # used: the next plan (or triage) starts after them
             append_jsonl(p.state / "critic.jsonl", {"ticket": "PLAN", "step": f"periodic:{name}", "notes": len(notes)})
         if reqs:
-            self.triaged.append((reqs, text, name))
+            self.triaged.append((reqs, said, name))
         score = SCORE_RE.search(m.group(1))
         if score:
             append_jsonl(p.state / "ledger.jsonl", {"role": f"periodic:{name}", "event": "score",

@@ -104,7 +104,13 @@ if step == "crash":
     print("Error: socket hang up", file=sys.stderr, flush=True)
     sys.exit(1)
 text = "ok"
-if system.startswith("# windvane worker run"):
+# the driver's re-ask for a missing end line, in the same session: the right line, FAKE_REASK's text, or none ("empty")
+reask = "--resume" in args and system.startswith(("# windvane planner run", "# windvane periodic run"))
+if reask:
+    said = os.environ.get("FAKE_REASK")
+    text = "" if said == "empty" else said or (
+        "PLAN: new=1 noted=0 one ticket" if system.startswith("# windvane planner") else "PERIODIC: wrote a ticket")
+elif system.startswith("# windvane worker run"):
     tid = re.search(r"Ticket (\S+)\.", prompt).group(1)
     behaviour = os.environ.get("FAKE_WORKER", "ready")
     import time
@@ -287,7 +293,7 @@ elif system.startswith("# windvane planner run"):
         sh("git", "push", "-q", "origin", f"{c}:refs/heads/main")
     if os.environ.get("FAKE_PLAN_OUTSIDE"):
         open("stray.txt", "w").write("x")
-    text = "PLAN: new=1 noted=0 one ticket"
+    text = os.environ.get("FAKE_END_LINE", "PLAN: new=1 noted=0 one ticket")  # FAKE_END_LINE: a misspelt one
 elif system.startswith("# windvane periodic run"):  # the project's rules file says what to do
     ids = re.search(r"## Ids for new tickets.*\n(.*)", prompt).group(1).split(", ")
     if os.environ.get("FAKE_SESSION_RUN"):
@@ -330,7 +336,7 @@ elif system.startswith("# windvane periodic run"):  # the project's rules file s
     text = "played\n" + "".join(f"note {i}\n" for i in range(extra))
     text += "covered: the jump by T-001\nnot ticketed: the fog (by design)\n" if "NOTE=" in system else ""
     text += verdicts
-    text += ("" if "NO_LINE" in system else "PERIODIC: " + (
+    text += ("" if "NO_LINE" in system else os.environ.get("FAKE_END_LINE") or "PERIODIC: " + (
         "see report.txt" if "WRITE_REPORT" in system else "wrote a ticket") + (f" score={score.group(1)}" if score else ""))
 elif system.startswith("# windvane fix run"):  # FAKE_FIX: push (fixes it), red (pushes, still red), giveup
     n = re.search(r"Desk PR #(\d+)", prompt).group(1)
@@ -349,7 +355,8 @@ elif system.startswith("# windvane fix run"):  # FAKE_FIX: push (fixes it), red 
 elif system.startswith("# windvane preflight"):  # FAKE_PREFLIGHT: the questions it finds
     found = os.environ.get("FAKE_PREFLIGHT", "")
     text = found + "\nPREFLIGHT: " + ("1 questions" if found else "NONE")
-if os.environ.get("FAKE_SAY") and system.startswith(("# windvane review", "# windvane planner", "# windvane periodic")):
+if os.environ.get("FAKE_SAY") and not reask and system.startswith(
+        ("# windvane review", "# windvane planner", "# windvane periodic")):
     text = os.environ["FAKE_SAY"] + "\n" + text  # a line of its own in its final reply
 emit({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", "text": text}], "usage": {
     "input_tokens": 3, "cache_creation_input_tokens": 4000, "cache_read_input_tokens": 6000}}})  # the first turn

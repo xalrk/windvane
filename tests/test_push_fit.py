@@ -265,6 +265,20 @@ def planned(p, patch, s):
     return {"planned 1 ticket": ("API Error",)}
 
 
+def plan_dropped(p, patch, s):
+    orig = planner.run_claude
+
+    def run_claude(*a, **k):  # the plan misspells its line, and its re-ask fails
+        if k.get("resume"):
+            return "", None, LONG
+        text, killed, error = orig(*a, **k)
+        return text.replace("PLAN:", "PLAP:"), killed, error
+    patch(planner, "run_claude", run_claude)
+    planner.plan(p, "make it great")
+    return {"plan dropped": ("its session failed (API Error", "`git apply --unidiff-zero ", "/dropped/plan-",
+                             "on main gets them")}
+
+
 def secret_aside(p, patch, s):
     pilot(p).secret_aside("T-001", "t-001-x", "0" * 40, [("token", f".windvane/{'x' * 250}.md:1 in 1a2b3c4")])
     return {"Set aside": ("Not merged: its commits add a token at .windvane/", "which would stay in main's history.")}
@@ -305,7 +319,8 @@ def scale_warned(p, patch, s):
 
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
-         held, secret_aside, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned, tmp_full,
+         held, secret_aside, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned,
+         plan_dropped, tmp_full,
          not_taken_up, scale_warned]
 
 

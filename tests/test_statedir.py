@@ -137,6 +137,18 @@ class StateDir(Base):
                           "20260905-100000-T-002.jsonl", "20261006-100000-T-001.jsonl"])
         self.assertEqual(stats(), before)  # stats reads the ledger, not the transcripts
 
+    def test_an_old_dropped_session_patch_goes_a_recent_one_stays(self):
+        d = self.p.state / "dropped"
+        d.mkdir()
+        for name in ("plan-20260901-100000.patch", "triage-20260902-100000.patch"):
+            (d / name).write_text("diff --git a/x b/x\n")
+            os.utime(d / name, (OLD, OLD))
+        (d / "plan-20261006-100000.patch").write_text("diff\n")  # this week's
+        item, = statedir.reclaimable(self.p, procs=set())
+        self.assertEqual(item.what, "dropped/ (2 dropped session patches over 14 days old)")
+        statedir.clean(self.p, procs=set())
+        self.assertEqual([f.name for f in d.iterdir()], ["plan-20261006-100000.patch"])
+
     def test_a_merged_tickets_old_critic_pack_goes_an_unmerged_ones_stays(self):
         packs = {t: self.p.state / "critic" / t for t in ("T-001", "T-002")}
         for d in packs.values():

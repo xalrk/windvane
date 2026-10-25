@@ -1,4 +1,5 @@
-"""[[periodic]] sessions, the rest: where their tickets land, what a triage reads, a run by hand, scores."""
+"""[[periodic]] sessions, the rest: where their tickets land, what a triage reads, a run by hand, scores, and a
+session that ends without its PERIODIC line (asked for it once, then its changes kept as a patch)."""
 import fcntl
 import io
 import json
@@ -12,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import cli, critic, driver  # noqa: E402
+from windvane import cli, critic, driver, requests  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.periodic import place  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
@@ -21,6 +22,7 @@ from helpers import Sandbox  # noqa: E402
 from test_pipeline import args  # noqa: E402
 
 TRIAGE = '[[periodic]]\nname = "triage"\nminutes = 30\nprompt = "tools/TRIAGE.md"\n'
+REQUESTS = '[[periodic]]\nname = "requests"\nrequests = true\nland = "end"\nminutes = 30\n'
 PLAYTEST = '[[periodic]]\nname = "playtest"\nminutes = 30\nprompt = "tools/PLAYTEST.md"\nthen = "triage"\n'
 
 
@@ -194,6 +196,7 @@ class Triage(Base):
         self.make(PLAYTEST + TRIAGE)
         self.s.write("tools/TRIAGE.md", "# Triage\nNO_LINE\n")
         self.s.publish("triage fails")
+        os.environ["FAKE_REASK"] = "empty"  # asked again for its line, it still gives none
         append_jsonl(self.p.state / "critic.jsonl", {"ticket": "T-001", "critique": "Beyond this ticket:\n- x\n"})
         self.pilot().periodic(self.p.periodic["playtest"])
         self.assertEqual(critic.followups(self.p), [("T-001", "x")])
@@ -257,6 +260,99 @@ class Scores(Base):
 
     def cli_stats(self, *flags):
         return ByHand.cli(self, "stats", *flags)
+
+
+class EndLine(Base):
+    """A session that ended well but without its PERIODIC line is asked for it once, in the same session."""
+    def triage(self, misspelt="PERIODIK: wrote a ticket", **env):
+        """A triage of two requests (an accept, a question) whose first reply ends with `misspelt`, run once."""
+        self.make(REQUESTS)
+        here = os.getcwd()
+        os.chdir(self.s.root)
+        self.addCleanup(os.chdir, here)
+        for title, want in (("Retry the check on a flaky network", "accept"), ("Make the coffee", "question")):
+            (self.s.tmp / "body.md").write_text(f"WANT={want}")
+            with redirect_stdout(io.StringIO()):
+                cli.main(["request", title, "--body", str(self.s.tmp / "body.md")])
+        self.pushes = []
+        with mock.patch.dict(os.environ, {"FAKE_END_LINE": misspelt, **env}), \
+                mock.patch("windvane.periodic.push", lambda *a, **k: self.pushes.append(a[:2])):
+            self.pilot().periodic(self.p.periodic["requests"])
+        calls = [json.loads(x) for x in (self.s.tmp / "calls.jsonl").read_text().splitlines()]
+        return [c for c in calls if c["system"].startswith("# windvane periodic")]
+
+    def verdicts(self):
+        return {f.stem: requests.fields(requests.read(f))[1].get("verdict") for f in requests.files()}
+
+    def test_a_misspelt_line_is_asked_for_and_the_verdicts_still_apply(self):
+        first, again = self.triage()
+        self.assertNotIn("--resume", first["flags"])
+        self.assertEqual(again["flags"][again["flags"].index("--resume") + 1], "fake-session")
+        self.assertEqual(again["prompt"], "Your reply has no end line. Reply with only it (your `REQUEST:` lines "
+                                          "first): `PERIODIC: <one-line summary of what you found and the tickets you "
+                                          "wrote>`")
+        self.assertIn("Bash", again["deny"])
+        self.assertIn("requests: PERIODIC: wrote a ticket", self.log())
+        self.assertIn("T-004", Queue(self.p, "origin/main").files)  # the ticket the first turn wrote landed
+        self.assertEqual(self.verdicts(), {"R-001": "accepted → T-004", "R-002": "question: A or B?"})
+        self.assertEqual(self.pushes[0], ("requests", "wrote a ticket"))
+
+    def test_a_verdict_the_reask_repeats_wins(self):
+        self.triage(FAKE_REASK="REQUEST: R-002 reject not windvane's doing\nPERIODIC: wrote a ticket")
+        self.assertEqual(self.verdicts(), {"R-001": "accepted → T-004", "R-002": "rejected: not windvane's doing"})
+
+    def test_still_no_line_keeps_the_changes_as_a_patch_and_says_where(self):
+        self.assertEqual(len(self.triage(FAKE_REASK="empty")), 2)
+        self.assertNotIn("T-004", Queue(self.p, "origin/main").files)
+        self.assertEqual(self.verdicts(), {"R-001": "none yet", "R-002": "none yet"})  # triaged again next run
+        patch = next((self.p.state / "dropped").glob("requests-*.patch"))
+        self.assertIn(f"requests: no PERIODIC line; dropped 2 changed files (kept in {patch})", self.log())
+        self.assertEqual(self.pushes, [("requests round failed", "The requests round didn't finish: it ended without "
+                                        "its PERIODIC line; its changes were dropped (2 changed files): "
+                                        f"`git apply --unidiff-zero {patch}` on main gets them back.")])
+        self.s.git("apply", "--unidiff-zero", str(patch))  # README, which never lands, isn't in it
+        self.assertEqual(self.s.git("status", "--porcelain"), "M .windvane/QUEUE.md\n?? .windvane/tickets/T-004.md")
+        self.assertIn("asked in R-001", (self.s.root / ".windvane/tickets/T-004.md").read_text())
+
+    def test_a_chains_dropped_patch_holds_only_what_the_last_session_added(self):
+        self.make(PLAYTEST + TRIAGE, play="WRITE_TICKET")
+        self.s.write("tools/TRIAGE.md", "# Triage\nWRITE_TICKET\nNO_LINE\n")
+        self.s.publish("triage fails")
+        pushes = []
+        with mock.patch.dict(os.environ, {"FAKE_REASK": "empty"}), \
+                mock.patch("windvane.periodic.push", lambda *a, **k: pushes.append(a[:2])):
+            self.pilot().periodic(self.p.periodic["playtest"])
+            patch, = (self.p.state / "dropped").glob("triage-*.patch")
+            self.pilot().periodic(self.p.periodic["playtest"])  # a second round skips the dropped patch's T-005
+        self.assertEqual(sorted(Queue(self.p, "origin/main").files), ["T-001", "T-002", "T-003", "T-004", "T-006"])
+        self.assertIn("triage: no PERIODIC line; dropped 2 changed files", self.log())
+        self.assertNotIn("tickets/T-004.md", patch.read_text())  # landed already: only in its context lines
+        self.s.git("pull", "-q", "--ff-only", "origin", "main")
+        self.s.git("apply", "--unidiff-zero", str(patch))  # as the push says, on main after the playtest's land
+        self.assertIn("# T-005: found", (self.s.root / ".windvane/tickets/T-005.md").read_text())
+        self.assertIn("- T-005 found", (self.s.root / ".windvane/QUEUE.md").read_text())
+
+    def test_a_stop_during_the_reask_is_a_stop(self):
+        self.make(TRIAGE)
+        pilot = self.pilot()
+        orig = pilot.claude
+        pilot.claude = lambda *a, **k: ("", "stop now", None) if k.get("resume") else orig(*a, **k)
+        pushes = []
+        with mock.patch.dict(os.environ, {"FAKE_END_LINE": "PERIODIK: wrote a ticket"}), \
+                mock.patch("windvane.periodic.push", lambda *a, **k: pushes.append(a[:2])):
+            pilot.periodic(self.p.periodic["triage"])
+        self.assertIn("triage: stop now; dropped", self.log())
+        self.assertEqual(pushes, [])
+
+    def test_a_cut_off_or_failed_session_is_not_asked_again(self):
+        self.make(TRIAGE)
+        for killed, error in (("time", None), (None, "API Error: 529")):
+            pilot, calls = self.pilot(), []
+            pilot.claude = lambda *a, **k: calls.append(k) or ("played\n", killed, error)
+            with mock.patch("windvane.periodic.push"):
+                pilot.periodic(self.p.periodic["triage"])
+            self.assertEqual([k.get("resume") for k in calls], [None])
+            self.assertIn("session", calls[0])
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 failed periodic round reaches the phone; a renumbering is in the merged push and the PR comment; a desk PR is checked
 merged with main when main moved past its base. Each with the case where nothing changes."""
 import json
+import os
 import sys
 import unittest
 from datetime import timedelta
@@ -168,6 +169,7 @@ class PeriodicFailures(Base):
         self.make(TRIAGE)
         self.s.write("tools/TRIAGE.md", "# Triage\nNO_LINE\n")
         self.s.publish("rules")
+        os.environ["FAKE_REASK"] = "empty"  # asked again for its line, it still gives none
         self.pilot.periodic(self.p.periodic["triage"])
         self.assertEqual(self.pushes, [("triage round failed", "The triage round didn't finish: it ended without its "
                                                                "PERIODIC line; its changes were dropped.")])

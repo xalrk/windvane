@@ -3,6 +3,7 @@ commits, then pushes or lands it."""
 import fcntl
 import os
 import re
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -10,11 +11,76 @@ from . import actions, critic, login, net, privacy, requests
 from .held import OWN_BRANCHES, author_ident, free_name, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
 from .queue import Queue, folder_ids, id_after, ref_ids
-from .runner import NO_REQUEST, rules, run_claude
-from .util import edit_json, git, gout, last_match, load_json, log, now, push, same_process, save_json, stamp
+from .runner import NO_REQUEST, plain_error, rules, run_claude
+from .util import edit_json, git, gout, last_match, load_json, log, now, push, run, same_process, save_json, stamp
 from .worktree import clean_detach, ensure_worktree
 
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
+PLAN_LINE = "`PLAN: new=<n> noted=<n> <gist>` (or `PLAN: NONE <why>`)"
+DROPPED = "dropped"  # the state dir's patches of sessions whose changes were thrown away for want of their end line
+NEW_FILE_RE = re.compile(r"^diff --git a/(\S+) b/\1\nnew file mode", re.M)  # a file a patch creates
+
+
+def end_reask(line, more=""):
+    """The one follow-up turn a session that ended without its end line gets, in the same session, so it reads its
+    context cached: a misspelt marker (`PLAP:`) would throw away a paid plan's tickets. Its fields can't be trusted,
+    so the session is asked rather than the near miss read."""
+    return f"Your reply has no end line. Reply with only it{more}: {line}"
+
+
+def scratch_index(cd, tmp):
+    """The environment for git commands on a scratch index holding `cd`'s tree with its `.windvane/` as it is now:
+    the tree's own index stays as the session left it."""
+    env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+    for cmd in (["read-tree", "HEAD"], ["add", "-A", "--", ".windvane"]):
+        run(["git", *cmd], cd, env=env)
+    return env
+
+
+def snapshot(cd):
+    """`cd`'s `.windvane/` as it is now, as a tree id: what a later session's dropped patch is taken against."""
+    with tempfile.TemporaryDirectory() as tmp:
+        return run(["git", "write-tree"], cd, env=scratch_index(cd, tmp)).stdout.strip() or "HEAD"
+
+
+def keep_dropped(p, cd, label, base="HEAD"):
+    """Save what a session changed under `.windvane/` in `cd` since `base` (HEAD, or the tree an earlier session in its
+    chain left, whose tickets land) as one patch under the state dir's `dropped/`, before its tree is reset, so its
+    tickets can still be applied by hand. Only `.windvane/`: nothing else a plan or periodic session writes ever
+    lands. Returns (the number of files in it, its path), or (0, None) when there's nothing to keep."""
+    with tempfile.TemporaryDirectory() as tmp:
+        env = scratch_index(cd, tmp)
+        names = run(["git", "diff", "--cached", "--name-only", base, "--", ".windvane"], cd, env=env).stdout.split()
+        # no context lines: the added queue lines still apply once main's queue has moved (a land placed them)
+        patch = run(["git", "diff", "--cached", "--binary", "-U0", base, "--", ".windvane"], cd, env=env).stdout
+    if not names:
+        return 0, None
+    name = re.sub(r"[^\w.-]", "-", label)  # a periodic entry's name, from the config
+    stem = p.state / DROPPED / f"{name}-{now():%Y%m%d-%H%M%S}"
+    path, n = stem.with_suffix(".patch"), 1
+    while path.exists():  # two in the same second
+        n += 1
+        path = stem.with_name(f"{stem.name}-{n}.patch")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(patch)
+    return len(names), path
+
+
+def files(n):
+    return f"{n} changed file{'s' * (n != 1)}"
+
+
+def kept_in(path):
+    """Where a dropped session's patch is, as a push says it: a path the user can type, `~` for the home dir."""
+    try:
+        return f"~/{Path(path).relative_to(Path.home())}"
+    except ValueError:
+        return str(path)
+
+
+def reapply(path):
+    """The push's way back for a dropped session's patch."""
+    return f"`git apply --unidiff-zero {kept_in(path)}` on main gets them back."  # the patch has no context lines
 
 
 def changed_paths(cwd):
@@ -95,7 +161,22 @@ def local_ids(p, checkout=None, own=None):
     project's root and `checkout` (`windvane new` leaves its ticket uncommitted in the user's checkout, a plan in its
     own worktree), and the ids a running plan or periodic session was handed (`claimed_ids`, but `own`'s)."""
     roots = {p.main_root(), Path(p.root)} | ({Path(checkout)} if checkout else set())
-    return set().union(*(folder_ids(p, r) for r in roots)) | claimed_ids(p, own)
+    return set().union(*(folder_ids(p, r) for r in roots)) | claimed_ids(p, own) | dropped_ids(p)
+
+
+def dropped_ids(p):
+    """The ids of the new tickets in the state dir's dropped patches (`keep_dropped`): taken until the patch is pruned,
+    so a later plan never writes other tickets under them and the patch still applies as its push says."""
+    ids = set()
+    for f in (p.state / DROPPED).glob("*.patch"):
+        try:
+            text = f.read_text(errors="replace")
+        except OSError:  # not a file it can read: never a reason for a picker to fail
+            continue
+        for path in NEW_FILE_RE.findall(text):
+            if path.startswith(p.tickets_rel + "/") and path.endswith(".md"):
+                ids.add(p.norm(Path(path).stem))
+    return ids - {""}
 
 
 @contextmanager
@@ -242,9 +323,10 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
     log(p, f"plan run ({len(notes)} critic notes)")
     deny = ["Agent", "Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
             "Bash(gh *)", "NotebookEdit", NO_REQUEST]
+    session = {}
     while True:
         text, killed, error = run_claude(p, "planner", "plan", prompt, rules(p, "PLAN.md"), cd,
-                                         ["Bash(git ls-files *)"], deny, usage, stop_if)
+                                         ["Bash(git ls-files *)"], deny, usage, stop_if, session=session)
         m = last_match(PLAN_RE, text)
         if killed or m:
             break
@@ -256,10 +338,25 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
         else:
             break
         clean_detach(p, cd, p.upstream)
+    if not (killed or error or m) and session.get("id"):  # ended well but without its line: asked once, tree as is
+        again, killed, error = run_claude(p, "planner", "plan-reask", end_reask(PLAN_LINE), rules(p, "PLAN.md"), cd,
+                                          deny=critic.DENY, usage=usage, stop_if=stop_if, resume=session["id"])
+        m = last_match(PLAN_RE, again)  # a re-ask cut off or failed has none: the plan is dropped and kept below
+        if m:  # the commit and the PR still carry the first reply: the re-ask's is only the line
+            text = f"{text.rstrip()}\n{m.group(0)}"
     changed = changed_paths(cd)
     if killed or not m or not changed:
+        why = killed or error or (m.group(0) if m else "no PLAN line")
+        n, kept = keep_dropped(p, cd, "plan") if changed else (0, None)
         clean_detach(p, cd, p.upstream)
-        log(p, f"plan: nothing written ({killed or error or (m.group(0) if m else 'no PLAN line')})")
+        if not kept:
+            log(p, f"plan: nothing written ({why})")
+            return 0
+        log(p, f"plan: {why}; dropped {files(n)} (kept in {kept})")
+        if not killed:  # a stop (the user's, the deadline's) is the run's own news; a failure would go unseen
+            what = f"its session failed ({plain_error(error)})" if error else "it ended without its PLAN line"
+            push("plan dropped", f"The plan didn't land: {what}. Its changes ({files(n)}) are kept: {reapply(kept)}",
+                 4, "warning")
         return 0
     outside = [c for c in changed if not c.startswith(".windvane/")]
     if outside:
