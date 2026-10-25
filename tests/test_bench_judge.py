@@ -78,7 +78,8 @@ class Judge(unittest.TestCase):
         self.assertRegex(out, r"\ntiny\s+1\s+0\s+0\s+1/2\s+1/2 ")
         self.assertIn("  judge no: J2 it fails", out)
         # its tokens are the bench's own: in its record, never in the seed's ledger or cost per merged ticket
-        ledger = [json.loads(x) for x in next((run / "tiny/state/windvane").glob("*/ledger.jsonl")).read_text().splitlines()]
+        seed_ledger = next((run / "tiny/state/windvane").glob("*/ledger.jsonl"))
+        ledger = [json.loads(x) for x in seed_ledger.read_text().splitlines()]
         sessions = [x for x in ledger if not x.get("event")]
         self.assertNotIn("judge", {x["role"] for x in sessions})
         self.assertEqual(r["weighted"], round(sum(map(weighted, sessions))))

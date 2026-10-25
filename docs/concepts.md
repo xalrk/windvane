@@ -247,6 +247,11 @@ folder), they are copied only into a scratch clone of the final `main`, and sinc
 intent, every session's stream is searched afterwards: a seed whose streams name a hidden test file or folder is
 reported as contaminated and not counted. A score the builders could see would
 be trained to; one they never see shows whether a prompt or pipeline change made the built project better.
+Hidden tests miss what a user also meets (an unclear error, a command hard to find, a wrong README), so a judge
+session then tries each finished seed as its user would, on the seed's own yes/no checks. It is told the goal and
+the tickets, never the critic's scale, its verdicts, the pass mark or which windvane built it, so no session
+can aim at its score either. `windvane bench compare A B` sets two windvane versions side by side, and with
+`--repeat` tells a real difference from the runs' own noise.
 
 ## Questions and quiet times
 

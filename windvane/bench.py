@@ -221,7 +221,7 @@ def tally(seed, tickets, scratch, env=None):
     for f in hidden.iterdir():
         if f.is_dir():
             shutil.copytree(f, scratch / f.name, dirs_exist_ok=True)
-        elif f.name != "bench.toml":
+        elif f.name not in ("bench.toml", "JUDGE.md"):
             shutil.copy2(f, scratch / f.name)
     cmd = seed["bench"]["command"]
     try:
@@ -630,7 +630,7 @@ def compare(a, p, *refs):
             s["runs"] = s["runs"][-a.repeat:]
     todo = [s for i in range(a.repeat) for s in both if not s["fixed"] and len(s["runs"]) <= i]  # A, B, A, B ...
     for s in both:
-        print(f"{s['name']} ({s['sha'][:7]}): {len(s['runs'])} recorded run(s) reused, "
+        print(f"{s['name']} ({s['sha'][:7]}): {runs_n(len(s['runs']))} recorded, "
               f"{sum(t is s for t in todo)} to run", flush=True)
     if a.dry_run:
         return 0
@@ -642,6 +642,10 @@ def compare(a, p, *refs):
         s["runs"].append(recs)
     print(compare_table(both, which))
     return 0
+
+
+def runs_n(n):
+    return f"{n} run" + ("" if n == 1 else "s")
 
 
 def value(recs, key):
@@ -685,8 +689,8 @@ def compare_table(both, which):
     A, B = both
     if not common:
         return f"bench compare: no seed was counted in every run of both sides ({', '.join(seen) or 'none ran'})"
-    out = [f"bench compare ({which}): A = {A['name']} ({A['sha'][:7]}), {len(A['runs'])} run(s) · "
-           f"B = {B['name']} ({B['sha'][:7]}), {len(B['runs'])} run(s)",
+    out = [f"bench compare ({which}): A = {A['name']} ({A['sha'][:7]}), {runs_n(len(A['runs']))} · "
+           f"B = {B['name']} ({B['sha'][:7]}), {runs_n(len(B['runs']))}",
            f"{'seed':<12} {'measure':<14} {'A':>9} {'B':>9} {'B-A':>7}"]
     repeats, marked = max(len(A["runs"]), len(B["runs"])) > 1, 0
     for seed in common + ["all"]:
