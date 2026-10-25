@@ -133,8 +133,7 @@ def wait(p, label, error, started, until, stopped, sleep=time.sleep):
                 if stopped() or now() >= until():
                     log(p, f"  Claude login still gone after {waited} min; stopped waiting")
                     return False
-                sleep(POLL)
-                waited += 1
+                waited += sleep(POLL) is not True  # as in net.wait: a nap a signal cut short isn't a minute waited
                 state = logged_in(p.state)
                 if file_sig() != sig or (state and was_out):
                     why = "the Claude login looks back"

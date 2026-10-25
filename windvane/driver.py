@@ -381,7 +381,10 @@ class Pilot(Desk, Periodic):
         # on its own crashes alone, until another ticket's session shows the API works.
         self.ticket_crashes, self.oks, self.suspect = {}, 0, None
         self.login_gone = None  # when a session first died of the Claude login, until one works again
-        self.sleep = time.sleep  # the retry backoff's; tests make it instant
+        # Set by a signal or `stop --now`: the waits a slot's thread sits in (a backoff, an outage, a nap) wake on it,
+        # since a signal only ever interrupts the main thread, and the wind-down joins the slots
+        self.interrupted = threading.Event()
+        self.sleep = self.interrupted.wait  # the retry backoff's and the outage waits'; tests make it instant
         self.stop_reason = "unknown"
         self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
         self.kept_given = 0  # the latest stop this run has given its kept jobs (`keep_until`), a Unix time
@@ -510,6 +513,8 @@ class Pilot(Desk, Periodic):
                 self.kill_all = (self.p.state / "STOP").read_text().strip() == "now"
             except OSError:
                 pass
+            if self.kill_all:
+                self.interrupted.set()
         return self.kill_all
 
     def stopper(self, limit):
@@ -546,7 +551,7 @@ class Pilot(Desk, Periodic):
 
     def wait_online(self):
         """Wait out a network outage; False when a stop or the deadline ended the wait."""
-        return net.wait(self.p, self.end, lambda: self.signalled or (self.p.state / "STOP").exists(), self.sleep)
+        return net.wait(self.p, self.end, lambda: self.signalled or self.kill_all or (self.p.state / "STOP").exists(), self.sleep)
 
     def wait_login(self, label, error):
         """Wait for the Claude login to come back (login.py); False when a stop or the deadline ended the wait, the
@@ -556,7 +561,8 @@ class Pilot(Desk, Periodic):
         # used once: a session this thread starts outside `claude` (the critic's, the planner's) dying again waits
         started, self.tl.started = getattr(self.tl, "started", 0), time.time()
         return login.wait(self.p, label, error, started, self.end,
-                          lambda: self.signalled or self.ending or (self.p.state / "STOP").exists(), self.sleep)
+                          lambda: self.signalled or self.kill_all or self.ending or (self.p.state / "STOP").exists(),
+                          self.sleep)
 
     def crashed(self, label, error, tid=""):
         """A session died for a reason outside its ticket (API overload, network): pause, longer each
@@ -604,7 +610,7 @@ class Pilot(Desk, Periodic):
             self.log(f"  {label}: {self.halt}" + (f"; the error: {error}" if error not in self.halt else ""))
             return False
         self.log(f"  {label} died ({error}); retry {own[0] if own else self.crashes}/{n} in {wait:g} min")
-        return self.backoff(wait)
+        return self.backoff(wait, label)
 
     def said_error(self, error, log=None):
         """A session's error as a reason says it (the run summary's aside line, the stop reason): its API message, at
@@ -612,13 +618,27 @@ class Pilot(Desk, Periodic):
         no-op where the caller logs it itself)."""
         return whole("", plain_error(error), log=log or self.log, most=REASON)
 
-    def backoff(self, minutes):
-        """A retry's backoff; False when a stop or the deadline came first."""
-        for _ in range(round(minutes)):
+    def backoff(self, minutes, label, what="retry backoff"):
+        """A retry's backoff; False when a stop, the deadline, a signal or `stop --now` came first. A slot's thread
+        sits in it with no signal to interrupt it, so it wakes on `interrupted` within a second: the wind-down joins
+        the slot, and a service manager's stop timeout (systemd's 90 s) mustn't run out before it ends."""
+        naps = round(minutes)
+        while not (self.signalled or self.kill_all):
+            if not naps:
+                return True
             if (self.p.state / "STOP").exists() or now() >= self.end():
                 return False
             self.sleep(60)
-        return True
+            naps -= 1
+        self.log(f"{label}: {what} ended: {self.why_interrupted()}")
+        return False
+
+    def why_interrupted(self):
+        """What cut a wait short, for its log line: the signal or `stop --now`."""
+        sig = self.signalled
+        if not sig:
+            return "`windvane stop --now`"
+        return "the driver got " + ("Ctrl-C" if sig == signal.SIGINT else signal.Signals(sig).name)
 
     def others_left(self, tid):
         """Whether a ticket other than `tid` is running or could start: the session that tells a ticket's own
@@ -738,7 +758,7 @@ class Pilot(Desk, Periodic):
             if len(tries) > n or now() + timedelta(minutes=wait) >= self.end() - timedelta(minutes=self.a.min_slot):
                 return False
             self.log(f"  {tid}-critic died ({error}); retry {len(tries)}/{n} in {wait:g} min")
-            return self.backoff(wait)
+            return self.backoff(wait, f"{tid}-critic")
         return retry
 
     # ---------- one ticket
@@ -1408,7 +1428,7 @@ class Pilot(Desk, Periodic):
             if not k:  # one line for the whole wait, and one when it ends
                 self.log(f"{tid}: gh couldn't {what}; asking again after 1, 2, 4, then every 5 min")
             wait = min(5, 2 ** k)
-            if not self.backoff(wait):
+            if not self.backoff(wait, tid, "wait for gh"):
                 self.log(f"{tid}: gh still failing after {waited} min; stopped waiting; the next run resumes the ticket")
                 return None
             k, waited = k + 1, waited + wait
@@ -1926,11 +1946,12 @@ class Pilot(Desk, Periodic):
         return True
 
     def nap(self, until, answers=False):
-        """Sleep until `until`, waking within seconds for a stop or the run's deadline (which may have moved).
-        Phone messages are handled throughout, but only a wait for `answers` ends early on one: a tap on Usage
-        during a usage pause must not cut the pause short."""
-        while now() < min(until, self.end()) and not (self.p.state / "STOP").exists():
-            time.sleep(NAP)
+        """Sleep until `until`, waking within seconds for a stop or the run's deadline (which may have moved), and at
+        once for a signal or `stop --now` (a slot's stash wait naps too). Phone messages are handled throughout, but
+        only a wait for `answers` ends early on one: a tap on Usage during a usage pause must not cut the pause short."""
+        while now() < min(until, self.end()) and not (self.p.state / "STOP").exists() and \
+                not (self.signalled or self.kill_all):
+            self.interrupted.wait(NAP)
             if phone.pump() and answers:
                 return
 
@@ -2684,6 +2705,7 @@ class Pilot(Desk, Periodic):
         if self.signalled:
             return
         self.signalled, self.kill_all = sig, True
+        self.interrupted.set()
         if sig == signal.SIGHUP:  # its terminal is gone: a print there fails (EIO) and would cost the run its end
             sys.stdout = sys.stderr = open(os.devnull, "w")
         log(self.p, f"{SIGNALLED[sig]}: stopping now")
@@ -2699,6 +2721,7 @@ class Pilot(Desk, Periodic):
         still happen and the next run finds neither stale state nor helpers left up. Only a third Ctrl-C (counting the
         one that ended the run) ends it at once, for a teardown that hangs."""
         self.kill_all, self.signalled = True, self.signalled or sig  # an outage wait ends, a kept job doesn't run on
+        self.interrupted.set()
         what = "Ctrl-C" if sig == signal.SIGINT else signal.Signals(sig).name
         if sig == signal.SIGINT:
             self.presses += 1

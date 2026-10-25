@@ -468,7 +468,7 @@ class Periodic:
             self.log(f"{name}: {'no phone' if sent is None else 'the question did not send'}; the tickets are held")
             return "hold"
         until = min(now() + timedelta(minutes=self.a.answer_wait), self.end())
-        while now() < until and not (p.state / "STOP").exists():
+        while now() < until and not (p.state / "STOP").exists() and not (self.signalled or self.kill_all):
             got = phone.answer(qid)
             if got.startswith("ANSWER"):
                 letter = (got.split()[1:] or [""])[0][:1].upper()
