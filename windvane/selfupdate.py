@@ -154,24 +154,43 @@ def end_trial(state):
     (state / TRIAL).unlink(missing_ok=True)
 
 
-def signature(why, id_re):
-    """A setback's words with what differs between tickets taken out (ids, branch names, shas, numbers), so two
-    tickets that failed the same way read the same."""
-    s = re.sub(rf"\b{id_re}[\w.-]*", "<id>", why, flags=re.I)
-    s = re.sub(r"\b[0-9a-f]{7,40}\b", "<sha>", s)
-    return re.sub(r"\d+(\.\d+)?", "<n>", s)
+ERROR_LINE = re.compile(r"\b(errors?|fail(ed|ure|ures)?|exception|traceback|panic(ked)?|assert\w*)\b", re.I)
 
 
-def setback(state, tid, step, why, id_re):
-    """Records ticket `tid`'s first setback on trial (a failed check, a failed ticket); True when the update is bad:
-    two tickets or more have had one, and all at the same step with the same error."""
+def error_lines(text):
+    """The lines of a failed check's output that name an error (a test's FAIL line, an exception, a compiler's
+    `error:`), the last 12: two tickets the driver broke the same way share them, two that broke a test each don't."""
+    return [x.strip() for x in text.splitlines() if ERROR_LINE.search(x)][-12:]
+
+
+def signature(text, id_re):
+    """A setback's words without what differs between tickets that failed alike: ids and branch names, shas, paths
+    (worktrees, logs) and durations. Other numbers stay: a test count or a line number tells two failures apart."""
+    s = re.sub(rf"\b{id_re}[\w.-]*", "<id>", text, flags=re.I)
+    s = re.sub(r"\S*/\S*", "<path>", s)
+    s = re.sub(r"\b\d+(\.\d+)?\s*(ms|s|sec|seconds|min|minutes)\b", "<time>", s)
+    return re.sub(r"\b[0-9a-f]{7,40}\b", "<sha>", s)
+
+
+def setback(state, tid, step, why, detail, id_re):
+    """Records ticket `tid`'s first setback on trial (`step`: a red check, a driver error), `why` said short and
+    `detail` what is compared; True when the update is bad: two tickets or more have had one, all at the same step
+    with the same error, and no ticket has passed that step on trial (`passed`)."""
     t = on_trial(state)
     if not t:
         return False
-    t["seen"].setdefault(tid, [step, signature(why, id_re), why])
+    t["seen"].setdefault(tid, [step, signature(detail, id_re), why, detail])
     save_json(state / TRIAL, t)
     sigs = {tuple(v[:2]) for v in t["seen"].values()}
-    return len(t["seen"]) >= 2 and len(sigs) == 1
+    return len(t["seen"]) >= 2 and len(sigs) == 1 and step not in t.get("passed", [])
+
+
+def passed(state, step):
+    """A ticket got past `step` on the code on trial: that step's failures were the tickets' own, not the update's."""
+    t = on_trial(state)
+    if t and step not in t.setdefault("passed", []):
+        t["passed"].append(step)
+        save_json(state / TRIAL, t)
 
 
 def to_revert(root, upstream, good, new):
@@ -249,8 +268,8 @@ def fix_ticket(p, cd, tid, trial, how, commits, ids, revert):
     text = (f"# {tid}: {title}\nDepends on: nothing.\n\n## Goal\nAfter a self-update, windvane {new[:8]} {how}. The "
             f"run reverted these on {p.main} in `{revert[:8]}` and went on on {good[:8]}:\n{listed}\n\n## Scope\n- Reproduce it (the reverted change is `git show {revert[:8]}`, "
             "inverted), find the cause, and fix it with a test that fails without the fix.\n"
-            + "".join(f"- {t}'s error ({step}):\n```\n{why[-1500:]}\n```\n"
-                      for t, (step, _, why) in list(trial.get("seen", {}).items())[:1])
+            + "".join(f"- {t}'s error ({v[0]}):\n```\n{v[-1][-1500:]}\n```\n"
+                      for t, v in list(trial.get("seen", {}).items())[:1])
             + (f"- {', '.join(ids)} wait{'s' * (len(ids) == 1)} for this ticket, then redo{'es' * (len(ids) == 1)} "
                "their change on top of the fix.\n" if ids else "")
             + "\n## Done when\n- A test shows the error above can't happen again.\n")

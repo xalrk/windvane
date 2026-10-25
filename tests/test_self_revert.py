@@ -133,6 +133,7 @@ class Crashes(Trial):
     def test_a_second_bad_update_in_a_row_stops_the_run(self):
         self.update("broken\n")
         self.supervise()
+        self.good = self.main("rev-parse", "main")  # the run went on on the revert: the good code now
         self.update("broken again\n", "T-002")  # T-011 didn't merge: T-002's change breaks it again
         head = self.main("rev-parse", "main")
         self.pushes.clear()
@@ -146,7 +147,8 @@ class Crashes(Trial):
         self.assertEqual(rc, 1)
         self.assertEqual(self.main("rev-parse", "main"), head)  # nothing more reverted
         self.assertEqual(self.titles(), ["windvane restarted", "windvane stopped"])
-        self.assertIn("right after a revert, with no ticket merged since: nothing more is reverted", self.pushes[-1][1])
+        self.assertIn("right after a revert, with no ticket merged since: nothing more is reverted. To go on, revert "
+                      f"{self.new[:8]} on main by hand", self.pushes[-1][1])
         self.assertEqual(self.users_checkout(), self.checkout)
 
     def test_a_crash_off_trial_is_restarted_as_before(self):
@@ -176,8 +178,9 @@ class Tickets(Trial):
     def test_every_ticket_failing_the_check_the_same_way_is_reverted_and_the_run_goes_on(self):
         # the driver's broken code is what fails the check here: it reads the install's code
         cfg = self.s.root / ".windvane/config.toml"
+        broken = f"grep -q broken {self.s.tmp}/install/windvane/driver.py"
         cfg.write_text(cfg.read_text().replace('check = "test -f README"',
-                                               f'check = "! grep -q broken {self.s.tmp}/install/windvane/driver.py"'))
+                                               f"check = 'if {broken}; then echo \"Error: the driver is broken\"; exit 1; fi'"))
         self.s.publish("config")
         self.good, self.p = self.s.git("rev-parse", "HEAD"), Project(self.s.root)
         self.update("broken\n")
@@ -186,7 +189,7 @@ class Tickets(Trial):
             pilot.run(now() + timedelta(hours=2))  # restarts itself on the revert
         log = (self.p.state / "autopilot.log").read_text()
         self.assertIn("windvane's new code failed T-001, T-002 the same way at the check", log)
-        self.assert_reverted("failed T-001, T-002 the same way at the check: ")
+        self.assert_reverted("failed T-001, T-002 the same way at the check: CHECK FAILED (exit 1): Error: the driver is broken")
         self.assertEqual(pilot.merged, [])
         self.assertFalse((self.p.state / selfupdate.TRIAL).exists())  # the good code back isn't on trial
         again = self.pilot()
@@ -231,13 +234,57 @@ class Tickets(Trial):
             pilot.self_update()
         self.assertIsNone(selfupdate.on_trial(self.p.state))
 
+    def test_two_tickets_failing_their_own_ways_or_offline_are_no_bad_update(self):
+        self.update("better\n")
+        pilot = self.pilot()
+        st, id_re = self.p.state, self.p.id_re
+        one = selfupdate.error_lines("FAIL: test_a (tests.test_x)\nRan 2356 tests in 3.1s\nFAILED (failures=1)")
+        two = selfupdate.error_lines("FAIL: test_b (tests.test_y)\nRan 2361 tests in 2.9s\nFAILED (failures=3)")
+        self.assertFalse(selfupdate.setback(st, "T-001", "check", "x", "\n".join(one), id_re))
+        self.assertFalse(selfupdate.setback(st, "T-002", "check", "x", "\n".join(two), id_re))
+        same = "FAIL: test_a (tests.test_x)\nFAILED (failures=1)"
+        selfupdate.put_on_trial(st, self.good, self.new, 0)
+        selfupdate.setback(st, "T-001", "check", "x", same, id_re)
+        selfupdate.passed(st, "check")  # a third ticket's check passed on this code: those were the tickets' own
+        self.assertFalse(selfupdate.setback(st, "T-002", "check", "x", same, id_re))
+        selfupdate.put_on_trial(st, self.good, self.new, 0)
+        orig, driver.net.online = driver.net.online, lambda: False
+        try:
+            with redirect_stdout(io.StringIO()):
+                pilot.fail("T-001", "driver error: KeyError: 'x'")
+                pilot.fail("T-002", "driver error: KeyError: 'x'")
+        finally:
+            driver.net.online = orig
+        self.assertIsNone(pilot.bad)  # an outage's failures are no one's
+        with redirect_stdout(io.StringIO()):
+            pilot.fail("T-001", "the reviewer asked for changes 3 times")  # the tickets' own: not compared
+            pilot.fail("T-002", "the reviewer asked for changes 3 times")
+        self.assertIsNone(pilot.bad)
+        with redirect_stdout(io.StringIO()):
+            pilot.fail("T-001", "driver error: KeyError: 'x'")
+            pilot.fail("T-002", "driver error: KeyError: 'x'")
+        self.assertEqual(pilot.bad, "failed T-001, T-002 the same way at the driver error: driver error: KeyError: 'x'")
+
+    def test_a_revert_killed_while_it_lands_still_counts(self):
+        self.update("broken\n")
+
+        def killed(*a):
+            raise SystemExit("killed")
+        orig, selfupdate.revert_update = selfupdate.revert_update, killed
+        try:
+            with self.assertRaises(SystemExit):
+                driver.undo_update(self.p, self.p.ci_dir, self.home, selfupdate.on_trial(self.p.state), "broke", print)
+        finally:
+            selfupdate.revert_update = orig
+        self.assertTrue((self.p.state / selfupdate.REVERTED).exists())  # the next bad update stops the run
+
     def test_a_trial_ends_after_an_hour(self):
         self.update("better\n")
         t = json.loads((self.p.state / selfupdate.TRIAL).read_text())
         t["since"] -= selfupdate.TRIAL_S
         (self.p.state / selfupdate.TRIAL).write_text(json.dumps(t))
         self.assertIsNone(selfupdate.on_trial(self.p.state))
-        self.assertFalse(selfupdate.setback(self.p.state, "T-001", "check", "exit 1", self.p.id_re))
+        self.assertFalse(selfupdate.setback(self.p.state, "T-001", "check", "exit 1", "exit 1", self.p.id_re))
 
 
 class Parts(unittest.TestCase):
@@ -257,10 +304,10 @@ class Parts(unittest.TestCase):
 
     def test_signature_reads_two_tickets_failing_alike_the_same(self):
         id_re = r"T-\d+[a-z]?"
-        a = selfupdate.signature("check on 1a2b3c4: exit 1 after 12.5s in t-001-work (T-001)", id_re)
-        b = selfupdate.signature("check on 9f8e7d6: exit 1 after 3.1s in t-002-other (T-002)", id_re)
+        a = selfupdate.signature("Error at 1a2b3c4: exit 1 after 12.5s in /w/work-1/x.py (t-001-work, T-001)", id_re)
+        b = selfupdate.signature("Error at 9f8e7d6: exit 1 after 3.1s in /w/work-2/x.py (t-002-other, T-002)", id_re)
         self.assertEqual(a, b)
-        self.assertNotEqual(a, selfupdate.signature("check on 1a2b3c4: exit 2 timed out", id_re))
+        self.assertNotEqual(a, selfupdate.signature("Error at 1a2b3c4: exit 2 after 1s in /w/x.py (T-001)", id_re))
 
     def test_waits_for(self):
         self.assertEqual(selfupdate.waits_for("# T-1: x\nDepends on: nothing.\n", "T-9"), "# T-1: x\nDepends on: T-9.\n")

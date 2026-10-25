@@ -1184,8 +1184,12 @@ class Pilot(Desk, Periodic, Experiments):
         if not ok:
             self.feedback[tid] = f"The check fails on {sha[:12]}: {summary}\n```\n{tail(logf, 40)}\n```"
             critic.sent_back(p, tid, "check")
-            self.on_trial(tid, "check", f"{summary}\n{tail(logf, 5)}")  # its last lines: two checks failing alike
+            errors = selfupdate.error_lines(tail(logf, 60)) if net.online() else []  # an outage's red check is no one's
+            if errors:
+                head = summary.split(" in ")[0]
+                self.on_trial(tid, "check", f"{head}: {errors[-1]}", "\n".join([head, *errors]))
             return self.bounce(tid, "check")
+        selfupdate.passed(p.state, "check")
         if res and not res[0]:  # git merged it cleanly: like any approved head that merges, nothing new to review
             self.log(f"{tid}: a clean merge of {p.main}; no review needed")
             return self.integrate(tid, branch, sha)
@@ -1886,8 +1890,8 @@ class Pilot(Desk, Periodic, Experiments):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
-        if getattr(self, "bad", False) is None:  # no bad update found yet (a stand-in driver in a test has none)
-            self.on_trial(tid, "failed", why)
+        if why.startswith("driver error:") and net.online() and getattr(self, "bad", False) is None:  # (a stand-in
+            self.on_trial(tid, "driver error", why, why)  # driver in a test has no `bad`)
         ending = getattr(self, "ending", False)  # the run winds down: it neither goes on nor takes a retry
         if head:
             retry = "" if ending else f"\nOnce {once or 'fixed'}, it merges the kept approval: `windvane retry {tid}`"
@@ -2732,13 +2736,12 @@ class Pilot(Desk, Periodic, Experiments):
             return selfupdate.end_trial(p.state)
         selfupdate.put_on_trial(p.state, good, new, len(self.merged))
 
-    def on_trial(self, tid, step, why):
+    def on_trial(self, tid, step, why, detail):
         """A ticket's setback while the driver's code is on trial: the same setback for every ticket marks the update
         bad, and the loop reverts it once no ticket runs (`trial_check`)."""
-        if self.bad is None and selfupdate.setback(self.p.state, tid, step, why, self.p.id_re):
+        if self.bad is None and selfupdate.setback(self.p.state, tid, step, why, detail, self.p.id_re):
             seen = selfupdate.on_trial(self.p.state)["seen"]
-            at = " at the check" if step == "check" else ""
-            self.bad = f"failed {', '.join(seen)} the same way{at}: {why.split('; log ')[0]}"  # (not its log's path)
+            self.bad = f"failed {', '.join(seen)} the same way at the {step}: {why}"
             self.log(f"windvane's new code {self.bad}; no new tickets until it is reverted")
 
     def trial_check(self):
@@ -3140,12 +3143,18 @@ def undo_update(p, cd, home, trial, how, log):
     update in a row stops the run, as only the user can tell what goes on."""
     st, new, good = p.state, trial["new"][:8], trial["good"][:8]
     selfupdate.end_trial(st)
+    shas = [c[0][:8] for c in selfupdate.to_revert(p.main_root(), p.upstream, trial["good"], trial["new"]) or []]
+    by_hand = (f". To go on, revert {', '.join(shas) or new} on {p.main} by hand (`git revert -m 1 <sha>` for a merge) "
+               "or fix it, push, then start the run again")
     if (st / selfupdate.REVERTED).exists():
-        return f"windvane {new} {how}, right after a revert, with no ticket merged since: nothing more is reverted"
+        return f"windvane {new} {how}, right after a revert, with no ticket merged since: nothing more is reverted{by_hand}"
+    save_json(st / selfupdate.REVERTED, {"good": trial["good"]})  # first: a kill while it lands still counts it
     try:
         _, ids, tid, sha = selfupdate.revert_update(p, cd, trial, how, log)
     except (selfupdate.Unreverted, SetupFailed) as e:
-        return f"windvane {new} {how}, and it couldn't be reverted: {e}"
+        (st / selfupdate.REVERTED).unlink(missing_ok=True)  # nothing reached main
+        then = "; land it, then start the run again" if str(e).startswith("the revert waits") else by_hand
+        return f"windvane {new} {how}, and it couldn't be reverted: {e}{then}"
     save_json(st / selfupdate.REVERTED, {"good": trial["good"], "revert": sha, "tickets": ids, "fix": tid})
     said = []
     selfupdate.pull(home, said, trial["new"])
