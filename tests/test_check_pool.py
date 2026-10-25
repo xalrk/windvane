@@ -1,5 +1,5 @@
 """tools/check_pythons.sh's pool: with no arguments it runs each test module in a process of its own, side by side,
-and still prints one summary per version; with arguments it runs them as one unittest call, as before. Runs the real
+and still prints one summary per version, then imports every module on the newest; with arguments it runs them as one unittest call, as before. Runs the real
 script and tools/test_pool.py on a tiny fake tests/ under this test's own Python."""
 import fcntl
 import json
@@ -117,7 +117,8 @@ class CheckPool(unittest.TestCase):
         self.assertIn(f"--- python{V}, the end of its output:\n--- test_fail:\n", out)
         self.assertIn("AssertionError: boom from test_fail", out)
         self.assertNotIn("loud line", out, "a passing module's output stays out of the log")
-        self.assertTrue(out.endswith(f"FAILED on: python{V}\n"), out)
+        self.assertIn(f"python{V} imports: Ran 4 imports in ", out)
+        self.assertTrue(out.endswith(f"FAILED: the suite on python{V}\n"), out)
         self.assertRegex(out, rf"\nrerun alone: test_fail failed again on {V} \(a real failure: see below\); "
                               r"added \d+s\n")
         log = (self.root / "home/.cache/windvane-check/reruns.log").read_text().splitlines()
@@ -141,7 +142,7 @@ class CheckPool(unittest.TestCase):
         self.assertNotIn("rerun", out)
         log = (self.root / "home/.cache/windvane-check/reruns.log").read_text()
         self.assertRegex(log, r"^\S+ windvane-check-\w+ no reruns\n$", "a clean check is logged too, for the rate")
-        self.assertTrue(out.endswith(f"passed on: python{V}\n"), out)
+        self.assertTrue(out.endswith(f"passed: the suite on python{V}, imports on python{V}\n"), out)
         times = json.loads((self.root / f"home/.cache/windvane-check/times{V}.json").read_text())
         self.assertEqual(sorted(times), sorted(m for m in MODULES if m != "test_fail"), "kept for the next run")
 
@@ -153,7 +154,33 @@ class CheckPool(unittest.TestCase):
         self.assertRegex(out, rf"python{V}: Ran 6 tests in [\d.]+s OK \(skipped=1\)\n", "counted once, by the rerun")
         self.assertRegex(out, rf"\nrerun alone: test_flaky passed on {V} \(flaky beside others, no action\); "
                               r"added \d+s\n")
-        self.assertTrue(out.endswith(f"passed on: python{V}\n"), out)
+        self.assertTrue(out.endswith(f"passed: the suite on python{V}, imports on python{V}\n"), out)
+
+    def test_a_module_that_doesnt_import_fails_the_check_by_name_though_no_test_reaches_it(self):
+        (self.root / "tests/test_fail.py").unlink()
+        (self.root / "windvane").mkdir()
+        (self.root / "windvane/__init__.py").write_text("")
+        (self.root / "windvane/fine.py").write_text("import json\n")
+        (self.root / "windvane/gone.py").write_text("import a_module_this_python_removed\n")
+        out, code = self.run_script()
+        self.assertEqual(code, 1, out)
+        self.assertRegex(out, rf"python{V}: Ran 5 tests in [\d.]+s OK \(skipped=1\)\n")
+        self.assertIn(f"python{V} imports: Ran 6 imports in ", out)
+        self.assertIn("import failed: windvane.gone: ModuleNotFoundError: No module named "
+                      "'a_module_this_python_removed'\n", out)
+        self.assertNotIn("windvane.fine", out)
+        self.assertTrue(out.endswith(f"FAILED: imports on python{V}\n"), out)
+        self.assertEqual(sorted(p.name for p in (self.root / "windvane").iterdir()), ["__init__.py", "fine.py", "gone.py"],
+                         "no bytecode left in the tree")
+
+    def test_all_runs_the_suite_with_no_import_pass(self):
+        (self.root / "tests/test_fail.py").unlink()
+        (self.root / "tests/test_syntax.py").write_text("import unittest\nx = (\n")
+        out, code = self.run_script("--all")
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("imports", out)
+        self.assertIn("test_syntax", out)
+        self.assertTrue(out.endswith(f"FAILED on: python{V}\n"), out)
 
     def sleepers(self, n):
         """n modules of one test that sleeps a second and records when it ran, on a machine of 8 CPUs."""
@@ -239,6 +266,27 @@ class CheckPool(unittest.TestCase):
         self.assertLessEqual(max(sum(1 for s, e in before if s <= t < e) for t, _ in before), 2, spans)
         self.assertEqual(max(sum(1 for s, e in after if s <= t < e) for t, _ in after), 4, spans)
         self.assertEqual(list(self.markers.iterdir()), [], "the killed check's marker was swept")
+
+    def test_a_check_stopped_mid_run_leaves_nothing_and_the_next_one_runs_whole(self):
+        self.sleepers(12)
+        self.seen = self.root / "seen"
+        proc = self.start_script(jobs=None)
+        for _ in range(100):  # its pool is running modules
+            if any(self.seen.iterdir()):
+                break
+            time.sleep(0.05)
+        proc.terminate()
+        proc.communicate(timeout=30)
+        self.assertEqual(list((self.root / "tmp").iterdir()), [], "its temp dir went with it")
+        self.assertEqual(list(self.markers.iterdir()), [], "and its marker")
+        for f in self.seen.iterdir():
+            f.unlink()
+        out, code = self.run_script(jobs=None)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("shared:", out, "no share kept for the stopped check")
+        self.assertRegex(out, rf"python{V}: Ran 12 tests in [\d.]+s OK\n")
+        self.assertIn(f"python{V} imports: Ran 12 imports in ", out)
+        self.assertEqual(len(list(self.seen.iterdir())), 12, out)
 
     def test_explicit_arguments_run_as_one_unittest_call(self):
         out, code = self.run_script("discover", "-s", "tests", "-q")

@@ -2,7 +2,8 @@
 # times from `ps`). Standard library only: nothing to install.
 # By hand only (Actions tab, or `gh workflow run test.yml`): hosted minutes are limited, and a push or pull_request
 # trigger ran it twice per autopilot ticket. Every merge is already gated by the local check, tools/check_pythons.sh,
-# which runs every supported Python installed on the machine. On 3.12 and newer it ends with the 30 slowest tests,
+# which runs the suite on the oldest supported Python installed and imports every module on the newest (`--all`: the
+# suite on every one, as a release does). On 3.12 and newer it ends with the 30 slowest tests,
 # to show where a slow runner spends its time.
 name: tests
 
