@@ -280,7 +280,7 @@ def cmd_retry(a, p):
     lets it go, as `windvane queue` says it."""
     tid = p.norm(a.ticket) or sys.exit(f"windvane retry: {a.ticket} isn't a ticket id")
     if not driver.locked(p):
-        return print(f"{p.display}: autopilot isn't running; " + idle_retry(Queue(p), tid))
+        return print(f"{p.display}: autopilot isn't running; " + idle_retry(p, tid))
     st = load_json(p.state / "state.json", {})
     if tid not in st.get("failed", []) and tid not in st.get("aside", {}):
         why = Queue(p).release(tid, questions.tickets(st.get("questions", {})), st)
@@ -291,15 +291,22 @@ def cmd_retry(a, p):
     print(f"{p.display}: {tid} goes back in the queue; the autopilot takes it up between tickets")
 
 
-def idle_retry(q, tid):
-    """What the next run does with `tid`, for a retry with none going: it starts only a ticket that's on main, not
-    merged and not parked, so a retry can't promise more."""
+def idle_retry(p, tid):
+    """What the next run does with `tid`, for a retry with none going. It reads main as the run will, fetched first
+    (a failed fetch leaves the last one), and starts only a ticket there that isn't merged, parked or waiting."""
+    net.call(["git", "fetch", "-q", p.remote], p.main_root(), FETCH_S, {**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    q, qs = Queue(p), load_json(p.state / "state.json", {}).get("questions", {})
     if not q.known(tid):
-        sys.exit(f"{tid} isn't a ticket here")
+        local = (p.root / p.tickets_rel / f"{tid}.md").exists()
+        sys.exit(f"{tid} isn't a ticket on {p.upstream}" + ("; commit and push its file" if local else ""))
     if q.is_done(tid):
         return f"{tid} is already merged"
     if tid in q.parked:
-        return f"{tid} is parked in QUEUE.md: delete its `parked:` line to queue it"
+        return f"{tid} is parked in {p.queue_rel}: delete its `parked:` line on {p.main} to queue it"
+    if why := q.release(tid, questions.tickets(qs), {"questions": qs}):  # a finished run's failures start afresh
+        return f"the next `windvane run` doesn't take {tid} up yet: {why}"
+    if on := q.waits_on(tid):
+        return f"{tid} waits on {', '.join(on)}: the next `windvane run` takes it up once they're done"
     return f"the next `windvane run` takes {tid} up"
 
 
@@ -851,7 +858,7 @@ def parser():
     s.add_argument("--for", dest="for_", default="4h", help="how long the run will be (default 4h)")
     s.add_argument("--json", action="store_true", help="print them for a Claude session to ask")
     s = sub.add_parser("stop", help="stop after the current ticket")
-    s.add_argument("--if-running", action="store_true", help="do nothing, quietly, when no autopilot runs")
+    s.add_argument("--if-running", action="store_true", help="with no run going, say only that it isn't running (for scripts and phone hooks)")
     s.add_argument("--now", action="store_true", help="kill the running sessions now; their worktrees keep the work")
     s = sub.add_parser("deadline", help="move a running autopilot's deadline")
     s.add_argument("when", nargs="+", help="HH:MM, 'YYYY-MM-DD HH:MM', or from now: +90m, +2h")

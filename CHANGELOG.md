@@ -83,8 +83,8 @@ release on the same day adds a number (`2026.10.9.1`).
 ### Fixed
 - `windvane stop` with no autopilot running says there's nothing to stop and leaves no stop request behind (a
   waiting schedule is still called off). `windvane retry` with none running says what the next run will do with that
-  ticket: that it isn't a ticket here, is already merged, or is parked in `QUEUE.md`, instead of promising to take
-  any id up. Every command line argument now has a line in `--help`.
+  ticket, as main has it after a fetch: that it isn't a ticket there, is already merged, is parked, waits on another
+  ticket or has an open question, instead of promising to take any id up. Every command line argument now has a line in `--help`.
 - A worker whose push the pre-push scan refused is told why. A READY whose branch isn't on the remote goes back at
   once with the refusal's reason (or the `git push -u` to run, when its branch was never pushed) instead of after a
   full check and a "No open PR" bounce; the next worker resumes the local branch instead of being told to start the

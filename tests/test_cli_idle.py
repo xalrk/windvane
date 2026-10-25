@@ -1,6 +1,6 @@
 """The command line with no autopilot running says what's true: `stop` has nothing to stop and leaves no STOP behind,
-and `retry` says what the next run will do with that ticket (none, merged, parked, or take it up). And every argument
-of every command has a line of help."""
+and `retry` says what the next run will do with that ticket, read from a fetched main: none, merged, parked, waiting
+on another or a question, or take it up. And every argument of every command has a line of help."""
 import argparse
 import subprocess
 import sys
@@ -19,8 +19,12 @@ class Idle(unittest.TestCase):
     def setUp(self):
         self.s = Sandbox()
         self.addCleanup(self.s.close)
-        for tid in ("T-001", "T-002", "T-003"):
+        for tid in ("T-001", "T-002", "T-003", "T-005"):
             self.s.ticket(tid)
+        self.s.ticket("T-004", deps="T-001")
+        self.s.write(".windvane/QUESTIONS.md", "# Q\n\n## Open\n\n### T-005: red or blue?\nThe button.\n"
+                     "- **A**: red\n- **B**: blue\nRecommendation: A, because it shows.\n\n## Provisional\n\n"
+                     "## Answered\n")
         self.s.write(".windvane/QUEUE.md", "# Queue\n\n- parked: T-002 (needs a new API key)\n")
         self.s.publish()
         self.s.git("checkout", "-q", "-b", "t-003-work")
@@ -51,15 +55,32 @@ class Idle(unittest.TestCase):
     def test_retry_with_no_run_says_what_the_next_run_does(self):
         cases = [("T-001", 0, "Sandbox: autopilot isn't running; the next `windvane run` takes T-001 up\n"),
                  ("T-003", 0, "Sandbox: autopilot isn't running; T-003 is already merged\n"),
-                 ("T-002", 0, "Sandbox: autopilot isn't running; T-002 is parked in QUEUE.md: delete its `parked:` "
-                              "line to queue it\n")]
+                 ("T-002", 0, "Sandbox: autopilot isn't running; T-002 is parked in .windvane/QUEUE.md: delete its "
+                              "`parked:` line on main to queue it\n"),
+                 ("T-004", 0, "Sandbox: autopilot isn't running; T-004 waits on T-001: the next `windvane run` takes "
+                              "it up once they're done\n"),
+                 ("T-005", 0, "Sandbox: autopilot isn't running; the next `windvane run` doesn't take T-005 up yet: "
+                              "T-005 has an open question: `windvane answer T-005 <letter>`\n")]
         for tid, code, out in cases:
             with self.subTest(tid):
                 r = self.run_cli("retry", tid)
                 self.assertEqual((r.returncode, r.stdout), (code, out), r.stderr)
         r = self.run_cli("retry", "t-999")
-        self.assertEqual((r.returncode, r.stdout, r.stderr), (1, "", "T-999 isn't a ticket here\n"))
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (1, "", "T-999 isn't a ticket on origin/main\n"))
+        self.s.ticket("T-009")  # written, but not pushed: the run can't see it
+        r = self.run_cli("retry", "T-009")
+        self.assertEqual((r.returncode, r.stderr), (1, "T-009 isn't a ticket on origin/main; commit and push its file\n"))
         self.assertEqual(self.left_behind(), [])
+
+    def test_retry_reads_main_as_the_next_run_will_fetched(self):
+        other = self.s.tmp / "other"
+        subprocess.run(["git", "clone", "-q", str(self.s.remote), str(other)], check=True)
+        (other / ".windvane/tickets/T-006.md").write_text("# T-006: do T-006\nDepends on: nothing.\n")
+        for cmd in (["add", "-A"], ["commit", "-qm", "T-006"], ["push", "-q"]):
+            subprocess.run(["git", *cmd], cwd=other, check=True)
+        r = self.run_cli("retry", "T-006")
+        self.assertEqual((r.returncode, r.stdout),
+                         (0, "Sandbox: autopilot isn't running; the next `windvane run` takes T-006 up\n"), r.stderr)
 
 
 class Help(unittest.TestCase):
