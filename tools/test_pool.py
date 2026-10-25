@@ -47,9 +47,9 @@ STALE = 3600  # seconds after which a half-made marker is left over whatever its
 QUICK_WALL = 45  # seconds of module time per job the quick pass may pick: about a minute of wall time, reruns and all
 RECENT = 100  # the newest checks (reruns log lines, check logs) whose real failures the quick pass picks
 FREQUENT = 1  # failed for real in this many of them: picked, most often first
-# The cross-cutting tests, always in the quick pass: each reads every source file or every call of a kind (every
-# push, every stdlib name, every prompt's or doc's text), so a change anywhere can break them though they import
-# nothing it touched.
+# The cross-cutting tests, picked right after the change's own modules: each reads every source file or every call of
+# a kind (every push, every stdlib name, every prompt's or doc's text) or runs the whole product from a clean
+# install, so a change anywhere can break them though they import nothing it touched.
 SWEEPS = ("test_push_fit", "test_push_sweep", "test_py311", "test_prompts", "test_docs", "test_clean_machine")
 KEYS = ("failures", "errors", "skipped", "expected failures", "unexpected successes")  # unittest's order
 
