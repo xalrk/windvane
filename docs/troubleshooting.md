@@ -49,6 +49,9 @@ come from `CLAUDE_CODE_MAX_TURNS` in the environment you start windvane from: wi
 the Claude CLI has no turn limit without one, so raise or unset it, then start `windvane run` again once the current run ends: a run keeps the value it started with. The work so far is on the ticket's branch.
 Usually the ticket is too big or too vague: split it or sharpen "Done when", then run again; the next worker resumes
 the branch.
+If its push was refused twice by the scan for secrets, its branch is only on this machine: take the finding out of
+the commits that add it (`git commit --amend`, or `git reset --soft` and commit again), push it, and
+`windvane retry T-007` puts it back in the running autopilot's queue (any set-aside ticket goes back that way).
 
 ### A ticket failed
 The `Failed` push and the log's `T-007: FAILED` line say why; its branch is kept. Once you've fixed the cause,

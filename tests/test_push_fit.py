@@ -22,7 +22,7 @@ from windvane import held as held_mod  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
-from windvane.worktree import ensure_worktree  # noqa: E402
+from windvane.worktree import REFUSALS, ensure_worktree  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_set_aside import args  # noqa: E402
 
@@ -284,6 +284,17 @@ def secret_aside(p, patch, s):
     return {"Set aside": ("Not merged: its commits add a token at .windvane/", "which would stay in main's history.")}
 
 
+def push_refused(p, patch, s):
+    line = f"windvane: push refused: it would make public a token at {'x' * 250}.py:1 in 1a2b3c4."
+    (p.state / REFUSALS).mkdir(parents=True, exist_ok=True)
+    (p.state / REFUSALS / "work-1.json").write_text(json.dumps({"at": "2026-10-24T10:00:00", "branch": "t-001-x",
+                                                                "base": "abc", "line": line}))
+    pl = pilot(p)
+    pl.refused["T-001"] = driver.same_refusal(line)  # its last READY was refused for the same reason
+    pl.not_pushed("T-001", "t-001-x", "0" * 40)
+    return {"Set aside": ("Its push was refused twice: it would make public a token at ", ".py:1 in 1a2b3c4.")}
+
+
 def draft_held(p, patch, s):
     patch(driver, "gh_answer", lambda cmd, cwd: subprocess.CompletedProcess(cmd, int("view" not in cmd), "true", LONG))
     pilot(p).undraft("T-001", "7")
@@ -319,7 +330,7 @@ def scale_warned(p, patch, s):
 
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
-         held, secret_aside, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned,
+         held, secret_aside, push_refused, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned,
          plan_dropped, tmp_full,
          not_taken_up, scale_warned]
 
