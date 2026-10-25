@@ -52,6 +52,8 @@ def note(text, indent=" "):
 def cmd_stats(a, p):
     if a.critic:
         return critic_stats(a, p)
+    if getattr(a, "bench", False):
+        return bench_stats(p)
     rows = read_jsonl(p.state / "ledger.jsonl")
     since = f"{now() - timedelta(days=a.days):%Y-%m-%d %H:%M}"
     rows = [r for r in rows if r.get("at", "") >= since]
@@ -70,6 +72,27 @@ def cmd_stats(a, p):
         guard_stats(refusals, a.by)
     else:
         session_stats(a, p, rows, swept, checks, refusals, awaits)
+
+
+def bench_stats(p):
+    """`windvane bench`'s recorded runs, a line each, oldest first: a drift in what the projects built get or cost
+    shows without a compare. A contaminated seed's result isn't counted, as in the run's own table."""
+    runs = {}
+    for r in read_jsonl(p.state / "bench.jsonl"):
+        runs.setdefault(r.get("run"), []).append(r)
+    if not runs:
+        return print("no bench runs yet (windvane bench runs one)")
+    print(f"{'run':<17} {'ref':<22} {'size':<5} {'seeds':>5} {'hidden':>7} {'judge':>6} {'tokens/merged':>13}")
+    for run, recs in runs.items():
+        good = [r for r in recs if not r.get("contaminated")]
+        merged = sum(len(r["tickets"]["merged"]) for r in good)
+        judged = [r["judge"] for r in good if r.get("judge")]
+        judge = f"{sum(j['yes'] for j in judged)}/{sum(j['total'] for j in judged)}" if judged else "-"
+        ref = f"{recs[0]['ref']} ({recs[0]['sha'][:7]})"
+        hidden = f"{sum(r['passed'] for r in good)}/{sum(r['total'] for r in good)}"
+        print(f"{run:<17} {ref[:22]:<22} {recs[0]['size']:<5} {len(good):>5} {hidden:>7} {judge:>6} "
+              f"{k(sum(r['weighted'] for r in good) / merged) if merged else '-':>13}"
+              + (f"  ({len(recs) - len(good)} contaminated)" if len(good) < len(recs) else ""))
 
 
 def check_runs(p, checks, running=jobs.running):

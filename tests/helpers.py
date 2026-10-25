@@ -352,6 +352,11 @@ elif system.startswith("# windvane fix run"):  # FAKE_FIX: push (fixes it), red 
         sh("git", "commit", "-q", "--allow-empty", "-m", "fix")
         sh("git", "push", "-q", "origin", f"HEAD:{branch}")
         text = f"FIX: PUSHED #{n} fixed it"
+elif system.startswith("# windvane judge"):  # FAKE_JUDGE_NO: the check ids it answers no
+    no = os.environ.get("FAKE_JUDGE_NO", "").split(",")
+    ids = re.findall(r"^- (J\d+): ", prompt, re.M)
+    text = "".join(f"{i}: {'no, it fails' if i in no else 'yes, ran it'}\n" for i in ids)
+    text += f"JUDGE: {sum(i not in no for i in ids)}/{len(ids)}"
 elif system.startswith("# windvane preflight"):  # FAKE_PREFLIGHT: the questions it finds
     found = os.environ.get("FAKE_PREFLIGHT", "")
     text = found + "\nPREFLIGHT: " + ("1 questions" if found else "NONE")
