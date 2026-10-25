@@ -330,9 +330,7 @@ def cmd_status(a, p):
     tmux = f"in tmux {p.tmux}" if in_tmux(p) else ""
     print("autopilot: " + (f"{schedule.word(st)}{', ' * bool(tmux)}{tmux}" if st
                            else f"running {tmux}".strip() if on else "not running"))
-    print(f"questions now: {questions.mode(p)}")
-    if (spent := actions.line(p)):
-        print(f"{spent} this month (cap {actions.cap_minutes(p):,})")
+    print(questions.told(p))
     st = load_json(p.state / "state.json", {})
     for tid, slot in sorted(st.get("running", {}).items(), key=lambda kv: kv[1]) if on else ():
         print(f"slot {slot}: {tid}")
@@ -357,11 +355,11 @@ def cmd_status(a, p):
 
 
 def status_line(p, on, st):
-    """The phone's one line on a project: on or off, held-back changes, Actions minutes, the log's last line."""
+    """The phone's one line on a project: on or off, held-back changes, the log's last line."""
     held, last = held_count(p), (last_log(p) or [""])[0][11:]
     last = "" if held or HELD_LOG.search(last) else last  # the held count says it; or it's no longer held
     last = "" if st and st["waiting"] and "schedule: waiting" in last else last  # the line says it already
-    extra = "".join(f". {x}" for x in (held, actions.line(p), f"Last: {last}" if last else "") if x)
+    extra = "".join(f". {x}" for x in (held, f"Last: {last}" if last else "") if x)
     return f"{p.display}: autopilot {schedule.word(st) if st else 'running' if on else 'off'}{extra}"
 
 
@@ -468,7 +466,6 @@ def cmd_overview(a, p):
             line += f" {c['accepted']} passed only by running out of revisions."
         lines.append(line)
     lines.append(check_line(p, recs))
-    lines.append((spent := actions.line(p)) and f"{spent} this month.")
     lines += [l[:1].upper() + l[1:] for l in held_text(p)]  # overview's lines are sentences
     print("\n".join(filter(None, lines + overview_extra(p))))
 

@@ -94,7 +94,7 @@ class Stale(unittest.TestCase):
         self.assertTrue(actions.cached_over_cap(self.p))
         self.assertEqual(self.commit("outside"), f"outside {actions.SKIP}")
 
-    def test_status_shows_the_date_of_another_days_count(self):
+    def test_the_caps_line_shows_the_date_of_another_days_count(self):
         self.cache(10, 2 * 86400)
         day = time.localtime(time.time() - 2 * 86400)
         self.assertIn(f"(stale: counted {time.strftime('%b', day)} {day.tm_mday}, workers skip CI)",

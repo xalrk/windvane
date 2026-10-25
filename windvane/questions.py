@@ -232,6 +232,22 @@ def mode(p, at=None):
             + (f" (a quiet-times file is ignored: {err})" if err else ""))
 
 
+
+def told(p, at=None):
+    """`windvane status`'s line on questions, in the user's words: mode() is the worker's, which a user would have to
+    decode."""
+    at = at or datetime.now()
+    lines, err = quiet_lines(p)
+    end, soon = quiet_until(lines, at), quiet_next(lines, at)
+    if end:
+        s = f"questions: none pushed until {end:%a %H:%M} (quiet time); workers build their recommendation"
+    elif not phone.can_ask():
+        s = "questions: no phone set up; they wait for `windvane answer`"
+    else:
+        s = "questions: pushed to your phone as they come" + (
+            f"; a quiet time starts {soon[0]:%a %H:%M}" if soon and soon[0] - at <= QUIET_LEAD else "")
+    return s + (f" (a quiet-times file is ignored: {err})" if err else "")
+
 def quiet_note(p, until=None, at=None):
     """The worker's system prompt's section on quiet times, or "": in one, when it ends; one starting before `until`
     (the session's end, else QUIET_LEAD from now), when it starts. Times are absolute, so the note stays true all
