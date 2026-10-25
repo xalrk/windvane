@@ -24,7 +24,7 @@ BAD = """# Scale
 - 8 safe: no known way it loses work
 - 10 safe: still safe under load
 ## checks
-- 5 green: the checks pass
+- 5 green: its output is in colour
 - 10 fast: they pass fast
 """
 

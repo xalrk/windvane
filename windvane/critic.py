@@ -89,6 +89,7 @@ MAX_TURNS = "CLAUDE_CODE_MAX_TURNS"  # how a session's turns are capped (the dri
 TRIAL = "trial"  # what `critique` returns, with the reason, for a light read that asks for the full trial
 TRIAL_RE = re.compile(r"CRITIC: (\S+) trial\b[ \t:]*(.*)")
 SENT_BACK = "sent_back.jsonl"  # the state dir's record of the check's and the reviewer's send-backs
+SCALE_TOLD = "scale_check_told"  # the scale and check command `scale_check_note` last warned of
 ASKED = "a light read asking for the trial"  # its line there: every later critique of the ticket is the trial
 COVERED_RE = re.compile(r"[(\[]?[ \t]*covered by[ \t]+([A-Za-z]+-\d+[a-z]?)[ \t]*[)\]]?", re.I)
 NEW_TAG_RE = re.compile(r"[ \t]*[(\[][ \t]*new[ \t]*[)\]][ \t.]*$", re.I)
@@ -321,13 +322,67 @@ def evidence_graded(text, rel):
             for cs in ladder(text).values() for _, cid, q in cs if (m := GRADES_EVIDENCE.search(q))]
 
 
+RUN_BY = r"(?:(?:project's|full|whole|entire|test)\s+)*(?:suite|checks?|ci)"
+PASSES = r"\s+(?:run\s+)?(?:pass(?:es|ed|ing)?|(?:is|are|runs?|stays?|goes)\s+green|green|exits\s+0)\b"
+ASKS_CHECK = re.compile(r"(?:^|\b(?:the|its|all|every|a|project's|full|whole|entire|test)\s+)" + RUN_BY + PASSES +
+                        r"|\bpassing\s+" + RUN_BY + r"\b", re.I)
+
+
+def check_asked(text, rel, cmd=""):
+    """[(what, fix)] for each check asking for the project's check or full suite passing: the check's command `cmd`
+    anywhere, or its first word only followed by "passes" and the like, as "doesn't make it slower" and
+    "`./gradlew assembleDebug` builds" are no asking for `make` or `./gradlew check`), or "check passed", "the test suite passes", "a passing suite"
+    and the like. The driver runs the check on the final head after the critic, so a critic can't see it pass and
+    such a check reads as a `no` on every ticket, and sends it back only for
+    a pack that didn't quote the check passing. "health check passes" names a product's check and is no warning."""
+    words, edge = cmd.split(), r"(?<![\w/.-])`?"
+    whole = len(words) > 1 or any(c in cmd for c in "/.")  # a lone `make` is a word of prose, `tools/check` isn't
+    named = [re.compile(edge + re.escape(cmd.strip()) + r"(?![\w/-])")] * whole
+    named += [re.compile(edge + re.escape(words[0]) + "`?" + PASSES, re.I)] if words else []
+    out = []
+    for cs in ladder(text).values():
+        for _, cid, q in cs:
+            if m := next(filter(None, (r.search(q) for r in named + [ASKS_CHECK])), None):
+                out.append((f"critic scale: check `{cid}` asks for the project's check or suite passing "
+                            f'("{m.group(0).strip()}"), which the critic can\'t see',
+                            f"drop it from its rung in {rel}: the driver runs the check on the final head after the "
+                            "critic"))
+    return out
+
+
+def scale_check_note(p, tid, cwd):
+    """Log `check_asked()`'s warnings at a critique's start, once per scale and check command: a worker's `windvane
+    critic` is where such a check costs a round, and a run's start (`scale_warnings`) is often far back in the log.
+    The scale's hash in SCALE_TOLD keeps every later critique on it quiet."""
+    f = Path(cwd) / p.rubric_rel
+    warns = check_asked(f.read_text(), p.rubric_rel, p.cfg["check"] or "") if f.is_file() else []
+    if not warns or (p.state / SCALE_TOLD).is_file() and (p.state / SCALE_TOLD).read_text() == check_told(p, cwd):
+        return
+    for what, fix in warns:
+        log(p, f"{tid}: {what}: {fix}")
+    told_check(p, cwd)
+
+
+def check_told(p, cwd):
+    """The key SCALE_TOLD holds: the scale's hash and the check command, so either changing warns again."""
+    return hashlib.sha256(f"{scale(p, cwd)} {p.cfg['check']}".encode()).hexdigest()[:12]
+
+
+def told_check(p, cwd):
+    """Note that the log has `check_asked()`'s warnings on this scale: the run's start logs them too
+    (`scale_warnings`), and its first critique needn't again."""
+    p.state.mkdir(parents=True, exist_ok=True)
+    (p.state / SCALE_TOLD).write_text(check_told(p, cwd))
+
+
 def scale_warnings(p, cwd):
-    """`misread()` and `evidence_graded()` on the project's scale in `cwd`, or [] when it has none."""
+    """`misread()`, `evidence_graded()` and `check_asked()` on the project's scale in `cwd`, or [] when it has
+    none."""
     f = Path(cwd) / p.rubric_rel
     if not f.is_file():
         return []
-    text = f.read_text()
-    return misread(text, p.rubric_rel) + evidence_graded(text, p.rubric_rel)
+    text, cmd = f.read_text(), (getattr(p, "cfg", None) or {}).get("check") or ""
+    return misread(text, p.rubric_rel) + evidence_graded(text, p.rubric_rel) + check_asked(text, p.rubric_rel, cmd)
 
 
 def clip(text, n=200):
@@ -736,6 +791,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     ticket = gout(cwd, "show", f"{rev}:{p.tickets_rel}/{tid}.md")
     stat = "\n".join(gout(cwd, "diff", "--stat", f"{p.upstream}...{rev}").splitlines()[-40:])
     lad = rubric(p, cwd)
+    scale_check_note(p, tid, cwd)
     prior = carries(p, tid, cwd, lad)
     earlier = [] if prior else [unscored(e["critique"], lad) for e in past if e.get("critique")]
 

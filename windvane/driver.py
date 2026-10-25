@@ -2265,6 +2265,7 @@ class Pilot(Desk, Periodic):
         warns = critic.scale_warnings(self.p, self.p.root)
         for what, fix in warns:
             self.log(f"{what}: {fix}")
+        critic.told_check(self.p, self.p.root)
         if not warns:
             return
         told = hashlib.sha256((self.p.root / self.p.rubric_rel).read_bytes()).hexdigest()[:16]

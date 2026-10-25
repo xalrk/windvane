@@ -188,7 +188,10 @@ a planned ticket will show is critiqued now.
 four dimensions, each a ladder of rungs (say 2, 5, 8, 10) with a few yes/no checks on each (`- 5 safe: no known way
 it crashes or loses work`). The first dimension is always whether the ticket works at all. Checks are answered by
 trying the change, so each asks what a user meets when it's run, broken or read, never what the pack or a test
-shows (`doctor` warns of one worded that way). The critic answers every
+shows (`doctor` warns of one worded that way). Nor does a check ask for the project's check or full suite
+passing: the driver runs the check on the final head after the critic, so the critic never sees it pass and
+doesn't answer `no` for it (`doctor` and each critique's start warn of a check naming the check's command, or
+"check passed", "the test suite passes" and the like). The critic answers every
 check of each dimension the ticket touches, `yes`, `no` or `no (out of scope: <why>)`, with a clause of evidence,
 and never writes a number: a dimension's score is its highest rung whose checks and every lower rung's are all
 `yes`, and the ticket's is the lowest dimension. So give every ladder a 10 rung, reachable by a good ticket: one
