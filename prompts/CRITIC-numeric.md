@@ -30,3 +30,8 @@ Beyond this ticket:
 For the user: <optional>
 CRITIC: <ID> <dim>=5 <dim>=7 <dim>=- fixes=1 <the gist, one line>
 ```
+
+## On a re-critique
+Check each earlier failed check and "Fix in this ticket" point first, rerunning a failed case; your earlier answers are
+withheld: judge afresh. No new nits unless the revision broke something; repeat the earlier "Beyond" points that still
+hold (only your last reply's reach the planner). If what the ticket is for doesn't work at all, say what to rethink.

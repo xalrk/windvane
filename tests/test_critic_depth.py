@@ -103,16 +103,40 @@ class Depth(unittest.TestCase):
         self.assertEqual(critic.bounced(self.p, "T-002"), ["check"], "each ticket's own")
         self.assertEqual(critic.bounced(self.p, "T-001"), ["check", "reviewer"])
 
-    def test_an_earlier_critic_send_back_makes_the_next_critique_full(self):
+    def test_a_revision_only_the_critic_sent_back_gets_its_own_depth(self):
         self.change(3)
         os.environ["FAKE_CRITIC_LIGHT"] = READS.replace("- again: yes, read: no state kept", "- again: no, read: a lock")
         _, _, first = self.critic()
         self.assertEqual((first["depth"], first["step"]), ("light", "revise"))
         self.change(4)
+        os.environ["FAKE_CRITIC_LIGHT"] = READS
         _, calls, again = self.critic()
-        self.assertEqual((again["depth"], again["step"]), ("full", "pass"))
-        self.assertEqual(again["depth_why"], "sent back before, by critic")
-        self.assertIn("## Depth: full (sent back before, by critic)", calls[-1]["prompt"])
+        self.assertEqual((again["depth"], again["step"]), ("light", "pass"), "a one-line revision is a light read")
+        why = (f"1 lines changed since your last critique ({first['sha']}), no [critic] risky file, sent back only "
+               "by the critic")
+        self.assertEqual(again["depth_why"], why)
+        self.assertIn(f"## Depth: light ({why})", calls[-1]["prompt"])
+        self.assertEqual(self.depth()[1].split(",")[0], f"0 lines changed since your last critique ({again['sha']})")
+        self.change(5)
+        self.p.critic["risky"] = ["tool.py"]
+        self.assertEqual(self.depth(), ("full", f"touches tool.py since your last critique ({again['sha']})"))
+        self.p.critic["risky"] = []
+        self.change(300, "big.py")
+        self.assertEqual(self.depth(), ("full", f"301 lines changed since your last critique ({again['sha']}), "
+                                                "over [critic] light_lines = 250"))
+
+    def test_a_check_or_reviewer_bounce_after_the_critics_keeps_the_trial(self):
+        self.change(3)
+        os.environ["FAKE_CRITIC_LIGHT"] = READS.replace("- again: yes, read: no state kept", "- again: no, read: a lock")
+        self.critic()
+        self.change(4)
+        critic.sent_back(self.p, "T-001", "check")
+        self.assertEqual(self.depth(), ("full", "sent back before, by critic, check"))
+
+    def test_a_critic_send_back_whose_head_is_gone_gets_the_trial(self):
+        self.change(3)
+        append_jsonl(self.p.state / "critic.jsonl", {"ticket": "T-001", "sha": "0000000", "step": "revise", "score": 2})
+        self.assertEqual(self.depth(), ("full", "sent back before, by critic"))
 
     def test_another_tickets_verdict_doesnt_count(self):
         self.change(3)
@@ -161,7 +185,7 @@ class Depth(unittest.TestCase):
         self.change(3)
         os.environ["FAKE_CRITIC_LIGHT"] = ASKS
         out, calls, rec = self.critic()
-        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic"])
+        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic-trial"])
         self.assertEqual((rec["depth"], rec["step"], rec["trial"]), ("full", "pass", "ran"))
         self.assertEqual(rec["asked_trial"], "run it twice, killed midway")
         self.assertIn("## Depth: full (the light read asked for it: run it twice, killed midway)", calls[1]["prompt"])
@@ -173,8 +197,8 @@ class Depth(unittest.TestCase):
         os.environ["FAKE_CRITIC_LIGHT"] = ASKS
         os.environ["FAKE_CRITIC_TEXT"] = ASKS  # the trial too, and its re-ask
         out, calls, rec = self.critic()
-        self.assertEqual(self.labels().count("T-001-critic"), 1)
-        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic", "T-001-critic-reask"])
+        self.assertEqual(self.labels().count("T-001-critic-trial"), 1)
+        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic-trial", "T-001-critic-reask"])
         self.assertEqual((rec["step"], rec["depth"]), ("none", "full"))
         self.assertIn("CRITIC STEP: none", out)
 
@@ -198,7 +222,7 @@ class Depth(unittest.TestCase):
         self.addCleanup(os.environ.pop, "FAKE_MAX_TURNS", None)
         self.addCleanup(os.environ.pop, "FAKE_MAX_TURNS_IN", None)
         _, calls, rec = self.critic()
-        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic"])
+        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic-trial"])
         self.assertEqual((rec["depth"], rec["step"]), ("full", "pass"))
         self.assertEqual(rec["asked_trial"], f"it ran out of its {critic.LIGHT_TURNS} turns")
 
@@ -252,7 +276,7 @@ class DepthStats(unittest.TestCase):
             by.setdefault(r["ticket"], []).append(r)
         for tid, label, cache in (("T-001", "T-001-critic-light", 40000), ("T-003", "T-003-critic", 100000),
                                   ("T-003", "T-003-critic", 100000), ("T-004", "T-004-critic-light", 20000),
-                                  ("T-004", "T-004-critic", 100000), ("T-002", "T-002-critic", 90000)):
+                                  ("T-004", "T-004-critic-trial", 100000), ("T-002", "T-002-critic", 90000)):
             append_jsonl(st / "ledger.jsonl", {"at": "2026-10-20 13:00", "role": "critic", "label": label,
                                                "ticket": tid, "cache_read": cache * 10})
         (st / "autopilot.log").write_text("2026-10-20 09:20 T-001: review changes: a crash on retry\n"
