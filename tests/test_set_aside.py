@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import driver, runner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import now  # noqa: E402
+from windvane.worktree import ensure_worktree  # noqa: E402
 from helpers import Sandbox, no_wrap_up  # noqa: E402
 
 TOO_LONG = "Prompt is too long"
@@ -68,7 +69,7 @@ class LimitPushes(Base):
         pilot.partials["T-001"] = self.p.ap["partials"] - 1
         pilot.handle("T-001", "RESULT: PARTIAL T-001 the docs", None)
         self.assertIn("T-001", pilot.skip)
-        self.assertEqual(self.aside(), [("Set aside: do T-001 (T-001)",
+        self.assertEqual(self.aside(), [("Set aside: T-001",  # no queue read: by id
                                          f"{self.p.ap['partials']} runs in a row ran out of time. Split it into smaller "
                                          "tickets (`windvane new`), then mark it `done:` in QUEUE.md. Branch kept.\n"
                                          "Left: the docs")])

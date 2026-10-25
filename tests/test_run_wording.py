@@ -31,7 +31,7 @@ class DeadlineApart(Base):
         again = self.pilot()
         again.carry_over(True)
         summary = again.summary()
-        self.assertIn("\nStopped at the deadline (resumes next run): T-002.\nSet aside: T-001 (hit its max turns).\n",
+        self.assertIn("\nSet aside: T-001 (hit its max turns).\nStopped at the deadline (resumes next run): T-002.\n",
                       summary)  # no queue read yet, so tickets go by id
         self.assertEqual(summary.count("T-002"), 1)
         self.assertEqual(again.skip, {"T-001"}, "a deadline stop isn't skipped: the next run resumes it")

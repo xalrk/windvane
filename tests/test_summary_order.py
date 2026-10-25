@@ -121,6 +121,13 @@ class Fit(Base):
         self.assertIn("Waiting on you: T-003.\n", text)
         self.assertIn("Heavy jobs waited", text)
 
+    def test_titles_outlast_every_merge_id(self):
+        pilot = self.pilot([f"T-{i:03}" for i in range(60, 301)])
+        pilot.failed = [f"T-{i:03}" for i in range(10, 60)]
+        text = pilot.summary()
+        self.assertIn("Failed: " + "; ".join(pilot.failed) + ".\n", text)
+        self.assertTrue(text.endswith("\nMerged 241."), text)
+
 
 if __name__ == "__main__":
     unittest.main()

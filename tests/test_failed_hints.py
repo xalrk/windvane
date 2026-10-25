@@ -2,7 +2,9 @@
 clears by hand (a refused merge) ends with `windvane retry`, the work's own doesn't; max turns names the variable that
 sets them; the queue's failed hint fits a phone line; a retry taken just before a restart isn't reported as never
 failed; and a ticket set aside for a secret is refused a retry with what lets it go."""
+import contextlib
 import fcntl
+import io
 import os
 import re
 import subprocess
@@ -15,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver  # noqa: E402
+from windvane import cli, driver  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now, shell_path  # noqa: E402
@@ -98,6 +100,10 @@ class FailedPush(Base):
         self.assertEqual(self.pushed("Failed"), "the API it needs is gone. Branch kept, run goes on.\n"
                                                 f"Log: {log}; once fixed, {RETRY}")
         self.assertIn("T-001: FAILED: the API it needs is gone", self.log())  # the line the log holds for it
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):  # the command as pushed, once the run is over
+            cli.main(["-C", str(self.s.root), "retry", "T-001"])
+        self.assertIn("autopilot isn't running; the next `windvane run` takes T-001 up", out.getvalue())
 
     def test_a_failure_as_the_run_ends_names_the_log_without_a_retry(self):
         pilot = driver.Pilot(self.p, args())

@@ -2892,8 +2892,8 @@ class Pilot(Desk, Periodic):
 
         heavy = self.heavy_line()
         head = (whole("Why: ", self.stop_reason, ".", log=self.log) + "\n") * why
-        window = schedule.next_line(p).strip()
-        info = (f"{self.usage.text()}.\n" if self.usage.five is not None else "") + (window + "\n") * bool(window)
+        info = f"{self.usage.text()}.\n" if self.usage.five is not None else ""
+        window = schedule.next_line(p)  # the push's last line, as a window's run ends
         merged = [t + " (under the critic's bar)" * (t in under) for t in self.merged]
         tail = [(f"Desk PRs merged: {', '.join('#' + n for n in self.desk_merged)}.\n" if self.desk_merged else ""),
                 (f"Side by side: up to {self.peak} at once, {self.conflicts} conflict bounce"
@@ -2909,13 +2909,13 @@ class Pilot(Desk, Periodic):
 
         # what goes, in turn, past `most`: the trail's lines from the end, then merge ids from the end
         cuts = [(len(merged), n) for n in range(len(tail), -1, -1)] + [(k, 0) for k in range(len(merged) - 1, -1, -1)]
-        for titled in (True, False):  # a long list of what needs the user loses its titles, never a line
-            top = head + needs(titled)
-            for shown, n in cuts:
-                text = top + info + merged_line(shown) + "".join(tail[:n])
+        for titled in (True, False):  # a long list of what needs the user loses its titles, never a line, and
+            top = head + needs(titled)  # titles outrank every merge id and the trail
+            for shown, n in cuts if titled else [(0, 0)]:
+                text = (top + info + merged_line(shown) + "".join(tail[:n])).rstrip("\n") + window
                 if len(text.encode()) <= most:
-                    return text.rstrip("\n")
-        return text.rstrip("\n")  # the last guard, `phone.fit`, keeps its first lines
+                    return text
+        return text  # the last guard, `phone.fit`, keeps its first lines
 
     def note_heavy(self, tid=None):
         """Keeps what the run's heavy jobs said while they waited on memory (`jobs.heavy_waits`): a ticket's bg logs

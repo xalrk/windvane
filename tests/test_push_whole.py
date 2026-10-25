@@ -78,7 +78,7 @@ class PushWhole(unittest.TestCase):
     def test_failed_keeps_the_reason_then_the_next_step(self):
         self.patch(net, "online", lambda: True)
         self.pilot().fail("T-001", REASON)
-        self.assertEqual(self.assert_whole("Failed"), f"{REASON}. Branch kept, run goes on.")
+        self.assertEqual(self.assert_whole("Failed").split("\n")[0], f"{REASON}. Branch kept, run goes on.")
 
     def test_set_aside(self):
         self.pilot().set_aside("T-001", REASON)
