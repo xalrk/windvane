@@ -31,7 +31,7 @@ from . import net, privacy, renumber, worktree
 from .config import DIR, HOME, user_dir
 from .phone import cut
 from .runner import plain_error, run_claude
-from .util import append_jsonl, git, gout, load_json, log, read_jsonl
+from .util import append_jsonl, git, gout, last_match, load_json, log, read_jsonl
 
 OLD_RE = re.compile(r"CRITIC: (\d+(?:\.\d+)?)/10 (\S+) fixes=(\d+)[ \t]*(.*)")
 CRITIC_RE = re.compile(r"CRITIC: (\S+) ((?:[\w-]+=(?:\d+(?:\.\d+)?|-)[ \t]+)+?)fixes=(\d+)[ \t]*(.*)")
@@ -80,6 +80,11 @@ SCRATCH_RUN = ("stop", "deadline", "retry", "await", "doctor --clean")
 TRIAL_DENY = PROJECT_DENY + ["Bash(windvane request *)"]
 TRIAL_UP = "trial time"  # why a ticket critic's session was stopped at `trial_minutes`: it then answers on what it saw
 PROJECT = "PROJECT"  # critic.jsonl's ticket for a verdict on the whole project
+LIGHT_TURNS = 6  # a light read's turns: the diff and the pack are in its prompt, so it reads little else
+MAX_TURNS = "CLAUDE_CODE_MAX_TURNS"  # how a session's turns are capped (the driver's MAX_TURNS)
+TRIAL = "trial"  # what `critique` returns, with the reason, for a light read that asks for the full trial
+TRIAL_RE = re.compile(r"CRITIC: (\S+) trial\b[ \t:]*(.*)")
+SENT_BACK = "sent_back.jsonl"  # the state dir's record of the check's and the reviewer's send-backs
 COVERED_RE = re.compile(r"[(\[]?[ \t]*covered by[ \t]+([A-Za-z]+-\d+[a-z]?)[ \t]*[)\]]?", re.I)
 NEW_TAG_RE = re.compile(r"[ \t]*[(\[][ \t]*new[ \t]*[)\]][ \t.]*$", re.I)
 
@@ -663,12 +668,12 @@ def text_paths(p, cwd, rev):
             and (f.lower().endswith(TEXT_SUFFIXES) or renumber.noted(f, p.critic.get("text") or []))]
 
 
-def text_diff(p, cwd, rev, cap=TEXT_CAP):
+def text_diff(p, cwd, rev, cap=TEXT_CAP, paths=None):
     """The diff of what users read, with one line of context, so the critic judges the text itself and the pack
     needn't quote it (before, a pack's missing quote was a send-back of its own). Over `cap` characters, whole hunks
     go, the biggest first, so most changes stay whole, and a last line names what went: the critic can Read the rest.
-    Returns "" when the change touches no such file."""
-    paths = text_paths(p, cwd, rev)
+    `paths` (a light read's whole change) replaces the text files. Returns "" when the change touches no such file."""
+    paths = text_paths(p, cwd, rev) if paths is None else paths
     if not paths:
         return ""
     # One diff per path, so what is cut is named by the path itself: git's headers quote an odd name (a `"`, a tab)
@@ -723,17 +728,86 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     stat = "\n".join(gout(cwd, "diff", "--stat", f"{p.upstream}...{rev}").splitlines()[-40:])
     lad = rubric(p, cwd)
     earlier = [unscored(e["critique"], lad) for e in past if e.get("critique")]
-    prompt = "\n\n".join(filter(None, [
-        f"Critique {tid}. Follow the critic rules in your system prompt and end with the CRITIC line.",
-        f"## The ticket\n{ticket[:6000]}",
-        f"## The worker's pack notes\n{notes}",
-        "## Pack images (Read them)\n" + "\n".join(map(str, images)) if images else "",
-        f"## Files the change touches\n{stat}",
-        f"## What users read, as changed\n{said}" if (said := text_diff(p, cwd, rev)) else "",
-        "## Your earlier critiques of this ticket, oldest first\n" + "\n---\n".join(earlier) if earlier else "",
-    ]))
+
+    def prompt(deep, why):
+        said = text_diff(p, cwd, rev, paths=None if deep == "full" else changed_paths(p, cwd, rev))
+        return "\n\n".join(filter(None, [
+            f"Critique {tid}. Follow the critic rules in your system prompt and end with the CRITIC line.",
+            f"## The ticket\n{ticket[:6000]}",
+            f"## The worker's pack notes\n{notes}",
+            "## Pack images (Read them)\n" + "\n".join(map(str, images)) if images else "",
+            f"## Files the change touches\n{stat}",
+            (f"## What users read, as changed\n{said}" if deep == "full" else f"## The change\n{said}") if said else "",
+            "## Your earlier critiques of this ticket, oldest first\n" + "\n---\n".join(earlier) if earlier else "",
+            depth_part(tid, deep, why),
+        ]))
+    deep, why = depth(p, tid, cwd, rev)
+    told = {"depth": deep, "depth_why": cut(why)}
+    if deep == "light":
+        got = critique(p, tid, cwd, rev, prompt(deep, why), n, lad, usage, stop_if, retry, None, {}, "", told)
+        if got[0] != TRIAL:
+            return got
+        why = f"the light read asked for it: {got[1]}"
+        told = {"depth": "full", "depth_why": cut(why), "asked_trial": cut(got[1])}
     with tried(p, tid, cwd, rev, stop_if) as (tree, git_env, note):
-        return critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_env, note)
+        return critique(p, tid, cwd, rev, prompt("full", why), n, lad, usage, stop_if, retry, tree, git_env, note,
+                        told)
+
+
+def sent_back(p, tid, by):
+    """Notes that `by` (the check, the reviewer) sent `tid` back, so `depth` gives its next critic the full trial: a
+    worker's own `windvane critic` runs outside the driver, which keeps its count of send-backs to itself."""
+    append_jsonl(p.state / SENT_BACK, {"ticket": tid, "by": by})
+
+
+def bounced(p, tid):
+    """Who sent `tid` back so far, in order: an earlier critic verdict (revise, rethink), then `sent_back`'s."""
+    who = ["critic"] * any(e.get("step") in ("revise", "rethink") for e in history(p, tid))
+    who += [r.get("by") or "?" for r in read_jsonl(p.state / SENT_BACK) if r.get("ticket") == tid]
+    return list(dict.fromkeys(who))
+
+
+def changed_paths(p, cwd, rev):
+    """The change's files outside DIR: the autopilot's tickets and questions are no part of what it changes."""
+    changed = gout(cwd, "diff", "--name-only", "-z", f"{p.upstream}...{rev}").split("\0")
+    return [f for f in changed if f and not f.startswith(f"{DIR}/")]
+
+
+def changed_lines(p, cwd, rev):
+    """Lines added and removed outside DIR, as `git diff --shortstat` counts them."""
+    out = gout(cwd, "diff", "--shortstat", f"{p.upstream}...{rev}", "--", ".", f":(exclude){DIR}/")
+    return sum(int(n) for n in re.findall(r"(\d+) (?:insertion|deletion)", out))
+
+
+def depth(p, tid, cwd, rev):
+    """(depth, why) for this critic run: "light", a read of the diff with no commands, for a small change to no
+    `[critic] risky` file that nothing sent back; "full", the trial (T-260), otherwise. A pinned `[critic] depth`
+    wins. The full trial costs more than a read-only critic per verdict, and faults hide where the change is big,
+    risky or has already failed once."""
+    if (pinned := p.critic["depth"]) != "auto":
+        return pinned, "set by [critic] depth"
+    if who := bounced(p, tid):
+        return "full", f"sent back before, by {', '.join(who)}"
+    if hit := [f for f in changed_paths(p, cwd, rev) if renumber.noted(f, p.critic["risky"])]:
+        return "full", f"touches {hit[0]}{f' and {len(hit) - 1} more [critic] risky files' * (len(hit) > 1)}"
+    if (n := changed_lines(p, cwd, rev)) > p.critic["light_lines"]:
+        return "full", f"{n} lines changed, over [critic] light_lines = {p.critic['light_lines']}"
+    return "light", f"{n} lines changed, no [critic] risky file, never sent back"
+
+
+def depth_part(tid, deep, why):
+    """The prompt's line on the depth; a light read's also says how to ask for the trial."""
+    if deep == "full":
+        return f"## Depth: full ({why})"
+    return (f"## Depth: light ({why})\nA light read: no copy, no commands, at most {LIGHT_TURNS} turns. Judge on the "
+            f"change above and the pack (`read: ...`, not `ran:`). If a fault could hide where only running it would "
+            f"show, reply with only `CRITIC: {tid} trial <what to try, and why>`: you then get the full trial.")
+
+
+def asked_trial(text, tid, norm):
+    """What a light reply asks the trial to try, or None when it gives a verdict instead."""
+    m = last_match(TRIAL_RE, text)
+    return m[2].strip() or "no reason given" if m and norm(m[1]) == tid else None
 
 
 def tried(p, tid, cwd, rev, stop_if=None):
@@ -762,21 +836,28 @@ def boxed(stop_if, minutes):
     return stop
 
 
-def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_env, note):
+def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_env, note, told=None):
     """judge's sessions and verdict. With a copy (`tree`) the critic runs commands there (TRIAL_DENY and `refused`
     keep it off commits, pushes, switches, gh and the autopilot's controls), within `trial_minutes` per attempt;
     stopped by that box, it's asked once, in the same session and with no tools to run, for its verdict on what it
     saw, so a trial that runs out never costs the ticket its critique. Every follow-up turn runs in the same tree: a
-    session resumes only from the folder it started in."""
+    session resumes only from the folder it started in. `told` is the depth, recorded with the verdict: a light read
+    runs in LIGHT_TURNS turns, and one that asks for the trial or runs out of turns returns (TRIAL, why)."""
+    told = told or {"depth": "full"}
+    light = told["depth"] == "light"
     where, allow, deny = (tree, ["Bash"], TRIAL_DENY) if tree else (cwd, [], DENY)
-    prompt = "\n\n".join(filter(None, [prompt, trial_part(p, cwd, rev, tree, note)]))
-    system, session, out = system_prompt(p, cwd), {}, {"trial": "ran" if tree else "read-only"}
+    prompt = "\n\n".join(filter(None, [prompt, "" if light else trial_part(p, cwd, rev, tree, note)]))
+    out = {**({} if light else {"trial": "ran" if tree else "read-only"}), **told}
+    system, session = system_prompt(p, cwd), {}
+    label, env = (f"{tid}-critic-light", {**git_env, MAX_TURNS: str(LIGHT_TURNS)}) if light else (f"{tid}-critic", git_env)
     while True:  # each attempt gets the whole box: a retry's wait is no time spent trying
         stop = boxed(stop_if, p.critic["trial_minutes"]) if tree else stop_if
-        text, killed, error = run_claude(p, "critic", f"{tid}-critic", prompt, system, where, allow=allow, deny=deny,
-                                         usage=usage, stop_if=stop, ticket=tid, session=session, extra_env=git_env)
+        text, killed, error = run_claude(p, "critic", label, prompt, system, where, allow=allow, deny=deny,
+                                         usage=usage, stop_if=stop, ticket=tid, session=session, extra_env=env)
         if not error or not retry or not retry(error):
             break
+    if light and not error and (killed == "max turns" or (ask := asked_trial(text, tid, p.norm)) is not None):
+        return TRIAL, ask if killed != "max turns" else f"it ran out of its {LIGHT_TURNS} turns"
     if killed == TRIAL_UP:  # recorded with or without a session to ask: the stream may end before its id
         out["trial"] = "timed out"
     if killed == TRIAL_UP and session.get("id"):
@@ -906,15 +987,15 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None):
     return entry, critique
 
 
-def none(p, tid, text, why, rerun=True, reasked=False, reask_failed=None, trial=None):
+def none(p, tid, text, why, rerun=True, reasked=False, reask_failed=None, **told):
     """judge's (None, reply) when there's no verdict, the reply ending in the step that says why. Only a missing pack
     is the worker's to fix: a reply the driver can't read is the critic's slip, and "fix the pack" sent a worker with
     a sound pack to pay for a second run (R-001). Logged as `step: none`, so `windvane stats` can count what no
     verdict costs: `reasked` only when the same-session re-ask replied, `reask_failed` why one didn't (an API error,
-    the deadline), `trial` how its tries went. `history()` leaves these lines out."""
+    the deadline), `trial` how its tries went, `depth` the critic's. `history()` leaves these lines out."""
     append_jsonl(p.state / "critic.jsonl", {"ticket": tid, "step": "none", "why": why, "reasked": reasked,
                                             **({"reask_failed": reask_failed} if reask_failed else {}),
-                                            **({"trial": trial} if trial else {})})
+                                            **{k: v for k, v in told.items() if v}})
     todo = (f" Your pack isn't the problem: run `windvane critic {tid}` again; if the critic keeps failing, go on."
             if rerun else "")
     return None, f"{text}\n\nCRITIC STEP: none. No verdict: {why}{todo}".lstrip()

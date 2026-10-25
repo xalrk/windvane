@@ -509,6 +509,7 @@ class Sandbox:
             check = "test -f README"
             [critic]
             enabled = false
+            depth = "full"
             """) + config_extra)
         self.write(".windvane/QUESTIONS.md", "# Q\n\n## Open\n\n## Provisional\n\n## Answered\n")
         self.write(".windvane/QUEUE.md", "# Queue\n")

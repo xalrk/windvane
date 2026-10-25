@@ -992,6 +992,7 @@ class Pilot(Desk, Periodic):
         self.log(f"{tid}: check on {sha[:7]}: {summary}")
         if not ok:
             self.feedback[tid] = f"The check fails on {sha[:12]}: {summary}\n```\n{tail(logf, 40)}\n```"
+            critic.sent_back(p, tid, "check")
             return self.bounce(tid, "check")
         if res and not res[0]:  # git merged it cleanly: like any approved head that merges, nothing new to review
             self.log(f"{tid}: a clean merge of {p.main}; no review needed")
@@ -1001,6 +1002,7 @@ class Pilot(Desk, Periodic):
             return
         if verdict == "CHANGES":
             self.feedback[tid] = f"The reviewer asks for changes on {sha[:12]}:\n{review[-4000:]}"
+            critic.sent_back(p, tid, "reviewer")
             self.reviews[tid] = self.reviews.get(tid, 0) + 1
             if self.reviews[tid] >= p.ap["review_rounds"]:
                 return self.fail(tid, f"the reviewer asked for changes {said_times(self.reviews[tid])}, the most "
@@ -1047,8 +1049,9 @@ class Pilot(Desk, Periodic):
         last = past[-1]
         score = last.get("score")
         dims = " ".join(f"{k}={v:g}" for k, v in last.get("dims", {}).items() if k != "score")
+        deep = f", {last['depth']}" if last.get("depth") else ""  # `stats --critic` splits by it
         self.log(f"{tid}: critic {'-' if score is None else f'{score:g}'}/10{f' ({dims})' if dims else ''} "
-                 f"({last['step']}): {last.get('gist', '')}")
+                 f"({last['step']}{deep}): {last.get('gist', '')}")
         if last.get("unanswered"):
             self.log(f"{tid}: the critic left {', '.join(last['unanswered'])} unanswered (counted as no)")
         if last.get("ignored"):
@@ -1259,6 +1262,7 @@ class Pilot(Desk, Periodic):
                                       "and fix it.")
                 self.log(f"{tid}: the merged tree fails the check; back to the worker")
                 self.approve_bounce(tid, sha, "red")
+                critic.sent_back(p, tid, "check")
                 return self.bounce(tid, "check")
             if p.cfg["forge"] == "github":
                 pr = self.find_pr(tid, branch)

@@ -10,6 +10,10 @@ release on the same day adds a number (`2026.10.9.1`).
 - `windvane periodic <name>` while a run is on asks that run for the round instead of refusing: it runs at the run's
   next gap between tickets, from the config on `main` as it is then, without stopping the run. `--cancel` takes the
   ask back, and `windvane status` shows it.
+- The critic scales to the ticket: a small change to no risky file, never sent back, gets a light read of its diff
+  and pack in a few turns instead of the full trial, and a light read that suspects a hidden fault asks for the trial
+  and gets it. `[critic] depth` pins either one, and `light_lines` and `risky` set what `auto` counts as small and
+  risky. `windvane stats --critic` shows the critic's tokens per ticket and its misses at each depth.
 - The critic tries the change before it judges it. Each critique runs in a throwaway copy of the ticket's committed
   head, where the critic runs the command that shows the ticket's promise, the tests and small probes, then one or two
   ways it could fail (a second pass, a restart midway). A case it sees fail sends the ticket back, named. Commits,

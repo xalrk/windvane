@@ -53,7 +53,10 @@ DEFAULTS = {
                "fix": "opus", "fix_effort": "high"},  # fix: makes a red or conflicting desk PR merge
     "critic": {"enabled": True, "pass": 8, "floor": 4, "revisions": 3,
                "trial_minutes": 15,  # the critic's time to run the change in a copy of its head; 0: read-only
-               "text": []},  # globs of the files users read beyond Markdown: the critic reads their diff
+               "text": [],  # globs of the files users read beyond Markdown: the critic reads their diff
+               "depth": "auto",  # "light" (a read of the diff), "full" (the trial), or "auto": by size, risk, send-backs
+               "light_lines": 250,  # lines changed outside DIR up to which `auto` reads lightly
+               "risky": []},  # globs of the files whose change always gets the full trial under `auto`
     # parallel: "auto" starts another ticket whenever one fits beside the running ones (Touches) and in the usage
     # window, up to max_parallel; a number caps the slots at that
     "autopilot": {"parallel": "auto", "max_parallel": 4, "cap": 75, "week_cap": 95, "ticket_hours": 3,
@@ -232,12 +235,24 @@ def heavy_reuses(v):
     return v
 
 
-def critic_text(v):
-    """`[critic] text`: paths or globs (a directory ending in /) of message files or UI strings."""
+def critic_text(v, key="text"):
+    """`[critic] text` (paths or globs, a directory ending in /, of message files or UI strings), or `risky`."""
     if not isinstance(v, list) or not all(isinstance(x, str) and x.strip("/ ") for x in v):
-        raise SystemExit(f"windvane: [critic] text = {v!r} in config.toml: use a list of paths or globs, "
-                         "e.g. text = [\"src/messages/*.json\"]")
+        raise SystemExit(f"windvane: [critic] {key} = {v!r} in config.toml: use a list of paths or globs, "
+                         f"e.g. {key} = [\"src/{'messages/*.json' if key == 'text' else 'core/'}\"]")
     return v
+
+
+def critic_depth(c):
+    """`[critic] depth`, `light_lines` and `risky`, checked at once: a typo in the depth would pin every critic to
+    the wrong one."""
+    if c["depth"] not in ("auto", "full", "light"):
+        raise SystemExit(f"windvane: [critic] depth = {c['depth']!r} in config.toml: use \"auto\", \"full\" or \"light\"")
+    n = c["light_lines"]
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise SystemExit(f"windvane: [critic] light_lines = {n!r} in config.toml: use a number of lines (0: only an "
+                         "empty change is read lightly)")
+    critic_text(c["risky"], key="risky")
 
 
 def trial_minutes(v):
@@ -348,6 +363,7 @@ class Project:
         self.models = c["models"]
         self.critic = c["critic"]
         critic_text(self.critic["text"])
+        critic_depth(self.critic)
         trial_minutes(self.critic["trial_minutes"])
         self.ap = c["autopilot"]
         setup_minutes(c["setup_minutes"])

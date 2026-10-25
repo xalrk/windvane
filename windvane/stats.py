@@ -429,6 +429,7 @@ def bought(p, recs, lad, bar, since):
     sent_back_table(recs, backs, lad)
     rounds_line(p, by, backs)
     misses(p, by, since)
+    depths(p, by, since)
     undecided(recs, lad, bar)
 
 
@@ -583,25 +584,56 @@ def rounds_line(p, by, backs):
          + "; a round's output tokens are its run's, shared out by turns")
 
 
-def misses(p, by, since):
-    """The critic's misses: reviews that asked for changes on a ticket whose latest verdict before the review let the
-    work go on, with the review's line from the log."""
-    reviewed, missed = 0, []
+def reviewed(p, by, since):
+    """The reviews after a critic pass, as [(the review's log match, the verdict that passed it)]."""
+    out = []
     for line in last_log(p, None):
         m = REVIEW_LOG_RE.match(line)
         if not m or m[2] not in by or m[1] < since:
             continue
         before = [r for r in by[m[2]] if r.get("at", "") <= m[1]]
         if before and before[-1].get("step") in PASSED:
-            reviewed += 1
-            if m[3] == "changes":
-                missed.append(m)
-    if not reviewed:
+            out.append((m, before[-1]))
+    return out
+
+
+def misses(p, by, since):
+    """The critic's misses: reviews that asked for changes on a ticket whose latest verdict before the review let the
+    work go on, with the review's line from the log."""
+    seen = reviewed(p, by, since)
+    reviewed_n, missed = len(seen), [m for m, _ in seen if m[3] == "changes"]
+    if not reviewed_n:
         return
-    print(f"critic misses: {missed and len(missed) or 'none'} of {plural(reviewed, 'review')} after a critic pass "
+    print(f"critic misses: {missed and len(missed) or 'none'} of {plural(reviewed_n, 'review')} after a critic pass "
           f"asked for changes" + ":" * bool(missed))
     for m in missed:
         print(f"  {m[2]:8} {m[1]}  {critic_mod.clip(m[4], 70)}")
+
+
+def depths(p, by, since):
+    """The critic's cost and misses by depth (`critic.depth`): a ticket counts at its first verdict's depth, the one
+    `auto` picked from its size and risk, with its critic sessions' weighted tokens from the ledger, how many of its
+    light reads asked for the trial, and the reviews after a pass at each depth that still asked for changes.
+    Nothing until a verdict records its depth."""
+    first = {t: rs[0]["depth"] for t, rs in by.items() if rs[0].get("depth")}
+    if not first:
+        return
+    cost = Counter()
+    for row in read_jsonl(p.state / "ledger.jsonl"):
+        if row.get("role") == "critic" and row.get("ticket") in first and row.get("at", "") >= since:
+            cost[row["ticket"]] += weighted(row)
+    seen = Counter(v["depth"] for _, v in reviewed(p, by, since) if v.get("depth"))
+    missed = Counter(v["depth"] for m, v in reviewed(p, by, since) if v.get("depth") and m[3] == "changes")
+    parts = []
+    for d in ("light", "full"):
+        ts = [t for t, v in first.items() if v == d]
+        if not ts:
+            continue
+        asked = sum(any(r.get("asked_trial") for r in by[t]) for t in ts)
+        parts.append(f"{d} {plural(len(ts), 'ticket')}, {sum(cost[t] for t in ts) / len(ts) / 1000:.0f}k weighted "
+                     f"critic tokens each" + (f", {asked} asked for the trial" if d == "light" else "")
+                     + (f", missed {missed[d]} of {plural(seen[d], 'review')}" if seen[d] else ""))
+    note("by depth (a ticket at its first verdict's): " + "; ".join(parts))
 
 
 def undecided(recs, lad, bar, least=5):
