@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import bench, driver, experiment, planner  # noqa: E402
+from windvane import bench, driver, experiment, jobs, planner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.stats import ticket_outcomes  # noqa: E402
@@ -187,6 +187,22 @@ class Experiment(unittest.TestCase):
         self.assertEqual((self.calls, self.sessions("worker"), self.sessions("review")),
                          ([self.head(), self.head()], 1, 1))  # the recorded run reused; nothing paid for twice
         self.assertEqual(json.loads((self.p.state / "state.json").read_text()).get("benching"), {})
+
+    def test_a_restart_while_its_bench_job_runs_waits_for_that_job(self):
+        self.make()
+        better = {**MAIN, "passed": 6}
+        self.stop_after_first = True
+        self.run_pilot([better, better])
+        (self.p.state / "STOP").unlink(missing_ok=True)
+        self.stop_after_first = False
+        # the driver died while its second bench run went on: the job is still there when the next one starts
+        script = "import time; time.sleep(1)\n" + FAKE
+        jobs.bg(self.p, "experiment-T-001", [sys.executable, "-c", script, json.dumps([rec(
+            self.head(), seed="tiny", **better)]), str(bench.results(self.p))], self.p.root, quiet=True)
+        pilot = self.run_pilot([better, better])
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.assertIn("T-001: its bench job from before a restart still runs; waiting for it", self.log())
+        self.assertEqual((self.calls, self.sessions("worker"), self.sessions("review")), ([self.head()], 1, 1))
 
     def test_a_ticket_without_kind_experiment_merges_without_a_bench(self):
         self.make(kind="")
