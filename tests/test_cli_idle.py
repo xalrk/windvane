@@ -22,6 +22,7 @@ class Idle(unittest.TestCase):
         for tid in ("T-001", "T-002", "T-003", "T-005"):
             self.s.ticket(tid)
         self.s.ticket("T-004", deps="T-001")
+        self.s.ticket("T-007", deps="T-002")
         self.s.write(".windvane/QUESTIONS.md", "# Q\n\n## Open\n\n### T-005: red or blue?\nThe button.\n"
                      "- **A**: red\n- **B**: blue\nRecommendation: A, because it shows.\n\n## Provisional\n\n"
                      "## Answered\n")
@@ -59,6 +60,9 @@ class Idle(unittest.TestCase):
                               "`parked:` line on main to queue it\n"),
                  ("T-004", 0, "Sandbox: autopilot isn't running; T-004 waits on T-001: the next `windvane run` takes "
                               "it up once they're done\n"),
+                 ("T-007", 0, "Sandbox: autopilot isn't running; the next `windvane run` doesn't take T-007 up yet: "
+                              "T-002 is parked: T-007 waits; to unpark it, take `- parked: T-002 (needs a new API key)` "
+                              "out of .windvane/QUEUE.md\n"),
                  ("T-005", 0, "Sandbox: autopilot isn't running; the next `windvane run` doesn't take T-005 up yet: "
                               "T-005 has an open question: `windvane answer T-005 <letter>`\n")]
         for tid, code, out in cases:

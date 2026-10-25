@@ -303,9 +303,12 @@ def idle_retry(p, tid):
         return f"{tid} is already merged"
     if tid in q.parked:
         return f"{tid} is parked in {p.queue_rel}: delete its `parked:` line on {p.main} to queue it"
-    if why := q.release(tid, questions.tickets(qs), {"questions": qs}):  # a finished run's failures start afresh
+    blocked, run = questions.tickets(qs), {"questions": qs}  # a finished run's failures start afresh in the next
+    if why := q.release(tid, blocked, run):
         return f"the next `windvane run` doesn't take {tid} up yet: {why}"
-    if on := q.waits_on(tid):
+    if on := q.waits_on(tid):  # one that's parked, asked or not a ticket isn't done by itself: say what lets it go
+        if held := [h for d in on if (h := q.hint(d, [tid], blocked, q.asks(run), run))]:
+            return f"the next `windvane run` doesn't take {tid} up yet: {'; '.join(held)}"
         return f"{tid} waits on {', '.join(on)}: the next `windvane run` takes it up once they're done"
     return f"the next `windvane run` takes {tid} up"
 
