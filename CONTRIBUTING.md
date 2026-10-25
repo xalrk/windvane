@@ -38,7 +38,11 @@ pass: it runs the suite on the oldest Python from 3.11 up that you have installe
 steps can miss on a busy machine), and prints the five slowest modules. On the newest Python you have it only
 byte-compiles and imports every module, which takes seconds and catches anything a newer Python removed.
 `tools/check_pythons.sh --all` runs the whole suite on every installed Python instead, as a release does; give it
-unittest arguments and it runs just those on every Python, in one process each. In its
+unittest arguments and it runs just those on every Python, in one process each. `--quick` is a fast first pass,
+made for a project's `check_quick`: about a minute of test modules on the oldest Python, the ones the
+change touches (changed, named after a changed file, or importing or naming one), the sweeps that read every source
+file or every call of a kind, and the ones that failed in recent checks; it stops at the first module that fails
+again on its own. `tools/quick_replay.py` replays that pick over a state dir's failed checks, to tune it. In its
 `rerun alone:` line, `passed` means the module was only flaky beside the others and needs nothing from you, and
 `failed again` is a real failure, its output printed below; a full check (no arguments) also adds a line to
 `~/.cache/windvane-check/reruns.log`, so you can see how often reruns happen over time. The CI workflow
