@@ -42,10 +42,10 @@ unittest arguments and it runs just those on every Python, in one process each. 
 made for a project's `check_quick`: about a minute of test modules on the oldest Python, the ones the
 change touches (changed, named after a changed file, or importing or naming one), the sweeps that read every source
 file or every call of a kind, and the ones that failed in recent checks; it stops at the first module that fails
-again on its own. `tools/quick_replay.py` replays that pick over a state dir's failed checks, to tune it. In its
-`rerun alone:` line, `passed` means the module was only flaky beside the others and needs nothing from you, and
-`failed again` is a real failure, its output printed below; a full check (no arguments) also adds a line to
-`~/.cache/windvane-check/reruns.log`, so you can see how often reruns happen over time. The CI workflow
+again on its own. `tools/quick_replay.py` replays that pick over a state dir's failed checks, to tune it.
+In the check's `rerun alone:` line, `passed` means the module was only flaky beside the others and needs nothing
+from you, and `failed again` is a real failure, its output printed below; a full check (no arguments) also adds a
+line to `~/.cache/windvane-check/reruns.log`, so you can see how often reruns happen over time. The CI workflow
 (`.github/workflows/test.yml`) runs it on Linux and macOS; it is started by hand, so a maintainer runs it on your pull
 request before merging.
 

@@ -64,14 +64,16 @@ def ticket_commits(repo, main):
         ct, sha, subject = (line.split(" ", 2) + [""])[:3]
         if t := ticket_of(subject):
             add(t, [f"{ct} {sha}"])
-    for line in git(repo, "log", "--first-parent", "--merges", "--format=%H %s", main).decode(errors="replace").splitlines():
+    merges = git(repo, "log", "--first-parent", "--merges", "--format=%H %s", main).decode(errors="replace")
+    for line in merges.splitlines():
         sha, _, subject = line.partition(" ")
         if subject.startswith("Merge ") and (t := ticket_of(subject)):
             add(t, git(repo, "log", "--no-merges", "--format=%ct %H", f"{sha}^1..{sha}^2").decode().splitlines())
     for ref in git(repo, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/").decode().splitlines():
         m = re.match(r"([a-z]+-\d+)-", ref.rsplit("/", 1)[-1])
         if m:
-            add(m.group(1).upper(), git(repo, "log", "--no-merges", "--format=%ct %H", f"{main}..{ref}").decode().splitlines())
+            add(m.group(1).upper(),
+                git(repo, "log", "--no-merges", "--format=%ct %H", f"{main}..{ref}").decode().splitlines())
     return {t: sorted(v) for t, v in out.items()}
 
 
@@ -110,7 +112,8 @@ def main(argv=None):
         changed = git(a.repo, "diff", "--name-only", base, sha).decode(errors="replace").splitlines()
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(start))
         earlier = [f for f in logs if f.name[:15] < stamp]
-        failures = test_pool.history(a.reruns, earlier, before=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(start)))
+        failures = test_pool.history(a.reruns, earlier,
+                                     before=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(start)))
         with tempfile.TemporaryDirectory() as tmp:
             tests = tests_at(a.repo, sha, a.tests, tmp)
             chosen = test_pool.pick(tests, changed, failures, times, a.jobs * test_pool.QUICK_WALL)

@@ -565,7 +565,8 @@ class Pick(unittest.TestCase):
             ("test_new", "changed"), ("test_driver_push", "named after windvane/driver.py"),
             ("test_push_fit", "sweep"), ("test_often", "failed for real in 3 of the recent checks"),
             ("test_bad", "touches tests/test_new.py, windvane/driver.py and 2 more"),
-            ("test_helper_user", "imports or names tests/helpers.py"), ("test_reads", "imports or names prompts/WORKER.md"),
+            ("test_helper_user", "imports or names tests/helpers.py"),
+            ("test_reads", "imports or names prompts/WORKER.md"),
             ("test_uses", "imports or names windvane/driver.py")])
 
     def test_the_budget_keeps_the_first_and_skips_what_does_not_fit_for_smaller_ones(self):

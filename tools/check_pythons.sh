@@ -27,7 +27,10 @@ all="" quick="" args=()
 for a in "$@"; do
     case $a in --all) all=1 ;; --quick) quick=1 ;; *) args+=("$a") ;; esac
 done
-[ -z "$quick" ] || [ ${#args[@]} -eq 0 ] || { echo "--quick picks its own tests: no unittest arguments with it"; exit 2; }
+if [ -n "$quick" ] && [ ${#args[@]} -gt 0 ]; then
+    echo "--quick picks its own tests: no unittest arguments with it"
+    exit 2
+fi
 [ ${#args[@]} -eq 0 ] || all=1
 VERSIONS="3.11 3.12 3.13 3.14"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/windvane-check-XXXXXX") || exit 2
@@ -53,7 +56,9 @@ k=${CHECK_JOBS:-$(( cpus / $# ))}
 [ "$k" -ge 2 ] 2>/dev/null || k=2
 py=$(command -v "python$oldest")
 
-name() { case $1 in *i) echo "python${1%i} imports" ;; *q) echo "python${1%q} quick pass" ;; *) echo "python$1" ;; esac; }
+name() {
+    case $1 in *i) echo "python${1%i} imports" ;; *q) echo "python${1%q} quick pass" ;; *) echo "python$1" ;; esac
+}
 what() {
     case $1 in *i) echo "imports on python${1%i}" ;; *q) echo "the quick pass on python${1%q}" ;;
         *) echo "the suite on python$1" ;; esac
