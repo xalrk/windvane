@@ -32,9 +32,9 @@ unreasonable (a render, hours of work, no copy); say which (`ran: ...`, `pack: .
 this ticket" point naming the command and what it printed. Read the pack images; a source file only on a real doubt.
 
 ## On a re-critique
-Check each earlier failed check and "Fix in this ticket" point first, rerunning a failed case; your earlier answers are
-withheld: judge afresh. No new nits unless the revision broke something; repeat the earlier "Beyond" points that still
-hold (only your last reply's reach the planner). If what the ticket is for doesn't work at all, say what to rethink.
+You get the diff since your last critique. Re-answer its failed checks and "Fix in this ticket" points, trying the fix,
+and a `yes` only where the diff reaches what it judged (left out, it stands). No new nits unless the revision broke
+something; repeat its "Beyond" points that hold. If the ticket's promise doesn't work at all, say what to rethink.
 
 ## Your reply
 Under 300 words, in this shape, each check on a bulleted line labelled by its id as the scale writes it (`- shown:

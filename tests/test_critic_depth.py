@@ -103,16 +103,40 @@ class Depth(unittest.TestCase):
         self.assertEqual(critic.bounced(self.p, "T-002"), ["check"], "each ticket's own")
         self.assertEqual(critic.bounced(self.p, "T-001"), ["check", "reviewer"])
 
-    def test_an_earlier_critic_send_back_makes_the_next_critique_full(self):
+    def test_a_revision_only_the_critic_sent_back_gets_its_own_depth(self):
         self.change(3)
         os.environ["FAKE_CRITIC_LIGHT"] = READS.replace("- again: yes, read: no state kept", "- again: no, read: a lock")
         _, _, first = self.critic()
         self.assertEqual((first["depth"], first["step"]), ("light", "revise"))
         self.change(4)
+        os.environ["FAKE_CRITIC_LIGHT"] = READS
         _, calls, again = self.critic()
-        self.assertEqual((again["depth"], again["step"]), ("full", "pass"))
-        self.assertEqual(again["depth_why"], "sent back before, by critic")
-        self.assertIn("## Depth: full (sent back before, by critic)", calls[-1]["prompt"])
+        self.assertEqual((again["depth"], again["step"]), ("light", "pass"), "a one-line revision is a light read")
+        why = (f"1 lines changed since your last critique ({first['sha']}), no [critic] risky file, sent back only "
+               "by the critic")
+        self.assertEqual(again["depth_why"], why)
+        self.assertIn(f"## Depth: light ({why})", calls[-1]["prompt"])
+        self.assertEqual(self.depth()[1].split(",")[0], f"0 lines changed since your last critique ({again['sha']})")
+        self.change(5)
+        self.p.critic["risky"] = ["tool.py"]
+        self.assertEqual(self.depth(), ("full", f"touches tool.py since your last critique ({again['sha']})"))
+        self.p.critic["risky"] = []
+        self.change(300, "big.py")
+        self.assertEqual(self.depth(), ("full", f"301 lines changed since your last critique ({again['sha']}), "
+                                                "over [critic] light_lines = 250"))
+
+    def test_a_check_or_reviewer_bounce_after_the_critics_keeps_the_trial(self):
+        self.change(3)
+        os.environ["FAKE_CRITIC_LIGHT"] = READS.replace("- again: yes, read: no state kept", "- again: no, read: a lock")
+        self.critic()
+        self.change(4)
+        critic.sent_back(self.p, "T-001", "check")
+        self.assertEqual(self.depth(), ("full", "sent back before, by critic, check"))
+
+    def test_a_critic_send_back_whose_head_is_gone_gets_the_trial(self):
+        self.change(3)
+        append_jsonl(self.p.state / "critic.jsonl", {"ticket": "T-001", "sha": "0000000", "step": "revise", "score": 2})
+        self.assertEqual(self.depth(), ("full", "sent back before, by critic"))
 
     def test_another_tickets_verdict_doesnt_count(self):
         self.change(3)

@@ -529,9 +529,7 @@ def unscored(critique, lad=None):
 
 
 def beyond(critique):
-    m = re.search(r"^Beyond(?: this ticket)?:?\s*\n((?:[ \t]*[-*\d].*\n?)*)", critique or "", re.M)
-    return [re.sub(r"^[ \t]*(?:[-*]|\d+\.)\s*", "", l).strip() for l in (m.group(1) if m else "").splitlines()
-            if l.strip()]
+    return listed(critique, r"Beyond(?: this ticket)?")
 
 
 def followups(p):
@@ -669,16 +667,18 @@ def text_paths(p, cwd, rev):
             and (f.lower().endswith(TEXT_SUFFIXES) or renumber.noted(f, p.critic.get("text") or []))]
 
 
-def text_diff(p, cwd, rev, cap=TEXT_CAP, paths=None):
+def text_diff(p, cwd, rev, cap=TEXT_CAP, paths=None, since=None):
     """The diff of what users read, with one line of context, so the critic judges the text itself and the pack
     needn't quote it (before, a pack's missing quote was a send-back of its own). Over `cap` characters, whole hunks
     go, the biggest first, so most changes stay whole, and a last line names what went: the critic can Read the rest.
-    `paths` (a light read's whole change) replaces the text files. Returns "" when the change touches no such file."""
+    `paths` (a light read's whole change) replaces the text files; `since` (a re-critique's last judged head) diffs
+    from there instead of from the upstream. Returns "" when the change touches no such file."""
     paths = text_paths(p, cwd, rev) if paths is None else paths
     if not paths:
         return ""
+    span = [since, rev] if since else [f"{p.upstream}...{rev}"]
     # One diff per path, so what is cut is named by the path itself: git's headers quote an odd name (a `"`, a tab)
-    diffs = [(f, gout(cwd, "diff", "--no-color", "--no-ext-diff", "-U1", f"{p.upstream}...{rev}", "--",
+    diffs = [(f, gout(cwd, "diff", "--no-color", "--no-ext-diff", "-U1", *span, "--",
                       f":(literal){f}")) for f in paths]
     pairs = [(f, HUNK_RE.split(d + "\n")) for f, d in diffs if d]  # (path, [header, hunk, hunk, ...])
     if not pairs:
@@ -728,7 +728,8 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
     ticket = gout(cwd, "show", f"{rev}:{p.tickets_rel}/{tid}.md")
     stat = "\n".join(gout(cwd, "diff", "--stat", f"{p.upstream}...{rev}").splitlines()[-40:])
     lad = rubric(p, cwd)
-    earlier = [unscored(e["critique"], lad) for e in past if e.get("critique")]
+    prior = carries(p, tid, cwd, lad)
+    earlier = [] if prior else [unscored(e["critique"], lad) for e in past if e.get("critique")]
 
     def prompt(deep, why):
         said = text_diff(p, cwd, rev, paths=None if deep == "full" else changed_paths(p, cwd, rev))
@@ -740,12 +741,13 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
             f"## Files the change touches\n{stat}",
             (f"## What users read, as changed\n{said}" if deep == "full" else f"## The change\n{said}") if said else "",
             "## Your earlier critiques of this ticket, oldest first\n" + "\n---\n".join(earlier) if earlier else "",
+            since_part(p, cwd, rev, prior, lad) if prior else "",
             depth_part(tid, deep, why),
         ]))
     deep, why = depth(p, tid, cwd, rev)
     told = {"depth": deep, "depth_why": cut(why)}
     if deep == "light":
-        got = critique(p, tid, cwd, rev, prompt(deep, why), n, lad, usage, stop_if, retry, None, {}, "", told)
+        got = critique(p, tid, cwd, rev, prompt(deep, why), n, lad, usage, stop_if, retry, None, {}, "", told, prior)
         if got[0] != TRIAL:
             return got
         why = f"the light read asked for it: {got[1]}"
@@ -753,7 +755,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         sent_back(p, tid, ASKED)  # before the trial: one that dies or gives no verdict is no way back to a light pass
     with tried(p, tid, cwd, rev, stop_if) as (tree, git_env, note):
         return critique(p, tid, cwd, rev, prompt("full", why), n, lad, usage, stop_if, retry, tree, git_env, note,
-                        told)
+                        told, prior)
 
 
 def sent_back(p, tid, by):
@@ -776,26 +778,159 @@ def changed_paths(p, cwd, rev):
     return [f for f in changed if f and not f.startswith(f"{DIR}/")]
 
 
-def changed_lines(p, cwd, rev):
-    """Lines added and removed outside DIR, as `git diff --shortstat` counts them."""
-    out = gout(cwd, "diff", "--shortstat", f"{p.upstream}...{rev}", "--", ".", f":(exclude){DIR}/")
+def changed_lines(p, cwd, rev, since=None, paths=None):
+    """Lines added and removed outside DIR, as `git diff --shortstat` counts them; with `since`, those of `paths` from
+    that commit to `rev` (a revision's)."""
+    if since and not paths:
+        return 0
+    span, where = ([since, rev], [f":(literal){f}" for f in paths]) if since else (
+        [f"{p.upstream}...{rev}"], [".", f":(exclude){DIR}/"])
+    out = gout(cwd, "diff", "--shortstat", *span, "--", *where)
     return sum(int(n) for n in re.findall(r"(\d+) (?:insertion|deletion)", out))
+
+
+def judged(p, tid, cwd):
+    """(the last verdict, its head's full sha) when that commit is still here, or None: where a re-critique's delta
+    starts. A skipped or unavailable run judged nothing."""
+    rec = next((e for e in reversed(history(p, tid)) if e.get("sha") and e.get("step") not in ("skip", "unavailable")),
+               None)
+    sha = rec and gout(cwd, "rev-parse", "--verify", "-q", f"{rec['sha']}^{{commit}}")
+    return (rec, sha) if sha else None
+
+
+def revised(p, cwd, since, rev):
+    """The ticket's files that changed from `since` to `rev`, outside DIR. A merge of the upstream in between brings
+    other files along; only those the ticket itself changes, at either end, are its revision."""
+    mine = set(changed_paths(p, cwd, rev)) | set(changed_paths(p, cwd, since))
+    return [f for f in gout(cwd, "diff", "--name-only", "-z", since, rev).split("\0") if f in mine]
+
+
+def carries(p, tid, cwd, lad):
+    """(the last verdict, its sha) a re-critique on the ladder `lad` judges from, or None (a first critique, an old
+    numeric scale, a scale changed since, a head gone): then the critic judges afresh with its earlier critiques
+    unscored. A re-critique can fail a check the verdict before passed, and re-reading everything costs the
+    critic nearly what its first run did."""
+    last = judged(p, tid, cwd) if lad else None
+    return last if last and "answers" in last[0] and last[0].get("scale") == scale(p, cwd) else None
+
+
+def key_label(key):
+    """How a check is written: its id, or `works safe` for an id two dimensions share (`answers()` reads both)."""
+    return " ".join(key) if isinstance(key, tuple) else key
+
+
+def stood(rec, lad):
+    """{`answers()` key: (answer, evidence)} of a verdict's `yes` answers and its `-` dimensions: what a re-critique
+    that leaves them out keeps. The verdict's `yes` record holds the carried ones too; an older verdict's are read
+    from its critique."""
+    if "yes" in rec:
+        out = {tuple(k.split(" ", 1)) if " " in k else k: ("yes", ev) for k, ev in rec["yes"].items()}
+    else:
+        ids = {cid for cs in lad.values() for _, cid, _ in cs}
+        out = {k: v for k, v in answers(rec.get("critique"), lad).items()
+               if v[0] == "yes" and (isinstance(k, tuple) or k in ids)}
+    out.update({d: ("-", "") for i, d in enumerate(lad) if i and d not in (rec.get("dims") or {})})
+    return out
+
+
+def carry(ans, kept, lad):
+    """Adds to `ans` (a re-critique's answers) each earlier `yes` and `-` dimension (`kept`) it leaves out, and returns
+    their labels. Only what it leaves out: a carried `yes` it answers `no` counts as `no`."""
+    both, out = shared(lad), []
+    for i, (d, cs) in enumerate(lad.items()):
+        if ans.get(d, ("",))[0] == "-":
+            continue
+        if i and d not in ans and kept.get(d) and not any((d, c) in ans or c in ans for _, c, _ in cs):
+            ans[d] = kept[d]
+            out.append(d)
+            continue
+        for _, cid, _ in cs:
+            key = (d, cid) if cid in both else cid
+            if (d, cid) not in ans and cid not in ans and kept.get(key, ("",))[0] == "yes":
+                ans[key] = kept[key]
+                out.append(key_label(key))
+    return out
+
+
+def said_yes(ans, lad):
+    """{label: evidence} of the `yes` answers `ans` gives the checks, in the scale's order: what the next re-critique
+    carries (`stood`)."""
+    both, out = shared(lad), {}
+    for d, cs in lad.items():
+        for _, cid, _ in cs:
+            key = (d, cid) if cid in both else cid
+            if ans.get(key, ("",))[0] == "yes":
+                out[key_label(key)] = ans[key][1]
+    return out
+
+
+def listed(critique, head):
+    """The points of a critique's list headed `head` (a regex), as `beyond()` reads its own."""
+    m = re.search(rf"^{head}:?\s*\n((?:[ \t]*[-*\d].*\n?)*)", critique or "", re.M)
+    return [re.sub(r"^[ \t]*(?:[-*]|\d+\.)\s*", "", l).strip() for l in (m.group(1) if m else "").splitlines()
+            if l.strip()]
+
+
+def since_part(p, cwd, rev, prior, lad):
+    """A re-critique's section: the diff from the head the critic last judged, that verdict's failed checks and
+    points to answer afresh, and its `yes` answers, which stand unless the diff reaches them. The same head again
+    (only the pack changed) says so."""
+    rec, sha = prior
+    now = gout(cwd, "rev-parse", "--short", rev)
+    if sha == gout(cwd, "rev-parse", rev):
+        parts = [f"## What changed since your last critique\nNothing in the tree: the head is {now} again, the one "
+                 "your last critique judged; only the pack changed. Judge the new pack only."]
+    else:
+        paths = revised(p, cwd, sha, rev)
+        stat = gout(cwd, "diff", "--stat", sha, rev, "--", *[f":(literal){f}" for f in paths]) if paths else ""
+        diff = text_diff(p, cwd, rev, paths=paths, since=sha)
+        parts = [f"## What changed since your last critique ({rec['sha']} → {now})\n"
+                 + ("\n".join(stat.splitlines()[-40:]) + f"\n\n{diff}" if paths else
+                    "Only the autopilot's own files (tickets, questions): the change itself is as you judged it.")]
+    said, ans = rec.get("answers") or {}, answers(rec.get("critique"), lad)
+    kept, failed = stood(rec, lad), []
+    for d, cs in lad.items():
+        if kept.get(d, ("",))[0] == "-":
+            continue
+        for _, cid, _ in cs:
+            key = (d, cid) if cid in shared(lad) else cid
+            if kept.get(key, ("",))[0] != "yes":
+                a, ev = ans.get(key) or ans.get(cid) or (said.get(cid, "none"), "")
+                a = {"scope": "no (out of scope)", "none": "unanswered"}.get(a, a)
+                failed.append(f"- {key_label(key)}: {a}{f', {ev}' if ev else ''}")
+    fix, more = listed(rec.get("critique"), "Fix in this ticket"), beyond(rec.get("critique"))
+    parts += [f"Your last critique's failed checks (answer each afresh):\n" + "\n".join(failed) if failed else "",
+              "Its \"Fix in this ticket\" points (is each fixed?):\n" + "\n".join(
+                  f"{i}. {x}" for i, x in enumerate(fix, 1)) if fix else "",
+              "Its `yes` answers (they stand unless the change above reaches what they judged; then answer them "
+              "again):\n" + "\n".join(f"- {key_label(k)}: yes{f', {ev}' if ev else ''}"
+                                         for k, (a, ev) in kept.items() if a == "yes") if any(
+                  a == "yes" for a, _ in kept.values()) else "",
+              "Its \"Beyond this ticket\" points (only your last reply's reach the planner):\n" + "\n".join(f"- {x}" for x in more) if more else ""]
+    return "\n\n".join(filter(None, parts))
 
 
 def depth(p, tid, cwd, rev):
     """(depth, why) for this critic run: "light", a read of the diff with no commands, for a small change to no
     `[critic] risky` file that nothing sent back; "full", the trial (T-260), otherwise. A pinned `[critic] depth`
     wins. The full trial costs more than a read-only critic per verdict, and faults hide where the change is big,
-    risky or has already failed once."""
+    risky or has already failed once. A revision only the critic sent back is measured by itself, from the head it
+    last judged: the re-critique judges that delta, and the checks it doesn't reach carry over (`carries`); a check's
+    or a reviewer's send-back found what the critic missed, so the trial stays full."""
     if (pinned := p.critic["depth"]) != "auto":
         return pinned, "set by [critic] depth"
-    if who := bounced(p, tid):
+    who, last = bounced(p, tid), judged(p, tid, cwd)
+    if who and (who != ["critic"] or not last):
         return "full", f"sent back before, by {', '.join(who)}"
-    if hit := [f for f in changed_paths(p, cwd, rev) if renumber.noted(f, p.critic["risky"])]:
-        return "full", f"touches {hit[0]}{f' and {len(hit) - 1} more [critic] risky files' * (len(hit) > 1)}"
-    if (n := changed_lines(p, cwd, rev)) > p.critic["light_lines"]:
-        return "full", f"{n} lines changed, over [critic] light_lines = {p.critic['light_lines']}"
-    return "light", f"{n} lines changed, no [critic] risky file, never sent back"
+    paths = revised(p, cwd, last[1], rev) if who else changed_paths(p, cwd, rev)
+    since = f" since your last critique ({last[0]['sha']})" if who else ""
+    if hit := [f for f in paths if renumber.noted(f, p.critic["risky"])]:
+        return "full", f"touches {hit[0]}{f' and {len(hit) - 1} more [critic] risky files' * (len(hit) > 1)}{since}"
+    n = changed_lines(p, cwd, rev, last[1], paths) if who else changed_lines(p, cwd, rev)
+    if n > p.critic["light_lines"]:
+        return "full", f"{n} lines changed{since}, over [critic] light_lines = {p.critic['light_lines']}"
+    return "light", (f"{n} lines changed{since}, no [critic] risky file, "
+                     f"{'sent back only by the critic' if who else 'never sent back'}")
 
 
 def depth_part(tid, deep, why):
@@ -840,13 +975,14 @@ def boxed(stop_if, minutes):
     return stop
 
 
-def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_env, note, told=None):
+def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_env, note, told=None, prior=None):
     """judge's sessions and verdict. With a copy (`tree`) the critic runs commands there (TRIAL_DENY and `refused`
     keep it off commits, pushes, switches, gh and the autopilot's controls), within `trial_minutes` per attempt;
     stopped by that box, it's asked once, in the same session and with no tools to run, for its verdict on what it
     saw, so a trial that runs out never costs the ticket its critique. Every follow-up turn runs in the same tree: a
     session resumes only from the folder it started in. `told` is the depth, recorded with the verdict: a light read
-    runs in LIGHT_TURNS turns, and one that asks for the trial or runs out of turns returns (TRIAL, why)."""
+    runs in LIGHT_TURNS turns, and one that asks for the trial or runs out of turns returns (TRIAL, why). `prior`
+    (`carries`) makes it a re-critique: the answers it leaves out carry over from that verdict."""
     told = told or {"depth": "full"}
     light = told["depth"] == "light"
     where, allow, deny = (tree, ["Bash"], TRIAL_DENY) if tree else (cwd, [], DENY)
@@ -873,7 +1009,8 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
                  "revisions": n, "step": "unavailable", "gist": cut(plain_error(error)), "critique": "", **out}
         append_jsonl(p.state / "critic.jsonl", entry)
         return entry, f"Critic unavailable ({cut(plain_error(error))})."  # the worker reads it
-    why, asked = unread(p, tid, lad, text), {}
+    kept = stood(prior[0], lad) if prior else {}
+    why, asked = unread(p, tid, lad, text, kept), {}
     if why and session.get("id"):  # one more turn in the same session reads its context cached, not fresh (T-116)
         again, killed, error = run_claude(p, "critic", f"{tid}-critic-reask", reask(tid, why, lad),
                                           system, where, deny=DENY, usage=usage, stop_if=stop_if,
@@ -881,14 +1018,14 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
         if killed or error:  # no reply to it: the first reply stands, and the log says the re-ask failed
             asked = {"reask_failed": cut(killed or plain_error(error))}
         else:
-            text, why, asked = again, unread(p, tid, lad, again), {"reasked": True}
+            text, why, asked = again, unread(p, tid, lad, again, kept), {"reasked": True}
     if why:
         return none(p, tid, text, why, **asked, **out)
     _, dims, fixes, gist = verdict(text)
     saved = {"reasked": True} if asked else {}  # the re-ask saved this verdict: `stats --critic` counts it
     saved |= out
     if lad:
-        return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved)
+        return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved, prior)
     caps, anchor = checks(text)
     dims, was = capped(dims, caps)
     hits = [f"{d}<={c:g}" for d, c, hit in caps if hit is True]
@@ -934,9 +1071,10 @@ def time_up(tid, minutes):
             f"run and the pack, saying which, and end with the CRITIC line for {tid}.")
 
 
-def unread(p, tid, lad, text):
+def unread(p, tid, lad, text, kept=None):
     """Why the critic's reply is no verdict, or None when the driver can read one. A ladder reply that answers no
-    check at all is none: counting every check as `no` would send good work back for the critic's own slip."""
+    check at all is none: counting every check as `no` would send good work back for the critic's own slip. A
+    re-critique whose last verdict passed every check (`kept`) may answer none: it judged only the points."""
     v = verdict(text)
     if not v:
         return "the critic's reply has no CRITIC line."
@@ -946,6 +1084,9 @@ def unread(p, tid, lad, text):
         return None if v[1] else "the critic's CRITIC line has no scores, and the scale has no checks to work them out."
     ans = answers(text, lad)
     if any(cid in ans or (d, cid) in ans for d, cs in lad.items() for _, cid, _ in cs):
+        return None
+    if kept and all(kept.get(d, ("",))[0] == "-" or all(kept.get(c, kept.get((d, c), ("",)))[0] == "yes"
+                                                         for _, c, _ in cs) for d, cs in lad.items()):
         return None
     seen = labels(text)
     return ("no answer the driver could match to a check (labels it saw: "
@@ -961,16 +1102,20 @@ def reask(tid, why, lad):
             f"give{shape}, ending with its CRITIC line for {tid}.")
 
 
-def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None):
+def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None, prior=None):
     """judge's ending on a ladder: the driver scores the critic's check answers (`climb`), and the failed checks under
-    the bar join its "Fix in this ticket" points."""
+    the bar join its "Fix in this ticket" points. On a re-critique (`prior`) the earlier `yes` answers it leaves out
+    count too (`carry`), never on a first critique: there an unanswered check is a `no`."""
     ans = answers(text, lad)
+    carried = carry(ans, stood(prior[0], lad), lad) if prior else []
     dims, said, block, scoped, missing = climb(lad, ans, p.critic["pass"])
     eff = fixes + len(block)
     scores = " ".join(f"{d}={dims[d]:g}" if d in dims else f"{d}=-" for d in lad)
     head, _, _ = text.rpartition("CRITIC:")
     starts = [m.start() for m in (CHECKS_RE.search(head), LISTS_RE.search(head)) if m]
     critique = head[min(starts, default=0):].rstrip()  # from the Checks block, or a list the critic put before it
+    if carried:
+        critique += f"\nCarried from the last critique ({prior[0]['sha']}), unchanged: {', '.join(carried)}"
     if block:
         critique += "\nFailed checks under the bar (fix these too):\n" + "\n".join(
             f"- {d}.{cid} (rung {r:g}) failed: {q} ({ev})" for d, r, cid, q, ev in block)
@@ -986,7 +1131,8 @@ def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None):
              "critique": critique, "scale": scale(p, cwd), "answers": said,
              "failed": [cid for _, _, cid, _, _ in block], "scoped": scoped, "unanswered": missing,
              "ignored": ignored(text, lad),
-             **(saved or {})}
+             "yes": said_yes(ans, lad),
+             **({"since": prior[0]["sha"], "carried": carried} if prior else {}), **(saved or {})}
     append_jsonl(p.state / "critic.jsonl", entry)
     return entry, critique
 
