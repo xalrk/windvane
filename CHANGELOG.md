@@ -7,8 +7,8 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
-- `check_quick` in the config: a first pass `windvane check` runs before `check` (`pytest -x --lf -q`,
-  `npm test -- --bail`). A failure there ends the check in a minute, `CHECK FAILED (quick pass, exit N)`, with no
+- `check_quick` in the config: a first pass `windvane check` runs before `check`, such as the tests the change
+  touches. A failure there ends the check in a minute, `CHECK FAILED (quick pass, exit N)`, with no
   pass recorded, instead of a full check's length; its pass goes on to `check`. The driver's gate runs `check`
   alone, so the quick pass never decides a merge. Both commands get `WINDVANE_CHANGED` (a file listing the
   branch's changed paths) and `WINDVANE_CHECK_BY` (`worker` or `driver`), to pick or order tests by the change.

@@ -16,7 +16,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from datetime import datetime
@@ -204,11 +203,11 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
     t = ticket or os.environ.get(TICKET)  # a ticket's check gets its scratch dir as TMPDIR, as its sessions do
     # it runs code and tests a session wrote: no tmux pane (util.without_tmux), as for sessions
     env = {**util.without_tmux(os.environ), **({"TMPDIR": str(scratch.session_dir(p, t))} if t else {})}
-    changed = changed_file(p, cwd, env.get("TMPDIR"))
-    env.update({CHANGED: changed, CHECK_BY: by})
+    changed = log.with_suffix(".changed")
     try:
         with log.open("w") as f:
             fcntl.flock(f, fcntl.LOCK_EX)  # blocking: `running` may hold a momentary shared probe
+            env.update({CHANGED: str(write_changed(p, cwd, changed)), CHECK_BY: by})  # locked: no prune takes it
             ledger(p, ticket, {"start": round(start, 3), "log": log.name}, event="check-start")
             beat = heartbeat(log)
             try:
@@ -248,20 +247,18 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
                            **({} if code is not None else {"finished": False}), **({"not_run": True} if waited else {}),
                            **({"waited_s": wait_s} if wait_s else {}),
                            **({"quick_minutes": round(quick_mins, 2)} if quick_mins is not None else {})})
-        Path(changed).unlink(missing_ok=True)
+        changed.unlink(missing_ok=True)
     return code, mins, waited, quick_failed
 
 
-def changed_file(p, cwd, tmp):
-    """A file listing the paths the branch changes (`git diff --name-only <upstream>...HEAD`, one per line) for
-    `WINDVANE_CHANGED`: a file, not the list itself, so a long change can't overflow the environment. Empty when
-    the upstream isn't known here. In the check's TMPDIR, deleted once the check ends."""
+def write_changed(p, cwd, path):
+    """Write `path`, beside the check's log, with the paths the branch changes (`git diff --name-only
+    <upstream>...HEAD`, one per line, unquoted) for `WINDVANE_CHANGED`: a file, not the list itself, so a long
+    change can't overflow the environment. Empty when the upstream isn't known here. Deleted once the check ends; a
+    killed check's goes at the next check's prune, as soon as its log is no longer locked."""
     up = getattr(p, "upstream", None)
-    out = gout(cwd, "diff", "--name-only", f"{up}...HEAD") or "" if up else ""
-    fd, path = tempfile.mkstemp(prefix="windvane-changed-", suffix=".txt", dir=tmp if tmp and Path(tmp).is_dir()
-                                else None)
-    with os.fdopen(fd, "w") as f:
-        f.write(out + "\n" if out else "")
+    out = gout(cwd, "-c", "core.quotepath=off", "diff", "--name-only", f"{up}...HEAD") or "" if up else ""
+    path.write_text(out + "\n" if out else "")
     return path
 
 
@@ -371,7 +368,7 @@ def prune(p, logs, clock=time.time):
     or delete stays, and anything else wrong skips the prune. One prune at a time (another slot's check may start
     alongside): two would both close the same killed check, counting its minutes twice."""
     try:
-        with logs.with_name("prune.lock").open("w") as lock:  # beside the logs: `checks/` holds only logs
+        with logs.with_name("prune.lock").open("w") as lock:  # beside the logs: `checks/` holds only checks' files
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:  # another check is pruning right now
@@ -384,6 +381,12 @@ def prune(p, logs, clock=time.time):
 def prune_logs(p, logs, t):
     """`prune`'s work, under its lock."""
     passed, killed = outcomes(p)
+    for f in logs.glob("*.changed"):  # a killed check's change list; a running one holds its log's lock
+        try:
+            if not f.with_suffix(".log").exists() or not locked(f.with_suffix(".log")):
+                f.unlink()
+        except OSError:
+            pass
     files = sorted(logs.glob("*.log"))  # names sort by start time
     keep = set([f for f in files if f.name not in passed][-KEEP_FAILED:])
     for f in files:

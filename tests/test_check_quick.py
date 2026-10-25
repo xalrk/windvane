@@ -55,12 +55,13 @@ class Base(unittest.TestCase):
         recorded): the paths WINDVANE_CHANGED must list."""
         self.s.git("switch", "-q", "-c", "t-001-work")
         self.s.write("sub/new.txt", "new\n")
+        self.s.write("sub/naïve.txt", "unquoted\n")
         self.s.write("README", "changed\n")
         (self.s.root / "old.txt").unlink()
         self.s.git("add", "-A")
         self.s.git("commit", "-qm", "T-001: work")
         self.s.git("push", "-q", "-u", "origin", "t-001-work")
-        return ["README", "old.txt", "sub/new.txt"]
+        return ["README", "old.txt", "sub/naïve.txt", "sub/new.txt"]
 
     def windvane(self, *argv):
         """`windvane <argv>` in the project, in this process: (exit code, output)."""
@@ -103,7 +104,7 @@ class WorkerQuickPass(Base):
         row = self.check_rows()[-1]
         self.assertEqual((row["passed"], row["role"]), (False, "driver"))  # no session role at the desk
         self.assertIn("quick_minutes", row)
-        self.assertFalse(list(self.s.tmp.rglob("windvane-changed-*")), "the changed list stayed")
+        self.assertEqual(list((self.p.state / "checks").glob("*.changed")), [], "the changed list stayed")
 
     def test_a_passing_quick_pass_runs_check_and_records_its_pass(self):
         (self.seen / "quick.exit").write_text("0")
@@ -123,6 +124,85 @@ class WorkerQuickPass(Base):
         code, out = self.windvane("check")  # the same tree: reused, nothing runs
         self.assertIn("reused the pass", out)
         self.assertEqual(self.saw("quick")[0], ["worker"], "the quick pass ran again on a passed tree")
+
+
+    def test_an_unknown_upstream_gives_an_empty_list_and_the_check_still_runs(self):
+        (self.seen / "quick.exit").write_text("0")
+        self.branch()
+        self.s.git("update-ref", "-d", "refs/remotes/origin/main")
+        code, out = self.windvane("check")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.saw("quick"), (["worker"], []))
+        self.assertEqual(self.saw("check"), (["worker"], []))
+
+    def test_a_check_killed_in_its_quick_pass_leaves_nothing_the_next_check_trips_on(self):
+        """SIGKILL skips every `finally`: its change list stays until the next check's prune, which takes it once
+        the dead check's log is unlocked (its orphaned command gone too); the next check runs its quick pass as
+        usual."""
+        self.branch()
+        go = self.s.tmp / "go"
+        self.s.write(".windvane/config.toml", (self.s.root / ".windvane/config.toml").read_text().replace(
+            "exit $(cat", f"while [ ! -e {go} ]; do sleep 0.05; done; exit $(cat"))
+        self.s.git("commit", "-qam", "a quick pass that waits")
+        p = Project(self.s.root)
+        child = os.fork()
+        if not child:
+            try:
+                jobs.check(p, self.s.root, ticket="T-001", by="worker")
+            finally:
+                os._exit(0)
+        end = time.time() + 10
+        while not self.saw("quick"):
+            self.assertLess(time.time(), end, "the quick pass never started")
+            time.sleep(0.05)
+        os.kill(child, 9)
+        os.waitpid(child, 0)
+        left = list((p.state / "checks").glob("*.changed"))
+        self.assertEqual(len(left), 1, "SIGKILL ran the cleanup after all: nothing to prove")
+        go.touch()  # the orphaned quick pass ends, and with it the lock it inherited on the dead check's log
+        while jobs.locked(left[0].with_suffix(".log")):
+            self.assertLess(time.time(), end, "the orphaned quick pass never ended")
+            time.sleep(0.05)
+        (self.seen / "quick.by").unlink()
+        ok, summary, _ = jobs.check(p, self.s.root, ticket="T-001", by="worker")
+        self.assertIn("quick pass, exit 3", summary)
+        self.assertEqual(self.saw("quick")[0], ["worker"])
+        self.assertEqual(list((p.state / "checks").glob("*.changed")), [])
+        self.assertEqual(self.passes(), [])
+
+
+class HeavyQuickPass(Base):
+    """With `heavy_check`, the quick pass isn't queued for the machine: it fails in its own time while another job
+    holds the machine, and only `check` waits for it."""
+
+    def setUp(self):
+        super().setUp()
+        from test_heavy_check_wait import hold, machine
+        patch = mock.patch.dict(os.environ, machine(self.s.tmp / "machine", 0.02))  # gives up after 1.2 s
+        patch.start()
+        self.addCleanup(patch.stop)
+        for k in ("WINDVANE_HEAVY_HELD", STOP_AT, TICKET):
+            os.environ.pop(k, None)
+        self.s.write(".windvane/config.toml", (self.s.root / ".windvane/config.toml").read_text().replace(
+            "check_quick =", "heavy_check = true\ncheck_quick ="))
+        self.s.publish("heavy")
+        self.p = Project(self.s.root)
+        hold(self, self.s.tmp / "machine")
+
+    def test_a_failing_quick_pass_never_waits_for_the_machine(self):
+        ok, summary, log = jobs.check(self.p, self.s.root, ticket="T-001", by="worker")
+        self.assertFalse(ok)
+        self.assertRegex(summary, r"^CHECK FAILED \(quick pass, exit 3\)")
+        self.assertNotIn("waiting", log.read_text())
+        self.assertNotIn("waited_s", self.check_rows()[-1])
+
+    def test_a_passing_one_hands_over_to_the_heavy_check(self):
+        (self.seen / "quick.exit").write_text("0")
+        ok, summary, _ = jobs.check(self.p, self.s.root, ticket="T-001", by="worker")
+        self.assertIsNone(ok, summary)  # the machine stayed held: `check` waited and never ran
+        self.assertTrue(summary.startswith(jobs.NOT_RUN), summary)
+        self.assertEqual(self.saw("quick")[0], ["worker"])
+        self.assertIsNone(self.saw("check"))
 
 
 class SessionQuickPass(Base):
