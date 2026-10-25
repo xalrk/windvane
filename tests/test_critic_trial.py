@@ -174,11 +174,11 @@ class CriticTrial(unittest.TestCase):
 
     def test_it_drives_windvane_on_scratch_state(self):
         self.env("FAKE_CRITIC_TRY", "XDG_STATE_HOME=$TMPDIR/state windvane stop; echo stop=$?; "
-                                    "ls $TMPDIR/state/windvane/*/STOP; windvane doctor --clean; echo clean=$?")
+                                    "windvane doctor --clean; echo clean=$?")
         self.critic()
         [seen] = self.tried()
         self.assertIn("stop=0", seen["out"])
-        self.assertIn("/STOP\n", seen["out"])  # the scratch run's stop file
+        self.assertIn("autopilot isn't running; nothing to stop", seen["out"])  # it ran, on scratch state with no run
         self.assertIn("`windvane doctor --clean` is refused on the live state", seen["out"])  # it names the scratch form
         self.assertIn("`XDG_STATE_HOME=$TMPDIR/state windvane doctor --clean ...`", seen["out"])
         self.assertIn("clean=1", seen["out"])
