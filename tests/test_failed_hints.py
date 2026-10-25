@@ -101,6 +101,7 @@ class FailedPush(Base):
                                                 f"Log: {log}; once fixed, {RETRY}")
         self.assertIn("T-001: FAILED: the API it needs is gone", self.log())  # the line the log holds for it
         out = io.StringIO()
+        self.addCleanup(os.chdir, os.getcwd())  # `-C` moves into the sandbox, which goes before the next test
         with contextlib.redirect_stdout(out):  # the command as pushed, once the run is over
             cli.main(["-C", str(self.s.root), "retry", "T-001"])
         self.assertIn("autopilot isn't running; the next `windvane run` takes T-001 up", out.getvalue())
