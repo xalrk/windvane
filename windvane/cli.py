@@ -16,8 +16,8 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import (bench, budget, doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, publiccheck,
-               questions, requests, schedule, scratch, util, watch)
+from . import (bench, budget, doctor, driver, experiment, heavy, install, jobs, net, phone, planner, preflight, privacy,
+               publiccheck, questions, requests, schedule, scratch, util, watch)
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
@@ -708,7 +708,11 @@ def cmd_experiments(a, p):
     """This week's experiment budget, or more of it for this week (`allow +10`)."""
     b = budget.Budget(p.cfg["experiments"])
     if not a.what:
-        return print("\n".join(b.lines()))
+        why = experiment.stopped(p)
+        return print("\n".join(b.lines() + [f"experiments stopped: {why}; `windvane experiments resume` plans them "
+                                             "again"] * bool(why)))
+    if a.what == ["resume"]:
+        return print("experiments: planned again" if experiment.resume(p) else "experiments: weren't stopped")
     try:
         more = float(a.what[1].lstrip("+")) if a.what[0] == "allow" and len(a.what) == 2 else 0
     except ValueError:
@@ -983,10 +987,13 @@ def parser():
     s.add_argument("--week-cap", type=float, help="the seed runs' weekly cap %% (default: this project's)")
     s.add_argument("--dry-run", action="store_true", help="print the plan and what earlier runs that size cost")
     s.add_argument("--last", action="store_true", help="print the latest run's results again")
+    s.add_argument("--pool", action="store_true", help="the training pool's seeds (bench/pool/), not the frozen "
+                   "holdout's (bench/)")
     s.add_argument("--repeat", type=int, default=1, help="with compare: N runs a side, so a difference shows past "
                    "the noise (default 1)")
     s = sub.add_parser("experiments", help="this week's bench spend against the experiment budget")
-    s.add_argument("what", nargs="*", metavar="allow +N", help="let benches use N%% more of this week's limit")
+    s.add_argument("what", nargs="*", metavar="allow +N | resume", help="let benches use N%% more of this week's "
+                   "limit; resume: plan experiments again after the overfit alarm stopped them")
     sub.add_parser("mode", help="how a design question is handled right now")
     sub.add_parser("quiet", help="show the quiet times (yours for every project, and this project's)")
     s = sub.add_parser("watch", help="follow the running sessions live (costs no tokens)")

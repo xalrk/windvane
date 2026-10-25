@@ -490,6 +490,7 @@ class Pilot(Desk, Periodic, Experiments):
         # bench rounds: main's head each was last looked at for (and whether it was due), and the merge count a busy
         # checkout put its regression ticket off to
         self.bench_seen, self.bench_wait = {}, {}
+        self.overfit_read = None  # bench.jsonl's mtime when `overfit_watch` last looked
         self.asks_left = []  # the rounds asked for that the run ended before: in the final summary
         self.requests_tried = set()  # windvane requests a [[periodic]] round was given this run: never twice
         self.desk_init(s.get("desk", {}))  # the user's labelled PRs, merged between tickets (desk.py)
@@ -2490,6 +2491,7 @@ class Pilot(Desk, Periodic, Experiments):
                 if not self.wait_for_reset():
                     return
                 continue
+            self.overfit_watch()
             due = self.periodic_due()
             if due and self.running and due.get("bench") != "start":  # a quiet tree: the running ones finish first
                 self.idle_note([f"{due['name']} is due: waiting for {', '.join(sorted(self.running))} to finish"])

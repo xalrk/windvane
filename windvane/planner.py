@@ -127,6 +127,14 @@ EXPERIMENTS = f"{DIR}/EXPERIMENTS.md"  # the experiments the bench rejected (exp
 EXPERIMENTS_SHOWN = 6000  # characters of it a planner or periodic prompt gets: the newest records
 
 
+def stopped_part(p):
+    """The prompt's line when experiment planning is stopped (the overfit alarm), or ""."""
+    from .experiment import stopped
+    why = stopped(p)
+    return why and (f"## Experiments are stopped\n{why}. Write no `Kind: experiment` ticket: the user resumes them "
+                    "with `windvane experiments resume`.")
+
+
 def rejected_part(cd):
     """The prompt's section on the experiments the bench rejected, from `cd`'s EXPERIMENTS.md, or "" when none was."""
     f = Path(cd) / EXPERIMENTS
@@ -334,6 +342,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=()):
         + "\n".join(f"- ({t}) {b}" for t, b in notes[:60]) if notes else "",
         f"## Existing tickets (id, status, title)\n{q.listing(compact=True, keep=merged) or '(none yet)'}",
         rejected_part(cd),
+        stopped_part(p),
         f"## Ids for new tickets, in order (at most {max_new})\n{', '.join(ids)}",
     ]))
     log(p, f"plan run ({len(notes)} critic notes)")

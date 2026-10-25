@@ -8,7 +8,11 @@ Kept (`bench.experiment_verdict`), it merges as usual, its numbers in the log an
 merged: its branch stays, QUEUE.md gets `- rejected: <id> (numbers)` and EXPERIMENTS.md a record of the idea, its files
 and both sides' numbers, which the planner and the periodic sessions get, so the idea isn't planned again unchanged.
 Main moving on during the bench: the head is compared with the newest main a bench ran, benching main's side again
-(only that side) when the results for its new sha are missing.
+(only that side) when the results for its new sha are missing. With a `seed` round, the bench is the training pool's
+(`bench.training`), never the holdout's.
+
+`stop` halts experiment planning (the overfit alarm, `periodic.Periodic.overfit_watch`): the planner and the periodic
+sessions are told to write no experiment until `windvane experiments resume`.
 """
 from datetime import datetime, timedelta
 
@@ -19,7 +23,7 @@ from .periodic import bench_command, bench_runs
 from .phone import whole
 from .planner import EXPERIMENTS, branch_name
 from .questions import quiet_now
-from .util import append_jsonl, git, gout, hhmm, now, push
+from .util import append_jsonl, git, gout, hhmm, load_json, now, push, save_json
 from .worktree import clean_detach
 
 POLL = 30  # seconds between looks at a running bench job
@@ -45,7 +49,7 @@ class Experiments:
         for _ in range(MOVES):
             self.fetch()
             base = gout(p.main_root(), "rev-parse", p.upstream)
-            if not bench.planned(p, base, which):
+            if not bench.planned(p, base, which, bench.training(p)):
                 self.log(f"{tid}: Kind: experiment, but {p.main} has no bench seeds to measure it with; merged as "
                          "usual")
                 return self.settled(tid)
@@ -67,6 +71,7 @@ class Experiments:
         if not kept:
             return self.reject(tid, branch, sha, both, numbers, why)
         self.log(f"{tid}: experiment kept by the bench ({why}): {numbers}")
+        append_jsonl(p.state / "ledger.jsonl", {"event": "experiment", "ticket": tid, "verdict": "kept"})  # pool.py
         self.bench_body(tid, branch, numbers, why, bench.compare_table(both, which))
         return self.settled(tid)
 
@@ -101,7 +106,8 @@ class Experiments:
     def run_minutes(self, sha, which):
         """The most one bench run at `sha` takes: its seeds build for `experiment_minutes` side by side, then each
         seed's judge has up to JUDGE_MINUTES, one after another."""
-        return int(self.p.ap["experiment_minutes"]) + len(bench.planned(self.p, sha, which)) * bench.JUDGE_MINUTES
+        return int(self.p.ap["experiment_minutes"]) + len(bench.planned(self.p, sha, which, bench.training(self.p))) \
+            * bench.JUDGE_MINUTES
 
     def bench_fits(self, tid, sha):
         """Whether the experiment's next bench run fits before the deadline (or none is owed); if not, the ticket is
@@ -284,6 +290,26 @@ def todo(p, base, sha, which, repeat):
     `repeat`."""
     return [(p.main, base)] * (not bench_runs(p, base, which)) + [("the head", sha)] * max(
         0, repeat - len(bench_runs(p, sha, which)))
+
+
+def stopped_file(p):
+    return p.state / "experiments-stopped.json"
+
+
+def stopped(p):
+    """Why experiment planning is stopped ("" when it isn't)."""
+    return load_json(stopped_file(p), {}).get("why", "")
+
+
+def stop(p, why):
+    save_json(stopped_file(p), {"why": why, "at": f"{now():%Y-%m-%d %H:%M}"})
+
+
+def resume(p):
+    """Start experiment planning again; whether it was stopped."""
+    was = bool(stopped(p))
+    stopped_file(p).unlink(missing_ok=True)
+    return was
 
 
 def job_name(tid):

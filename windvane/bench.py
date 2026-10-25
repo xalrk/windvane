@@ -15,6 +15,11 @@ its user would, on the seed's `hidden/JUDGE.md` checks. It gets the seed's goal 
 project was built (no critic scale or verdicts, pass mark, run log, ledger or windvane ref), so its yes count is a
 score no session could aim at. Its tokens are the bench's own, kept out of the seed's cost per merged ticket.
 
+Two sets of seeds: `bench/<name>/` is the frozen holdout, run by hand and in the weekly trend, never what an
+automatic decision rests on; `bench/pool/<name>/` the training pool (`--pool`), which a project with a `seed` round
+([[periodic]] `builtin = "seed"`, pool.py) benches its experiments and regressions on. `overfit` reads the two
+against each other: the pool rising while the holdout falls is the loop learning its seeds, not how to build projects.
+
 `bench compare A B` sets two windvane refs (or earlier runs) side by side, running only what isn't recorded yet.
 `experiment_verdict` reads one such pair as an experiment ticket's keep or reject (experiment.py).
 How a seed is scored and how two sides are compared live in `bench_score.py`, a protected path.
@@ -29,7 +34,7 @@ import subprocess
 import sys
 import time
 import tomllib
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # the scoring, and what callers (`periodic`, the tests) read through this module
@@ -37,7 +42,7 @@ from . import budget
 from .bench_score import (NOISE, QUALITY, answers, compare_table, counted, headline, judge_checks,  # noqa: F401
                           judge_failed, judged, measure, num, outcomes, past_noise, regression, runs_n, score,
                           summary, tally, yeses)
-from .config import PERM_ROLES, Project, user_dir
+from .config import PERM_ROLES, POOL, Project, user_dir
 from .heavy import machine
 from .runner import rules as session_rules, run_claude
 from .stats import k, ticket_outcomes, weighted
@@ -89,8 +94,24 @@ def size(full, small, week, limit):
         "full", f"weekly usage {week:g}% ≤ {limit:g}%")
 
 
+def where(pool):
+    """The folder of a set of seeds, relative to the checkout: the training pool's, or the holdout's."""
+    return POOL if pool else "bench"
+
+
+def set_of(r):
+    """A record's set of seeds: "pool" or "holdout" (every run from before the pool)."""
+    return "pool" if r.get("pool") else "holdout"
+
+
+def training(p):
+    """Whether this project's automatic benches (an experiment's gate, the bench round) run on the training pool:
+    once it has a `seed` round to fill it. Without one, they run on `bench/`'s seeds, as before there was a pool."""
+    return any(e["builtin"] == "seed" for e in p.periodic.values())
+
+
 def seeds(src):
-    """{name: seed} for every `bench/<name>/` with a `seed/` and a `hidden/bench.toml`, by name."""
+    """{name: seed} for every `<src>/<name>/` with a `seed/` and a `hidden/bench.toml`, by name."""
     out = {}
     for d in sorted(Path(src).iterdir()) if Path(src).is_dir() else []:
         if not ((d / "seed").is_dir() and (d / "hidden/bench.toml").is_file()):
@@ -191,8 +212,9 @@ def child_env(home, path):
 
 def needles(seed, bases):
     """What a run stream that saw the hidden tests would hold: their paths and file names, the references' path."""
-    out = {f"bench/{seed['name']}/hidden", "fixtures/bench/reference"}
-    out |= {str(Path(b) / "bench" / seed["name"] / "hidden") for b in bases}
+    rel = f"{seed['dir'].parent.name}/{seed['name']}" if seed["dir"].parent.name == "pool" else seed["name"]
+    out = {f"bench/{rel}/hidden", "fixtures/bench/reference"}
+    out |= {str(Path(b) / "bench" / rel / "hidden") for b in bases}
     return sorted(out | {f.name for f in (seed["dir"] / "hidden").glob("*.py")})
 
 
@@ -369,9 +391,10 @@ def runs_of(p):
     return out
 
 
-def earlier(p, which):
-    """What an earlier run of this size cost, as a line."""
-    runs = [rs for rs in runs_of(p).values() if rs[0].get("size") == which]
+def earlier(p, which, pool=False):
+    """What an earlier run of this size and set cost, as a line."""
+    want = "pool" if pool else "holdout"
+    runs = [rs for rs in runs_of(p).values() if rs[0].get("size") == which and set_of(rs[0]) == want]
     if not runs:
         return f"earlier {which} runs: none yet, so no cost to go by"
     w = sum(r["weighted"] for rs in runs for r in rs) / len(runs)
@@ -484,7 +507,7 @@ def main(a, p):
         return print(table(list(runs.values())[-1]) if runs else "bench: no results yet (windvane bench runs one)")
     before = week_now()
     which, why = size(a.full, a.small, before, week_limit())
-    print(f"bench: {which} ({why})", flush=True)
+    print(f"bench: {which} ({why}), {'the training pool' if a.pool else 'the holdout'}", flush=True)
     return one(p, a, a.ref, which, before)[0]
 
 
@@ -500,13 +523,13 @@ def one(p, a, ref, which, before):
     try:
         sha = ref_worktree(p, ref, wt)
         refuse_changed(wt, sha)
-        found = seeds(wt / "bench")
+        found = seeds(wt / where(a.pool))
         if not found:
-            raise SystemExit(f"bench: no seeds in bench/ at {ref}")
+            raise SystemExit(f"bench: no seeds in {where(a.pool)}/ at {ref}")
         chosen = pick(found, which)
         print("\n".join(plan_lines(chosen, a.hours, ref, sha)), flush=True)
         if a.dry_run:
-            print(earlier(p, which))
+            print(earlier(p, which, a.pool))
             return 0, []
         return run(p, a, chosen, base, wt, ref, sha, which, before)
     except (KeyboardInterrupt, Stopped):  # before any seed ran
@@ -567,7 +590,7 @@ def run(p, a, chosen, base, wt, ref, sha, which, before):
                    "usd": usd, "per_merged": {t: per[t] for t in tickets["merged"]},
                    "minutes": round((ended.get(s["name"], time.time()) - began) / 60, 1), "week_before": before,
                    "week_after": after, "contaminated": bool(hits), "hits": [f"{f}: {w}" for f, w in hits[:5]],
-                   "exit": proc.returncode}
+                   "exit": proc.returncode, **({"pool": True} if a.pool else {})}
             append_jsonl(results(p), rec)
             recs.append(rec)
     except (KeyboardInterrupt, Stopped) as e:  # Ctrl-C, or a closed terminal: no seed run goes on alone
@@ -583,18 +606,19 @@ def run(p, a, chosen, base, wt, ref, sha, which, before):
 
 
 
-def planned(p, sha, which):
-    """The seeds a run of this size at `sha` works, by name, read from git: what makes a recorded run reusable."""
-    names = (gout(p.main_root(), "ls-tree", "-d", "--name-only", f"{sha}:bench") or "").split()
-    has = lambda path: subprocess.run(["git", "cat-file", "-e", f"{sha}:bench/{path}"], cwd=p.main_root(),
+def planned(p, sha, which, pool=False):
+    """The seeds of a set a run of this size at `sha` works, by name, read from git: what makes a recorded run
+    reusable."""
+    names = (gout(p.main_root(), "ls-tree", "-d", "--name-only", f"{sha}:{where(pool)}") or "").split()
+    has = lambda path: subprocess.run(["git", "cat-file", "-e", f"{sha}:{where(pool)}/{path}"], cwd=p.main_root(),
                                       capture_output=True).returncode == 0
     names = sorted(n for n in names if has(f"{n}/seed") and has(f"{n}/hidden/bench.toml"))
     return names if which == "full" else names[:SMALL_SEEDS]
 
 
-def sides(p, refs, which, runs):
+def sides(p, refs, which, runs, pool=False):
     """Each side of a compare: an earlier run's id (that run, fixed) or a ref, with its runs already recorded at the
-    same sha and size over the same seeds, newest last."""
+    same sha, size and set over the same seeds, newest last."""
     out = []
     for name in refs:
         if name in runs:
@@ -603,9 +627,9 @@ def sides(p, refs, which, runs):
         sha = gout(p.main_root(), "rev-parse", "--verify", "--quiet", f"{name}^{{commit}}")
         if not sha:
             raise SystemExit(f"bench compare: {name!r} is neither a commit nor an earlier run's id")
-        want = planned(p, sha, which)
+        want = planned(p, sha, which, pool)
         have = [rs for rs in runs.values() if rs[0].get("sha") == sha and rs[0].get("size") == which
-                and sorted(r["seed"] for r in rs) == want]
+                and set_of(rs[0]) == ("pool" if pool else "holdout") and sorted(r["seed"] for r in rs) == want]
         out.append({"name": name, "sha": sha, "runs": [rs for rs in have if not any(map(judge_failed, rs))],
                     "failed": sum(any(map(judge_failed, rs)) for rs in have), "fixed": False})
     return out
@@ -624,7 +648,7 @@ def compare(a, p, *refs):
     else:
         which, why = size(a.full, a.small, week_now(), week_limit())
     print(f"bench compare: {which} ({why})", flush=True)
-    both = sides(p, refs, which, runs)
+    both = sides(p, refs, which, runs, a.pool)
     taken = set()
     for s in both:  # a ref compared with itself gets runs of its own on each side
         if not s["fixed"]:
@@ -647,27 +671,41 @@ def compare(a, p, *refs):
     return 0
 
 
+WEEK_RUNS = 7  # days of runs the overfit alarm reads: the weekly trend's
 
 
+def drift(first, last):
+    """Where one set's quality went from its `first` run to its `last` (each a run's records), over the seeds both
+    counted, by the noise rule: ("up", "down" or "flat", or None when no seed was in both; each quality measure's
+    first → last)."""
+    both = [{"name": "first", "runs": [first]}, {"name": "last", "runs": [last]}]
+    per, common = counted(both)
+    if not common:
+        return None, "no seed counted in both runs"
+    moves, said = set(), []
+    for key, label in QUALITY:
+        (a, b), spread, d = measure(per, common, key)
+        said.append(f"{label} {num(a, key)}→{num(b, key)}")
+        if past_noise(d, spread, False):
+            moves.add("up" if d > 0 else "down")
+    return ("down" if "down" in moves else "up" if moves else "flat"), ", ".join(said)
 
 
+def week_drift(runs, which_set, since):
+    """One set's `drift` over its runs from run id `since` on, the newest size's first against its last;
+    (None, why) with fewer than two."""
+    rs = [x for x in runs if set_of(x[0]) == which_set and str(x[0].get("run")) >= since
+          and not any(map(judge_failed, x))]
+    rs = [x for x in rs if x[0].get("size") == rs[-1][0].get("size")] if rs else []
+    if len(rs) < 2:
+        return None, f"{len(rs)} {which_set} run{'s' * (len(rs) != 1)} this week"
+    return drift(rs[0], rs[-1])
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def overfit(p, at=None):
+    """The overfit alarm over the week before `at`: (alarmed, the pool's line, the holdout's line). Alarmed when the
+    training pool's quality rose past the noise while the frozen holdout's fell past it."""
+    since = f"{(at or datetime.now()) - timedelta(days=WEEK_RUNS):%Y%m%d-%H%M%S}"
+    runs = list(runs_of(p).values())
+    (pool, pool_said), (hold, hold_said) = (week_drift(runs, s, since) for s in ("pool", "holdout"))
+    return pool == "up" and hold == "down", f"pool {pool or '?'}: {pool_said}", f"holdout {hold or '?'}: {hold_said}"
