@@ -90,6 +90,9 @@ re-asks that try to save a reply the driver couldn't read, how they went, and wh
 Its `what it bought` lines (see [commands](commands.md)) take a revision round's turns and tokens from
 `runs/*.jsonl`, from a `CRITIC STEP: revise` to the next `windvane critic` call; a stream's per-turn output counts
 are partial, so a round gets its run's output tokens in proportion to its turns.
+Its `critic runs:` line splits the critic's sessions into each
+ticket's first critique and the ones after it, with the later ones' weighted tokens per ticket: what a re-critique
+that judges only the revision (see [concepts](concepts.md)) saves shows there.
 
 Check logs (`state/checks/`) are pruned when a check starts: a passed check's log after 3 days, any after 3 weeks,
 but never one still running or one of the 5 newest that failed or were cut off. A killed check's log gets its

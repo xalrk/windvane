@@ -430,6 +430,7 @@ def bought(p, recs, lad, bar, since):
     rounds_line(p, by, backs)
     misses(p, by, since)
     depths(p, by, since)
+    later_runs(p, by, since)
     undecided(recs, lad, bar)
 
 
@@ -634,6 +635,35 @@ def depths(p, by, since):
               if any(e == d for e, _ in seen)]
     note("by depth (a ticket by the depth it started at): " + "; ".join(parts) + "."
          + (f" Reviews after a pass that asked for changes: {', '.join(missed)}" if missed else ""))
+
+
+def later_runs(p, by, since):
+    """The critic's first critique of a ticket against the ones after it, in turns and weighted tokens from the
+    ledger, and the checks re-critiques carried over (`critic.carry`): what judging the revision instead of the whole
+    change again saves shows in the later ones. A critique starts at a `-critic` or `-critic-light` session; a light
+    read's trial, the time-up turn and the re-ask are the same critique."""
+    runs = {}
+    for row in read_jsonl(p.state / "ledger.jsonl"):
+        t, label = row.get("ticket"), row.get("label", "")
+        if row.get("role") != "critic" or t not in by or row.get("at", "") < since:
+            continue
+        mine = runs.setdefault(t, [])
+        if not mine or label == f"{t}-critic-light" or (label == f"{t}-critic" and mine[-1][2] != f"{t}-critic-light"):
+            mine.append([0, 0.0, label])
+        mine[-1][0] += row.get("turns") or 0
+        mine[-1][1] += weighted(row)
+        mine[-1][2] = label
+    first = [rs[0] for rs in runs.values()]
+    later = [r for rs in runs.values() for r in rs[1:]]
+    if not first:
+        return
+    each = lambda xs: f"{sum(x[0] for x in xs) / len(xs):.1f} turns and {sum(x[1] for x in xs) / len(xs) / 1000:.0f}k"
+    carried = [r for rs in by.values() for r in rs if "carried" in r]
+    note(f"critic runs: first critiques {len(first)}, {each(first)} weighted tokens each"
+         + (f"; later ones {len(later)}, {each(later)} each, {sum(x[1] for x in later) / len(first) / 1000:.0f}k "
+            f"per ticket" if later else "; no later ones")
+         + (f"; {sum(len(r['carried']) for r in carried)} checks carried over in {plural(len(carried), 're-critique')}"
+            if carried else ""))
 
 
 def undecided(recs, lad, bar, least=5):

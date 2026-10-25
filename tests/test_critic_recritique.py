@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import cli, critic  # noqa: E402
+from windvane import cli, critic, stats  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -165,6 +165,17 @@ class Recritique(unittest.TestCase):
         self.assertIn("It crashes.", earlier)
         self.assertNotIn("works=6", earlier, "no anchor on the earlier number")
         self.assertNotIn("## What changed since", prompt)
+
+    def test_stats_counts_the_later_runs_and_the_carried_checks_apart(self):
+        self.critic(FIRST)
+        self.change("import fcntl\nprint('one')\n")
+        self.critic(FIXED)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            stats.critic_stats(argparse.Namespace(last=10, since=None), self.p)
+        line = " ".join(out.getvalue().split()).split("critic runs: ")[1]
+        self.assertRegex(line, r"^first critiques 1, [\d.]+ turns and \d+k weighted tokens each; later ones 1, [\d.]+ "
+                               r"turns and \d+k each, \d+k per ticket; 2 checks carried over in 1 re-critique")
 
 
 if __name__ == "__main__":
