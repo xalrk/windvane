@@ -178,7 +178,9 @@ a planned ticket will show is critiqued now.
 
 **The scale** is `.windvane/CRITIC.md`, written per project: who uses it, what best in class looks like, and two to
 four dimensions, each a ladder of rungs (say 2, 5, 8, 10) with a few yes/no checks on each (`- 5 safe: no known way
-it crashes or loses work`). The first dimension is always whether the ticket works at all. The critic answers every
+it crashes or loses work`). The first dimension is always whether the ticket works at all. Checks are answered by
+trying the change, so each asks what a user meets when it's run, broken or read, never what the pack or a test
+shows (`doctor` warns of one worded that way). The critic answers every
 check of each dimension the ticket touches, `yes`, `no` or `no (out of scope: <why>)`, with a clause of evidence,
 and never writes a number: a dimension's score is its highest rung whose checks and every lower rung's are all
 `yes`, and the ticket's is the lowest dimension. So give every ladder a 10 rung, reachable by a good ticket: one

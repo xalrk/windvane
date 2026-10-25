@@ -285,10 +285,30 @@ def misread(text, rel):
     return out
 
 
+GRADES_EVIDENCE = re.compile(r"\b(?:in the (?:evidence )?pack|(?:the|its) (?:evidence )?pack (?:shows|has|holds|contains|"
+                             r"includes|quotes)|quot(?:e|es|ed|ing)|(?:a|the) tests? (?:exists?|covers?|shows?|"
+                             r"proves?|reproduces?)|(?:covered|exercised|proven|shown) by (?:a |the )?tests?)\b", re.I)
+
+
+def evidence_graded(text, rel):
+    """[(what, fix)] for each check whose wording grades the evidence rather than what a user meets when the change
+    is tried: the pack ("in the pack", "the pack shows/has/holds/contains/includes/quotes"), pasted quotes ("quote",
+    "quoted"...) or the tests ("a test exists/covers/shows/proves/reproduces", "covered/exercised/proven/shown by a
+    test"). Such a check is answered by pasting, not trying: one asking for quotes fails verdicts, and
+    one asking for a test turns into fix points. One warning per check, naming the first phrase; a word list, so a
+    check that only mentions a quote (a stock quote) gets a warning it can ignore."""
+    return [(f'critic scale: check `{cid}` grades the evidence ("{m.group(0)}"), not what trying the change shows',
+             f"reword it in {rel} as what a user meets when the change is run, broken or read")
+            for cs in ladder(text).values() for _, cid, q in cs if (m := GRADES_EVIDENCE.search(q))]
+
+
 def scale_warnings(p, cwd):
-    """`misread()` on the project's scale in `cwd`, or [] when it has none."""
+    """`misread()` and `evidence_graded()` on the project's scale in `cwd`, or [] when it has none."""
     f = Path(cwd) / p.rubric_rel
-    return misread(f.read_text(), p.rubric_rel) if f.is_file() else []
+    if not f.is_file():
+        return []
+    text = f.read_text()
+    return misread(text, p.rubric_rel) + evidence_graded(text, p.rubric_rel)
 
 
 def clip(text, n=200):

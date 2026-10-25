@@ -47,6 +47,10 @@ release on the same day adds a number (`2026.10.9.1`).
   that the token's user may read the reply topic, and a refused test names the one `ntfy access` line still to run.
 
 ### Changed
+- The critic scale new projects start from (`templates/CRITIC.md`) asks what a user meets when the change is
+  tried, not what the pack or a test shows, and has a starting ladder for an app with a UI, a game or visual
+  output, and a library beside the command-line one. `windvane doctor` and a run's start warn of a check worded
+  to grade the pack or the tests ("the pack quotes", "a test covers"), naming it.
 - `windvane await` on a job still in the heavy queue says where it stands now, read as `heavy --status` reads it:
   who holds the lock and since when, the job's place in line, what it waits on and the work ahead. The log lines it
   still shows say how long ago they were written, and an estimate that ran out reads `overdue since 03:57`, not a
