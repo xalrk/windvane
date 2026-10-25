@@ -312,7 +312,8 @@ leaves the machine at three points:
   state dir's `push-refusals/`. A worker that then finishes READY on a branch the remote lacks is sent back at once,
   with that line, before the critic or the check is paid for; the next worker resumes that local branch rather than
   starting afresh. The same refusal twice in a row sets the ticket aside, with a push naming the fix (`git commit
-  --amend`, or `git reset --soft` and commit again) and `windvane retry <ID>` to send it back once it's done.
+  --amend`, or `git reset --soft` and commit again) and `windvane retry <ID>` to send it back once it's done; the
+  retry forgets the refusal, as a push from your own checkout doesn't pass through windvane's hook.
 - **Every merge.** Before it merges a ticket or a desk PR, the driver scans the branch's commits again, for a push that
   got past the hook (`--no-verify`, or one made elsewhere). A ticket goes back to its worker, who takes it out with a
   commit on top; windvane then merges the branch as one commit, so the commit that added it stays out of main's

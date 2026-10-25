@@ -158,6 +158,21 @@ class NeverPushed(Base):
             pilot.save()  # as `work` does after each worker run
         self.assertIn("T-001", pilot.skip)
 
+    def test_a_retry_after_a_fix_by_hand_forgets_the_refusal(self):
+        ensure_worktree(self.p, self.p.work_dir, setup=False)
+        self.local(self.p.work_dir)
+        (self.p.state / REFUSALS).mkdir(parents=True)
+        (self.p.state / REFUSALS / "work-1.json").write_text(json.dumps(
+            {"at": "2026-10-24T10:00:00", "branch": "t-001-work", "base": "abc",
+             "line": "windvane: push refused: it would make public a token at a.py:1 in 1a2b3c4."}))
+        pilot = self.pilot()
+        pilot.skip, pilot.aside = {"T-001"}, {"T-001": "its push was refused twice in a row"}
+        (self.p.state / driver.RETRY).write_text("T-001\n")  # `windvane retry T-001`, after the user's own push
+        pilot.take_retries()
+        pilot.not_pushed("T-001", "t-001-work", "0" * 40)
+        self.assertEqual(pilot.feedback["T-001"], "Your branch `t-001-work` isn't on origin: push it "
+                                                  "(`git push -u origin t-001-work`), then finish READY.")
+
     def test_a_pushed_branch_isnt_shadowed_by_an_older_local_attempt(self):
         ensure_worktree(self.p, self.p.work_dir, setup=False)
         wd = self.p.work_dir

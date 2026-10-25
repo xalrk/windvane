@@ -297,6 +297,15 @@ def last_refusal(p, mine):
     return max(found, key=lambda r: r.get("at", ""), default=None)
 
 
+def forget_refusals(p, mine):
+    """Drop the notes `last_refusal` would find for branches `mine(branch)` accepts: once the user fixed a branch by
+    hand (their checkout's pushes skip windvane's hook, so nothing clears them) and sent its ticket back."""
+    for f in (p.state / REFUSALS).glob("*.json"):
+        r = load_json(f, None)
+        if isinstance(r, dict) and mine(r.get("branch", "")):
+            f.unlink(missing_ok=True)
+
+
 def their_hooks(path):
     """The repo's own hooks folder, as git finds it: the last core.hooksPath in its config files (relative to the
     worktree, as git reads it; not git's command line, where a session's own may be), else the common `.git/hooks`."""

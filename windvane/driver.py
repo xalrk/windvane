@@ -48,7 +48,7 @@ from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude
 from .util import (PARTIAL_LOG, append_jsonl, git, gout, hhmm, last_match, load_json, log, now, push, read_jsonl,
                    save_json)
 from .worktree import (TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, clear_scrub_stubs, ensure_worktree,
-                       guard_pushes, last_refusal, teardown)
+                       forget_refusals, guard_pushes, last_refusal, teardown)
 
 RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)")
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
@@ -2501,6 +2501,7 @@ class Pilot(Desk, Periodic):
             self.unfinished.discard(tid)
             for counts in (self.reviews, self.bounces, self.partials, self.ticket_crashes, self.refused):
                 counts.pop(tid, None)
+            forget_refusals(self.p, lambda b: b.startswith(f"{tid.lower()}-"))  # fixed by hand, as its push said
             append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "retried"})
             land = self.landing.get(tid)
             self.log(f"{tid}: back in the queue (windvane retry)"
