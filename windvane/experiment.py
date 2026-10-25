@@ -23,7 +23,7 @@ from .worktree import clean_detach
 POLL = 30  # seconds between looks at a running bench job
 MOVES = 3  # main moving on during the bench: the most times its side is benched again before the head is compared
 HEADER = ("# Experiments the bench rejected\n\nEach passed its critic, check and review, then measured no better than "
-          "main on the bench (`windvane bench`), so it wasn't merged; its branch is kept. A ticket planning one again "
+          "main on the bench\n(`windvane bench`), so it wasn't merged; its branch is kept. A ticket planning one again "
           "says what's different.\n")
 
 

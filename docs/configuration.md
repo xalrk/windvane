@@ -107,6 +107,9 @@ See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 | `stale_days` | `3` | Days. An unfinished ticket branch with no commit for this long is no longer resumed before new work: it waits for its turn in the queue order. |
 | `desk_label` | `"windvane merge"` | Forge `github`: your own open PRs with this label are checked merged with `main` and merged between tickets, so you needn't merge by hand while a run is on. A red, conflicting or refused one gets a fix session. `""` turns it off. |
 | `desk_fixes` | `2` | Fix sessions per desk PR before it is left for you (pushed once). A new head you push makes it a fresh candidate. |
+| `experiment_repeat` | `2` | Runs of an experiment ticket's head its bench takes before the merge ([experiments](concepts.md#the-critic-and-calibration)); `main`'s side reuses its recorded runs, making one when there are none. Protected with the bench. |
+| `experiment_saving` | `10` | Percent fewer weighted tokens per merged ticket that keep an experiment whose hidden tests and judge yeses held. |
+| `experiment_minutes` | `240` | The time an experiment's bench runs share (each seed run gets its part, less 30 min for the judge); a bench that doesn't fit before the run's deadline sets the ticket aside for the next run. |
 
 ## [[periodic]]
 
