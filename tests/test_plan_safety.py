@@ -180,12 +180,36 @@ class PlanSafety(unittest.TestCase):
         patch = next((self.p.state / "dropped").glob("plan-*.patch"))
         self.assertIn(f"plan: no PLAN line; dropped 2 changed files (kept in {patch})", self.log())
         self.assertNotIn("nothing written", self.log())
-        self.assertEqual(self.pushes, [("plan dropped", "The plan ended without its PLAN line, so its changes were "
-                                        f"dropped (2 changed files). They're kept in the state dir's dropped/"
-                                        f"{patch.name}: `git apply` it on main to get them back.")])
+        self.assertEqual(self.pushes, [("plan dropped", "The plan didn't land: it ended without its PLAN line. Its "
+                                        f"changes (2 changed files) are kept: `git apply {patch}` on main gets them "
+                                        "back.")])
         self.s.git("apply", str(patch))  # the user's checkout, on main: the ticket and its queue line come back
         self.assertIn("# T-003: planned", (self.s.root / ".windvane/tickets/T-003.md").read_text())
         self.assertIn("- T-003 planned", (self.s.root / ".windvane/QUEUE.md").read_text())
+
+    def reask_ends(self, killed, error):
+        """A plan misspelling its line, whose re-ask is cut off or fails."""
+        orig = planner.run_claude
+        self.addCleanup(setattr, planner, "run_claude", orig)
+        planner.run_claude = lambda *a, **k: ("", killed, error) if k.get("resume") else orig(*a, **k)
+        os.environ["FAKE_END_LINE"] = "PLAP: new=1 noted=0 one ticket"
+        self.assertEqual(planner.plan(self.p, "make it great"), 0)
+        return next((self.p.state / "dropped").glob("plan-*.patch"))
+
+    def test_a_stop_during_the_reask_is_a_stop_and_tells_no_one(self):
+        patch = self.reask_ends("stop now", None)
+        self.assertIn(f"plan: stop now; dropped 2 changed files (kept in {patch})", self.log())
+        self.assertEqual(self.pushes, [])  # as for a stop in the first turn
+
+    def test_a_failed_reask_says_the_session_failed(self):
+        patch = self.reask_ends(None, "API Error: 529 overloaded")
+        self.assertEqual(self.pushes, [("plan dropped", "The plan didn't land: its session failed (API Error: 529 "
+                                        "overloaded). Its changes (2 changed files) are kept: "
+                                        f"`git apply {patch}` on main gets them back.")])
+
+    def test_a_patch_under_the_home_dir_is_named_from_it(self):
+        self.assertEqual(planner.kept_in(Path.home() / ".local/state/x/dropped/plan-1.patch"),
+                         "~/.local/state/x/dropped/plan-1.patch")
 
     def test_a_plan_that_changed_nothing_is_still_nothing_written(self):
         orig = planner.run_claude

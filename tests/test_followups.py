@@ -173,8 +173,8 @@ class PeriodicFailures(Base):
         self.pilot.periodic(self.p.periodic["triage"])
         self.assertEqual(self.titles(), ["triage round failed"])
         self.assertRegex(self.pushes[0][1], r"^The triage round didn't finish: it ended without its PERIODIC line; its "
-                                            r"changes were dropped \(1 changed file, kept in the state dir's "
-                                            r"dropped/triage-\d{8}-\d{6}\.patch\)\.$")
+                                            r"changes were dropped \(1 changed file\): `git apply \S+/dropped/"
+                                            r"triage-\d{8}-\d{6}\.patch` on main gets them back\.$")
 
     def test_a_cut_off_session_is_pushed_but_not_a_stop(self):
         self.make(TRIAGE)

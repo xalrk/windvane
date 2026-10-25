@@ -308,10 +308,22 @@ class EndLine(Base):
         patch = next((self.p.state / "dropped").glob("requests-*.patch"))
         self.assertIn(f"requests: no PERIODIC line; dropped 3 changed files (kept in {patch})", self.log())
         self.assertEqual(self.pushes, [("requests round failed", "The requests round didn't finish: it ended without "
-                                        "its PERIODIC line; its changes were dropped (3 changed files, kept in the "
-                                        f"state dir's dropped/{patch.name}).")])
+                                        "its PERIODIC line; its changes were dropped (3 changed files): "
+                                        f"`git apply {patch}` on main gets them back.")])
         self.s.git("apply", str(patch))
         self.assertIn("asked in R-001", (self.s.root / ".windvane/tickets/T-004.md").read_text())
+
+    def test_a_stop_during_the_reask_is_a_stop(self):
+        self.make(TRIAGE)
+        pilot = self.pilot()
+        orig = pilot.claude
+        pilot.claude = lambda *a, **k: ("", "stop now", None) if k.get("resume") else orig(*a, **k)
+        pushes = []
+        with mock.patch.dict(os.environ, {"FAKE_END_LINE": "PERIODIK: wrote a ticket"}), \
+                mock.patch("windvane.periodic.push", lambda *a, **k: pushes.append(a[:2])):
+            pilot.periodic(self.p.periodic["triage"])
+        self.assertIn("triage: stop now; dropped", self.log())
+        self.assertEqual(pushes, [])
 
     def test_a_cut_off_or_failed_session_is_not_asked_again(self):
         self.make(TRIAGE)

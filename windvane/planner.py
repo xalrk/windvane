@@ -11,9 +11,9 @@ from . import actions, critic, login, net, privacy, requests
 from .held import OWN_BRANCHES, author_ident, free_name, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
 from .queue import Queue, folder_ids, id_after, ref_ids
-from .runner import NO_REQUEST, rules, run_claude
+from .runner import NO_REQUEST, plain_error, rules, run_claude
 from .util import edit_json, git, gout, last_match, load_json, log, now, push, run, same_process, save_json, stamp
-from .worktree import clean_detach, ensure_worktree, short_path
+from .worktree import clean_detach, ensure_worktree
 
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
 PLAN_LINE = "`PLAN: new=<n> noted=<n> <gist>` (or `PLAN: NONE <why>`)"
@@ -49,6 +49,19 @@ def keep_dropped(p, cd, label):
 
 def files(n):
     return f"{n} changed file{'s' * (n != 1)}"
+
+
+def kept_in(path):
+    """Where a dropped session's patch is, as a push says it: a path the user can type, `~` for the home dir."""
+    try:
+        return f"~/{Path(path).relative_to(Path.home())}"
+    except ValueError:
+        return str(path)
+
+
+def reapply(path):
+    """The push's way back for a dropped session's patch."""
+    return f"`git apply {kept_in(path)}` on main gets them back."
 
 
 def changed_paths(cwd):
@@ -292,8 +305,8 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
             break
         clean_detach(p, cd, p.upstream)
     if not (killed or error or m) and session.get("id"):  # ended well but without its line: asked once, tree as is
-        again, _, _ = run_claude(p, "planner", "plan-reask", end_reask(PLAN_LINE), rules(p, "PLAN.md"), cd,
-                                 deny=critic.DENY, usage=usage, stop_if=stop_if, resume=session["id"])
+        again, killed, error = run_claude(p, "planner", "plan-reask", end_reask(PLAN_LINE), rules(p, "PLAN.md"), cd,
+                                          deny=critic.DENY, usage=usage, stop_if=stop_if, resume=session["id"])
         m = last_match(PLAN_RE, again)  # a re-ask cut off or failed has none: the plan is dropped and kept below
         if m:  # the commit and the PR still carry the first reply: the re-ask's is only the line
             text = f"{text.rstrip()}\n{m.group(0)}"
@@ -306,9 +319,9 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new):
             log(p, f"plan: nothing written ({why})")
             return 0
         log(p, f"plan: {why}; dropped {files(n)} (kept in {kept})")
-        if not (killed or error):  # a stop or a failure is the run's own news; this one would be lost unseen
-            push("plan dropped", f"The plan ended without its PLAN line, so its changes were dropped ({files(n)}). "
-                 f"They're kept in the state dir's {short_path(p, kept)}: `git apply` it on main to get them back.",
+        if not killed:  # a stop (the user's, the deadline's) is the run's own news; a failure would go unseen
+            what = f"its session failed ({plain_error(error)})" if error else "it ended without its PLAN line"
+            push("plan dropped", f"The plan didn't land: {what}. Its changes ({files(n)}) are kept: {reapply(kept)}",
                  4, "warning")
         return 0
     outside = [c for c in changed if not c.startswith(".windvane/")]

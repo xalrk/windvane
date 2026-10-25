@@ -202,9 +202,8 @@ class Periodic:
         started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
         it due, {group: its tickets}, named in its prompt; `entries`: the chain's (main's for an asked round). An
         asked round's ask is taken once its session starts or is skipped for good (`asked_taken`)."""
-        from .planner import end_reask, files, keep_dropped, pick_ids
+        from .planner import end_reask, files, keep_dropped, pick_ids, reapply
         from .runner import rules
-        from .worktree import short_path
         name, p = e["name"], self.p
         entries = entries or p.periodic
         if not self.periodic_fits(e):
@@ -267,9 +266,9 @@ class Periodic:
         m, said = last_match(PERIODIC_RE, text), text
         if not (killed or error or m) and session.get("id"):  # ended well but without its line: asked once, tree as is
             more = " (your `REQUEST:` lines first)" if reqs else ""
-            again, _, _ = self.claude(f"periodic:{name}", f"periodic-{name}-reask", end_reask(PERIODIC_LINE, more),
-                                      system, cd, max(limit, now() + REASK_TIME), deny=critic.DENY,
-                                      resume=session["id"])
+            asked = end_reask(PERIODIC_LINE, more)  # cut off or failed, it's said as such below
+            again, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}-reask", asked, system, cd,
+                                               max(limit, now() + REASK_TIME), deny=critic.DENY, resume=session["id"])
             m = last_match(PERIODIC_RE, again)
             if m:  # the reply stays the first one's; a verdict the re-ask repeats wins over its first one
                 said = f"{again}\n{text}"
@@ -283,7 +282,7 @@ class Periodic:
                 what = (f"it was cut off ({killed})" if killed else f"the session failed ({phone.cut(plain_error(error), log=self.log)})"
                         if error else "it ended without its PERIODIC line")
                 self.periodic_failed(name, f"{what}; its changes were dropped" + (
-                    f" ({files(n)}, kept in the state dir's {short_path(p, kept)})." if kept else "."))
+                    f" ({files(n)}): {reapply(kept)}" if kept else "."))
             return None
         self.log(f"{name}: PERIODIC: {m.group(1)}")
         push(name, phone.cut(m.group(1), log=self.log) or "done", 3, "mag")

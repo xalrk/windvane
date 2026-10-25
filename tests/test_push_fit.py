@@ -273,7 +273,7 @@ def plan_dropped(p, patch, s):
         return text.replace("PLAN:", "PLAP:"), killed, error
     patch(planner, "run_claude", run_claude)
     planner.plan(p, "make it great")
-    return {"plan dropped": ("The plan ended without its PLAN line", "the state dir's dropped/plan-")}
+    return {"plan dropped": ("it ended without its PLAN line", "`git apply ", "/dropped/plan-", "on main gets them")}
 
 
 def secret_aside(p, patch, s):
