@@ -268,12 +268,14 @@ def planned(p, patch, s):
 def plan_dropped(p, patch, s):
     orig = planner.run_claude
 
-    def run_claude(*a, **k):  # both the plan and its re-ask misspell the line
+    def run_claude(*a, **k):  # the plan misspells its line, and its re-ask fails
+        if k.get("resume"):
+            return "", None, LONG
         text, killed, error = orig(*a, **k)
         return text.replace("PLAN:", "PLAP:"), killed, error
     patch(planner, "run_claude", run_claude)
     planner.plan(p, "make it great")
-    return {"plan dropped": ("it ended without its PLAN line", "`git apply --unidiff-zero ", "/dropped/plan-",
+    return {"plan dropped": ("its session failed (API Error", "`git apply --unidiff-zero ", "/dropped/plan-",
                              "on main gets them")}
 
 
