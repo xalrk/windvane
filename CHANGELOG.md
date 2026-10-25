@@ -7,6 +7,17 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane bench` has a blind judge: after the hidden tests, one session per seed tries a copy of the finished
+  project as its user would, on about eight yes/no checks in the seed's `hidden/JUDGE.md`, knowing its goal and
+  tickets but not the critic's scale or verdicts, the pass mark or the windvane ref. Its yes count, answers and
+  reasons go into `bench.jsonl` and the run's table; its tokens are the bench's own, never in a seed's cost per
+  merged ticket. A judge that fails twice or runs out of time gives no verdict (`-`, and `judge failed: <why>`),
+  never a row of noes.
+- `windvane bench compare <A> <B>`: two windvane refs, or earlier runs, side by side per seed and in all (tickets
+  merged, hidden tests, judge yeses, tokens per merged ticket, wall minutes, B minus A), running only what isn't
+  recorded yet. `--repeat N` runs each side N times and marks only a difference past the spread of each side's own
+  runs; without it, a line says one run can't tell a small difference from noise.
+- `windvane stats --bench`: every recorded bench run, a line each.
 - `windvane stats --projects [--since DATE] [--json]`: every project on the machine in one digest, read from each
   project's state dir and repo: tickets merged, failed and parked with their reasons, each role's share of
   weighted tokens and its cost per merged ticket, the critic's first-pass rate and median first and final

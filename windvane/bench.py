@@ -9,7 +9,15 @@ repo with a local bare remote and a state dir of its own under `<state root>/_be
 scratch clone of the final `main` and runs it. The sessions are denied `bench/` and the reference solutions, have no
 phone, gh or GitHub token, and every run stream is searched afterwards for the hidden files: a hit marks the seed's
 result contaminated, reported but never counted.
+
+After the hidden tests, a judge (one fresh session per seed, `prompts/JUDGE.md`) tries a copy of the final tree as
+its user would, on the seed's `hidden/JUDGE.md` checks. It gets the seed's goal and tickets and nothing of how the
+project was built (no critic scale or verdicts, pass mark, run log, ledger or windvane ref), so its yes count is a
+score no session could aim at. Its tokens are the bench's own, kept out of the seed's cost per merged ticket.
+
+`bench compare A B` sets two windvane refs (or earlier runs) side by side, running only what isn't recorded yet.
 """
+import copy
 import ast
 import itertools
 import json
@@ -27,6 +35,7 @@ from pathlib import Path
 
 from .config import PERM_ROLES, Project, user_dir
 from .heavy import machine
+from .runner import rules as session_rules, run_claude
 from .stats import k, ticket_outcomes, weighted
 from .util import append_jsonl, gout, read_jsonl
 
@@ -42,6 +51,9 @@ DENIED = ("bench", "tests/fixtures/bench")
 # unittest -v: a test's line (`test_x (module.Class.test_x)`), and its outcome at the end of it or of the docstring's
 START = re.compile(r"^(\w+) \(([\w.]+)\)")
 # (or alone on a line, when a warning the test caused was printed between the two)
+JUDGE_MINUTES = 30  # a judge still going after this is stopped: the checks it hasn't answered count as no
+CHECK = re.compile(r"^- (J\d+): (.+)$", re.M)  # a check in a seed's hidden/JUDGE.md
+ANSWER = re.compile(r"^\W*(J\d+)\W+(yes|no)\b[\s,.:;\u2014-]*(.*)$", re.I | re.M)  # its line in the judge's reply
 OUTCOME = re.compile(r"(?:^| \.\.\. )(ok|FAIL|ERROR|skipped.*|expected failure|unexpected success)$")
 
 
@@ -209,7 +221,7 @@ def tally(seed, tickets, scratch, env=None):
     for f in hidden.iterdir():
         if f.is_dir():
             shutil.copytree(f, scratch / f.name, dirs_exist_ok=True)
-        elif f.name != "bench.toml":
+        elif f.name not in ("bench.toml", "JUDGE.md"):
             shutil.copy2(f, scratch / f.name)
     cmd = seed["bench"]["command"]
     try:
@@ -255,6 +267,88 @@ def costs(sp, tickets):
     return round(sum(map(weighted, rows))), round(sum(r.get("usd") or 0 for r in rows), 4), per
 
 
+def goal(seed):
+    """What the seed is for, as its CLAUDE.md opens (up to its first section), else its README."""
+    for name in ("CLAUDE.md", "README.md", "README"):
+        f = seed["dir"] / "seed" / name
+        if f.is_file():
+            return f.read_text().split("\n## ")[0].strip()
+    return seed["name"]
+
+
+def judge_checks(seed, home):
+    """[(id, check)] of the seed's hidden/JUDGE.md; a ref from before the judge has none, and borrows the measuring
+    checkout's (`home`/bench), so both sides of a compare meet the same judge."""
+    for d in (seed["dir"], Path(home) / "bench" / seed["name"]):
+        f = d / "hidden/JUDGE.md"
+        if f.is_file():
+            return CHECK.findall(f.read_text())
+    return []
+
+
+def judge_prompt(seed, tickets, checks):
+    """The goal, the tickets this run worked, the checks: nothing else of the run."""
+    parts = ["Judge the project in your working folder.", "## Its goal", goal(seed),
+             "## The tickets it was built from"]
+    parts += [(seed["dir"] / "seed/.windvane/tickets" / f"{t}.md").read_text().strip() for t in tickets]
+    return "\n\n".join(parts + ["## The checks", "\n".join(f"- {i}: {c}" for i, c in checks)])
+
+
+def answers(text, checks):
+    """[{id, answer, reason}] for every check, from the judge's reply; one it skipped is a no."""
+    got = {}
+    for m in ANSWER.finditer(text or ""):
+        got.setdefault(m[1].upper(), (m[2].lower(), m[3].strip()))
+    return [{"id": i, "answer": got.get(i, ("no",))[0], "reason": got.get(i, ("", "not answered"))[1]}
+            for i, _ in checks]
+
+
+def judge_tree(remote, dest):
+    """The final main as its user gets it: the files, without git history or `.windvane/` (tickets, critic scale,
+    questions and their answers)."""
+    git(dest.parent, "clone", "-q", str(remote), str(dest))
+    for d in (".git", ".windvane"):
+        shutil.rmtree(dest / d, ignore_errors=True)
+
+
+def judge(sp, seed, tickets, checks, home, deny, env):
+    """The judge's verdict on one seed's final main, or None when the seed has no checks. It runs in a folder of
+    its own beside the seeds' (`<run>/judge/<seed>/`), denied every seed's home (where the critic's verdicts and
+    the run's streams are) and the ref's worktree, with a state dir of its own: its tokens never reach the seed's
+    ledger."""
+    if not checks:
+        return None
+    own = home.parent / "judge" / seed["name"]
+    own.mkdir(parents=True)
+    tree = own / "tree"
+    jp = copy.copy(sp)
+    jp.state = own / "state"
+    jp.state.mkdir()
+    for _ in range(2):  # a session that failed (an API error, a crash) is the judge's, never the project's: once more
+        shutil.rmtree(tree, ignore_errors=True)  # in a fresh copy: never what an attempt's trial left behind
+        judge_tree(home / "remote.git", tree)
+        until = time.time() + JUDGE_MINUTES * 60
+        text, stopped_, error = run_claude(jp, "judge", f"judge-{seed['name']}",
+                                           judge_prompt(seed, tickets, checks), session_rules(jp, "JUDGE.md"), tree,
+                                           deny=deny, stop_if=lambda: "time" if time.time() > until else None,
+                                           extra_env=env)
+        if not error:
+            break
+    said = answers(text, checks)
+    rows = [r for r in read_jsonl(jp.state / "ledger.jsonl") if not r.get("event")]
+    return {"yes": sum(x["answer"] == "yes" for x in said), "total": len(checks), "answers": said,
+            "weighted": round(sum(map(weighted, rows))), "usd": round(sum(r.get("usd") or 0 for r in rows), 4),
+            "stopped": stopped_, "error": error}
+
+
+def judge_deny(rules, base, chosen):
+    """The seed sessions' deny rules, and every seed's home and the ref's worktree in this run's dir."""
+    out = list(rules)
+    for d in [base / s["name"] for s, _ in chosen] + [base / "windvane"]:
+        out += [f"Read(/{d}/**)", f"Edit(/{d}/**)", f"Bash(*{d}/*)"]
+    return out
+
+
 def fates(sp, tickets):
     """{"merged", "failed", "parked", "open"}: lists of the seed's tickets, from its queue and ledger."""
     subprocess.run(["git", "fetch", "-q", "origin"], cwd=sp.root, capture_output=True)
@@ -267,23 +361,50 @@ def table(recs):
     r0 = recs[0]
     out = [f"bench {r0['run']}: {r0['ref']} ({r0['sha'][:7]}), {r0['size']}, weekly usage "
            f"{fmt(r0['week_before'])} → {fmt(r0['week_after'])}",
-           f"{'seed':<12} {'merged':>6} {'failed':>6} {'parked':>6} {'hidden':>7} {'weighted':>9} {'API $':>7} "
-           f"{'min':>5}"]
+           f"{'seed':<12} {'merged':>6} {'failed':>6} {'parked':>6} {'hidden':>7} {'judge':>6} {'weighted':>9} "
+           f"{'API $':>7} {'min':>5}"]
     for r in recs:
         t = r["tickets"]
         hidden = f"{r['passed']}/{r['total']}"
         out.append(f"{r['seed']:<12} {len(t['merged']):>6} {len(t['failed']):>6} {len(t['parked']):>6} "
-                   f"{hidden:>7} {k(r['weighted']):>9} "
+                   f"{hidden:>7} {yeses(r):>6} {k(r['weighted']):>9} "
                    f"{r['usd']:>7.2f} {r['minutes']:>5.0f}" + ("  contaminated: not counted" if r["contaminated"]
                                                                else ""))
         out.append("  " + " · ".join(f"{tid} {h['passed']}/{h['total']}" for tid, h in r["hidden"].items()))
+        out += [f"  judge no: {x['id']} {x['reason']}" for x in (judged(r) or {}).get("answers", [])
+                if x["answer"] != "yes"]
+        if judge_failed(r):
+            out.append(f"  judge failed: {judge_failed(r)} (no verdict: a compare won't reuse this run)")
     good = [r for r in recs if not r["contaminated"]]
     if len(recs) > 1 and good:
         merged = sum(len(r["tickets"]["merged"]) for r in good)
         out.append(f"counted: {sum(r['passed'] for r in good)}/{sum(r['total'] for r in good)} hidden tests, "
                    f"{merged} merged, {k(sum(r['weighted'] for r in good))} weighted tokens"
                    + (f" ({k(sum(r['weighted'] for r in good) / merged)} per merged ticket)" if merged else ""))
+    ran = [r["judge"] for r in recs if r.get("judge")]
+    if ran:
+        out.append(f"the judge's own cost, not in the above: {k(sum(j['weighted'] for j in ran))} weighted tokens, "
+                   f"{sum(j['usd'] for j in ran):.2f} API $")
     return "\n".join(out)
+
+
+def judged(r):
+    """The record's judge verdict when it is one: None with no checks, before the judge, or when the judge failed
+    or was stopped (its unanswered checks would read as the project's noes)."""
+    j = r.get("judge")
+    return j if j and not j.get("error") and not j.get("stopped") else None
+
+
+def judge_failed(r):
+    """Why the record's judge gave no verdict, when it ran and gave none."""
+    j = r.get("judge") or {}
+    return j.get("error") or (j.get("stopped") and f"stopped ({j['stopped']})")
+
+
+def yeses(r):
+    """The judge's yes count of a seed's record, "-" when there is no verdict."""
+    j = judged(r)
+    return f"{j['yes']}/{j['total']}" if j else "-"
 
 
 def fmt(v):
@@ -376,29 +497,44 @@ def end_all(procs, wait=300):
 
 
 def main(a, p):
+    if a.repeat != 1 and not a.what:
+        raise SystemExit("bench: --repeat goes with `windvane bench compare <A> <B>`")
+    if a.what:
+        if a.what[0] != "compare" or len(a.what) != 3:
+            raise SystemExit("bench: the only subcommand is `windvane bench compare <A> <B>`")
+        return compare(a, p, *a.what[1:])
     if a.last:
         runs = runs_of(p)
         return print(table(list(runs.values())[-1]) if runs else "bench: no results yet (windvane bench runs one)")
-    limit = float(machine().get("bench_week_small", WEEK_SMALL))
     before = week_now()
-    which, why = size(a.full, a.small, before, limit)
+    which, why = size(a.full, a.small, before, week_limit())
     print(f"bench: {which} ({why})", flush=True)
+    return one(p, a, a.ref, which, before)[0]
+
+
+def week_limit():
+    return float(machine().get("bench_week_small", WEEK_SMALL))
+
+
+def one(p, a, ref, which, before):
+    """One bench run of windvane at `ref`: (exit code, its records)."""
     base = new_run(state_root() / "_bench")
     wt = base / "windvane"
     old = {s: signal.signal(s, stopped) for s in (signal.SIGTERM, signal.SIGHUP)}
     try:
-        sha = ref_worktree(p, a.ref, wt)
+        sha = ref_worktree(p, ref, wt)
         found = seeds(wt / "bench")
         if not found:
-            raise SystemExit(f"bench: no seeds in bench/ at {a.ref}")
+            raise SystemExit(f"bench: no seeds in bench/ at {ref}")
         chosen = pick(found, which)
-        print("\n".join(plan_lines(chosen, a.hours, a.ref, sha)), flush=True)
+        print("\n".join(plan_lines(chosen, a.hours, ref, sha)), flush=True)
         if a.dry_run:
-            return print(earlier(p, which))
-        return run(p, a, chosen, base, wt, sha, which, before)
+            print(earlier(p, which))
+            return 0, []
+        return run(p, a, chosen, base, wt, ref, sha, which, before)
     except (KeyboardInterrupt, Stopped):  # before any seed ran
         print("bench: stopped before any seed ran", file=sys.stderr)
-        return 130
+        return 130, []
     finally:
         drop_worktree(p, wt)
         if a.dry_run or not any(base.iterdir()):  # nothing ran: nothing to keep
@@ -407,14 +543,15 @@ def main(a, p):
             signal.signal(s, h)
 
 
-def run(p, a, chosen, base, wt, sha, which, before):
+def run(p, a, chosen, base, wt, ref, sha, which, before):
     bases = [p.main_root(), wt]
     exe = [str(wt / "bin/windvane")]
     first = base / "bin/ref"  # the sessions' own `windvane check`, `critic` and `bg` are the ref's too
     first.mkdir(parents=True)
     (first / "windvane").symlink_to(exe[0])
     rules = deny_rules(bases)
-    path = os.pathsep.join([str(first), clean_path(os.environ.get("PATH", ""), base / "bin")])
+    clean = clean_path(os.environ.get("PATH", ""), base / "bin")
+    path = os.pathsep.join([str(first), clean])
     caps = [x for k_, v in (("--cap", a.cap), ("--week-cap", a.week_cap)) if v is not None for x in (k_, f"{v:g}")]
     procs = []
     recs = []
@@ -440,10 +577,14 @@ def run(p, a, chosen, base, wt, sha, which, before):
             hits = contamination(sp.state, needles(s, [p.main_root(), wt]))
             hidden = score(s, ts, home / "remote.git", home / "score", env)
             tickets = fates(sp, ts)
-            rec = {"run": base.name, "ref": a.ref, "sha": sha, "size": which, "seed": s["name"], "tickets": tickets,
+            # the judge has no windvane of the ref on its PATH, and a state dir of its own
+            verdict = judge(sp, s, ts, judge_checks(s, p.main_root()), home, judge_deny(rules, base, chosen),
+                            {**{t: "" for t in DROP_ENV}, "PATH": clean, NO_PHONE: "1",
+                             "XDG_STATE_HOME": str(base / "judge" / s["name"] / "xdg")})
+            rec = {"run": base.name, "ref": ref, "sha": sha, "size": which, "seed": s["name"], "tickets": tickets,
                    "hidden": hidden, "passed": sum(h["passed"] for h in hidden.values()),
-                   "total": sum(h["total"] for h in hidden.values()), "weighted": weighted_, "usd": usd,
-                   "per_merged": {t: per[t] for t in tickets["merged"]},
+                   "total": sum(h["total"] for h in hidden.values()), "judge": verdict, "weighted": weighted_,
+                   "usd": usd, "per_merged": {t: per[t] for t in tickets["merged"]},
                    "minutes": round((ended.get(s["name"], time.time()) - began) / 60, 1), "week_before": before,
                    "week_after": after, "contaminated": bool(hits), "hits": [f"{f}: {w}" for f, w in hits[:5]],
                    "exit": proc.returncode}
@@ -453,6 +594,149 @@ def run(p, a, chosen, base, wt, sha, which, before):
         end_all(procs)
         print(f"bench: stopped ({str(e) or 'SIGINT'}): every seed run was ended; {len(recs)} of {len(procs)} seeds "
               f"scored{' (see bench --last)' if recs else ''}; their logs are in {base}", file=sys.stderr)
-        return 130
+        return 130, recs
     print(table(recs))
+    return 0, recs
+
+
+# What `bench compare` sets side by side: (key, label). Each is a run's value over the seeds compared.
+MEASURES = (("merged", "merged"), ("hidden", "hidden tests"), ("judge", "judge yes"),
+            ("per_merged", "tokens/merged"), ("minutes", "wall min"))
+NOISE = ("one run a side: a difference of one hidden test or one judge check can't be told from noise "
+         "(--repeat N runs each side N times)")
+
+
+def planned(p, sha, which):
+    """The seeds a run of this size at `sha` works, by name, read from git: what makes a recorded run reusable."""
+    names = (gout(p.main_root(), "ls-tree", "-d", "--name-only", f"{sha}:bench") or "").split()
+    has = lambda path: subprocess.run(["git", "cat-file", "-e", f"{sha}:bench/{path}"], cwd=p.main_root(),
+                                      capture_output=True).returncode == 0
+    names = sorted(n for n in names if has(f"{n}/seed") and has(f"{n}/hidden/bench.toml"))
+    return names if which == "full" else names[:SMALL_SEEDS]
+
+
+def sides(p, refs, which, runs):
+    """Each side of a compare: an earlier run's id (that run, fixed) or a ref, with its runs already recorded at the
+    same sha and size over the same seeds, newest last."""
+    out = []
+    for name in refs:
+        if name in runs:
+            out.append({"name": name, "sha": runs[name][0]["sha"], "runs": [runs[name]], "fixed": True})
+            continue
+        sha = gout(p.main_root(), "rev-parse", "--verify", "--quiet", f"{name}^{{commit}}")
+        if not sha:
+            raise SystemExit(f"bench compare: {name!r} is neither a commit nor an earlier run's id")
+        want = planned(p, sha, which)
+        have = [rs for rs in runs.values() if rs[0].get("sha") == sha and rs[0].get("size") == which
+                and sorted(r["seed"] for r in rs) == want]
+        out.append({"name": name, "sha": sha, "runs": [rs for rs in have if not any(map(judge_failed, rs))],
+                    "failed": sum(any(map(judge_failed, rs)) for rs in have), "fixed": False})
+    return out
+
+
+def compare(a, p, *refs):
+    """Run what's missing of N runs a side (one size for both), then print them side by side."""
+    if a.repeat < 1:
+        raise SystemExit("bench compare: --repeat is a number of runs, 1 or more")
+    runs = runs_of(p)
+    fixed = {runs[r][0]["size"] for r in refs if r in runs}
+    if len(fixed) > 1:
+        raise SystemExit("bench compare: those runs are of different sizes (full, small): compare runs of one size")
+    if fixed:
+        which, why = fixed.pop(), "the size of the earlier run compared"
+    else:
+        which, why = size(a.full, a.small, week_now(), week_limit())
+    print(f"bench compare: {which} ({why})", flush=True)
+    both = sides(p, refs, which, runs)
+    taken = set()
+    for s in both:  # a ref compared with itself gets runs of its own on each side
+        if not s["fixed"]:
+            s["runs"] = [rs for rs in s["runs"] if rs[0]["run"] not in taken][-a.repeat:]
+            taken |= {rs[0]["run"] for rs in s["runs"]}
+    todo = [s for i in range(a.repeat) for s in both if not s["fixed"] and len(s["runs"]) <= i]  # A, B, A, B ...
+    for s in both:
+        print(f"{s['name']} ({s['sha'][:7]}): {runs_n(len(s['runs']))} recorded, "
+              f"{sum(t is s for t in todo)} to run" + (f" ({runs_n(s['failed'])} not reused: a judge failed)"
+                                                       if s.get("failed") else ""), flush=True)
+    if a.dry_run:
+        return 0
+    for i, s in enumerate(todo, 1):
+        print(f"bench compare: run {i} of {len(todo)}, {s['name']}", flush=True)
+        code, recs = one(p, a, s["name"], which, week_now())
+        if code:
+            return code
+        s["runs"].append(recs)
+    print(compare_table(both, which))
     return 0
+
+
+def runs_n(n):
+    return f"{n} run" + ("" if n == 1 else "s")
+
+
+def value(recs, key):
+    """One measure of one run over these seed records; None where it has none (no judge, nothing merged)."""
+    merged = sum(len(r["tickets"]["merged"]) for r in recs)
+    if key == "merged":
+        return merged
+    if key == "hidden":
+        return sum(r["passed"] for r in recs)
+    if key == "judge":
+        return sum(judged(r)["yes"] for r in recs) if all(map(judged, recs)) else None
+    if key == "per_merged":
+        return sum(r["weighted"] for r in recs) / merged if merged else None
+    return max(r["minutes"] for r in recs)  # the seeds run side by side
+
+
+def out_of(recs, key):
+    """A measure's "/total" (hidden tests, judge checks), else nothing."""
+    if key == "hidden":
+        return f"/{sum(r['total'] for r in recs)}"
+    if key == "judge" and all(map(judged, recs)):
+        return f"/{sum(judged(r)['total'] for r in recs)}"
+    return ""
+
+
+def num(v, key, sign=False):
+    if v is None:
+        return "-"
+    if key == "per_merged":
+        return ("-" if v < 0 else "+" if v > 0 and sign else "") + k(abs(v))
+    return f"{v:+.1f}".rstrip("0").rstrip(".") if sign and v else f"{v:.1f}".rstrip("0").rstrip(".")
+
+
+def compare_table(both, which):
+    """Per seed and in all: each measure's mean on A and B and B minus A. With repeats, a difference past the spread
+    of either side's own runs is marked; without them, a line says one run can't tell a small one from noise."""
+    counted = lambda rs: {r["seed"]: r for r in rs if not r["contaminated"]}
+    per = [[counted(rs) for rs in s["runs"]] for s in both]
+    common = sorted(set.intersection(*(set(c) for side in per for c in side)))
+    seen = sorted({r["seed"] for s in both for rs in s["runs"] for r in rs})
+    A, B = both
+    if not common:
+        return f"bench compare: no seed was counted in every run of both sides ({', '.join(seen) or 'none ran'})"
+    out = [f"bench compare ({which}): A = {A['name']} ({A['sha'][:7]}), {runs_n(len(A['runs']))} · "
+           f"B = {B['name']} ({B['sha'][:7]}), {runs_n(len(B['runs']))}",
+           f"{'seed':<12} {'measure':<14} {'A':>9} {'B':>9} {'B-A':>7}"]
+    repeats, marked = max(len(A["runs"]), len(B["runs"])) > 1, 0
+    for seed in common + ["all"]:
+        names = common if seed == "all" else [seed]
+        for i, (key, label) in enumerate(MEASURES):
+            vals = [[value([c[n] for n in names], key) for c in side] for side in per]
+            means = [None if not v or None in v else sum(v) / len(v) for v in vals]
+            spread = max((max(v) - min(v) for v in vals if v and None not in v), default=0)
+            delta = None if None in means else means[1] - means[0]
+            past = repeats and delta is not None and abs(delta) > spread
+            marked += past
+            tot = [out_of([c[n] for n in names], key) for c in (per[0][0], per[1][0])]
+            cells = [num(m, key) + (t if m is not None else "") for m, t in zip(means, tot)]
+            out.append(f"{seed if i == 0 else '':<12} {label:<14} {cells[0]:>9} {cells[1]:>9} "
+                       f"{num(delta, key, sign=True):>7}" + ("  past the noise" if past else ""))
+    left = [s for s in seen if s not in common]
+    if left:
+        out.append(f"not compared: {', '.join(left)} (missing or contaminated in a run)")
+    if not repeats:
+        out.append(NOISE)
+    elif not marked:
+        out.append("no difference past the spread of either side's own runs")
+    return "\n".join(out)

@@ -947,8 +947,11 @@ def parser():
     s.add_argument("--projects", action="store_true", help="every project on this machine side by side: what went "
                    "wrong where, and each measure's spread")
     s.add_argument("--json", action="store_true", help="with --projects: the same as JSON")
+    s.add_argument("--bench", action="store_true", help="the recorded `windvane bench` runs, one line each")
     s = sub.add_parser("bench", help="build the bench/ seed projects with the real pipeline and score them on "
                        "tests no session sees")
+    s.add_argument("what", nargs="*", metavar="compare A B", help="compare two windvane refs or earlier run ids, "
+                   "running only what isn't recorded yet")
     s.add_argument("--ref", default="HEAD", help="the windvane commit to measure (default: HEAD)")
     s.add_argument("--hours", type=float, default=4, help="each seed's run stops after this long (default 4)")
     g = s.add_mutually_exclusive_group()
@@ -958,6 +961,8 @@ def parser():
     s.add_argument("--week-cap", type=float, help="the seed runs' weekly cap %% (default: this project's)")
     s.add_argument("--dry-run", action="store_true", help="print the plan and what earlier runs that size cost")
     s.add_argument("--last", action="store_true", help="print the latest run's results again")
+    s.add_argument("--repeat", type=int, default=1, help="with compare: N runs a side, so a difference shows past "
+                   "the noise (default 1)")
     sub.add_parser("mode", help="how a design question is handled right now")
     sub.add_parser("quiet", help="show the quiet times (yours for every project, and this project's)")
     s = sub.add_parser("watch", help="follow the running sessions live (costs no tokens)")

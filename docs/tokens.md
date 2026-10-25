@@ -146,6 +146,13 @@ died or killed: 1 run (1 died, 0 killed for time), 948k weighted tokens, 3% of a
   T-010): 40k`).
 - `spent on tickets not merged`: the waste, tokens on tickets that are open, parked or failed.
 
+**The bench's own cost.** A `windvane bench` seed run keeps its sessions in a ledger of its own, under
+`_bench/<run id>/<seed>/`, so they never mix with this project's `stats`; their total and cost per merged ticket are
+the seed's record in `bench.jsonl`. The judge that tries each finished seed is the bench's overhead, not the
+seed's: its tokens and API $ are its own (`judge.weighted`, `judge.usd` in the record), never in the seed's cost
+per merged ticket, and the run's table ends with them on a line of their own (`the judge's own cost, not in the
+above`). `windvane stats --bench` lists every recorded run, a line each.
+
 ## Tuning
 
 - **Turns per worker run high?** Tickets may be too big or too vague. Split them, and make "Done when" points
