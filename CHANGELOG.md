@@ -24,7 +24,8 @@ release on the same day adds a number (`2026.10.9.1`).
   shows it). A regression past the noise (hidden tests or judge yeses down, or tokens per merged ticket up more than
   `bench_cost_up`, 25% by default, with neither up) writes one ticket with the changes merged in between, both
   sides' numbers and the seeds that moved, and sends one push; it never reverts anything. The first run records a
-  baseline. It keeps to the run's caps and deadline, and ends with the run.
+  baseline. It keeps to the run's caps and deadline; a run whose queue is done waits for it, and a stop or the
+  deadline ends it with one push, leaving the round due for the next run.
 - `windvane stats --projects [--since DATE] [--json]`: every project on the machine in one digest, read from each
   project's state dir and repo: tickets merged, failed and parked with their reasons, each role's share of
   weighted tokens and its cost per merged ticket, the critic's first-pass rate and median first and final

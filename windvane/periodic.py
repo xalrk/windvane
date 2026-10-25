@@ -499,9 +499,9 @@ class Periodic:
 
     def bench_due(self, e):
         """A bench entry's turn: "land" once its finished job found a regression (a ticket to write, in a quiet gap),
-        "start" when tickets touching its `after_touch` paths merged since the windvane last benchmarked (or since
-        the last round started, so a failed one waits for new changes), or nothing is recorded yet (a baseline);
-        else None. A finished job's verdict is read here, once. Main's head is looked at only when it moved."""
+        "start" when tickets touching its `after_touch` paths merged since the windvane last benchmarked (or since a
+        round that ran to its end and left nothing to compare: it waits for a new change; one cut off by a run's end
+        stays due), or nothing is recorded yet (a baseline); else None. A finished job's verdict is read here, once. Main's head is looked at only when it moved."""
         p, name = self.p, e["name"]
         st = load_json(bench_file(p, name), {})
         if st.get("job") and jobs.alive(Path(st["job"])):
@@ -515,7 +515,7 @@ class Periodic:
             return None
         if self.bench_seen.get(name, ("",))[0] != head:
             base = last_benched(p, head)
-            since = newer(p, base, st.get("head"), head)
+            since = newer(p, base, st.get("head") if st.get("verdict") == "failed" else None, head)
             due = (since is None or since != head and bool(touching(p, since, head, e["after_touch"]))) and "start"
             self.bench_seen[name] = (head, due or None)
         return self.bench_seen[name][1]
@@ -552,14 +552,17 @@ class Periodic:
             f"--{which}", "--hours", f"{hours:.3g}", "--cap", f"{self.a.cap:g}", "--week-cap", f"{self.a.week_cap:g}"]
         touched = touching(p, base, head, e["after_touch"]) if base else []
         job, after = bench_job(p, name), f"{datetime.now():%Y%m%d-%H%M%S}"  # its runs' ids are their start times
-        jobs.bg(p, job.name, bench_command(p, args), p.main_root(), quiet=True)
+        try:
+            jobs.bg(p, job.name, bench_command(p, args), p.main_root(), quiet=True)
+        except SystemExit as err:  # `bg` refuses with an exit; the driver goes on
+            self.log(f"{name}: bench not started: {err}")
+            return self.periodic_failed(name, f"the bench didn't start: {err}")
         save_json(bench_file(p, name), {"job": str(job), "base": base, "head": head, "size": which, "after": after,
                                         "touched": touched})
-        self.bench_mine.add(name)
         what = (f"a baseline at {head[:7]}" if base is None else f"{base[:7]} against {head[:7]}, after "
                 + ", ".join(t for t, *_ in touched) if touched else f"{base[:7]} against {head[:7]}")
-        self.log(f"{name}: bench started in the background ({what}; {which}: {said}; up to {e['minutes']} min, "
-                 f"read at a run's first gap after it ends); log {job}.log")
+        self.log(f"{name}: bench started in the background ({what}; {which}: {said}; up to {e['minutes']} min; "
+                 f"the run waits for it before it ends); log {job}.log")
 
     def bench_verdict(self, e, st):
         """The ended job's verdict, saved with the round: a baseline or no regression is one log line, a regression
@@ -621,14 +624,24 @@ class Periodic:
         push(f"{name}: regression", phone.cut(f"{'; '.join(st['why'])} after {after_list(st)}. {tid} written "
                                                     f"({where}); nothing was reverted.", log=self.log), 4, "warning")
 
+    def bench_waits(self):
+        """The idle lines of a run whose queue is done while a bench round runs: it waits for the verdict (and a
+        regression's ticket) rather than end and throw the round away; the deadline still ends it."""
+        return [f"waiting for the {name} bench round to end (started {datetime.fromtimestamp(started):%H:%M}), "
+                f"at the latest until the deadline ({hhmm(self.end())})" for name, _, started in live_benches(self.p)]
+
     def bench_at_end(self):
-        """The run's end ends the bench jobs it started (one a desk's `windvane periodic` started runs on): the round
-        fitted before the deadline when it started, and no run would be left to read its verdict."""
-        for name in sorted(self.bench_mine):
-            st = load_json(bench_file(self.p, name), {})
-            if st.get("job") and jobs.end_job(Path(st["job"]), "windvane: bench ended with the run"):
-                save_json(bench_file(self.p, name), dict(st, verdict="ended"))
-                self.log(f"{name}: bench ended with the run ({self.stop_reason or 'its end'}); nothing compared")
+        """The run's end (a stop, the deadline) ends every bench round still running, its own or one a desk's
+        `windvane periodic` or a run before a restart started: no run would be left to read its verdict. One push
+        each; the round stays due, so the next run starts it again."""
+        for name, st, _ in live_benches(self.p):
+            if not jobs.end_job(Path(st["job"]), f"windvane: bench ended with the run ({self.stop_reason})"):
+                continue
+            save_json(bench_file(self.p, name), dict(st, verdict="ended"))
+            what = f"{st['base'][:7]} against {st['head'][:7]}" if st["base"] else f"a baseline at {st['head'][:7]}"
+            self.log(f"{name}: bench ended with the run ({self.stop_reason}) before it finished; nothing compared")
+            push(f"{name} round cut off", f"The bench round ({what}) was ended with the run ({self.stop_reason}) "
+                 "before it finished: nothing was compared. The next run starts it again.", 3, "warning")
 
 
 def asked(p):
@@ -874,13 +887,25 @@ def regression_ticket(tid, st):
         "is worth it.", ""])
 
 
+def live_benches(p):
+    """[(entry name, its round, when its job started)] for each bench round whose job still runs."""
+    out = []
+    for f in sorted(p.state.glob("bench-*.json")):
+        st = load_json(f, {})
+        if st.get("job") and jobs.alive(Path(st["job"])):
+            try:
+                started = float(Path(st["job"] + ".start").read_text())
+            except (OSError, ValueError):
+                started = f.stat().st_mtime
+            out.append((f.stem.removeprefix("bench-"), st, started))
+    return out
+
+
 def bench_status(p):
     """`windvane status`'s lines on the bench rounds running in the background."""
     out = []
-    for name, e in p.periodic.items():
-        st = load_json(bench_file(p, name), {}) if e["builtin"] == "bench" else {}
-        if st.get("job") and jobs.alive(Path(st["job"])):
-            began = datetime.fromtimestamp(Path(st["job"] + ".start").stat().st_mtime)
-            what = f"{st['base'][:7]} against {st['head'][:7]}" if st["base"] else f"a baseline at {st['head'][:7]}"
-            out.append(f"bench: periodic {name} running since {began:%H:%M} ({what}); log {st['job']}.log")
+    for name, st, started in live_benches(p):
+        what = f"{st['base'][:7]} against {st['head'][:7]}" if st["base"] else f"a baseline at {st['head'][:7]}"
+        out.append(f"bench: periodic {name} running since {datetime.fromtimestamp(started):%H:%M} ({what}); "
+                   f"`windvane await periodic-{name}` follows it")
     return out

@@ -160,8 +160,10 @@ When it is due, the run starts `windvane bench compare <last benchmarked commit>
 on with tickets; `windvane status` shows it running (`bench: periodic bench running since ...`) and `windvane await
 periodic-bench` follows it. It is sized by the weekly usage as `windvane bench` is (small over `bench_week_small`),
 runs with the run's `--cap` and `--week-cap`, and is not started over the weekly cap, after a `windvane stop`, or
-when its `minutes` don't fit before the deadline; the run's end (a `stop --now` too) ends it. The first time, with
-no bench run recorded, it records a baseline (`bench --ref <main>`) and nothing else.
+when its `minutes` don't fit before the deadline. A run whose queue is done before the bench waits for it, at the
+latest until its deadline, and reads its verdict before it ends. A stop or the deadline ends it with one push, and
+the round stays due, so the next run starts it again. The first time, with no bench run recorded, it records a
+baseline (`bench --ref <main>`) and nothing else.
 
 When it ends, a regression past the noise rule of `bench compare` (hidden tests or judge yeses down by more than one
 with one run a side, or tokens per merged ticket up more than `bench_cost_up` with neither of those up) becomes one

@@ -1,12 +1,14 @@
 """The bench as a [[periodic]] entry: due once tickets touching its `after_touch` paths merge, started in the
 background (the run goes on with tickets), and a regression against the windvane last benchmarked written up as one
 ticket and one push. The bench itself is a fake job that records results, as `windvane bench` would."""
+import io
 import json
 import sys
 import time
 import unittest
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
+from contextlib import redirect_stdout
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -117,6 +119,7 @@ class Due(Base):
         self.addCleanup(jobs.end_job, periodic.bench_job(self.p, "bench"), "test over")
         self.assertIsNone(pilot.periodic_due())  # running
         self.assertIn("bench: periodic bench running since", "\n".join(periodic.bench_status(self.p)))
+        self.assertIn("`windvane await periodic-bench` follows it", periodic.bench_status(self.p)[0])
 
     def test_config(self):
         e = entries([{"name": "b", "builtin": "bench", "after_touch": "prompts/"}])["b"]
@@ -246,20 +249,73 @@ class Caps(Base):
 
 
 class Run(Base):
-    def test_the_run_works_tickets_while_the_bench_runs_and_ends_it_with_the_run(self):
+    def test_the_run_works_tickets_while_the_bench_runs_then_waits_for_its_verdict(self):
         self.make(tickets=2)
         self.record(rec(self.first))
         self.merge("Merge T-009: a shorter worker prompt", "prompts/WORKER.md")
         pilot = driver.Pilot(self.p, args())
-        with self.fake([{}], sleep=600):
+        with self.fake([{}], sleep=4), mock.patch.object(driver.Pilot, "pause", lambda self, seconds=30: time.sleep(.2)):
             pilot.run(now() + timedelta(hours=3))
         self.assertEqual(pilot.merged, ["T-001", "T-002"])
         log = self.log()
         started = log.index("bench: bench started in the background")
         self.assertIn("after T-009", log)
         self.assertGreater(log.index("T-002", started), started)  # worked after it started
-        self.assertIn("bench: bench ended with the run", log)
+        waited = log.index("waiting for the bench bench round to end")  # the queue was done before the bench
+        self.assertGreater(log.index("no regression", waited), waited)  # read before the run ended
+        self.assertNotIn("ended with the run", log)
+
+
+class Unfinished(Base):
+    def setUp(self):
+        self.make()
+        self.record(rec(self.first))
+        self.merge("Merge T-006: a shorter worker prompt", "prompts/WORKER.md")
+
+    def started(self):
+        pilot = self.pilot()
+        with self.fake([{}], sleep=600):
+            pilot.periodic(pilot.periodic_due())
+        self.assertTrue(jobs.alive(periodic.bench_job(self.p, "bench")))
+        return pilot
+
+    def test_a_stop_ends_it_with_one_push_and_the_round_stays_due(self):
+        pilot = self.started()
+        pilot.stop_reason = "stopped now: the running sessions were killed"
+        with mock.patch.object(periodic, "push") as pushed:
+            pilot.bench_at_end()
         self.assertFalse(jobs.alive(periodic.bench_job(self.p, "bench")))
+        self.assertEqual(pushed.call_count, 1)
+        self.assertIn("was ended with the run (stopped now", pushed.call_args[0][1])
+        self.assertIn("The next run starts it again.", pushed.call_args[0][1])
+        self.assertIn("bench: bench ended with the run (stopped now", self.log())
+        again = self.pilot()  # the next run
+        self.assertEqual(again.periodic_due()["bench"], "start")
+
+    def test_a_restarted_run_waits_for_a_round_it_did_not_start_and_ends_it_at_its_end(self):
+        self.started()
+        again = self.pilot()  # a restart: a fresh Pilot, the job still running
+        self.assertIsNone(again.periodic_due())
+        self.assertEqual(len(again.bench_waits()), 1)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            jobs.await_(self.p, "periodic-bench", limit=0)  # the desk can follow it as the status line says
+        self.assertIn("RUNNING periodic-bench", out.getvalue())
+        again.stop_reason = "deadline"
+        with mock.patch.object(periodic, "push"):
+            again.bench_at_end()
+        self.assertFalse(jobs.alive(periodic.bench_job(self.p, "bench")))
+        self.assertEqual(periodic.bench_status(self.p), [])
+
+    def test_a_round_that_ran_to_its_end_with_nothing_recorded_waits_for_a_new_change(self):
+        pilot = self.pilot()
+        with self.fake([]), mock.patch.object(periodic, "push"):
+            pilot.periodic(pilot.periodic_due())
+            self.ended()
+            self.assertIsNone(pilot.periodic_due())
+            self.assertIsNone(self.pilot().periodic_due())  # nor in the next run
+            self.merge("Merge T-007: another prompt change", "prompts/CRITIC.md")
+            self.assertEqual(pilot.periodic_due()["bench"], "start")
 
 
 class Regression(unittest.TestCase):
