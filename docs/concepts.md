@@ -175,7 +175,8 @@ the command that shows the ticket's promise and the tests, then one or two ways 
 restart midway), for at most `[critic] trial_minutes` (15 by default; when they run out it answers on what it saw).
 A case it sees fail sends the ticket back, named. The worker leaves an **evidence pack** for it outside git:
 `notes.md` (the command that shows the promise, and what the critic can't run itself: measurements over time, before
-and after numbers, a long run's output) and up to four images. The critic also reads
+and after numbers, a long run's output) and up to four images. A project whose output is visual or slow to make can set `[critic] show`, a command
+windvane runs once per tree in the critic's copy, so the critic also sees what the project itself renders. The critic also reads
 the diff of the text users read, so the pack quotes none of it: every Markdown or reStructuredText file outside
 `.windvane/` (README, docs, CHANGELOG) and the files `[critic] text` names (message files, UI strings), up to 12,000
 characters, the biggest hunks cut first and named. A change no user will ever see, even through a later ticket (a
