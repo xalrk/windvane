@@ -33,7 +33,10 @@ FAKE = ("import json, sys, time\n"
 MAIN = {"passed": 4, "yes": 3, "weighted": 100_000, "merged": 1}
 # `pr view --json body` and `pr edit --body` on top of the fake gh of test_merge_draft
 DRAFT = '''elif args[:2] == ["pr", "view"] and args[args.index("--json") + 1] == "isDraft":'''
-BODY = GH.replace(DRAFT, '''elif args[:2] == ["pr", "view"] and args[args.index("--json") + 1] == "body":
+BODY = GH.replace(DRAFT, '''elif args[:2] == ["pr", "view"] and args[args.index("--json") + 1] == "body" and \\
+        (st / "unread").exists():
+    sys.exit("HTTP 403: API rate limit exceeded")
+elif args[:2] == ["pr", "view"] and args[args.index("--json") + 1] == "body":
     print((st / "body").read_text() if (st / "body").exists() else "What changed and why.")
 elif args[:2] == ["pr", "edit"]:
     (st / "body").write_text(args[args.index("--body") + 1])
@@ -131,6 +134,16 @@ class Experiment(unittest.TestCase):
         self.assertIn(f"A = main ({self.main[:7]}), 1 run · B = T-001 ({self.head()[:7]}), 2 runs", body)
         self.assertIn("T-001: experiment kept by the bench (hidden tests up): hidden 4→6", self.log())
 
+    def test_a_pr_body_that_cant_be_read_is_left_as_it_is(self):
+        self.make(forge="github")
+        (self.gh / "unread").write_text("")
+        better = {**MAIN, "passed": 6}
+        pilot = self.run_pilot([better, better])
+        self.assertEqual(pilot.merged, ["T-001"])
+        self.assertFalse((self.gh / "body").exists())  # no `pr edit` replaced the worker's body
+        self.assertIn("T-001: its PR #", self.log())
+        self.assertIn("T-001: experiment kept by the bench (hidden tests up): hidden 4→6", self.log())
+
     def test_a_flat_experiment_with_tokens_down_12_percent_merges(self):
         self.make()
         cheaper = {**MAIN, "weighted": 88_000}
@@ -151,6 +164,20 @@ class Experiment(unittest.TestCase):
         pilot = self.run_pilot([worse, worse])
         record = self.assert_rejected(pilot, "- rejected: T-001 (hidden 4→3, judge 3→3, tokens/ticket -50%)")
         self.assertIn("- Verdict: hidden tests down", record)  # cheaper doesn't save a drop in quality
+
+    def test_a_rejection_record_that_doesnt_land_lands_in_the_next_run_with_nothing_paid_again(self):
+        self.make()
+        worse = {**MAIN, "passed": 3}
+        with mock.patch.object(experiment, "land", lambda *a, **k: (False, "a refused push")):
+            pilot = self.run_pilot([worse, worse])
+        self.assertEqual(pilot.merged, [])
+        self.assertIn("the next run lands it with no worker, critic or review run again", self.log())
+        self.assertIn("T-001", json.loads((self.p.state / "state.json").read_text())["benching"])
+        self.assertEqual((len(self.calls), self.sessions("worker"), self.sessions("review")), (2, 1, 1))
+        pilot = self.run_pilot([worse, worse])
+        self.assert_rejected(pilot, "- rejected: T-001 (hidden 4→3, judge 3→3, tokens/ticket +0%)")
+        self.assertEqual((len(self.calls), self.sessions("worker"), self.sessions("review")), (2, 1, 1))
+        self.assertEqual(json.loads((self.p.state / "state.json").read_text()).get("benching"), {})
 
     def test_main_moving_during_the_bench_benches_only_mains_side_again(self):
         self.make()

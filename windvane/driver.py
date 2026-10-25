@@ -1163,12 +1163,12 @@ class Pilot(Desk, Periodic, Experiments):
         paths = self.protected_paths(sha)  # before the critic: no paid-for verdict on a head that can't merge
         if paths:
             return self.protected_aside(tid, branch, sha, paths)
-        if self.queue.kinds.get(tid) == "experiment" and not self.bench_fits(tid, sha):  # nor on one it can't bench
-            return
         ap = self.approved.get(tid)
         res = ap and critic.resolution(self.cd, ap["sha"], sha, p.upstream, ap.get("why"))
         if ap and not res:
             self.approved.pop(tid)  # more than a resolution: the full critic and review again
+        if not res and self.queue.kinds.get(tid) == "experiment" and not self.bench_fits(tid, sha):
+            return  # nor on one it can't bench (a resolution merges without one)
         if res:
             self.log(f"{tid}: only merges {p.main} into the approved {ap['sha'][:7]} and resolves it "
                      f"({len(res[1])} file{'s' * (len(res[1]) != 1)}); the critic's verdict stands")

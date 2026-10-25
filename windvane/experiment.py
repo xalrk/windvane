@@ -171,19 +171,20 @@ class Experiments:
         pr = p.cfg["forge"] == "github" and pr_for(p, branch)
         if not pr:
             return
-        body = net.sh(p.main_root(), "gh", "pr", "view", pr, "--json", "body", "-q", ".body") or ""
+        r = net.call(["gh", "pr", "view", pr, "--json", "body", "-q", ".body"], p.main_root())
+        if r.returncode:  # an edit now would replace the worker's whole body with only this section
+            return self.log(f"{tid}: its PR #{pr} couldn't be read, so the bench's numbers stay out of its body")
+        body = r.stdout.strip()
         more = (f"## Experiment: kept by the bench\n{why}: {numbers}\n\n```\n{table}\n```")
         net.sh(p.main_root(), "gh", "pr", "edit", pr, "--body",
                privacy.censor(f"{body.rstrip()}\n\n{more}".lstrip(), privacy.own_names(p)))
 
     def reject(self, tid, branch, sha, both, numbers, why):
         """Not merged: `- rejected:` in QUEUE.md and a record in EXPERIMENTS.md, landed on main the way the driver
-        lands its own changes; the branch stays. One push."""
+        lands its own changes; the branch stays. One push. Until it lands, the head stays owed (`benching`), so the next run
+        goes straight back here with no worker, critic, review or bench run again."""
         p, cd = self.p, self.cd
         self.skip.add(tid)
-        self.approved.pop(tid, None)
-        self.settled(tid)
-        append_jsonl(p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "rejected"})
         self.log(f"{tid}: experiment rejected by the bench ({why}): {numbers}; branch {branch} kept, not merged")
         files = gout(p.main_root(), "diff", "--name-only", f"{p.upstream}...{sha}").split()
         with self.merge_lock:
@@ -201,8 +202,13 @@ class Experiments:
                                      f"{why}: {numbers}. Branch {branch} kept, not merged.", fresh=True)
             finally:
                 clean_detach(p, cd, p.upstream)
-        if not ok:
-            self.log(f"{tid}: its rejection record isn't on {p.main} ({where}): the next run benches it again")
+        if ok:
+            self.approved.pop(tid, None)
+            self.settled(tid)
+            append_jsonl(p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "rejected"})
+        else:  # its head stays owed (`benching`): the next run reuses the recorded runs and lands the record again
+            self.log(f"{tid}: its rejection record isn't on {p.main} ({where}): the next run lands it with no worker, "
+                     "critic or review run again")
         push(f"Rejected: {self.name(tid)}", whole(f"The bench found it no better than {p.main}: ", f"{why} ({numbers})",
                                                   f". Not merged; branch {branch} kept"
                                                   + ("." if ok else f"; the record waits on {where}."), log=self.log),
