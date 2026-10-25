@@ -7,6 +7,11 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- A run on windvane itself undoes a merged change that breaks its own driver. After a self-update the new code is on
+  trial until a ticket merges on it, or for an hour; two crashes, or every ticket failing at the same step with the
+  same error, revert the merges that changed the driver's code on `main` (a revert commit through the usual PR or
+  push, never a force push), write a ticket with the error, put the reverted tickets back in the queue after it, and
+  send one push. The run goes on on the last good code. A second bad update in a row stops the run instead.
 - An experiment budget (`[experiments]` in the config): a bench, an experiment's or the periodic one, starts only
   while the weekly usage is below `week_below` (75%) and this week's bench spend plus the run's estimate stays
   within `week_share` (30 points of the weekly limit), plus what you allowed this week. A bench that doesn't fit

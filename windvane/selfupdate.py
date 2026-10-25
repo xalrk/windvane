@@ -231,13 +231,13 @@ def revert_update(p, cd, trial, how, log):
             fix_ticket(p, cd, tid, trial, how, commits, ids, revert)
         git(cd, "add", "-A", p.tickets_rel, p.queue_rel)
         git(cd, *held.author_ident(p), "commit", "-q", "-m", f"{tid}: find and fix what broke windvane {new[:8]}")
-        landed = held.land(p, cd, planner.branch_name(p, cd, "revert"), title, body, commit=False, fresh=True)
+        ok, where = held.land(p, cd, planner.branch_name(p, cd, "revert"), title, body, commit=False, fresh=True)
     finally:
         worktree.clean_detach(p, cd, p.upstream)
-    if not landed.ok:
-        raise Unreverted(f"the revert waits on {landed.where}")
+    if not ok:
+        raise Unreverted(f"the revert waits on {where}")
     log(f"windvane {new[:8]} reverted on {p.main} ({', '.join(ids) or 'no ticket'}); {tid} is to fix it")
-    return landed.where, ids, tid, revert
+    return where, ids, tid, revert
 
 
 def fix_ticket(p, cd, tid, trial, how, commits, ids, revert):
@@ -249,6 +249,8 @@ def fix_ticket(p, cd, tid, trial, how, commits, ids, revert):
             f"self-update, windvane {new[:8]} {how}. The run reverted these on {p.main} in `{revert[:8]}` and went on "
             f"on {good[:8]}:\n{listed}\n\n## Scope\n- Reproduce it (the reverted change is `git show {revert[:8]}`, "
             "inverted), find the cause, and fix it with a test that fails without the fix.\n"
+            + "".join(f"- {t}'s error ({step}):\n```\n{why[-1500:]}\n```\n"
+                      for t, (step, _, why) in list(trial.get("seen", {}).items())[:1])
             + (f"- {', '.join(ids)} wait for this ticket, then redo their change on top of the fix.\n" if ids else "")
             + "\n## Done when\n- A test shows the error above can't happen again.\n")
     (cd / p.tickets_rel).mkdir(parents=True, exist_ok=True)

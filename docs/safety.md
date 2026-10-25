@@ -35,6 +35,16 @@ after that, it stops starting tickets, logs which ones the new code waits for, a
 restart's log line says how much slot time that drain left idle. An installed windvane (pipx, uv, `install.sh`) is
 never changed.
 
+New code a run on windvane itself took up this way is on trial until a ticket merges on it, or for an hour. If on
+trial the driver crashes twice (a detached run, whose supervisor outlives it), or two tickets or more all fail at the
+same step with the same error, the update is bad: the run reverts the commits since the last good code that changed
+the driver's code, with a `git revert` landed on `main` the way the driver lands its own changes (a PR on GitHub, a
+push on plain git; never a force push or a rewrite). In the same change it writes a ticket with the error and the
+reverted commits, puts it at the top of `QUEUE.md`, and makes the reverted tickets wait for it: the revert's subject
+(`Revert T-012, T-013: ...`) puts them back in the queue as not done. One push says so, the install fast-forwards to
+the revert, and the run goes on on the good code, retrying the tickets the bad code failed. A second bad update
+without a ticket merged in between, or a revert that can't land, stops the run with one push instead.
+
 ## What sessions may and may not do
 
 Sessions run headless with `claude -p` in Claude Code's `auto` permission mode, plus explicit allow and deny rules

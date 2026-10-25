@@ -1184,7 +1184,7 @@ class Pilot(Desk, Periodic, Experiments):
         if not ok:
             self.feedback[tid] = f"The check fails on {sha[:12]}: {summary}\n```\n{tail(logf, 40)}\n```"
             critic.sent_back(p, tid, "check")
-            self.on_trial(tid, "check", summary)
+            self.on_trial(tid, "check", f"{summary}\n{tail(logf, 5)}")  # its last lines: two checks failing alike
             return self.bounce(tid, "check")
         if res and not res[0]:  # git merged it cleanly: like any approved head that merges, nothing new to review
             self.log(f"{tid}: a clean merge of {p.main}; no review needed")
@@ -2720,14 +2720,16 @@ class Pilot(Desk, Periodic, Experiments):
 
     def trial_start(self):
         """Puts the code a restart takes up on trial (`selfupdate.on_trial`): `good` stays the last code that passed
-        one. Code that is a good one's again (a revert taken up) isn't."""
-        st = self.p.state
-        t = selfupdate.on_trial(st)
+        one. Code that is a good one's again (a revert taken up) isn't, nor code that isn't this project's own merges (a
+        run on another project): only those can be reverted."""
+        p = self.p
+        t, new = selfupdate.on_trial(p.state), gout(self.home, "rev-parse", "HEAD")
         good = t["good"] if t else self.loaded
-        back = load_json(st / selfupdate.REVERTED, {}).get("good")
-        if not good or any(g and not selfupdate.code_changed(self.home, g) for g in (good, back)):
-            return selfupdate.end_trial(st)
-        selfupdate.put_on_trial(st, good, gout(self.home, "rev-parse", "HEAD"), len(self.merged))
+        back = load_json(p.state / selfupdate.REVERTED, {}).get("good")
+        if not good or any(g and not selfupdate.code_changed(self.home, g) for g in (good, back)) or \
+                git(p.main_root(), "merge-base", "--is-ancestor", new, p.upstream).returncode:
+            return selfupdate.end_trial(p.state)
+        selfupdate.put_on_trial(p.state, good, new, len(self.merged))
 
     def on_trial(self, tid, step, why):
         """A ticket's setback while the driver's code is on trial: the same setback for every ticket marks the update
@@ -2735,7 +2737,7 @@ class Pilot(Desk, Periodic, Experiments):
         if self.bad is None and selfupdate.setback(self.p.state, tid, step, why, self.p.id_re):
             seen = selfupdate.on_trial(self.p.state)["seen"]
             at = " at the check" if step == "check" else ""
-            self.bad = f"failed {', '.join(seen)} the same way{at}: {why}"
+            self.bad = f"failed {', '.join(seen)} the same way{at}: {why.split('; log ')[0]}"  # (not its log's path)
             self.log(f"windvane's new code {self.bad}; no new tickets until it is reverted")
 
     def trial_check(self):
@@ -2761,7 +2763,9 @@ class Pilot(Desk, Periodic, Experiments):
             with open(self.p.state / RETRY, "a") as f:
                 f.write("".join(f"{x}\n" for x in failed))
         self.fail_streak = 0
-        self.pull()  # takes the revert up: the driver restarts on it
+        self.pull()  # the revert the install took up: the driver restarts on it now, as no ticket runs
+        if self.behind:
+            self.restart()
         return False
 
     def hand_over(self):
