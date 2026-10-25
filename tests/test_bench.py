@@ -53,6 +53,7 @@ class Bench(unittest.TestCase):
 
     def test_a_run_scores_the_hidden_tests_and_leaves_the_checkout_alone(self):
         before = self.checkout()
+        os.environ.update(FAKE_ENV=str(self.s.tmp / "env.jsonl"), GH_TOKEN="from-the-desk")
         out = self.bench("--hours", "1")
         self.assertEqual(out.splitlines()[0], "bench: full (no weekly usage reading yet)")
         recs = [json.loads(x) for x in (self.state / "bench.jsonl").read_text().splitlines()]
@@ -75,6 +76,11 @@ class Bench(unittest.TestCase):
         self.assertTrue(worker["cwd"].startswith(str(home)), worker["cwd"])
         self.assertIn(f"Read(/{self.s.root}/bench/**)", worker["deny"])
         self.assertIn(f"Bash(*{home.parent / 'windvane'}/bench*)", worker["deny"])
+        env = json.loads((self.s.tmp / "env.jsonl").read_text().splitlines()[0])["env"]
+        found = next(Path(d, "windvane") for d in env["PATH"].split(os.pathsep) if os.path.lexists(Path(d, "windvane")))
+        self.assertEqual(os.readlink(found), str(home.parent / "windvane/bin/windvane"))  # the ref's, gone now
+        self.assertEqual((env["XDG_STATE_HOME"], env[bench.NO_PHONE]), (str(home / "state"), "1"))
+        self.assertNotIn("GH_TOKEN", env)
         self.assertFalse((home / "repo/accept_tiny_greeting.py").exists())  # copied into the scratch clone only
         self.assertTrue((home / "score/accept_tiny_greeting.py").exists())
         # nothing reached the phone or GitHub, and the user's checkout is as it was
@@ -131,6 +137,17 @@ class Small(unittest.TestCase):
         self.assertEqual(sp.perms["worker"]["deny"], ["Read(//x/**)"])
         self.assertEqual(sp.state, home / "state/windvane/tiny")
         self.assertIn("daily 00:00-00:00", (sp.state / "quiet.txt").read_text())
+
+    def test_a_seed_run_has_no_phone(self):
+        s = Sandbox()
+        self.addCleanup(s.close)
+        from windvane import phone
+        f = phone.conf_path()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text('enabled = true\ntopic = "a"\nreply_topic = "b"\n')
+        self.assertTrue(phone.can_ask())
+        os.environ[bench.NO_PHONE] = "1"
+        self.assertFalse(phone.can_ask())
 
     def test_unittest_output_is_read_per_test(self):
         text = ("test_a (m.C.test_a) ... ok\ntest_b (m.C.test_b)\nT-001: says so ... FAIL\n"

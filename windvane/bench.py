@@ -359,8 +359,12 @@ def main(a, p):
 
 def run(p, a, chosen, base, wt, sha, which, before):
     bases = [p.main_root(), wt]
-    rules, path = deny_rules(bases), clean_path(os.environ.get("PATH", ""), base / "bin")
     exe = [str(wt / "bin/windvane")]
+    first = base / "bin/ref"  # the sessions' own `windvane check`, `critic` and `bg` are the ref's too
+    first.mkdir(parents=True)
+    (first / "windvane").symlink_to(exe[0])
+    rules = deny_rules(bases)
+    path = os.pathsep.join([str(first), clean_path(os.environ.get("PATH", ""), base / "bin")])
     caps = [x for k_, v in (("--cap", a.cap), ("--week-cap", a.week_cap)) if v is not None for x in (k_, f"{v:g}")]
     procs = []
     for s, ts in chosen:

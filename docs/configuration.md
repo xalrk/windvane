@@ -235,6 +235,7 @@ Settings for this machine, shared by every project on it.
 | `measure_load` | a quarter of the CPU count | A job that measures timing (`windvane heavy --measure`, `bg --heavy --measure`) also waits until the 1-minute load average is at or under this, so other work on the machine doesn't skew its times. Jobs without `--measure` never wait on it. A value that isn't a number is replaced by the default, and the job says so. |
 | `measure_hold` | `20` | Minutes a `--measure` job waiting for a quiet CPU lets the jobs behind it go first. After that it holds the line: they wait until the load is down and it has run, since each job let by adds load of its own; or until the load has stayed up this long again with no heavy job running, when it lets them by again. |
 | `heavy_wait` | `60` | Minutes a heavy job run by hand (`windvane heavy`, `windvane check` with `heavy_check`) waits for the machine before giving up without running (exit 75); `windvane heavy --wait` overrides it. Sessions' heavy jobs and the driver's heavy check wait until their stop instead (the session's stop, or the run's end), so they keep their place in line. A check that gave up says `CHECK NOT RUN` and doesn't count as failed. |
+| `bench_week_small` | `75` | `windvane bench` runs its small size (two seeds, three tickets each) when the latest weekly usage reading is over this %, its full size otherwise; `--full` and `--small` override it. |
 
 ## [state]
 

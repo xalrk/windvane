@@ -7,6 +7,14 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane bench`: builds three small seed projects (a command-line ledger, a notes web app, a text maze game) with
+  the real pipeline, side by side, each in a fresh repo with a local remote and a state dir of its own, then scores
+  them on acceptance tests no session sees, run in a scratch clone of each final `main`. It records tickets merged,
+  failed and parked, hidden tests passed per ticket, weighted tokens and API $ (per merged ticket too), minutes and
+  weekly usage before and after in `bench.jsonl`, and prints a table (`--last` prints it again). `--ref` picks the
+  windvane commit measured; the run is small (two seeds, three tickets) when weekly usage is over `machine.toml`'s
+  `bench_week_small`; `--dry-run` shows the plan and what earlier runs that size cost. Sessions are denied the hidden
+  tests, and a seed whose run streams name one is reported as contaminated and not counted.
 - `[critic] show`: a project whose output is visual or slow to make gives the critic a command that shows it (a
   screenshot script, a headless render). windvane runs it once per tree in the critic's copy of the head, and the
   critic gets the images it leaves in `$WINDVANE_SHOW_DIR` and its last lines of output. `show_heavy` runs it under
