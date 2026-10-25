@@ -18,6 +18,13 @@ release on the same day adds a number (`2026.10.9.1`).
   recorded yet. `--repeat N` runs each side N times and marks only a difference past the spread of each side's own
   runs; without it, a line says one run can't tell a small difference from noise.
 - `windvane stats --bench`: every recorded bench run, a line each.
+- A `[[periodic]]` entry with `builtin = "bench"` benchmarks windvane after changes land: once tickets touching its
+  `after_touch` paths (`["prompts/", ...]`) have merged since the last recorded bench run, the run starts `windvane
+  bench compare` between that commit and `main` as a background job and goes on with tickets (`windvane status`
+  shows it). A regression past the noise (hidden tests or judge yeses down, or tokens per merged ticket up more than
+  `bench_cost_up`, 25% by default, with neither up) writes one ticket with the changes merged in between, both
+  sides' numbers and the seeds that moved, and sends one push; it never reverts anything. The first run records a
+  baseline. It keeps to the run's caps and deadline, and ends with the run.
 - `windvane stats --projects [--since DATE] [--json]`: every project on the machine in one digest, read from each
   project's state dir and repo: tickets merged, failed and parked with their reasons, each role's share of
   weighted tokens and its cost per merged ticket, the critic's first-pass rate and median first and final

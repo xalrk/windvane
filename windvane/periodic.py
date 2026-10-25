@@ -551,10 +551,10 @@ class Periodic:
         args = (["--ref", head] if base is None else ["compare", base, head]) + [
             f"--{which}", "--hours", f"{hours:.3g}", "--cap", f"{self.a.cap:g}", "--week-cap", f"{self.a.week_cap:g}"]
         touched = touching(p, base, head, e["after_touch"]) if base else []
-        job = bench_job(p, name)
+        job, after = bench_job(p, name), f"{datetime.now():%Y%m%d-%H%M%S}"  # its runs' ids are their start times
         jobs.bg(p, job.name, bench_command(p, args), p.main_root(), quiet=True)
-        save_json(bench_file(p, name), {"job": str(job), "base": base, "head": head, "size": which,
-                                        "after": f"{datetime.now():%Y%m%d-%H%M%S}", "touched": touched})
+        save_json(bench_file(p, name), {"job": str(job), "base": base, "head": head, "size": which, "after": after,
+                                        "touched": touched})
         self.bench_mine.add(name)
         what = (f"a baseline at {head[:7]}" if base is None else f"{base[:7]} against {head[:7]}, after "
                 + ", ".join(t for t, *_ in touched) if touched else f"{base[:7]} against {head[:7]}")
