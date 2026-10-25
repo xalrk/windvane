@@ -112,8 +112,15 @@ class SeedRound(Base):
         self.assertEqual(title, "Bench seed refused")
         self.assertIn("the hidden tests fail on the reference solution: T-001 (0/1)", msg)
         self.assertEqual([r["verdict"] for r in self.ledger()], ["refused"])
-        self.assertFalse(pilot.periodic_due())  # tried once per head of main, refused or not
-        self.assertFalse(self.pilot().periodic_due())  # a restart, or the next run, doesn't pay for it again
+        self.assertFalse(pilot.periodic_due())  # once a run
+        for _ in range(2):  # the next runs (or restarts) try again, three times in all at one head of main
+            self.round(self.pilot(), "todo", reference="still todo")
+        self.assertEqual(len(self.pushes), 3)
+        self.assertTrue(self.pushes[-1][1].endswith(
+            f"That was try 3 at main {self.s.git('rev-parse', '--short=7', 'HEAD')}: no more until main moves on, or "
+            "`windvane periodic seed`. Meanwhile experiments wait: the training pool has 0 of its 2 seeds."),
+            self.pushes[-1][1])
+        self.assertFalse(self.pilot().periodic_due())  # no fourth session at this head
         self.s.write("docs/x.md", "a merge\n")
         self.s.publish("Merge T-009: something")
         self.assertEqual(self.pilot().periodic_due()["name"], "seed")
@@ -190,7 +197,8 @@ class Gate(Base):
         pilot = e.run_pilot([test_experiments.MAIN])
         self.assertEqual((pilot.merged, list(pilot.aside), e.calls), ([], ["T-001"], []))  # no bench on the holdout
         self.assertIn("T-001: the training pool has 0 of its 2 seeds: the experiment waits, not failed", e.log())
-        self.assertEqual(e.sessions("critic"), 0)  # set aside before any verdict is paid for
+        self.assertEqual((e.sessions("worker"), e.sessions("critic")), (0, 0))  # set aside before it's paid for
+        self.assertEqual(json.loads((e.p.state / "seed-seed.json").read_text())["tries"], 1)  # its seed was tried
 
     def test_experiments_resume_by_hand(self):
         self.make()

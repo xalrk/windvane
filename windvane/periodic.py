@@ -660,13 +660,14 @@ class Periodic:
 
     def seed_due(self, e):
         """A seed entry's turn: the pool on main short of `pool_size`, or `seed_every` experiments kept since a seed
-        last joined. Tried once per head of main (`seed_file`, kept across restarts and runs): a refused seed waits for
-        main to move on, and one that joined lets the next start at once while the pool is short. Read again only
+        last joined. Tried once a run, and at most SEED_TRIES times per head of main (`seed_file`, kept across restarts
+        and runs): one that joined moves main, so the next starts at once while the pool is short. Read again only
         when main or the ledger moved: it's asked on every pass between tickets."""
         p = self.p
         ledger = p.state / "ledger.jsonl"
         head = gout(p.main_root(), "rev-parse", p.upstream)
-        if load_json(seed_file(p, e["name"]), {}).get("tried") == head:
+        st = load_json(seed_file(p, e["name"]), {})
+        if st.get("head") == head and (st.get("tries", 0) >= SEED_TRIES or e["name"] in self.seed_tried):
             return False
         key = (head, ledger.stat().st_mtime if ledger.exists() else 0)
         if self.seed_seen.get(e["name"], (None,))[0] != key:
@@ -691,7 +692,13 @@ class Periodic:
             self.asked_taken(e)
         self.fetch()
         clean_detach(p, cd, p.upstream)
-        save_json(seed_file(p, name), {"tried": gout(cd, "rev-parse", "HEAD")})  # before any session is paid for
+        head, st = gout(cd, "rev-parse", "HEAD"), load_json(seed_file(p, name), {})
+        tries = st.get("tries", 0) + 1 if st.get("head") == head else 1
+        save_json(seed_file(p, name), {"head": head, "tries": tries})  # before any session is paid for: a kill counts
+        self.seed_tried.add(name)
+        self.seed_last = "" if tries < SEED_TRIES else (
+            f" That was try {tries} at {p.main} {head[:7]}: no more until {p.main} moves on, or `windvane periodic "
+            f"seed`." + (f" Meanwhile experiments wait: {bench.pool_short(p)}." if bench.pool_short(p) else ""))
         try:
             with tempfile.TemporaryDirectory(prefix="windvane-seed-") as keep:
                 new, said = self.seed_session(e, cd, Path(keep))
@@ -723,7 +730,7 @@ class Periodic:
             self.log(f"{name}: no seed ({killed or plain_error(error)})")
             if killed != "stop now":
                 self.periodic_failed(name, f"the seed session {'was cut off' if killed else 'failed'}: "
-                                     f"{killed or phone.cut(plain_error(error), log=self.log)}.")
+                                     f"{killed or phone.cut(plain_error(error), log=self.log)}.{self.seed_last}")
             return None, ""
         new, why = pool.staged(cd)
         why = why or pool.check(new)
@@ -731,8 +738,8 @@ class Periodic:
         if why:
             append_jsonl(p.state / "ledger.jsonl", {"event": "seed", "verdict": "refused", "why": why[:300]})
             self.log(f"{name}: seed refused: {why}")
-            push("Bench seed refused", phone.cut(f"The new seed didn't join the bench pool: {why}.", log=self.log),
-                 3, "warning")
+            push("Bench seed refused", phone.cut(f"The new seed didn't join the bench pool: {why}.", log=self.log)
+                 + self.seed_last, 3, "warning")
             return None, ""
         self.log(f"{name}: seed {new.name} checked: its hidden tests fail on the bare seed and pass on its reference"
                  + (f"; SEED: {said.group(1)}" if said else ""))
@@ -990,8 +997,11 @@ def bench_file(p, name):
     return p.state / f"bench-{name}.json"
 
 
+SEED_TRIES = 3  # a seed round's tries at one head of main (one a run), before it waits for main to move on
+
+
 def seed_file(p, name):
-    """A seed entry's last round: the head of main it was tried at."""
+    """A seed entry's tries: the head of main they were at, and how many."""
     return p.state / f"seed-{name}.json"
 
 

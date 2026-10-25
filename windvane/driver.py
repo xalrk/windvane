@@ -492,6 +492,7 @@ class Pilot(Desk, Periodic, Experiments):
         self.bench_seen, self.bench_wait = {}, {}
         self.overfit_read = None  # bench.jsonl's mtime when `overfit_watch` last looked
         self.seed_seen = {}  # a seed entry -> ((main's head, the ledger's mtime), whether it was due then)
+        self.seed_tried = set()  # the seed entries whose round ran this run (each tries once a run)
         self.asks_left = []  # the rounds asked for that the run ended before: in the final summary
         self.requests_tried = set()  # windvane requests a [[periodic]] round was given this run: never twice
         self.desk_init(s.get("desk", {}))  # the user's labelled PRs, merged between tickets (desk.py)
@@ -2275,6 +2276,9 @@ class Pilot(Desk, Periodic, Experiments):
             tid, *rest = q.pick(avoid, tickets(self.questions))
             if tid is None:
                 return None, rest[0], None, None
+            if q.kinds.get(tid) == "experiment" and not self.pool_fits(tid):  # before any worker is paid for
+                avoid.add(tid)
+                continue
             own = next((i for i, o in [*self.owner.items(), *held.items()] if o == tid), None)
             slot = own if own is not None else next((i for i in free if self.owner[i] is None and i not in held), None)
             if slot is not None and slot in free:

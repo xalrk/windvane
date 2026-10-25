@@ -113,12 +113,13 @@ class Experiments:
 
     def pool_fits(self, tid):
         """Whether the training pool can decide the experiment (`bench.pool_short`); if not, it is set aside for the
-        rest of the run, not merged unmeasured: the seed round fills the pool between tickets meanwhile."""
+        rest of the run, not merged unmeasured, before its worker when it's picked: the seed round fills the pool."""
         short = bench.pool_short(self.p)
         if not short:
             return True
-        held = self.put_aside(tid, short, "a run once the seed round has filled the pool")
-        self.log(f"{tid}: {short}: the experiment waits, not failed, for a run once the pool is full{held}")
+        how = "the seed round filling it (`windvane periodic seed` asks for a round now)"
+        held = self.put_aside(tid, short, how)
+        self.log(f"{tid}: {short}: the experiment waits, not failed, for {how}{held}")
         return False
 
     def bench_fits(self, tid, sha):

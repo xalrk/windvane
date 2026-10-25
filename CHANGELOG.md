@@ -13,7 +13,7 @@ release on the same day adds a number (`2026.10.9.1`).
   bare seed and pass on the session's reference solution, which is never committed, and the oldest leaves past
   `pool_size`. Only that round's own branch may write `bench/pool/`. With it, experiments and the bench round run on
   the pool (`windvane bench --pool`), an experiment waits for a full pool rather than merging unmeasured, and
-  `bench/`'s seeds are a frozen holdout run by hand. A refused seed is tried again only once `main` has moved on. When a holdout run shows
+  `bench/`'s seeds are a frozen holdout run by hand. A refused seed is tried again the next run, at most three times per commit of `main`. When a holdout run shows
   the pool's numbers up and the holdout's down past the noise in the same week, one push says so and experiment
   planning stops until `windvane experiments resume`.
 - `check_quick` in the config: a first pass `windvane check` runs before `check`, such as the tests the change

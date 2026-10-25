@@ -289,10 +289,11 @@ copies: the seed joins only if every ticket's tests fail on the bare seed and pa
 committed; anything else the session changed is dropped. It lands on the driver's own `seed-` branch, the only one
 allowed to write `bench/pool/` (a ticket or plan branch that does is held like any protected change), as
 `bench/pool/<NNN>-<kind>/`, and the oldest seed past `pool_size` leaves. One push says which joined, or why it was
-refused. A round is tried once per commit of `main`, across restarts and runs: a refused seed waits for `main` to move
-on, while one that joined lets the next start at the next gap until the pool is full. With a seed round configured,
-the experiments' bench and the bench round run on the pool (`windvane bench --pool`), and an experiment is set aside
-for the run, not merged unmeasured, while the pool holds fewer than `pool_size` seeds; `bench/`'s own seeds become a
+refused. A round is tried once a run and at most three times per commit of `main`, counted across restarts: the
+third refusal's push says so, and `windvane periodic seed` asks for another; a seed that joined moves `main`, so the
+next starts at the next gap until the pool is full. With a seed round configured, the experiments' bench and the
+bench round run on the pool (`windvane bench --pool`), and an experiment is set aside for the run before its worker
+starts, never merged unmeasured, while the pool holds fewer than `pool_size` seeds; `bench/`'s own seeds become a
 frozen holdout that only `windvane bench` by hand (and a weekly trend) runs. Each time a new holdout run is recorded, the driver reads the
 week's runs of both sets: the pool's hidden tests or judge yeses up past the noise rule while the holdout's fell past
 it means the loop is learning its training seeds, so it sends one push and stops experiment planning (the planner and
