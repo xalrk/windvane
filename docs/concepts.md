@@ -215,15 +215,13 @@ the mark becomes a fix; `no (out of scope)` becomes a follow-up instead:
 "Beyond this ticket" points go in the pull request and feed the next `windvane plan`.
 
 **A re-critique** judges the revision, not the whole change again. Its prompt holds the diff from the head the critic
-last judged (the ticket's own files only, so merging `main` in adds nothing; cut to 12,000 characters as above), that
-verdict's failed checks and "Fix in this ticket" points, which it answers afresh, and its `yes` answers with their
-evidence, which it answers again only where the diff reaches what they judged. The ones it leaves out carry over:
-`critic.jsonl` lists them as `carried`, and the score comes from both. A first critique carries nothing, so a check it
-leaves out counts as `no`. When only the pack changed, the prompt says the tree is the one it judged. A revision only
-the critic sent back gets its own depth: a light read when it is small and touches no `[critic] risky` file, even after
-a full first run; one the check or the reviewer sent back keeps the full trial. A changed scale, a judged head that is
-gone, or a numeric scale (whose earlier critiques are shown without their numbers, so a revision isn't scored as "last
-time +1") is judged afresh.
+last judged (the ticket's own files only, so merging `main` in adds nothing), that verdict's failed checks and "Fix in
+this ticket" points, which it answers afresh, and its `yes` answers, which it answers again only where the diff reaches
+what they judged. Those it leaves out carry over (`carried` in `critic.jsonl`) and count in the score; a first critique
+carries nothing, so a check it leaves out is a `no`. An answer the driver can't count (a label naming no check, a line
+off its bullet) is asked again in the same session, and carries nothing if it stays. When only the pack changed, the
+prompt says so. A changed scale, a judged head that is gone, or a numeric scale is judged afresh. Its depth is the
+revision's own when only the critic sent it back (see [`depth`](configuration.md#critic)).
 
 **Who judges what.** The critic owns behaviour as a user meets it: each of its points names what a user meets (a
 command's output, a push, a lost file, a wait) and what fixed looks like, never a missing test or something the pack

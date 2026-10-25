@@ -1,6 +1,7 @@
 import argparse
 import contextlib
 import io
+import json
 import os
 import sys
 import unittest
@@ -43,7 +44,8 @@ class Recritique(unittest.TestCase):
         old = os.getcwd()
         os.chdir(s.root)
         self.addCleanup(os.chdir, old)
-        self.addCleanup(os.environ.pop, "FAKE_CRITIC_TEXT", None)
+        for k in ("FAKE_CRITIC_TEXT", "FAKE_CRITIC_REASK"):
+            self.addCleanup(os.environ.pop, k, None)
         self.change("print('one')\n")
 
     def change(self, text, path="tool.py"):
@@ -165,6 +167,50 @@ class Recritique(unittest.TestCase):
         self.assertIn("It crashes.", earlier)
         self.assertNotIn("works=6", earlier, "no anchor on the earlier number")
         self.assertNotIn("## What changed since", prompt)
+
+    def labels(self):
+        return [r["label"] for r in read_jsonl(self.p.state / "ledger.jsonl") if r.get("role") == "critic"]
+
+    def test_an_answer_naming_no_check_is_reasked_not_carried_over(self):
+        self.critic(FIRST)
+        self.change("import fcntl\n")
+        broke = "Checks:\n- run: no, ran: it prints nothing now\n- again: yes, ran: no crash\nCRITIC: {tid} fixes=0 broke"
+        os.environ["FAKE_CRITIC_REASK"] = broke.replace("- run:", "- runs:")
+        _, _, rec = self.critic(broke)
+        self.assertEqual(self.labels()[-1], "T-001-critic-reask")
+        self.assertEqual((rec["answers"]["runs"], rec["step"], rec["reasked"]), ("no", "rethink", True))
+        self.assertNotIn("stray", rec)
+
+    def test_an_answer_off_its_bullet_is_reasked_and_still_stray_carries_nothing(self):
+        self.critic(FIRST)
+        self.change("import fcntl\n")
+        loose = "Checks:\nruns: no, ran: it prints nothing now\n- again: yes, ran: no crash\nCRITIC: {tid} fixes=0 broke"
+        os.environ["FAKE_CRITIC_REASK"] = loose
+        _, reasked, rec = self.critic(loose)
+        self.assertIn("these answers count for no check (`runs:`)", reasked, "the re-ask's prompt")
+        self.assertEqual((rec["stray"], rec["carried"], rec["unanswered"]), (["runs"], [], ["runs", "said", "short"]))
+        self.assertEqual(rec["step"], "rethink", "with nothing carried, the unanswered check is a no")
+
+    def test_a_run_with_no_verdict_or_a_dead_critic_leaves_the_last_verdict_to_judge_from(self):
+        _, _, first = self.critic(FIRST)
+        self.change("import fcntl\nprint('one')\n")
+        os.environ["FAKE_CRITIC_REASK"] = "still no line"
+        _, _, none = self.critic("no CRITIC line at all")
+        self.assertEqual(none["step"], "none")
+        _, prompt, rec = self.critic(FIXED)
+        self.assertIn(f"## What changed since your last critique ({first['sha']} → ", prompt)
+        self.assertEqual((rec["since"], rec["step"]), (first["sha"], "pass"))
+
+    def test_a_judged_head_that_is_gone_judges_afresh(self):
+        self.critic(FIRST)
+        recs = read_jsonl(self.p.state / "critic.jsonl")
+        recs[-1]["sha"] = "0000000"
+        (self.p.state / "critic.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+        _, prompt, rec = self.critic(FIXED)
+        self.assertNotIn("## What changed since", prompt)
+        self.assertIn("## Your earlier critiques of this ticket", prompt)
+        self.assertNotIn("carried", rec)
+        self.assertEqual(rec["step"], "rethink", "nothing carried: `runs` unanswered is a no")
 
     def test_stats_counts_the_later_runs_and_the_carried_checks_apart(self):
         self.critic(FIRST)

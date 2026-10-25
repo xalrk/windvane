@@ -906,7 +906,8 @@ def since_part(p, cwd, rev, prior, lad):
               "again):\n" + "\n".join(f"- {key_label(k)}: yes{f', {ev}' if ev else ''}"
                                          for k, (a, ev) in kept.items() if a == "yes") if any(
                   a == "yes" for a, _ in kept.values()) else "",
-              "Its \"Beyond this ticket\" points (only your last reply's reach the planner):\n" + "\n".join(f"- {x}" for x in more) if more else ""]
+              "Its \"Beyond this ticket\" points (only your last reply's reach the planner):\n"
+              + "\n".join(f"- {x}" for x in more) if more else ""]
     return "\n\n".join(filter(None, parts))
 
 
@@ -1011,21 +1012,25 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
         return entry, f"Critic unavailable ({cut(plain_error(error))})."  # the worker reads it
     kept = stood(prior[0], lad) if prior else {}
     why, asked = unread(p, tid, lad, text, kept), {}
-    if why and session.get("id"):  # one more turn in the same session reads its context cached, not fresh (T-116)
-        again, killed, error = run_claude(p, "critic", f"{tid}-critic-reask", reask(tid, why, lad),
+    stray = strays(text, lad) if kept and not why else []
+    if (why or stray) and session.get("id"):  # one more turn in the same session reads its context cached (T-116)
+        again, killed, error = run_claude(p, "critic", f"{tid}-critic-reask", reask(tid, why or stray_why(stray), lad),
                                           system, where, deny=DENY, usage=usage, stop_if=stop_if,
                                           ticket=tid, resume=session["id"], extra_env=git_env)
         if killed or error:  # no reply to it: the first reply stands, and the log says the re-ask failed
             asked = {"reask_failed": cut(killed or plain_error(error))}
         else:
             text, why, asked = again, unread(p, tid, lad, again, kept), {"reasked": True}
+            stray = strays(text, lad) if kept and not why else []
     if why:
         return none(p, tid, text, why, **asked, **out)
+    if stray:  # an answer the driver can't count would leave the earlier `yes` standing in for it: carry nothing
+        kept, out = {}, {**out, "stray": stray}
     _, dims, fixes, gist = verdict(text)
     saved = {"reasked": True} if asked else {}  # the re-ask saved this verdict: `stats --critic` counts it
     saved |= out
     if lad:
-        return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved, prior)
+        return climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved, prior, kept)
     caps, anchor = checks(text)
     dims, was = capped(dims, caps)
     hits = [f"{d}<={c:g}" for d, c, hit in caps if hit is True]
@@ -1094,6 +1099,21 @@ def unread(p, tid, lad, text, kept=None):
             f"{', '.join(cid for cs in lad.values() for _, cid, _ in cs)}).")
 
 
+def strays(text, lad):
+    """The answer-shaped labels of a reply's Checks block that `answers()` doesn't count: one naming no check in the
+    scale `lad`, or one not on a bulleted line. On a re-critique each would leave an earlier `yes` standing for the
+    check it meant (a `- run: no` meant for `runs` passed on the carried `yes`)."""
+    counted = {m.group(1).strip() for line in block(text, lad)
+               if (m := LABEL_RE.match(line)) and named(lad, m.group(1))}
+    return list(dict.fromkeys(x for x in labels(text) if x not in counted))
+
+
+def stray_why(stray):
+    """The re-ask's reason for `strays`."""
+    return (f"these answers count for no check ({', '.join(f'`{x}:`' for x in stray)}): label each `- <check id>: "
+            "yes|no, <evidence>` on its own bulleted line, or the check keeps its earlier answer.")
+
+
 def reask(tid, why, lad):
     """The one follow-up turn a reply the driver can't read gets, in the critic's own session: a fresh critic run
     cost the worker a whole second review for a slip of format (T-116)."""
@@ -1102,12 +1122,12 @@ def reask(tid, why, lad):
             f"give{shape}, ending with its CRITIC line for {tid}.")
 
 
-def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None, prior=None):
+def climbed(p, tid, cwd, rev, lad, text, fixes, gist, n, saved=None, prior=None, kept=None):
     """judge's ending on a ladder: the driver scores the critic's check answers (`climb`), and the failed checks under
     the bar join its "Fix in this ticket" points. On a re-critique (`prior`) the earlier `yes` answers it leaves out
-    count too (`carry`), never on a first critique: there an unanswered check is a `no`."""
+    count too (`carry`, from `kept`), never on a first critique: there an unanswered check is a `no`."""
     ans = answers(text, lad)
-    carried = carry(ans, stood(prior[0], lad), lad) if prior else []
+    carried = carry(ans, kept, lad) if prior and kept else []
     dims, said, block, scoped, missing = climb(lad, ans, p.critic["pass"])
     eff = fixes + len(block)
     scores = " ".join(f"{d}={dims[d]:g}" if d in dims else f"{d}=-" for d in lad)
