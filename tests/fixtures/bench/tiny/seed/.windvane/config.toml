@@ -1,0 +1,5 @@
+name = "tiny"
+forge = "git"
+check = "true"
+[critic]
+enabled = false

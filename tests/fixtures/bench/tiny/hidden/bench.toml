@@ -1,0 +1,4 @@
+command = "python3 -m unittest discover -p 'accept_*.py' -v"
+
+[tickets]
+"T-001" = ["accept_tiny_greeting"]
