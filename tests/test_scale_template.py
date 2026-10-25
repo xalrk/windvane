@@ -57,8 +57,8 @@ class Template(unittest.TestCase):
 class EvidenceWording(unittest.TestCase):
     def test_a_check_that_grades_the_pack_is_warned_naming_it_and_the_fix(self):
         self.assertEqual(critic.evidence_graded(GRADES_PACK, ".windvane/CRITIC.md"),
-                         [('critic scale: check `quoted` grades the evidence ("the pack quotes"), not what trying the '
-                           'change shows', "reword it in .windvane/CRITIC.md as what a user meets when the change is "
+                         [('critic scale: check `quoted` reads as grading the evidence ("the pack quotes"), not what '
+                           'trying the change shows', "reword it in .windvane/CRITIC.md as what a user meets when the change is "
                            "run, broken or read")])
 
     def test_the_old_template_wording_is_caught_once_per_check(self):
@@ -69,8 +69,17 @@ class EvidenceWording(unittest.TestCase):
         got = [w.split("`")[1] for w, _ in critic.evidence_graded(old, "x")]
         self.assertEqual(got, ["shown", "failures", "class", "said", "tested"])
 
-    def test_mentioning_the_pack_or_the_tests_is_no_warning(self):
+    def test_other_ways_of_asking_for_evidence_are_caught(self):
+        for q in ("the evidence shows the crash handled", "a unit test covers the crash", "a transcript shows it working",
+                  "tests pass for every failure path", "it quotes every line it prints", "the message is quoted verbatim",
+                  "an end-to-end test proves it"):
+            self.assertTrue(critic.evidence_graded(f"## works\n- 2 runs: {q}.\n", "x"), q)
+
+    def test_mentioning_the_pack_the_tests_or_a_quote_is_no_warning(self):
         self.assertEqual(critic.evidence_graded(NEAR_MISSES, "x"), [])
+        for q in ("quoted CSV fields round-trip unchanged", "a stock quote refreshes within a second",
+                  "the test runner it ships exits non-zero on a failure", "a quote in a commit message survives"):
+            self.assertEqual(critic.evidence_graded(f"## api\n- 2 calls: {q}.\n", "x"), [], q)
 
     def test_this_repos_own_scale_gets_none(self):
         own = REPO / ".windvane/CRITIC.md"
@@ -88,7 +97,7 @@ class EvidenceWording(unittest.TestCase):
             got = [(w, f) for level, w, f in doctor.checks(p) if w.startswith("critic scale")]
             driver.Pilot(p, args()).run(now() + timedelta(minutes=1))
         self.assertEqual(len(got), 1, got)
-        self.assertIn("check `quoted` grades the evidence", got[0][0])
+        self.assertIn("check `quoted` reads as grading the evidence", got[0][0])
         log = (p.state / "autopilot.log").read_text()
         self.assertEqual(log.count("critic scale:"), 1, log)
 

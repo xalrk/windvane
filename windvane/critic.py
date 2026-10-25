@@ -285,20 +285,25 @@ def misread(text, rel):
     return out
 
 
-GRADES_EVIDENCE = re.compile(r"\b(?:in the (?:evidence )?pack|(?:the|its) (?:evidence )?pack (?:shows|has|holds|contains|"
-                             r"includes|quotes)|quot(?:e|es|ed|ing)|(?:a|the) tests? (?:exists?|covers?|shows?|"
-                             r"proves?|reproduces?)|(?:covered|exercised|proven|shown) by (?:a |the )?tests?)\b", re.I)
+TESTS = r"(?:(?:unit|integration|end-to-end|e2e|automated|regression|smoke) )?tests?"
+GRADES_EVIDENCE = re.compile(r"\b(?:in the (?:evidence )?pack|(?:(?:the|its) (?:evidence )?pack|(?:the )?evidence|"
+                             r"(?:a |the )?transcripts?) (?:shows?|has|holds|contains|includes|quotes|proves?)|"
+                             r"quot(?:e|es|ed|ing) (?:(?:every|each|all|the|its) (?:new |changed )?(?:lines?|output|"
+                             r"messages?|text)|verbatim|in full|whole)|(?:(?:a|an|the|its|every|each) )?" + TESTS +
+                             r" (?:exists?|covers?|shows?|proves?|reproduces?|pass(?:es)?)|(?:covered|exercised|proven|"
+                             r"shown) by (?:a |an |the )?" + TESTS + r")\b", re.I)
 
 
 def evidence_graded(text, rel):
     """[(what, fix)] for each check whose wording grades the evidence rather than what a user meets when the change
-    is tried: the pack ("in the pack", "the pack shows/has/holds/contains/includes/quotes"), pasted quotes ("quote",
-    "quoted"...) or the tests ("a test exists/covers/shows/proves/reproduces", "covered/exercised/proven/shown by a
-    test"). Such a check is answered by pasting, not trying: one asking for quotes fails verdicts, and
-    one asking for a test turns into fix points. One warning per check, naming the first phrase; a word list, so a
-    check that only mentions a quote (a stock quote) gets a warning it can ignore."""
-    return [(f'critic scale: check `{cid}` grades the evidence ("{m.group(0)}"), not what trying the change shows',
-             f"reword it in {rel} as what a user meets when the change is run, broken or read")
+    is tried: the pack, the evidence or a transcript that "shows/has/holds/contains/includes/quotes/proves", "in the
+    pack", quoting the output ("quotes every line", "quoted verbatim") or the tests ("a test exists/covers/shows/
+    proves/reproduces", "tests pass", "covered/exercised/proven/shown by a test", "unit" and the like allowed before
+    "test"). Such a check is answered by pasting, not trying: one asking for quotes fails verdicts, and
+    one asking for a test turns into fix points. One warning per check, naming the first phrase. A word list, so it says
+    the check "reads as" grading the evidence: a check about the product's own tests can ignore it."""
+    return [(f'critic scale: check `{cid}` reads as grading the evidence ("{m.group(0)}"), not what trying the change '
+             f"shows", f"reword it in {rel} as what a user meets when the change is run, broken or read")
             for cs in ladder(text).values() for _, cid, q in cs if (m := GRADES_EVIDENCE.search(q))]
 
 
