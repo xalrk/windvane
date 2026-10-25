@@ -641,18 +641,17 @@ def later_runs(p, by, since):
     """The critic's first critique of a ticket against the ones after it, in turns and weighted tokens from the
     ledger, and the checks re-critiques carried over (`critic.carry`): what judging the revision instead of the whole
     change again saves shows in the later ones. A critique starts at a `-critic` or `-critic-light` session; a light
-    read's trial, the time-up turn and the re-ask are the same critique."""
+    read's `-critic-trial`, the time-up turn and the re-ask are the same critique."""
     runs = {}
     for row in read_jsonl(p.state / "ledger.jsonl"):
         t, label = row.get("ticket"), row.get("label", "")
         if row.get("role") != "critic" or t not in by or row.get("at", "") < since:
             continue
         mine = runs.setdefault(t, [])
-        if not mine or label == f"{t}-critic-light" or (label == f"{t}-critic" and mine[-1][2] != f"{t}-critic-light"):
-            mine.append([0, 0.0, label])
+        if not mine or label in (f"{t}-critic", f"{t}-critic-light"):
+            mine.append([0, 0.0])
         mine[-1][0] += row.get("turns") or 0
         mine[-1][1] += weighted(row)
-        mine[-1][2] = label
     first = [rs[0] for rs in runs.values()]
     later = [r for rs in runs.values() for r in rs[1:]]
     if not first:

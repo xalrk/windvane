@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from windvane import cli, critic, stats  # noqa: E402
 from windvane.config import Project  # noqa: E402
-from windvane.util import read_jsonl  # noqa: E402
+from windvane.util import append_jsonl, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
 SCALE = ("# What a 10 means\n\n## works\n- 5 runs: the promise happens.\n- 8 again: and on a second pass.\n\n"
@@ -231,6 +231,21 @@ class Recritique(unittest.TestCase):
         line = " ".join(out.getvalue().split()).split("critic runs: ")[1]
         self.assertRegex(line, r"^first critiques 1, [\d.]+ turns and \d+k weighted tokens each; later ones 1, [\d.]+ "
                                r"turns and \d+k each, \d+k per ticket; 2 checks carried over in 1 re-critique")
+
+    def test_stats_tells_a_light_reads_trial_from_a_full_recritique_after_a_light_pass(self):
+        for tid, labels in (("T-001", ["light", "trial"]), ("T-002", ["light", "", "reask"])):
+            for label in labels:
+                append_jsonl(self.p.state / "ledger.jsonl", {"at": "2026-10-20 13:00", "role": "critic", "turns": 2,
+                                                             "ticket": tid, "label": f"{tid}-critic-{label}".rstrip("-")})
+        for tid in ("T-001", "T-002"):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                stats.later_runs(self.p, {tid: [{"ticket": tid}]}, "")
+            line = " ".join(out.getvalue().split())
+            want = "first critiques 1, 4.0 turns" if tid == "T-001" else "first critiques 1, 2.0 turns and 0k weighted " \
+                "tokens each; later ones 1, 4.0 turns"
+            self.assertIn(want, line, tid)
+            self.assertEqual("no later ones" in line, tid == "T-001", line)
 
 
 if __name__ == "__main__":

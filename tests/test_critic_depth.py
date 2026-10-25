@@ -185,7 +185,7 @@ class Depth(unittest.TestCase):
         self.change(3)
         os.environ["FAKE_CRITIC_LIGHT"] = ASKS
         out, calls, rec = self.critic()
-        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic"])
+        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic-trial"])
         self.assertEqual((rec["depth"], rec["step"], rec["trial"]), ("full", "pass", "ran"))
         self.assertEqual(rec["asked_trial"], "run it twice, killed midway")
         self.assertIn("## Depth: full (the light read asked for it: run it twice, killed midway)", calls[1]["prompt"])
@@ -197,8 +197,8 @@ class Depth(unittest.TestCase):
         os.environ["FAKE_CRITIC_LIGHT"] = ASKS
         os.environ["FAKE_CRITIC_TEXT"] = ASKS  # the trial too, and its re-ask
         out, calls, rec = self.critic()
-        self.assertEqual(self.labels().count("T-001-critic"), 1)
-        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic", "T-001-critic-reask"])
+        self.assertEqual(self.labels().count("T-001-critic-trial"), 1)
+        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic-trial", "T-001-critic-reask"])
         self.assertEqual((rec["step"], rec["depth"]), ("none", "full"))
         self.assertIn("CRITIC STEP: none", out)
 
@@ -222,7 +222,7 @@ class Depth(unittest.TestCase):
         self.addCleanup(os.environ.pop, "FAKE_MAX_TURNS", None)
         self.addCleanup(os.environ.pop, "FAKE_MAX_TURNS_IN", None)
         _, calls, rec = self.critic()
-        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic"])
+        self.assertEqual(self.labels(), ["T-001-critic-light", "T-001-critic-trial"])
         self.assertEqual((rec["depth"], rec["step"]), ("full", "pass"))
         self.assertEqual(rec["asked_trial"], f"it ran out of its {critic.LIGHT_TURNS} turns")
 
@@ -276,7 +276,7 @@ class DepthStats(unittest.TestCase):
             by.setdefault(r["ticket"], []).append(r)
         for tid, label, cache in (("T-001", "T-001-critic-light", 40000), ("T-003", "T-003-critic", 100000),
                                   ("T-003", "T-003-critic", 100000), ("T-004", "T-004-critic-light", 20000),
-                                  ("T-004", "T-004-critic", 100000), ("T-002", "T-002-critic", 90000)):
+                                  ("T-004", "T-004-critic-trial", 100000), ("T-002", "T-002-critic", 90000)):
             append_jsonl(st / "ledger.jsonl", {"at": "2026-10-20 13:00", "role": "critic", "label": label,
                                                "ticket": tid, "cache_read": cache * 10})
         (st / "autopilot.log").write_text("2026-10-20 09:20 T-001: review changes: a crash on retry\n"

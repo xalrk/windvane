@@ -990,7 +990,9 @@ def critique(p, tid, cwd, rev, prompt, n, lad, usage, stop_if, retry, tree, git_
     prompt = "\n\n".join(filter(None, [prompt, "" if light else trial_part(p, cwd, rev, tree, note)]))
     out = {**({} if light else {"trial": "ran" if tree else "read-only"}), **told}
     system, session = system_prompt(p, cwd), {}
-    label, env = (f"{tid}-critic-light", {**git_env, MAX_TURNS: str(LIGHT_TURNS)}) if light else (f"{tid}-critic", git_env)
+    # the trial a light read asked for has its own label: `stats` counts it with that read, not as a re-critique
+    label = f"{tid}-critic-light" if light else f"{tid}-critic-trial" if "asked_trial" in told else f"{tid}-critic"
+    env = {**git_env, MAX_TURNS: str(LIGHT_TURNS)} if light else git_env
     while True:  # each attempt gets the whole box: a retry's wait is no time spent trying
         stop = boxed(stop_if, p.critic["trial_minutes"]) if tree else stop_if
         text, killed, error = run_claude(p, "critic", label, prompt, system, where, allow=allow, deny=deny,
