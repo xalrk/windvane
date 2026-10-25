@@ -1100,12 +1100,13 @@ def unread(p, tid, lad, text, kept=None):
 
 
 def strays(text, lad):
-    """The answer-shaped labels of a reply's Checks block that `answers()` doesn't count: one naming no check in the
-    scale `lad`, or one not on a bulleted line. On a re-critique each would leave an earlier `yes` standing for the
-    check it meant (a `- run: no` meant for `runs` passed on the carried `yes`)."""
-    counted = {m.group(1).strip() for line in block(text, lad)
-               if (m := LABEL_RE.match(line)) and named(lad, m.group(1))}
-    return list(dict.fromkeys(x for x in labels(text) if x not in counted))
+    """The answer-shaped labels of a reply's Checks block that `answers()` doesn't count: a bulleted one naming no
+    check in the scale `lad`, or one off its bullet that does name one. On a re-critique each would leave an earlier
+    `yes` standing for the check it meant (a `- run: no` meant for `runs` passed on the carried `yes`). A prose line
+    naming no check is the reply's summary (`The fix works: no crash now.`), not an answer."""
+    loose = [m.group(1).strip() for line in block(text, lad)
+             if not LABEL_RE.match(line) and (m := SAID_RE.match(line)) and named(lad, m.group(1))]
+    return list(dict.fromkeys(ignored(text, lad) + loose))
 
 
 def stray_why(stray):

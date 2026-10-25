@@ -191,6 +191,15 @@ class Recritique(unittest.TestCase):
         self.assertEqual((rec["stray"], rec["carried"], rec["unanswered"]), (["runs"], [], ["runs", "said", "short"]))
         self.assertEqual(rec["step"], "rethink", "with nothing carried, the unanswered check is a no")
 
+    def test_a_summary_sentence_naming_no_check_is_not_reasked_and_still_carries(self):
+        self.critic(FIRST)
+        self.change("import fcntl\n")
+        summary = "Checks:\n- again: yes, ran: two runs\nThe fix works: no crash now.\nCRITIC: {tid} fixes=0 runs twice"
+        _, _, rec = self.critic(summary)
+        self.assertNotEqual(self.labels()[-1], "T-001-critic-reask")
+        self.assertNotIn("stray", rec)
+        self.assertIn("runs", rec["carried"])
+
     def test_a_run_with_no_verdict_or_a_dead_critic_leaves_the_last_verdict_to_judge_from(self):
         _, _, first = self.critic(FIRST)
         self.change("import fcntl\nprint('one')\n")
