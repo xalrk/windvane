@@ -44,6 +44,8 @@ class Experiments:
         p = self.p
         self.benching[tid] = {"branch": branch, "sha": sha}
         self.save()
+        if not self.pool_fits(tid):
+            return None
         which, said = self.bench_size()
         repeat = max(1, int(p.ap["experiment_repeat"]))
         for _ in range(MOVES):
@@ -109,11 +111,23 @@ class Experiments:
         return int(self.p.ap["experiment_minutes"]) + len(bench.planned(self.p, sha, which, bench.training(self.p))) \
             * bench.JUDGE_MINUTES
 
+    def pool_fits(self, tid):
+        """Whether the training pool can decide the experiment (`bench.pool_short`); if not, it is set aside for the
+        rest of the run, not merged unmeasured: the seed round fills the pool between tickets meanwhile."""
+        short = bench.pool_short(self.p)
+        if not short:
+            return True
+        held = self.put_aside(tid, short, "a run once the seed round has filled the pool")
+        self.log(f"{tid}: {short}: the experiment waits, not failed, for a run once the pool is full{held}")
+        return False
+
     def bench_fits(self, tid, sha):
         """Whether the experiment's next bench run fits before the deadline (or none is owed); if not, the ticket is
         set aside for the rest of the run. Asked before the critic too, so no verdict is paid for on a head this run
         can't bench."""
         p = self.p
+        if not self.pool_fits(tid):
+            return False
         which, _ = self.bench_size()
         base = gout(p.main_root(), "rev-parse", p.upstream)
         left = todo(p, base, sha, which, max(1, int(p.ap["experiment_repeat"])))

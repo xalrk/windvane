@@ -104,10 +104,23 @@ def set_of(r):
     return "pool" if r.get("pool") else "holdout"
 
 
+def seed_entry(p):
+    """This project's `seed` round ([[periodic]] `builtin = "seed"`), or None."""
+    return next((e for e in p.periodic.values() if e["builtin"] == "seed"), None)
+
+
 def training(p):
     """Whether this project's automatic benches (an experiment's gate, the bench round) run on the training pool:
     once it has a `seed` round to fill it. Without one, they run on `bench/`'s seeds, as before there was a pool."""
-    return any(e["builtin"] == "seed" for e in p.periodic.values())
+    return seed_entry(p) is not None
+
+
+def pool_short(p):
+    """Why the training pool can't decide an experiment yet ("" when it can, or there's no pool): fewer seeds on main
+    than the seed round's `pool_size`. Never the holdout instead: that would train on it."""
+    e = seed_entry(p)
+    have = len(planned(p, p.upstream, "full", True)) if e else 0
+    return f"the training pool has {have} of its {e['pool_size']} seeds" if e and have < e["pool_size"] else ""
 
 
 def seeds(src):

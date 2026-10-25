@@ -6,6 +6,7 @@ holdout falls stops experiment planning with one push."""
 import io
 import json
 import os
+import subprocess
 import sys
 import unittest
 from argparse import Namespace
@@ -111,9 +112,11 @@ class SeedRound(Base):
         self.assertEqual(title, "Bench seed refused")
         self.assertIn("the hidden tests fail on the reference solution: T-001 (0/1)", msg)
         self.assertEqual([r["verdict"] for r in self.ledger()], ["refused"])
-        self.assertFalse(pilot.periodic_due())  # tried once a merge, refused or not
-        pilot.merged.append("T-009")
-        self.assertEqual(pilot.periodic_due()["name"], "seed")
+        self.assertFalse(pilot.periodic_due())  # tried once per head of main, refused or not
+        self.assertFalse(self.pilot().periodic_due())  # a restart, or the next run, doesn't pay for it again
+        self.s.write("docs/x.md", "a merge\n")
+        self.s.publish("Merge T-009: something")
+        self.assertEqual(self.pilot().periodic_due()["name"], "seed")
 
     def test_a_seed_whose_tests_already_pass_on_the_bare_seed_is_refused(self):
         self.make()
@@ -171,6 +174,34 @@ class SeedRound(Base):
                     {"name": "x", "builtin": "seed", "seed_every": True}):
             with self.assertRaises(SystemExit):
                 entries([bad])
+
+
+class Gate(Base):
+    def test_an_experiment_waits_for_a_full_pool_rather_than_merging_unmeasured(self):
+        import test_experiments  # the module, not its class: a class imported here would run all its tests again
+        e = test_experiments.Experiment()
+        e.make()
+        self.addCleanup(e.doCleanups)
+        with open(e.s.root / ".windvane/config.toml", "a") as f:
+            f.write(SEED)
+        e.s.publish("a seed round")
+        e.p = Project(e.s.root)
+        self.assertEqual(bench.pool_short(e.p), "the training pool has 0 of its 2 seeds")
+        pilot = e.run_pilot([test_experiments.MAIN])
+        self.assertEqual((pilot.merged, list(pilot.aside), e.calls), ([], ["T-001"], []))  # no bench on the holdout
+        self.assertIn("T-001: the training pool has 0 of its 2 seeds: the experiment waits, not failed", e.log())
+        self.assertEqual(e.sessions("critic"), 0)  # set aside before any verdict is paid for
+
+    def test_experiments_resume_by_hand(self):
+        self.make()
+        experiment.stop(self.p, "the training pool rose while the frozen holdout fell this week")
+        run = lambda *a: subprocess.run(["windvane", "-C", str(self.s.root), "experiments", *a], capture_output=True,
+                                        text=True).stdout
+        self.assertIn("experiments stopped: the training pool rose while the frozen holdout fell this week; "
+                      "`windvane experiments resume` plans them again", run())
+        self.assertEqual(run("resume"), "experiments: planned again\n")
+        self.assertEqual(run("resume"), "experiments: weren't stopped\n")
+        self.assertEqual(experiment.stopped(self.p), "")
 
 
 class OnlyTheSeedBranch(Base):
@@ -256,10 +287,11 @@ class Sets(Base):
 
 class Overfit(Base):
     def runs(self, pool_scores, holdout_scores):
-        """A run a day this week on each set, quality `passed` as given."""
+        """A run a day this week on each set, after any made before, quality `passed` as given."""
         start = datetime.now() - timedelta(days=5)
-        for day, (a, b) in enumerate(zip(pool_scores, holdout_scores)):
-            at = f"{start + timedelta(days=day):%Y%m%d-%H%M%S}"
+        for a, b in zip(pool_scores, holdout_scores):
+            self.day = getattr(self, "day", -1) + 1
+            at = f"{start + timedelta(days=self.day):%Y%m%d-%H%M%S}"
             append_jsonl(bench.results(self.p), {**rec("abc", seed="001-todo", passed=a, run=at + "-p"), "pool": True})
             append_jsonl(bench.results(self.p), rec("abc", seed="ledger", passed=b, run=at + "-h"))
 
@@ -286,10 +318,10 @@ class Overfit(Base):
         pilot = self.pilot()
         self.runs([5, 8], [5, 8])
         pilot.overfit_watch()
-        self.runs([8], [7])  # the holdout down by one: within the noise
+        self.runs([8], [4])  # the holdout down by one from the week's first run: within the noise
         pilot.overfit_watch()
         self.assertEqual((self.pushes, experiment.stopped(self.p)), ([], ""))
-        self.assertIn("overfit check after the holdout run", self.log())
+        self.assertIn("pool up: hidden tests 5→8, judge yes 5→5; holdout flat: hidden tests 5→4", self.log())
 
     def test_runs_older_than_the_week_dont_count(self):
         self.make()

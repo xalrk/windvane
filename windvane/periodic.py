@@ -660,13 +660,15 @@ class Periodic:
 
     def seed_due(self, e):
         """A seed entry's turn: the pool on main short of `pool_size`, or `seed_every` experiments kept since a seed
-        last joined. Tried at most once a merge, so a seed refused again and again costs one session a ticket. Read
-        again only when main or the ledger moved: it's asked on every pass between tickets."""
+        last joined. Tried once per head of main (`seed_file`, kept across restarts and runs): a refused seed waits for
+        main to move on, and one that joined lets the next start at once while the pool is short. Read again only
+        when main or the ledger moved: it's asked on every pass between tickets."""
         p = self.p
-        if self.periodic_at.get(e["name"], -1) >= len(self.merged):
-            return False
         ledger = p.state / "ledger.jsonl"
-        key = (gout(p.main_root(), "rev-parse", p.upstream), ledger.stat().st_mtime if ledger.exists() else 0)
+        head = gout(p.main_root(), "rev-parse", p.upstream)
+        if load_json(seed_file(p, e["name"]), {}).get("tried") == head:
+            return False
+        key = (head, ledger.stat().st_mtime if ledger.exists() else 0)
         if self.seed_seen.get(e["name"], (None,))[0] != key:
             have = len(bench.planned(p, p.upstream, "full", True))
             self.seed_seen[e["name"]] = (key, have < e["pool_size"]
@@ -681,14 +683,15 @@ class Periodic:
         p, cd, name = self.p, self.p.ci_dir, e["name"]
         if cd == p.work_dir and any(self.owner.values()) or not self.keep_changes(f"the {name} round"):
             self.log(f"{name}: skipped: the checkout is busy")
-            return self.periodic_busy(e)
-        self.periodic_ran(e)
+            self.seed_seen[name] = (self.seed_seen.get(name, (None,))[0], False)  # due again once main or the ledger moves
+            return
         if not self.periodic_fits(e):
             return
         if e.get("asked"):
             self.asked_taken(e)
         self.fetch()
         clean_detach(p, cd, p.upstream)
+        save_json(seed_file(p, name), {"tried": gout(cd, "rev-parse", "HEAD")})  # before any session is paid for
         try:
             with tempfile.TemporaryDirectory(prefix="windvane-seed-") as keep:
                 new, said = self.seed_session(e, cd, Path(keep))
@@ -985,6 +988,11 @@ def output(text, cd):
 def bench_file(p, name):
     """A bench entry's round, carried across restarts: its job, the commits it compares, then its verdict."""
     return p.state / f"bench-{name}.json"
+
+
+def seed_file(p, name):
+    """A seed entry's last round: the head of main it was tried at."""
+    return p.state / f"seed-{name}.json"
 
 
 def bench_job(p, name):
