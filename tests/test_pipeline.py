@@ -326,9 +326,7 @@ class PhoneSync(unittest.TestCase):
             "q": "Red or blue?", "opts": {"A": "red", "B": "blue"}, "rec": "A", "must_wait": False,
             "branch": "t-001-x", "asked": None}}}))  # asked in a quiet time; that run stopped before it ended
         pilot = driver.Pilot(self.p, args(answer_wait=60))
-        orig = driver.time.sleep
-        driver.time.sleep = lambda s: (self.p.state / "STOP").touch()  # the idle wait for an answer ends the run
-        self.addCleanup(setattr, driver.time, "sleep", orig)
+        pilot.nap = lambda until, answers=False: (self.p.state / "STOP").touch()  # the wait for an answer ends the run
         pilot.run(now() + timedelta(hours=1))
         self.assertIn(f"{self.p.qid('T-001')} Sandbox: T-001: Red or blue?", record.read_text())
         self.assertEqual(record.read_text().count("Red or blue?"), 1)
