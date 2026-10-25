@@ -39,6 +39,7 @@ enabled = true
 pass = 8                  # this or more goes on
 floor = 4                 # under this, rethink rather than patch
 revisions = 3
+# show = "npm run screenshots"  # the critic also sees the images it leaves in $WINDVANE_SHOW_DIR
 
 [autopilot]
 parallel = "auto"         # tickets at a time (a number caps it): those whose Touches don't overlap, while
