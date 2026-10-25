@@ -66,9 +66,9 @@ class Refused(Base):
         self.assertRegex(second, r"Your branch `t-001-work` isn't on origin: its push was refused \(it would make "
                                  r"public a token at settings\.py:1 in \w{7}\)\. Fix that and push again, then finish "
                                  r"READY\.")
-        self.assertRegex(second, r"In progress on branch `t-001-work`, which isn't on origin: its last push was "
-                                 r"refused \(it would make public a token at settings\.py:1 in \w{7}\)\. Take that "
-                                 r"out of its commits, then push it \(`git push -u origin t-001-work`\)\.")
+        self.assertIn("In progress on branch `t-001-work`, which isn't on origin yet. Resume it, then push it (`git push "
+                      "-u origin t-001-work`).", second)
+        self.assertEqual(second.count("it would make public"), 1)  # the feedback says it: once is enough
         self.assertNotIn(TOKEN, second)
         self.assertIn("T-001", pilot.skip)
         self.assertIn("T-001: set aside: its push was refused twice in a row (it would make public a token", log)
@@ -77,7 +77,8 @@ class Refused(Base):
         title, msg = aside[0]
         self.assertEqual(title, "Set aside: do T-001 (T-001)")
         self.assertIn("Its push was refused twice: it would make public a token at settings.py:1 in ", msg)
-        self.assertIn("`git commit --amend` for the last one, or `git reset --soft ", msg)
+        self.assertIn("In your checkout, `git switch t-001-work` and take it out of the commits that add it (`git "
+                      "commit --amend` for the last one, or `git reset --soft ", msg)
         self.assertIn("then `git push -u origin t-001-work`. `windvane retry T-001` sends it back. Its branch is only "
                       "on this machine.", msg)
         self.assertNotIn(TOKEN, msg + log)
@@ -143,6 +144,30 @@ class NeverPushed(Base):
             "that before you push."), pilot.feedback["T-001"])
         self.assertIn("T-001: READY on no branch (its push was refused: it would make public a token at a.py:1 in "
                       "1a2b3c4); back to the worker", self.log())
+
+    def test_an_amend_that_keeps_the_finding_is_the_same_refusal(self):
+        ensure_worktree(self.p, self.p.work_dir, setup=False)
+        self.local(self.p.work_dir)
+        pilot = self.pilot()
+        line = "windvane: push refused: it would make public a token at a.py:1 in {}."
+        for sha in ("1a2b3c4", "5d6e7f8"):  # the amend's new commit
+            (self.p.state / REFUSALS).mkdir(parents=True, exist_ok=True)
+            (self.p.state / REFUSALS / "work-1.json").write_text(json.dumps(
+                {"at": "2026-10-24T10:00:00", "branch": "t-001-work", "base": "abc", "line": line.format(sha)}))
+            pilot.not_pushed("T-001", "t-001-work", "0" * 40)
+        self.assertIn("T-001", pilot.skip)
+
+    def test_a_pushed_branch_isnt_shadowed_by_an_older_local_attempt(self):
+        ensure_worktree(self.p, self.p.work_dir, setup=False)
+        wd = self.p.work_dir
+        self.s.git("switch", "-q", "-c", "t-001-old", "origin/main", cwd=wd)
+        self.s.git("commit", "-q", "--allow-empty", "-m", "T-001: an older try", cwd=wd)
+        self.s.git("switch", "-q", "-c", "t-001-work", "origin/main", cwd=wd)
+        self.s.git("commit", "-q", "--allow-empty", "-m", "T-001: build", cwd=wd)
+        self.s.git("push", "-q", "-u", "origin", "HEAD", cwd=wd)
+        self.s.git("switch", "-q", "--detach", cwd=wd)
+        self.assertEqual(self.pilot().unpushed("T-001", ["t-001-work"], self.s.root), ("", None))
+        self.assertEqual(self.pilot().unpushed("T-001", [], self.s.root)[0], "t-001-old")
 
     def test_the_next_worker_resumes_a_local_branch_and_pushes_it(self):
         ensure_worktree(self.p, self.p.work_dir, setup=False)

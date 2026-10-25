@@ -111,14 +111,20 @@ def refused_why(r):
     return r["line"].removeprefix("windvane: push refused: ").rstrip(".")
 
 
+def same_refusal(line):
+    """A refusal's line without its commits: an amend that keeps the finding changes the commit, not the reason."""
+    return re.sub(r" in [0-9a-f]{7,40}\b", "", line)
+
+
 def unpushed_line(local, branches, r, remote):
     """The prompt's line for a ticket branch with commits the remote lacks (`Pilot.unpushed`), or ""."""
     if not local:
         return ""
-    why = f": its last push was refused ({refused_why(r)}). Take that out of its commits, then" if r else \
-        " yet. Resume it, then"
-    lead = f"`{local}` has commits {remote} lacks" if local in branches else \
-        f"In progress on branch `{local}`, which isn't on {remote}"
+    ahead = local in branches  # the ticket's branch on the remote, with commits of its own here
+    why = (f": its last push was refused ({refused_why(r)}). Take that out of its commits, then" if r else
+           ":" if ahead else " yet. Resume it, then")
+    lead = (f"`{local}` has commits {remote} lacks" if ahead else
+            f"In progress on branch `{local}`, which isn't on {remote}")
     return f"{lead}{why} push it (`git push -u {remote} {local}`)."
 
 
@@ -799,6 +805,8 @@ class Pilot(Desk, Periodic):
         root = p.main_root().resolve()
         theirs = [b for b in branches if wd.resolve() != root and root in self.trees_on(b)]
         local, refusal = self.unpushed(tid, branches, root)
+        if refusal and fb and refused_why(refusal) in fb:  # said once is enough
+            refusal = None
         if pr and fb and fb.startswith(NO_PR):  # stale: the PR is open now
             fb = None
         known = self.answered(tid, ref)
@@ -966,18 +974,19 @@ class Pilot(Desk, Periodic):
             self.bounce(tid, "push")
             return True
         why = refused_why(r)
-        if self.refused.get(tid) == r["line"]:
-            fix = (f"Take it out of the commits on {branch} that add it (`git commit --amend` for the last one, or "
-                   f"`git reset --soft {r.get('base') or p.upstream}` and commit again), then `git push -u "
-                   f"{p.remote} {branch}`.")
+        if self.refused.get(tid) == same_refusal(r["line"]):
+            fix = (f"In your checkout, `git switch {branch}` and take it out of the commits that add it (`git commit "
+                   f"--amend` for the last one, or `git reset --soft {r.get('base') or p.upstream}` and commit "
+                   f"again), then `git push -u {p.remote} {branch}`.")
             held = self.put_aside(tid, f"its push was refused twice in a row: {why}", fix)
             self.log(f"{tid}: set aside: its push was refused twice in a row ({why}){held}")
             push(f"Set aside: {self.name(tid)}", whole("Its push was refused twice: ", why, ".", log=self.log)
                  + f"\n{fix} `windvane retry {tid}` sends it back. "
-                 + ("Its new commits are" if there else "Its branch is") + " only on this machine." + self.held_line(tid),
+                 + ("Its new commits are" if there else "Its branch is") + " only on this machine."
+                 + self.held_line(tid),
                  3, "warning")
             return True
-        self.refused[tid] = r["line"]
+        self.refused[tid] = same_refusal(r["line"])
         self.feedback[tid] = f"{where}: its push was refused ({why}). Fix that and push again, then finish READY."
         self.log(f"{tid}: READY, but its push to {branch} was refused ({why}); back to the worker")
         self.bounce(tid, "push")
@@ -986,10 +995,11 @@ class Pilot(Desk, Periodic):
     def unpushed(self, tid, branches, root):
         """(the ticket's branch with commits only this machine has, the scan's last refusal for it) for the worker's
         prompt: a refused push leaves the work on a local branch the queue, which reads the remote's, doesn't see.
-        A branch the user's checkout holds isn't one: the worker couldn't switch to it. ("", None) for none."""
+        With a branch on the remote, only its own name counts: an older attempt left beside it isn't the work. A
+        branch the user's checkout holds isn't one either: the worker couldn't switch to it. ("", None) for none."""
         wd, prefix = self.wd, f"{tid.lower()}-"
         for b in gout(wd, "for-each-ref", "--format=%(refname:short)", "refs/heads/").split():
-            if (b in branches or b.startswith(prefix)) and root not in self.trees_on(b) and \
+            if (b in branches if branches else b.startswith(prefix)) and root not in self.trees_on(b) and \
                     gout(wd, "rev-list", "-1", b, "--not", f"--remotes={self.p.remote}"):
                 return b, last_refusal(self.p, lambda x: x == b)
         return "", None
@@ -2456,8 +2466,8 @@ class Pilot(Desk, Periodic):
                 self.poll_questions()
 
     def take_retries(self):
-        """Between tickets: the failed or set-aside tickets `windvane retry` asked for go back in the queue, each counting
-        its rounds afresh. The request stays in the state dir until the run's state saying it was taken is saved, so a
+        """Between tickets: the failed or set-aside tickets `windvane retry` asked for go back in the queue, each
+        counting its rounds afresh. The request stays in the state dir until the run's state saying it was taken is saved, so a
         restart (a self-update, a crash) reads it again if it came first; `retried` tells a ticket taken then, now
         back in the queue, from one that never failed."""
         f = self.p.state / RETRY
