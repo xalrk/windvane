@@ -87,12 +87,15 @@ def bench_stats(p):
         good = [r for r in recs if not r.get("contaminated")]
         merged = sum(len(r["tickets"]["merged"]) for r in good)
         judged = [r["judge"] for r in good if r.get("judge")]
-        judge = f"{sum(j['yes'] for j in judged)}/{sum(j['total'] for j in judged)}" if judged else "-"
+        failed = [r["seed"] for r in good if r.get("judge") and (r["judge"].get("error") or r["judge"].get("stopped"))]
+        # a failed judge's unanswered checks aren't the project's noes, and a sum without it reads as the run's
+        judge = f"{sum(j['yes'] for j in judged)}/{sum(j['total'] for j in judged)}" if judged and not failed else "-"
         ref = f"{recs[0]['ref']} ({recs[0]['sha'][:7]})"
         hidden = f"{sum(r['passed'] for r in good)}/{sum(r['total'] for r in good)}"
         print(f"{run:<17} {ref[:22]:<22} {recs[0]['size']:<5} {len(good):>5} {hidden:>7} {judge:>6} "
               f"{k(sum(r['weighted'] for r in good) / merged) if merged else '-':>13}"
-              + (f"  ({len(recs) - len(good)} contaminated)" if len(good) < len(recs) else ""))
+              + (f"  ({len(recs) - len(good)} contaminated)" if len(good) < len(recs) else "")
+              + (f"  (judge failed: {', '.join(failed)})" if failed else ""))
 
 
 def check_runs(p, checks, running=jobs.running):

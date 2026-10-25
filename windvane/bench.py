@@ -325,10 +325,14 @@ def judge(sp, seed, tickets, checks, home, deny, env):
     jp = copy.copy(sp)
     jp.state = own / "state"
     jp.state.mkdir()
-    until = time.time() + JUDGE_MINUTES * 60
-    text, stopped_, error = run_claude(jp, "judge", f"judge-{seed['name']}", judge_prompt(seed, tickets, checks),
-                                       session_rules(jp, "JUDGE.md"), tree, deny=deny,
-                                       stop_if=lambda: "time" if time.time() > until else None, extra_env=env)
+    for _ in range(2):  # a session that failed (an API error, a crash) is the judge's, never the project's: once more
+        until = time.time() + JUDGE_MINUTES * 60
+        text, stopped_, error = run_claude(jp, "judge", f"judge-{seed['name']}",
+                                           judge_prompt(seed, tickets, checks), session_rules(jp, "JUDGE.md"), tree,
+                                           deny=deny, stop_if=lambda: "time" if time.time() > until else None,
+                                           extra_env=env)
+        if not error:
+            break
     said = answers(text, checks)
     rows = [r for r in read_jsonl(jp.state / "ledger.jsonl") if not r.get("event")]
     return {"yes": sum(x["answer"] == "yes" for x in said), "total": len(checks), "answers": said,
@@ -366,24 +370,39 @@ def table(recs):
                    f"{r['usd']:>7.2f} {r['minutes']:>5.0f}" + ("  contaminated: not counted" if r["contaminated"]
                                                                else ""))
         out.append("  " + " · ".join(f"{tid} {h['passed']}/{h['total']}" for tid, h in r["hidden"].items()))
-        out += [f"  judge no: {x['id']} {x['reason']}" for x in (r.get("judge") or {}).get("answers", [])
+        out += [f"  judge no: {x['id']} {x['reason']}" for x in (judged(r) or {}).get("answers", [])
                 if x["answer"] != "yes"]
+        if judge_failed(r):
+            out.append(f"  judge failed: {judge_failed(r)} (no verdict: a compare won't reuse this run)")
     good = [r for r in recs if not r["contaminated"]]
     if len(recs) > 1 and good:
         merged = sum(len(r["tickets"]["merged"]) for r in good)
         out.append(f"counted: {sum(r['passed'] for r in good)}/{sum(r['total'] for r in good)} hidden tests, "
                    f"{merged} merged, {k(sum(r['weighted'] for r in good))} weighted tokens"
                    + (f" ({k(sum(r['weighted'] for r in good) / merged)} per merged ticket)" if merged else ""))
-    judged = [r["judge"] for r in recs if r.get("judge")]
-    if judged:
-        out.append(f"the judge's own cost, not in the above: {k(sum(j['weighted'] for j in judged))} weighted tokens, "
-                   f"{sum(j['usd'] for j in judged):.2f} API $")
+    ran = [r["judge"] for r in recs if r.get("judge")]
+    if ran:
+        out.append(f"the judge's own cost, not in the above: {k(sum(j['weighted'] for j in ran))} weighted tokens, "
+                   f"{sum(j['usd'] for j in ran):.2f} API $")
     return "\n".join(out)
 
 
-def yeses(r):
-    """The judge's yes count of a seed's record, "-" when it has none (no checks, or recorded before the judge)."""
+def judged(r):
+    """The record's judge verdict when it is one: None with no checks, before the judge, or when the judge failed
+    or was stopped (its unanswered checks would read as the project's noes)."""
     j = r.get("judge")
+    return j if j and not j.get("error") and not j.get("stopped") else None
+
+
+def judge_failed(r):
+    """Why the record's judge gave no verdict, when it ran and gave none."""
+    j = r.get("judge") or {}
+    return j.get("error") or (j.get("stopped") and f"stopped ({j['stopped']})")
+
+
+def yeses(r):
+    """The judge's yes count of a seed's record, "-" when there is no verdict."""
+    j = judged(r)
     return f"{j['yes']}/{j['total']}" if j else "-"
 
 
@@ -477,6 +496,8 @@ def end_all(procs, wait=300):
 
 
 def main(a, p):
+    if a.repeat != 1 and not a.what:
+        raise SystemExit("bench: --repeat goes with `windvane bench compare <A> <B>`")
     if a.what:
         if a.what[0] != "compare" or len(a.what) != 3:
             raise SystemExit("bench: the only subcommand is `windvane bench compare <A> <B>`")
@@ -607,7 +628,8 @@ def sides(p, refs, which, runs):
         want = planned(p, sha, which)
         have = [rs for rs in runs.values() if rs[0].get("sha") == sha and rs[0].get("size") == which
                 and sorted(r["seed"] for r in rs) == want]
-        out.append({"name": name, "sha": sha, "runs": have, "fixed": False})
+        out.append({"name": name, "sha": sha, "runs": [rs for rs in have if not any(map(judge_failed, rs))],
+                    "failed": sum(any(map(judge_failed, rs)) for rs in have), "fixed": False})
     return out
 
 
@@ -625,13 +647,16 @@ def compare(a, p, *refs):
         which, why = size(a.full, a.small, week_now(), week_limit())
     print(f"bench compare: {which} ({why})", flush=True)
     both = sides(p, refs, which, runs)
-    for s in both:
+    taken = set()
+    for s in both:  # a ref compared with itself gets runs of its own on each side
         if not s["fixed"]:
-            s["runs"] = s["runs"][-a.repeat:]
+            s["runs"] = [rs for rs in s["runs"] if rs[0]["run"] not in taken][-a.repeat:]
+            taken |= {rs[0]["run"] for rs in s["runs"]}
     todo = [s for i in range(a.repeat) for s in both if not s["fixed"] and len(s["runs"]) <= i]  # A, B, A, B ...
     for s in both:
         print(f"{s['name']} ({s['sha'][:7]}): {runs_n(len(s['runs']))} recorded, "
-              f"{sum(t is s for t in todo)} to run", flush=True)
+              f"{sum(t is s for t in todo)} to run" + (f" ({runs_n(s['failed'])} not reused: a judge failed)"
+                                                       if s.get("failed") else ""), flush=True)
     if a.dry_run:
         return 0
     for i, s in enumerate(todo, 1):
@@ -656,7 +681,7 @@ def value(recs, key):
     if key == "hidden":
         return sum(r["passed"] for r in recs)
     if key == "judge":
-        return sum(r["judge"]["yes"] for r in recs) if all(r.get("judge") for r in recs) else None
+        return sum(judged(r)["yes"] for r in recs) if all(map(judged, recs)) else None
     if key == "per_merged":
         return sum(r["weighted"] for r in recs) / merged if merged else None
     return max(r["minutes"] for r in recs)  # the seeds run side by side
@@ -666,8 +691,8 @@ def out_of(recs, key):
     """A measure's "/total" (hidden tests, judge checks), else nothing."""
     if key == "hidden":
         return f"/{sum(r['total'] for r in recs)}"
-    if key == "judge" and all(r.get("judge") for r in recs):
-        return f"/{sum(r['judge']['total'] for r in recs)}"
+    if key == "judge" and all(map(judged, recs)):
+        return f"/{sum(judged(r)['total'] for r in recs)}"
     return ""
 
 

@@ -123,6 +123,24 @@ class Compare(unittest.TestCase):
         self.assertEqual(three[1:], [f"ref-a ({self.a[:7]}): 2 runs recorded, 1 to run",
                                      f"ref-b ({self.b[:7]}): 2 runs recorded, 1 to run"])
 
+    def test_a_run_whose_judge_failed_is_run_again_and_a_ref_against_itself_takes_two_runs(self):
+        failed = {**rec("a0", self.a, "tiny", 1, 1, 0, 40000, 3.0), "judge": {
+            "yes": 0, "total": 2, "answers": [], "weighted": 10, "usd": 0, "error": "API Error: 529 overloaded"}}
+        self.record(rec("a0", self.a, "other", 1, 1, 1, 10000, 5.0), failed)
+        self.assertEqual(self.compare("ref-a", "ref-b", "--dry-run")[1],
+                         f"ref-a ({self.a[:7]}): 0 runs recorded, 1 to run (1 run not reused: a judge failed)")
+        self.record(*(rec(f"a{i}", self.a, s, 1, 1, 1, 10000, 5.0) for i in (1, 2) for s in ("other", "tiny")))
+        out = self.compare("ref-a", "ref-a")  # an A/A run: how far two runs of one windvane differ
+        self.assertEqual(out[3], f"bench compare (full): A = ref-a ({self.a[:7]}), 1 run · "
+                                 f"B = ref-a ({self.a[:7]}), 1 run")
+        self.assertIn(f"ref-a ({self.a[:7]}): 1 run recorded, 0 to run (1 run not reused: a judge failed)", out)
+
+    def test_repeat_goes_with_compare(self):
+        r = subprocess.run(["windvane", "-C", str(self.s.root), "bench", "--repeat", "2", "--dry-run"],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual((r.returncode, r.stderr.strip()),
+                         (1, "bench: --repeat goes with `windvane bench compare <A> <B>`"))
+
     def test_stats_lists_every_recorded_run(self):
         self.record(rec("a1", self.a, "other", 0, 0, 0, 10000, 5.0), rec("a1", self.a, "tiny", 1, 1, 1, 40000, 3.0),
                     {**rec("b1", self.b, "tiny", 1, 2, 2, 30000, 2.0), "judge": None})

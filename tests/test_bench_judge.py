@@ -93,6 +93,19 @@ class Judge(unittest.TestCase):
         return subprocess.run(["windvane", "-C", str(self.s.root), "stats", "--bench"], capture_output=True,
                               text=True, timeout=60).stdout
 
+    def test_a_judge_that_fails_is_tried_again_then_shown_as_no_verdict(self):
+        os.environ["FAKE_ERROR_FOR"] = "^Judge the project"  # every judge session dies of an API error
+        out = self.bench("--hours", "1")
+        r = json.loads((self.state / "bench.jsonl").read_text().splitlines()[0])
+        calls = (self.s.tmp / "calls.jsonl").read_text()
+        self.assertEqual(calls.count('"system": "# windvane judge run'), 2)  # once more, then given up
+        self.assertIn("overloaded", r["judge"]["error"].lower())
+        self.assertRegex(out, r"\ntiny\s+1\s+0\s+0\s+1/2\s+- ")  # no verdict, never 0/2
+        self.assertRegex(out, r"\n  judge failed: .*overloaded.* \(no verdict: a compare won't reuse this run\)\n")
+        self.assertNotIn("judge no:", out)
+        line = self.stats().splitlines()[1].split()
+        self.assertEqual(line[6:], ["-", "<1k", "(judge", "failed:", "tiny)"])
+
     def test_a_seed_without_checks_has_no_judge(self):
         (self.s.root / "bench/tiny/hidden/JUDGE.md").unlink()
         self.s.git("commit", "-qam", "no judge")

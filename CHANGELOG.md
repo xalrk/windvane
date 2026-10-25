@@ -11,7 +11,8 @@ release on the same day adds a number (`2026.10.9.1`).
   project as its user would, on about eight yes/no checks in the seed's `hidden/JUDGE.md`, knowing its goal and
   tickets but not the critic's scale or verdicts, the pass mark or the windvane ref. Its yes count, answers and
   reasons go into `bench.jsonl` and the run's table; its tokens are the bench's own, never in a seed's cost per
-  merged ticket.
+  merged ticket. A judge that fails twice or runs out of time gives no verdict (`-`, and `judge failed: <why>`),
+  never a row of noes.
 - `windvane bench compare <A> <B>`: two windvane refs, or earlier runs, side by side per seed and in all (tickets
   merged, hidden tests, judge yeses, tokens per merged ticket, wall minutes, B minus A), running only what isn't
   recorded yet. `--repeat N` runs each side N times and marks only a difference past the spread of each side's own
