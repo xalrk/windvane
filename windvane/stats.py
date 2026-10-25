@@ -955,7 +955,7 @@ MEASURES = [
     ("final scores on the pass mark", lambda d: pct(d["critic"]["final_on_bar"], d["critic"]["tickets"]), "{:g}%"),
     ("reviews sent back after a pass", lambda d: pct(d["critic"]["sent_back"], d["critic"]["reviews"]), "{:g}%"),
     ("check min per checked ticket", lambda d: d["checks"]["per_ticket"], "{:g}"),
-    ("worker min in await", lambda d: d["checks"]["worker_await"], "{:g}"),
+    ("worker min in await", lambda d: d["checks"]["worker_await"], "{:,.0f}"),
     ("re-fixes", lambda d: None if d["refixes"] is None else len(d["refixes"]), "{:g}"),
     ("CALIBRATION.md lines added", lambda d: d["calibration_lines"], "{:g}"),
     ("failed tickets", lambda d: d["tickets"]["failed"], "{:g}"),
@@ -986,15 +986,17 @@ def print_digest(digest):
     for d in rows:
         print()
         print_project(d)
-    if digest["across"]:
-        print()
-        print("across projects       lowest                      highest")
-        fmts = {label: fmt for label, _, fmt in MEASURES}
-        names = lambda ns: ", ".join(ns[:3]) + (f" +{len(ns) - 3}" if len(ns) > 3 else "")
-        for x in digest["across"]:
-            f = fmts[x["measure"]]
-            lo, hi = f"{show(x['low'], f)} {names(x['low_projects'])}", f"{show(x['high'], f)} {names(x['high_projects'])}"
-            print(f"  {x['measure']:30} {lo:27} {hi}")
+    if not digest["across"]:
+        return
+    fmts = {label: fmt for label, _, fmt in MEASURES}
+    names = lambda ns: ", ".join(ns[:3]) + (f" +{len(ns) - 3}" if len(ns) > 3 else "")
+    ends = [(x["measure"], f"{show(x['low'], fmts[x['measure']])} {names(x['low_projects'])}",
+             f"{show(x['high'], fmts[x['measure']])} {names(x['high_projects'])}") for x in digest["across"]]
+    w = max(len(lo) for _, lo, _ in ends) + 2
+    print()
+    print(f"{'across projects':32} {'lowest':{w}} highest")
+    for label, lo, hi in ends:
+        print(f"  {label:30} {lo:{w}} {hi}")
 
 
 def print_project(d):
@@ -1005,7 +1007,8 @@ def print_project(d):
     each = lambda x: f", {k(x)} a merged ticket" if x is not None else ""
     roles = ", ".join(f"{r} {v['share']:g}%" + (f" ({k(v['per_merged'])})" if v["per_merged"] is not None else "")
                       for r, v in w["roles"].items())
-    note(f"  weighted tokens: {k(w['weighted'])}{each(w['per_merged'])}" + (f"; {roles}" if roles else ""), "    ")
+    note(f"  weighted tokens: {k(w['weighted'])}{each(w['per_merged'])}"
+         + (f"; by role, share (per merged ticket): {roles}" if roles else ""), "    ")
     if c["tickets"]:
         print(f"  critic: {plural(c['tickets'], 'ticket')}, {c['first_pass']} passed first time, median score "
               f"{c['median_first']:g} first, {c['median_final']:g} final, {c['final_on_bar']} final on the pass "

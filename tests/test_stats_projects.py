@@ -121,10 +121,11 @@ class StatsProjects(unittest.TestCase):
         self.assertNotIn("phone", out)
         lines = out.splitlines()
         start = lines.index(f"sandbox  {self.s.root}")
-        self.assertEqual(lines[start:start + 10], [
+        self.assertEqual(lines[start:start + 11], [
             f"sandbox  {self.s.root}",
             "  tickets: 2 merged, 1 failed, 1 parked now",
-            "  weighted tokens: 100k, 50k a merged ticket; worker 80% (40k), critic 10% (5k), reviewer 10% (5k)",
+            "  weighted tokens: 100k, 50k a merged ticket; by role, share (per merged ticket): worker 80% (40k),",
+            "    critic 10% (5k), reviewer 10% (5k)",
             "  critic: 3 tickets, 1 passed first time, median score 5 first, 8 final, 1 final on the pass mark (8)",
             "  reviews after a critic pass: 2, 1 sent back",
             "  checks: 4 runs (23 min per checked ticket), 1 failed, 1 cut off; workers 30 min in await",
@@ -135,14 +136,18 @@ class StatsProjects(unittest.TestCase):
         other = lines.index("other  repo unknown")
         self.assertEqual(lines[other + 1:other + 5], [
             "  tickets: 1 merged, 0 failed",
-            "  weighted tokens: 2k, 2k a merged ticket; worker 100% (2k)",
+            "  weighted tokens: 2k, 2k a merged ticket; by role, share (per merged ticket): worker 100% (2k)",
             "  checks: 1 run (5.0 min per checked ticket), 0 failed, 0 cut off; workers 0.0 min in await",
             "  repo unknown: no re-fixes, CALIBRATION.md lines or parked tickets (it hasn't run since runs recorded "
             "their checkout)"])
-        across = lines[lines.index("across projects       lowest                      highest") + 1:]
-        self.assertIn("  merged tickets                 1 other                     2 sandbox", across)
-        self.assertIn("  worker share of tokens         80% sandbox                 100% other", across)
-        self.assertIn("  check min per checked ticket   5 other                     23.3 sandbox", across)
+        across = lines[lines.index("across projects                  lowest        highest") + 1:]
+        self.assertEqual(across, [
+            "  merged tickets                 1 other       2 sandbox",
+            "  worker share of tokens         80% sandbox   100% other",
+            "  weighted per merged ticket     2k other      50k sandbox",
+            "  check min per checked ticket   5 other       23.3 sandbox",
+            "  worker min in await            0 other       30 sandbox",
+            "  failed tickets                 0 other       1 sandbox"])
         self.assertFalse(any("re-fixes" in x or "CALIBRATION" in x for x in across))  # only one project has them
 
     def test_json_matches_the_table(self):
