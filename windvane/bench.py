@@ -33,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 
 # the scoring, and what callers (`periodic`, the tests) read through this module
+from . import budget
 from .bench_score import (NOISE, QUALITY, answers, compare_table, counted, headline, judge_checks,  # noqa: F401
                           judge_failed, judged, measure, num, outcomes, past_noise, regression, runs_n, score,
                           summary, tally, yeses)
@@ -531,6 +532,7 @@ def run(p, a, chosen, base, wt, ref, sha, which, before):
     caps = [x for k_, v in (("--cap", a.cap), ("--week-cap", a.week_cap)) if v is not None for x in (k_, f"{v:g}")]
     procs = []
     recs = []
+    started, start = time.time(), budget.reading()
     try:
         for s, ts in chosen:
             home = base / s["name"]
@@ -572,6 +574,9 @@ def run(p, a, chosen, base, wt, ref, sha, which, before):
         print(f"bench: stopped ({str(e) or 'SIGINT'}): every seed run was ended; {len(recs)} of {len(procs)} seeds "
               f"scored{' (see bench --last)' if recs else ''}; their logs are in {base}", file=sys.stderr)
         return 130, recs
+    finally:  # what it spent counts against the experiment budget, however it ended
+        if procs:
+            budget.record(base, started, start, which)
     print(table(recs))
     return 0, recs
 

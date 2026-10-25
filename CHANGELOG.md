@@ -7,6 +7,13 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- An experiment budget (`[experiments]` in the config): a bench, an experiment's or the periodic one, starts only
+  while the weekly usage is below `week_below` (75%) and this week's bench spend plus the run's estimate stays
+  within `week_share` (30 points of the weekly limit), plus what you allowed this week. A bench that doesn't fit
+  isn't started: its experiment waits, set aside but not failed, and the run goes on. At the share, one phone
+  question a week per cap offers +10% or +20% for this week (no answer: wait). `windvane experiments` shows this
+  week's spend, the cap and when the week resets; `windvane experiments allow +10` raises it for this week. Each
+  bench run's spend is the weekly reading's rise times its share of every ledger's tokens in its span.
 - Experiment tickets: `Kind: experiment` in a ticket's header (the planner and periodic sessions write it for changes
   to what sessions are told or do, in a project with `bench/`) adds a bench before the merge. After its critic, check
   and review pass, its head is benchmarked against current `main` (`experiment_repeat`, 2 runs of the head by

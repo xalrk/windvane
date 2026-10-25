@@ -78,6 +78,9 @@ DEFAULTS = {
                   # `Kind: experiment` tickets: runs of the head a bench takes, the % fewer tokens per merged ticket
                   # that keeps one whose quality held, and the minutes each bench run's seeds build for
                   "experiment_repeat": 2, "experiment_saving": 10, "experiment_minutes": 60},
+    # the bench's share of the account's week (machine-wide, percent points of the weekly limit): benches start only
+    # under `week_below` weekly usage, and while this week's bench spend plus the next run stays within `week_share`
+    "experiments": {"week_below": 75, "week_share": 30},
     "permissions": {},  # <role>_allow / <role>_deny: rules added to that role's sessions (none by default)
     "env": {"keep": []},  # names of credential-like variables sessions still get (runner.scrub drops the rest)
     "github": {"token_file": ""},  # a token for this repo alone: sessions and the driver use it as GH_TOKEN
@@ -377,7 +380,8 @@ def github_token(p):
 
 # What a benchmark's numbers rest on, protected by default when the project has `bench/`: the seeds and their hidden
 # tests, the judge's rules, the scoring, and the config keys that set protection and the experiments' budget.
-PROTECTED = ("bench/", "prompts/JUDGE.md", "windvane/bench_score.py", f"{DIR}/config.toml:experiment_*")
+PROTECTED = ("bench/", "prompts/JUDGE.md", "windvane/bench_score.py", f"{DIR}/config.toml:experiment_*",
+             f"{DIR}/config.toml:week_below", f"{DIR}/config.toml:week_share")
 # Always protected while anything is: a branch that could edit this key could unprotect the rest.
 SELF = f"{DIR}/config.toml:protected"
 

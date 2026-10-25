@@ -10,14 +10,15 @@ and both sides' numbers, which the planner and the periodic sessions get, so the
 Main moving on during the bench: the head is compared with the newest main a bench ran, benching main's side again
 (only that side) when the results for its new sha are missing.
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from . import bench, jobs, net, privacy
+from . import bench, budget, jobs, net, phone, privacy
 from .config import DIR
 from .held import land
 from .periodic import bench_command, bench_runs
 from .phone import whole
 from .planner import EXPERIMENTS, branch_name
+from .questions import quiet_now
 from .util import append_jsonl, git, gout, hhmm, now, push
 from .worktree import clean_detach
 
@@ -111,12 +112,67 @@ class Experiments:
         base = gout(p.main_root(), "rev-parse", p.upstream)
         left = todo(p, base, sha, which, max(1, int(p.ap["experiment_repeat"])))
         need = left and self.run_minutes(left[0][1], which)
-        if not need or now() + timedelta(minutes=need) <= self.end():
+        if not need:
             return True
-        held = self.put_aside(tid, f"its next bench run ({need} min) didn't fit before the deadline",
-                              f"a run with {need} min left before its deadline benches it")
-        self.log(f"{tid}: the experiment's next bench run (up to {need} min) doesn't fit before the deadline "
-                 f"({hhmm(self.end())}); set aside, the next run benches it{held}")
+        if now() + timedelta(minutes=need) > self.end():
+            held = self.put_aside(tid, f"its next bench run ({need} min) didn't fit before the deadline",
+                                  f"a run with {need} min left before its deadline benches it")
+            self.log(f"{tid}: the experiment's next bench run (up to {need} min) doesn't fit before the deadline "
+                     f"({hhmm(self.end())}); set aside, the next run benches it{held}")
+            return False
+        why, b = self.budget_holds(tid, which, 1)
+        if not why:
+            return True
+        held = self.put_aside(tid, f"{budget.MARK}: {why}", "the week's reset, or `windvane experiments allow +10`")
+        self.log(f"{tid}: {budget.MARK} holds its next bench run ({why}); it waits, not failed: the week resets "
+                 f"{b.ends()}, or `windvane experiments allow +10`{held}")
+        return False
+
+    def budget_holds(self, who, which, runs):
+        """(why, budget): why the experiment budget holds the next `runs` bench runs of this size ("" when they may
+        start). At the share, the week's one phone question per cap may raise it first."""
+        cfg = self.p.cfg["experiments"]
+        b = budget.Budget(cfg)
+        why = b.blocks(which, runs)
+        if why and why[0] == "share" and self.ask_budget(who, b, which, runs):
+            b = budget.Budget(cfg)
+            why = b.blocks(which, runs)
+        return (why[1] if why else ""), b
+
+    def ask_budget(self, who, b, which, runs):
+        """The phone question at the cap, once a week per cap (machine-wide): +10 or +20 points this week, or wait
+        for the reset. Waits up to `answer_wait` minutes, never past the deadline or a stop; no answer, "later", no
+        phone or a quiet time: no. True when the user allowed more."""
+        p = self.p
+        if b.cap in b.asked:
+            return False
+        if quiet_now(p)[0]:
+            self.log(f"{who}: quiet time, so no question on {budget.MARK}")
+            return False
+        b.save(asked=[*b.asked, b.cap])
+        qid = p.qid(f"budget-{datetime.fromtimestamp(b.reset or b.at):%m%d}-{b.cap:g}")
+        text, options = budget.question(b, which, runs)
+        sent = phone.ask(qid, f"{text} No answer in {self.a.answer_wait:g} min: no.", options)
+        if not sent:
+            self.log(f"{who}: {'no phone' if sent is None else 'the budget question did not send'}, so no more "
+                     "this week; `windvane experiments allow +10` raises it")
+            return False
+        until = min(now() + timedelta(minutes=self.a.answer_wait), self.end())
+        while now() < until and not (p.state / "STOP").exists() and not (self.signalled or self.kill_all):
+            got = phone.answer(qid)
+            if got.startswith("ANSWER"):
+                letter = (got.split()[1:] or [""])[0][:1].upper()
+                if letter and letter in "AB":
+                    more = budget.STEPS["AB".index(letter)]
+                    budget.Budget(self.p.cfg["experiments"]).allow(more)
+                    self.log(f"{who}: answered {letter}: experiments may use {more}% more of this week")
+                    return True
+                self.log(f"{who}: answered {letter}: no more this week")
+                return False
+            if got == "LATER":
+                break
+            self.sleep(min(5, max(0.0, (until - now()).total_seconds())))
+        self.log(f"{who}: no answer on {budget.MARK}: no more this week")
         return False
 
     def bench_for(self, tid, base, sha, which, said, repeat):

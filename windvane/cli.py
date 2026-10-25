@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import (bench, doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, publiccheck,
+from . import (bench, budget, doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, publiccheck,
                questions, requests, schedule, scratch, util, watch)
 from . import held as held_mod
 from . import periodic as periodic_mod
@@ -344,6 +344,9 @@ def cmd_status(a, p):
         print(f"asked: periodic {name}, at the next gap")
     for line in periodic_mod.bench_status(p):
         print(line)
+    held = [t for t, why in st.get("aside", {}).items() if why.startswith(budget.MARK)] if on else []
+    if held:
+        print(budget.Budget(p.cfg["experiments"]).waiting(held))
     for key, q in questions.waiting_on(st.get("questions", {})).items():
         print(f"waiting on you: {key}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
     for q in questions.with_ids(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"), p):
@@ -700,6 +703,22 @@ def cmd_new(a, p):
     sys.exit(f"{f} already exists: not overwritten. Run `windvane new` again for the next free id.")
 
 
+def cmd_experiments(a, p):
+    """This week's experiment budget, or more of it for this week (`allow +10`)."""
+    b = budget.Budget(p.cfg["experiments"])
+    if not a.what:
+        return print("\n".join(b.lines()))
+    try:
+        more = float(a.what[1].lstrip("+")) if a.what[0] == "allow" and len(a.what) == 2 else 0
+    except ValueError:
+        more = 0
+    if more <= 0:
+        sys.exit("experiments: `windvane experiments` shows this week's budget; `windvane experiments allow +10` "
+                 "lets benches use 10% more of the weekly limit, this week only")
+    b.allow(more)
+    print(f"experiments: {more:g}% more allowed this week: cap {b.cap:g}% until the week resets {b.ends()}")
+
+
 def cmd_mode(a, p):
     print(questions.mode(p))
 
@@ -965,6 +984,8 @@ def parser():
     s.add_argument("--last", action="store_true", help="print the latest run's results again")
     s.add_argument("--repeat", type=int, default=1, help="with compare: N runs a side, so a difference shows past "
                    "the noise (default 1)")
+    s = sub.add_parser("experiments", help="this week's bench spend against the experiment budget")
+    s.add_argument("what", nargs="*", metavar="allow +N", help="let benches use N%% more of this week's limit")
     sub.add_parser("mode", help="how a design question is handled right now")
     sub.add_parser("quiet", help="show the quiet times (yours for every project, and this project's)")
     s = sub.add_parser("watch", help="follow the running sessions live (costs no tokens)")

@@ -32,7 +32,7 @@ import tomllib
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import bench, critic, jobs, phone, requests
+from . import bench, budget, critic, jobs, phone, requests
 from .config import DIR, exe, periodic as periodic_entries, permissions
 from .questions import quiet_now
 from .queue import Queue, mend_queue, title as title_of
@@ -547,6 +547,12 @@ class Periodic:
             return
         which, said = bench.size(False, False, bench.week_now() if week is None else week, bench.week_limit())
         todo = 1 if base is None else 1 + (not bench_runs(p, base, which))
+        held, _ = self.budget_holds(name, which, todo)
+        if held:
+            self.log(f"{name}: bench not started: {budget.MARK}: {held}")
+            if e.get("asked"):
+                self.asked_taken(e, f"{budget.MARK}: {held}.")
+            return
         hours = (e["minutes"] - todo * bench.JUDGE_MINUTES) / 60 / todo
         if hours < 0.25:
             why = f"{e['minutes']} min leave under 15 min for each of its {todo} runs"
