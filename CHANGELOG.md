@@ -7,6 +7,12 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `check_quick` in the config: a first pass `windvane check` runs before `check` (`pytest -x --lf -q`,
+  `npm test -- --bail`). A failure there ends the check in a minute, `CHECK FAILED (quick pass, exit N)`, with no
+  pass recorded, instead of a full check's length; its pass goes on to `check`. The driver's gate runs `check`
+  alone, so the quick pass never decides a merge. Both commands get `WINDVANE_CHANGED` (a file listing the
+  branch's changed paths) and `WINDVANE_CHECK_BY` (`worker` or `driver`), to pick or order tests by the change.
+  `windvane doctor` and `stats --projects` suggest it for a project whose checks average over 10 minutes a ticket.
 - An experiment budget (`[experiments]` in the config): a bench, an experiment's or the periodic one, starts only
   while the weekly usage is below `week_below` (75%) and this week's bench spend plus the run's estimate stays
   within `week_share` (30 points of the weekly limit), plus what you allowed this week. A bench that doesn't fit

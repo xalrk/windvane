@@ -26,7 +26,8 @@ matching keys for one run.
 | `forge` | `"github"` | `github`: workers open pull requests with `gh` and the driver merges them. `git`: no pull requests; the driver merges the ticket branch and pushes `main` itself. |
 | `actions_minutes` | `0` | Your GitHub Actions minutes a month (e.g. `2000`); `0` turns counting off. When set, windvane counts the month's billed minutes from your private and internal repos' run history (public ones run free on GitHub's standard runners; a larger runner on a public repo isn't counted), `windvane ci` keeps a private repo's workflows under `actions_cap` (a public one's start without a cap, and a public project's commits never carry the cap's `[skip ci]`), and `status` and `overview` show the count. The token `gh` uses needs the Actions permission: read to count, read and write for `windvane ci` to start a workflow (`gh auth login`'s token has both). Each run reads the repo's visibility afresh as it starts. See [A ticket's way through](concepts.md#a-tickets-way-through). |
 | `actions_cap` | `0.9` | The share of `actions_minutes` windvane never passes. At or over it, the driver adds `[skip ci]` to its commits and pushes to your phone once that month. |
-| `check` | `""` | The project's test command, run by `windvane check` in the worker's worktree and by the driver on every pushed head and merged tree, e.g. `"pytest -q"` or `"npm test"`. Empty means no check. |
+| `check` | `""` | The project's test command, run by `windvane check` in the worker's worktree and by the driver on every pushed head and merged tree, e.g. `"pytest -q"` or `"npm test"`. Empty means no check. It gets [`WINDVANE_CHANGED` and `WINDVANE_CHECK_BY`](#the-checks-environment). |
+| `check_quick` | `""` | A first, quick pass `windvane check` runs before `check` (in a session or at your desk), in the same place and environment, e.g. `"pytest -x --lf -q"`. If it fails the check ends there, `CHECK FAILED (quick pass, exit N) in 0.8 min`, with its log's tail and no pass recorded; if it passes, `check` runs next as one job. The driver's gate and the merged-tree check run `check` alone, so the quick pass never decides a merge. It isn't queued for the machine under `heavy_check`: keep it light. Empty means none. `windvane doctor` and `stats --projects` suggest it for a project whose checks average over 10 minutes a ticket. |
 | `setup` | `""` | A command run once in each fresh autopilot worktree before it is used, e.g. `"npm ci"`, with no input. If it fails, the run stops with its output. |
 | `setup_minutes` | `20` | The longest `setup` may run, in minutes (any number above 0, e.g. `0.5`). One still running then (a hung `npm ci`) is killed, its child processes too, and fails as above: `setup ... timed out after 20 min in work: <its last line>; raise setup_minutes in config.toml or fix the setup`. A `windvane stop` or the run's deadline ends it sooner, and the run ends as stopped, not failed. |
 | `teardown` | `""` | A command run once when a run ends, whatever ended it (the queue, the deadline, `windvane stop` or `stop --now`, a cap, a failed `setup`, a crash that isn't restarted, a SIGTERM or SIGHUP such as a closed terminal or tmux session, a detached driver the system kills), with no input, in the autopilot's `ci` worktree (the checkout with `isolate` off). It stops the helpers the project's tools start on purpose outside the sessions, which no session kill reaches, e.g. a shared Android emulator and its adb server: `teardown = "adb -s emulator-5554 emu kill; adb kill-server; ./gradlew --stop"`. It runs after the "stopped" push, so it can't hold that up; a failure or a timeout is logged with its last line and pushed with the command to run by hand, and the next run's "started" push names it once, as its helpers may still be up. A run killed outright (SIGKILL) is torn down at the next run's start, before its setup. A driver that crashes and is restarted keeps them; each `--daily` window tears down at its end. After it, what still runs in the worktrees (with `isolate` off: in the checkout, started during the run, on no terminal) is logged and named in one push, never killed; a killed driver's end isn't checked, as its sessions may still be at work. |
@@ -42,6 +43,31 @@ matching keys for one run.
 | `heavy_mem` | unset | GB of free memory this project's heavy jobs (`windvane heavy`, `bg --heavy`) and its `heavy_check` wait for; unset: `machine.toml`'s `min_free_gb`. A job's own `--mem` (`check --mem` for the check) overrides it. A job that needs less can go by one at the head of the line that waits for more. |
 | `heavy_keep_hours` | `0` | Hours a kept heavy job (`bg --heavy --keep`) may go on past the run's stop; `0`: the stop kills it, and the next run resumes its ticket. A job still running then is ended when that time comes, or by `windvane stop`; the next run keeps its ticket's worktree and resumes the ticket when it ends. |
 | `heavy_reuses` | `[]` | Process-name patterns (as `busy`; for a JVM, a word of its command line such as `GradleDaemon`, or `KotlinCompileDaemon` for the Kotlin daemon it starts) of long-lived helpers this project's heavy jobs reuse, e.g. `["qemu-system", "GradleDaemon", "KotlinCompileDaemon"]`. Their resident memory counts as available to its heavy jobs and heavy check, when the process works for this project: the nearest process up its tree that works in a checkout (itself, or the shell that launched it) is in one of this project's checkouts or its state dir. A daemon that detached and works in no checkout (a Gradle daemon in `~/.gradle/daemon/<version>`) counts by the dir it was started from (`PWD` in its environment: where `./gradlew` ran). Linux only. A heavy job waiting on memory that such a helper of this project holds, with no pattern here naming it, says so once in its waiting line and suggests the word to add, its name or for a JVM its main class's last part such as `GradleDaemon` (the heavy check logs it to the project log too). |
+
+### The check's environment
+
+`check` and `check_quick` run with two variables, so a project's own command or script can order or pick its tests
+by the change:
+
+- `WINDVANE_CHANGED`: the path of a file listing the paths the branch changes (`git diff --name-only
+  <remote>/<main>...HEAD`), one per line; empty when the upstream isn't known. A file, so a long list can't
+  overflow the environment. It's deleted when the check ends.
+- `WINDVANE_CHECK_BY`: `worker` for `windvane check` (a session's, or yours), `driver` for the gate. A check can
+  stop at the first failure only for the worker, who fixes it, and still run in full for the gate.
+
+Quick passes for the common runners (each stops at its first failure):
+
+```toml
+check_quick = "pytest -x --lf -q"         # pytest: last run's failures first
+# pytest on the changed test files that still exist (none changed: the whole suite)
+check_quick = 'pytest -x -q $(grep -x "tests/.*\.py" "$WINDVANE_CHANGED" | xargs -r ls 2>/dev/null)'
+check_quick = "npm test -- --bail"        # Jest or Mocha
+check_quick = "go test -failfast ./..."
+# Cargo, on the changed crates (when each crate's folder under crates/ is named as its package)
+check_quick = 'cargo test $(grep -o "^crates/[^/]*" "$WINDVANE_CHANGED" | sort -u | sed "s|crates/|-p |")'
+# the full check stopping at the first failure only for the worker
+check = 'pytest -q $([ "$WINDVANE_CHECK_BY" = worker ] && echo -x)'
+```
 
 ## [models]
 

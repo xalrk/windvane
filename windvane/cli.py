@@ -581,7 +581,7 @@ def cmd_check(a, p):
     in_job = bool(os.environ.get(jobs.IN_JOB))
     if os.environ.get(heavy.STOP_AT) and not in_job:  # a session: past one tool call, its check goes on
         sys.exit(jobs.session_check(p, os.getcwd(), mem, a.lines))
-    ok, summary, log = jobs.check(p, os.getcwd(), mem=mem, announce=in_job)
+    ok, summary, log = jobs.check(p, os.getcwd(), mem=mem, announce=in_job, by="worker")
     if ok is False and log:
         print(jobs.tail(log, a.lines))
     print(summary)
