@@ -973,7 +973,8 @@ class Pilot(Desk, Periodic):
             held = self.put_aside(tid, f"its push was refused twice in a row: {why}", fix)
             self.log(f"{tid}: set aside: its push was refused twice in a row ({why}){held}")
             push(f"Set aside: {self.name(tid)}", whole("Its push was refused twice: ", why, ".", log=self.log)
-                 + f"\n{fix} Then `windvane retry {tid}`. Its branch is only on this machine." + self.held_line(tid),
+                 + f"\n{fix} `windvane retry {tid}` sends it back. "
+                 + ("Its new commits are" if there else "Its branch is") + " only on this machine." + self.held_line(tid),
                  3, "warning")
             return True
         self.refused[tid] = r["line"]

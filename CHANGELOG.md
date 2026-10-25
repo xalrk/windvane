@@ -81,6 +81,11 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A worker whose push the pre-push scan refused is told why. A READY whose branch isn't on the remote goes back at
+  once with the refusal's reason (or the `git push -u` to run, when its branch was never pushed) instead of after a
+  full check and a "No open PR" bounce; the next worker resumes the local branch instead of being told to start the
+  ticket afresh; and the same refusal twice in a row sets the ticket aside with the fix, so the run stops spending a
+  worker run and a check on it each round. `windvane retry` now takes a set-aside ticket back too.
 - A SIGTERM, SIGHUP or `stop --now` during a retry's backoff ends the run within seconds, not when the backoff runs
   out (up to minutes later, after a service manager's stop timeout), so the save, the teardown and the unlock still
   happen.
