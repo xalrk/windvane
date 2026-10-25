@@ -290,7 +290,7 @@ def push_refused(p, patch, s):
     (p.state / REFUSALS / "work-1.json").write_text(json.dumps({"at": "2026-10-24T10:00:00", "branch": "t-001-x",
                                                                 "base": "abc", "line": line}))
     pl = pilot(p)
-    pl.refused["T-001"] = line  # its last READY was refused for the same reason
+    pl.refused["T-001"] = driver.same_refusal(line)  # its last READY was refused for the same reason
     pl.not_pushed("T-001", "t-001-x", "0" * 40)
     return {"Set aside": ("Its push was refused twice: it would make public a token at ", ".py:1 in 1a2b3c4.")}
 

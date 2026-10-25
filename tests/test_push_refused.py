@@ -66,8 +66,8 @@ class Refused(Base):
         self.assertRegex(second, r"Your branch `t-001-work` isn't on origin: its push was refused \(it would make "
                                  r"public a token at settings\.py:1 in \w{7}\)\. Fix that and push again, then finish "
                                  r"READY\.")
-        self.assertIn("In progress on branch `t-001-work`, which isn't on origin yet. Resume it, then push it (`git push "
-                      "-u origin t-001-work`).", second)
+        self.assertIn("In progress on branch `t-001-work`, which isn't on origin yet. Resume it, then push it "
+                      "(`git push -u origin t-001-work`).", second)
         self.assertEqual(second.count("it would make public"), 1)  # the feedback says it: once is enough
         self.assertNotIn(TOKEN, second)
         self.assertIn("T-001", pilot.skip)
@@ -145,16 +145,17 @@ class NeverPushed(Base):
         self.assertIn("T-001: READY on no branch (its push was refused: it would make public a token at a.py:1 in "
                       "1a2b3c4); back to the worker", self.log())
 
-    def test_an_amend_that_keeps_the_finding_is_the_same_refusal(self):
+    def test_an_amend_that_keeps_the_finding_is_the_same_refusal_after_a_killed_driver_too(self):
         ensure_worktree(self.p, self.p.work_dir, setup=False)
         self.local(self.p.work_dir)
-        pilot = self.pilot()
         line = "windvane: push refused: it would make public a token at a.py:1 in {}."
-        for sha in ("1a2b3c4", "5d6e7f8"):  # the amend's new commit
+        for sha in ("1a2b3c4", "5d6e7f8"):  # the amend's new commit; each READY seen by a driver of its own
             (self.p.state / REFUSALS).mkdir(parents=True, exist_ok=True)
             (self.p.state / REFUSALS / "work-1.json").write_text(json.dumps(
                 {"at": "2026-10-24T10:00:00", "branch": "t-001-work", "base": "abc", "line": line.format(sha)}))
+            pilot = self.pilot()  # state.json only: no restart hand-over from a killed one
             pilot.not_pushed("T-001", "t-001-work", "0" * 40)
+            pilot.save()  # as `work` does after each worker run
         self.assertIn("T-001", pilot.skip)
 
     def test_a_pushed_branch_isnt_shadowed_by_an_older_local_attempt(self):

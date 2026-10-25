@@ -54,7 +54,7 @@ RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)"
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "fixes", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes", "opened", "heavy_waits",
-           "stuck_pushed", "retried", "refused")  # the run's own memory, handed to the driver a restart starts
+           "stuck_pushed", "retried")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
@@ -367,6 +367,9 @@ class Pilot(Desk, Periodic):
         self.state_file = p.state / "state.json"
         s = load_json(self.state_file, {})
         self.feedback = s.get("feedback", {})  # ticket -> what its next worker run must act on
+        # ticket -> the pre-push scan's refusal (`same_refusal`) that kept its last READY's branch off the remote:
+        # saved, so a killed driver's next run still sees a second refusal as the second
+        self.refused = s.get("refused", {})
         self.questions = s.get("questions", {})  # question id (questions.keys) -> a question for the user
         # question id -> [what was built for it ("A (5 tries)"), when]: a late answer's push names it, after a restart
         # too, for as long as a late answer is still told (phone.LATE_FOR)
@@ -396,7 +399,6 @@ class Pilot(Desk, Periodic):
         self.fixes = {}  # ticket set aside -> what keeps it from being set aside again, for `windvane queue`'s hint
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
         self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
-        self.refused = {}  # ticket -> the pre-push scan's refusal its last READY's branch was kept off the remote by
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
         self.digest_tried = 0.0  # when a push last tried the phone's missed provisional answers (see quiet_check)
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
@@ -480,6 +482,7 @@ class Pilot(Desk, Periodic):
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
+                                        "refused": dict(self.refused),
                                         "checks": dict(self.check_wait), "scale_told": self.scale_told,
                                         "settled_as": dict(self.settled_as), "late": list(self.late),
                                         "late_failed": self.late_failed, "dropped": list(self.dropped),
