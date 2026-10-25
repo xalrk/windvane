@@ -376,7 +376,7 @@ def stats_per_merged(agg, outcome):
     and the share spent on tickets that didn't merge."""
     merged = [g for n, g in agg.items() if outcome.get(n) == "merged"]
     w = lambda gs: sum(g["w"] for g in gs)
-    other = w(g for n, g in agg.items() if outcome.get(n) in ("open", "parked", "failed"))
+    other = w(g for n, g in agg.items() if outcome.get(n) in ("open", "parked", "failed", "rejected"))
     loose = sorted((n for n in agg if n not in outcome), key=lambda n: -agg[n]["w"])  # grouped by role: no ticket
     gone = sorted((n for n in agg if outcome.get(n) == "gone"), key=lambda n: -agg[n]["w"])
     if merged:
@@ -759,14 +759,16 @@ def critic_since(p, when):
 
 
 def ticket_outcomes(p, agg):
-    """merged / parked / failed / open for each ticket in `agg`, from the queue's git-derived status and the ledger,
-    "gone" for a ticket no longer in the queue (runs that belong to no ticket, like the planner's, get none)."""
+    """merged / parked / failed / open / rejected (an experiment the bench didn't keep) for each ticket in `agg`, from
+    the queue's git-derived status and the ledger, "gone" for a ticket no longer in the queue (runs that belong to no
+    ticket, like the planner's, get none)."""
     try:
         q = Queue(p)
     except Exception:  # no remote yet: no outcomes rather than no stats
         return {}
     names, failed = {"done": "merged", "parked": "parked"}, failed_tickets(p)
-    return {t: names.get(q.status(t), "failed" if t in failed else "open") if t in q.files else "gone"
+    return {t: "rejected" if t in q.rejected else names.get(q.status(t), "failed" if t in failed else "open")
+            if t in q.files else "gone"
             for t, g in agg.items() if g["ticket"]}
 
 

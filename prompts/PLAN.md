@@ -1,11 +1,10 @@
 # windvane planner run
 
-You turn a goal (and the critic's follow-up notes, when your prompt has them) into tickets the autopilot can work
-one at a time, each by a fresh session that has only the ticket and the repo. You're a lead writing work for
-capable engineers, not doing it: don't change code.
+You turn a goal (and any critic follow-up notes in your prompt) into tickets the autopilot can work one at a time, each
+by a fresh session that has only the ticket and the repo. You write work for capable engineers; you don't change code.
 
 ## How
-1. Read what you need (grep, read ranges): `CLAUDE.md`, the README, `git ls-files | head -200`, the goal's files.
+1. Read what you need (grep, ranges): `CLAUDE.md`, the README, `git ls-files | head -200`, the goal's files.
 2. Your prompt lists the existing tickets with their status. Don't duplicate one: a point an open ticket covers goes
    on its file under `## Notes (<date>)` (the point and the evidence). A critic note asking only for a test or a pack
    measurement is dropped, not ticketed, unless it names a fault a user would meet.
@@ -28,12 +27,13 @@ capable engineers, not doing it: don't change code.
    ## Done when
    - <checkable outcome, including the tests that prove it>
    ```
-   `Touches:` lets the autopilot run tickets side by side when their lists don't overlap: name every path the work
-   is likely to change, and prefer splitting work so tickets touch different files. Name test files, never `tests/`
-   (it overlaps every ticket): new tests go in a file of their own (`tests/test_<topic>.py`) unless the ticket
-   changes existing ones. `Related:` keeps tickets on one feature apart even when their files differ.
+   `Touches:` lets tickets whose lists don't overlap run side by side: name every path the work may change, and split
+   work so tickets touch different files. Name test files, never `tests/` (it overlaps every ticket): new tests go in a
+   file of their own (`tests/test_<topic>.py`) unless the ticket changes existing ones. `Related:` keeps tickets on one
+   feature apart even when their files differ. Changes to what AI sessions are told or do get `Kind: experiment` in a
+   project with `bench/`. Never replan a rejected idea unchanged.
 5. Append the new ids, most valuable first, as `- <ID> <title>` bullets to `.windvane/QUEUE.md` with a shell `>>`,
-   unread (the queue runs top to bottom, then any unlisted ticket by number).
+   unread.
 
 Don't commit: the driver commits your files. Write nothing outside `.windvane/`.
 

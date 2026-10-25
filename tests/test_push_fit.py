@@ -1,5 +1,5 @@
 """T-079, T-093: every phone push leads with a line that holds its point, and carries its free text whole (no "…").
-Each `push(` call in driver.py, held.py and planner.py is driven here through their own functions with a
+Each `push(` call in driver.py, held.py, planner.py and experiment.py is driven here through their own functions with a
 300-character error or reason; a new call with no case here fails the coverage test, so it gets one."""
 import ast
 import json
@@ -17,7 +17,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver, net, planner, questions, scratch  # noqa: E402
+from windvane import driver, experiment, net, planner, questions, scratch  # noqa: E402
 from windvane import held as held_mod  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
@@ -27,7 +27,7 @@ from helpers import Sandbox  # noqa: E402
 from test_set_aside import args  # noqa: E402
 
 LONG = ("API Error: Request timed out while waiting for the model; the connection was reset by the peer. " * 4)[:300]
-MODULES = (driver, held_mod, planner)  # every module whose pushes are covered here
+MODULES = (driver, held_mod, planner, experiment)  # every module whose pushes are covered here
 SOURCES = {m.__file__: Path(m.__file__) for m in MODULES}
 
 
@@ -325,6 +325,15 @@ def kept_protected(p, patch, s):
     return {"Not landed": ("It changes protected paths (bench/", "land it by hand: `git push origin periodic-1`")}
 
 
+def experiment_rejected(p, patch, s):
+    ensure_worktree(p, p.ci_dir, setup=False)
+    pl = pilot(p)
+    pl.queue = Queue(p)
+    both = [{"name": "main", "sha": "a" * 40, "runs": [[]]}, {"name": "T-001", "sha": "b" * 40, "runs": [[]]}]
+    pl.reject("T-001", "t-001-x", s.git("rev-parse", "HEAD"), both, "hidden 4→3, judge 3→3, tokens/ticket -50%", LONG)
+    return {"Rejected": ("The bench found it no better than main: API Error", "Not merged; branch t-001-x kept.")}
+
+
 def tmp_full(p, patch, s):
     patch(scratch, "fullness", lambda path=None: (93.4, 20))
     pilot(p).clean_tmp()
@@ -346,7 +355,7 @@ def scale_warned(p, patch, s):
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
          held, secret_aside, push_refused, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned,
-         plan_dropped, tmp_full, protected_aside, kept_protected,
+         plan_dropped, experiment_rejected, tmp_full, protected_aside, kept_protected,
          not_taken_up, scale_warned]
 
 

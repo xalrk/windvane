@@ -153,8 +153,8 @@ class StatsCost(unittest.TestCase):
         self.assertEqual(self.rows(self.cli("stats", "--by", "ticket"))["T-002"][1], "open")
 
     def test_runner_fail_writes_the_outcome_row(self):
-        pilot = SimpleNamespace(p=self.p, skip=set(), failed=[], approved={}, fail_streak=0, log=lambda m: None,
-                                name=lambda t: t, note_heavy=lambda tid=None: None, save=lambda: None,
+        pilot = SimpleNamespace(p=self.p, skip=set(), failed=[], approved={}, benching={}, fail_streak=0,
+                                log=lambda m: None, name=lambda t: t, note_heavy=lambda tid=None: None, save=lambda: None,
                                 lock=threading.Lock(), check_wait={}, checking={})
         with mock.patch.object(driver, "push"), mock.patch.object(driver.net, "online", return_value=True):
             driver.Pilot.fail(pilot, "T-004", "tests fail")

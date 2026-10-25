@@ -7,6 +7,14 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- Experiment tickets: `Kind: experiment` in a ticket's header (the planner and periodic sessions write it for changes
+  to what sessions are told or do, in a project with `bench/`) adds a bench before the merge. After its critic, check
+  and review pass, its head is benchmarked against current `main` (`experiment_repeat`, 2 runs of the head by
+  default; `main`'s recorded runs reused), and it merges only when hidden tests or judge yeses rise past the noise
+  with neither dropping, or both hold and tokens per merged ticket fall by `experiment_saving` (10%). Its numbers go
+  in its PR body and the log. Otherwise it isn't merged: its branch is kept, `QUEUE.md` gets `- rejected: <id>
+  (numbers)`, `.windvane/EXPERIMENTS.md` a record of the idea, its files and both sides' numbers, and one push says
+  so. The planner and periodic sessions get that file, so a rejected idea isn't planned again unchanged.
 - `protected` in `.windvane/config.toml`: paths no session's change may touch. By default, in a project with
   `bench/`, the benchmark's seeds and hidden tests, the judge's rules, the scoring and the config keys that set
   protection and the experiments' budget. A ticket, plan or periodic branch that changes one isn't merged: its branch

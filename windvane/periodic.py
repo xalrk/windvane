@@ -220,7 +220,7 @@ class Periodic:
         started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
         it due, {group: its tickets}, named in its prompt; `entries`: the chain's (main's for an asked round). An
         asked round's ask is taken once its session starts or is skipped for good (`asked_taken`)."""
-        from .planner import end_reask, files, keep_dropped, pick_ids, reapply
+        from .planner import end_reask, files, keep_dropped, pick_ids, reapply, rejected_part
         from .runner import rules
         name, p = e["name"], self.p
         entries = entries or p.periodic
@@ -268,6 +268,7 @@ class Periodic:
             + "\n".join(f"- ({t}) {b}" for t, b in notes[:60]),
             triage and "## Existing tickets (id, status, title)\n"
             + (Queue(p).listing(compact=True, keep=self.merged) or "(none yet)"),
+            rejected_part(cd),  # so an idea the bench turned down isn't ticketed again unchanged
             f"## Ids for new tickets, in order (at most 6)\n{', '.join(ids)}",
             f"Time limit: {hhmm(limit)}; check with `date`.",
             reqs and requests.prompt_part(reqs),

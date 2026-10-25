@@ -32,6 +32,7 @@ from . import (actions, critic, heavy, install, jobs, login, net, phone, privacy
                selfupdate, statedir, util, worktree)
 from .renumber import noted, old_numbers, said
 from .desk import Desk
+from .experiment import Experiments
 from .heavy import minutes
 from .held import (CHECK_FIELDS, MERGE_STATES, author_ident, base_required, blocked_by, check_name, merge_state,
                    merge_words, never_started, push_held, required_checks, running_checks, start_hint)
@@ -386,7 +387,7 @@ def aged(line, alone, when):
     return f"{line}; you answered {age}", alone.replace(CAME, f"your answer from {age} came", 1)
 
 
-class Pilot(Desk, Periodic):
+class Pilot(Desk, Periodic, Experiments):
     def __init__(self, p, a):
         self.p, self.a = p, a
         phone.use(p)
@@ -413,6 +414,7 @@ class Pilot(Desk, Periodic):
         # ticket -> {"branch", "sha", "paths"}: a head held for the user for changing protected paths (protected_aside)
         self.held_protected = s.get("protected", {})
         self.landing = s.get("landing", {})  # ticket -> {"branch", "sha"}: an approved head whose merge failed
+        self.benching = s.get("benching", {})  # ticket -> {"branch", "sha"}: an approved experiment its bench owes
         # ticket -> when to try its merge again: kept in `landing` while its PR's required checks still run
         self.checking = {}
         # ticket -> {"since", "pr", "names", "quiet"}: when the run's wait for those checks began, what it waits on, and
@@ -515,6 +517,7 @@ class Pilot(Desk, Periodic):
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
+                                        "benching": dict(self.benching),
                                         "protected": dict(self.held_protected),
                                         "refused": dict(self.refused),
                                         "checks": dict(self.check_wait), "scale_told": self.scale_told,
@@ -872,7 +875,7 @@ class Pilot(Desk, Periodic):
         with self.lock:
             if self.checking.pop(tid, None) is None:  # not a wait's own retry: a new wait starts its clock over
                 self.check_wait.pop(tid, None)
-        if self.land_again(tid):
+        if self.land_again(tid) or self.bench_again(tid):
             return
         start_five = self.usage.five
         limit, kill_at, wrap = self.worker_times()
@@ -1164,6 +1167,8 @@ class Pilot(Desk, Periodic):
         res = ap and critic.resolution(self.cd, ap["sha"], sha, p.upstream, ap.get("why"))
         if ap and not res:
             self.approved.pop(tid)  # more than a resolution: the full critic and review again
+        if not res and self.queue.kinds.get(tid) == "experiment" and not self.bench_fits(tid, sha):
+            return  # nor on one it can't bench (a resolution merges without one)
         if res:
             self.log(f"{tid}: only merges {p.main} into the approved {ap['sha'][:7]} and resolves it "
                      f"({len(res[1])} file{'s' * (len(res[1]) != 1)}); the critic's verdict stands")
@@ -1192,6 +1197,9 @@ class Pilot(Desk, Periodic):
             if self.reviews[tid] >= p.ap["review_rounds"]:
                 return self.fail(tid, f"the reviewer asked for changes {said_times(self.reviews[tid])}, the most "
                                       f"`[autopilot] review_rounds` = {p.ap['review_rounds']} allows")
+            return
+        # an experiment merges only when the bench shows it better (a resolution's head: the kept verdict stands)
+        if not res and self.queue.kinds.get(tid) == "experiment" and not self.experiment(tid, branch, sha):
             return
         self.integrate(tid, branch, sha)
 
@@ -1865,6 +1873,7 @@ class Pilot(Desk, Periodic):
         scratch.drop(self.p, tid)
         self.failed.append(tid)
         self.approved.pop(tid, None)
+        self.benching.pop(tid, None)
         self.log(f"{tid}: FAILED: {why}" + (f"; once {once}, `windvane retry {tid}` merges the kept approval" if once
                                             else ""))
         self.save()  # `windvane queue` hints how to retry it to the tickets waiting on it

@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import actions, critic, login, net, privacy, requests
+from .config import DIR
 from .held import OWN_BRANCHES, author_ident, free_name, is_local, land, local_push, n_tickets, push_branch
 from .phone import whole
 from .queue import Queue, folder_ids, id_after, mend_queue, ref_ids
@@ -120,6 +121,19 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
             return _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged)
         finally:  # pushed or given up: its ids are on a branch now, or free
             release_ids(p, "plan")
+
+
+EXPERIMENTS = f"{DIR}/EXPERIMENTS.md"  # the experiments the bench rejected (experiment.py), one record each
+EXPERIMENTS_SHOWN = 6000  # characters of it a planner or periodic prompt gets: the newest records
+
+
+def rejected_part(cd):
+    """The prompt's section on the experiments the bench rejected, from `cd`'s EXPERIMENTS.md, or "" when none was."""
+    f = Path(cd) / EXPERIMENTS
+    text = f.read_text().strip() if f.is_file() else ""
+    if len(text) > EXPERIMENTS_SHOWN:  # whole records only
+        text = "(older records left out)\n### " + text[-EXPERIMENTS_SHOWN:].split("\n### ", 1)[-1]
+    return text and f"## Experiments the bench rejected ({EXPERIMENTS})\n{text}"
 
 
 def branch_name(p, cd, kind):
@@ -319,6 +333,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=()):
         "## The critic's follow-up notes since the last plan (ticket, point)\n"
         + "\n".join(f"- ({t}) {b}" for t, b in notes[:60]) if notes else "",
         f"## Existing tickets (id, status, title)\n{q.listing(compact=True, keep=merged) or '(none yet)'}",
+        rejected_part(cd),
         f"## Ids for new tickets, in order (at most {max_new})\n{', '.join(ids)}",
     ]))
     log(p, f"plan run ({len(notes)} critic notes)")

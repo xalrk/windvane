@@ -33,6 +33,8 @@ Retry with exponential backoff, at most 5 tries. Don't change the upload API.
   without this line runs alone.
 - **Related:** (optional, written by the planner) open tickets that change the same feature through other files.
   Related tickets never run side by side.
+- **Kind:** (optional) `experiment` for a change meant to make the built projects better: it merges only when the
+  bench shows it better than `main` ([experiments](#the-critic-and-calibration)).
 - **Goal / Scope / Done when:** what the worker builds and checks itself against. "Done when" points should be
   checkable, ideally by a test. The reviewer judges the change against them.
 
@@ -65,6 +67,7 @@ number. More kinds of line:
 - done: M9 (beta shipped)             releases tickets with `Depends on: M9`
 - parked: T-003 (needs a design call)  never started
 - last: T-009 (polish)                runs only once no ticket not marked last can start, in the order of these lines
+- rejected: T-011 (hidden 40→39, …)   an experiment the bench didn't keep: done, never merged, its branch kept
 ```
 A ticket with a question under `## Open` in `QUESTIONS.md` on `main` waits until it's answered (moved under
 `## Answered`), whoever wrote it: a question written at the desk stops its ticket like a worker's does.
@@ -259,6 +262,21 @@ ticket would cost more than the tickets, so a `[[periodic]]` entry with `builtin
 the prompts or the pipeline have landed, in the background while the run goes on, and writes a ticket when the
 projects got worse or dearer than with the windvane last benchmarked.
 
+**Experiments.** That round only flags a regression after it landed. A change meant to make projects better is a
+ticket with `Kind: experiment` in its header (the planner writes one for changes to what sessions are told or the
+steps they take, in a project with `bench/`), and it must earn its merge: after its critic, check and review pass,
+its head is benchmarked against current `main` (`experiment_repeat` runs of the head; `main`'s recorded runs at its
+sha are reused, one is made when there are none) as a background job, `windvane await experiment-<id>` following it.
+It is kept when, past the noise rule, neither hidden tests nor judge yeses drop and at least one rises, or both hold
+and weighted tokens per merged ticket fall by `experiment_saving` %; it then merges as usual, its numbers in the log
+and its PR body. Otherwise it is rejected: not merged, its branch kept, `- rejected: <id> (numbers)` in `QUEUE.md`,
+and a record in `.windvane/EXPERIMENTS.md` (the idea, its files, both sides' numbers) that the planner and the
+periodic sessions get, so an idea the bench turned down isn't planned again unless the ticket says what's different.
+If `main` moves on during the bench, the head is compared with the new `main`, benching only its side again when its
+results are missing. The approved head is saved until its bench ends: a bench run that doesn't fit before the
+deadline (checked before the critic, too) sets the ticket aside, and the next run, or this one after a restart, goes
+straight to the bench with no worker, critic or review paid for again, reusing every run recorded meanwhile.
+
 ## Questions and quiet times
 
 Workers make engineering calls themselves and say why in the pull request. **Product calls** (what users see or
@@ -311,6 +329,7 @@ On this machine only, under `~/.local/state/windvane/<name>/`:
 | `autopilot.log` | the driver's log, one line per event |
 | `runs/` | each session's full stream, which `windvane watch` reads |
 | `ledger.jsonl` | tokens, turns and minutes per session, which `windvane stats` reads |
+| `bg/experiment-<id>.log` | an experiment ticket's bench, as `windvane await experiment-<id>` follows it |
 | `bench.jsonl` | `windvane bench`'s results, one record per seed per run (the seed runs themselves live under `~/.local/state/windvane/_bench/`) |
 | `critic.jsonl`, `critic/<ID>/` | the critic's verdicts, and each ticket's evidence pack |
 | `quiet.txt` | quiet times |

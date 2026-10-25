@@ -74,7 +74,10 @@ DEFAULTS = {
                   "stale_days": 3,  # a ticket branch untouched this long resumes in its queue turn, not first
                   # forge github: the owner's open PRs with this label are checked and merged between tickets ("":
                   # off); a red or conflicting one gets up to desk_fixes fix sessions
-                  "desk_label": "windvane merge", "desk_fixes": 2},
+                  "desk_label": "windvane merge", "desk_fixes": 2,
+                  # `Kind: experiment` tickets: runs of the head a bench takes, the % fewer tokens per merged ticket
+                  # that keeps one whose quality held, and the minutes each bench run's seeds build for
+                  "experiment_repeat": 2, "experiment_saving": 10, "experiment_minutes": 60},
     "permissions": {},  # <role>_allow / <role>_deny: rules added to that role's sessions (none by default)
     "env": {"keep": []},  # names of credential-like variables sessions still get (runner.scrub drops the rest)
     "github": {"token_file": ""},  # a token for this repo alone: sessions and the driver use it as GH_TOKEN
