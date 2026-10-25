@@ -81,6 +81,14 @@ going is neither: `1 still running`. Then `costliest wasted check: T-060, 18 min
 failed or was cut off, the time that bought nothing; no line when every check passed. With `--by ticket`,
 `most check time: T-060, 4 runs, 31 min` comes before it (the ticket whose checks took longest).
 
+A heavy check's wait for the machine isn't its run: with any wait, the line reads `checks: 6 runs, 30 min running
+(5.0 min a ticket checked), 95 min waiting for the machine, ...`, every minute and average above being run minutes
+(a check's minutes less its `waited_s`) and the wait all the checks' time in the heavy queue, the not-run ones'
+included. A check killed while it still waited (its log holds only the queue's `heavy:` lines) never ran: it counts
+as `cancelled in the queue`, not cut off, and all its minutes as wait. A killed check that got the machine is cut off
+with its run minutes only. `stats --projects` splits its `checks:` line the same way (`minutes`, `waited`, `cut_off`
+and `cancelled_queued` in `--json`); its minutes per checked ticket are run minutes.
+
 `not-run checks: 2 (no bounce)` counts heavy checks whose wait for the machine timed out: each ran again instead of
 bouncing its ticket to a worker. `waits, worker: 12 min in await, 3.0 min for the heavy lock` is the wall time a role
 spent blocked rather than working, one line per role, longest first: in `windvane await` (its `await` rows) and
@@ -100,7 +108,7 @@ that judges only the revision (see [concepts](concepts.md)) saves shows there.
 
 Check logs (`state/checks/`) are pruned when a check starts: a passed check's log after 3 days, any after 3 weeks,
 but never one still running or one of the 5 newest that failed or were cut off. A killed check's log gets its
-end row (its minutes) in the ledger before it goes, so its time still counts.
+end row (its minutes, its wait and whether it was cancelled in the queue) in the ledger before it goes, so its time still counts.
 
 The `died or killed` line is what outages, crashes and hung sessions cost: their runs' weighted tokens, and their share
 of all. `idle worker launches` counts worker runs that ended PARTIAL within 8 turns, having done no work (started past

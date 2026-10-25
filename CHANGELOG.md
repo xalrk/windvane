@@ -88,6 +88,10 @@ release on the same day adds a number (`2026.10.9.1`).
   that the token's user may read the reply topic, and a refused test names the one `ntfy access` line still to run.
 
 ### Changed
+- The heavy queue lets a short job go before a long one: a job that usually runs 5 minutes or less goes ahead of a
+  waiting one at least three times as long, so a 1-minute check no longer waits behind a 25-minute render. The long
+  job is passed over 15 minutes in all at most (or its own run time, if less); jobs with no recorded time or `--expect` keep arrival order,
+  and a measurement is never passed. Both jobs' logs and `heavy --status` say who was let by.
 - The critic no longer fails a check for want of the project's check or full suite passing: its rules say the
   driver runs the check on the final head after it, so it judges the tests it ran on the change. A scale check
   that asks for one (naming the check's command, or "check passed", "the test suite passes" and the like) gets a
@@ -139,6 +143,10 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- `windvane stats` and `stats --projects` tell a heavy check's wait for the machine from its run: the `checks:` line
+  gives run minutes and minutes waiting for the machine apart (`minutes` and `waited` in `--json`), and the minutes per
+  checked ticket are run minutes. A check killed while it still waited in the queue counts as cancelled in the queue,
+  not cut off, so the cut-off count is only checks that really ran.
 - A provisional or open question's option wrapped onto an indented second line is read whole, in `status`, the
   summary and the question push, not cut at its first line's end.
 - `windvane stop` with no autopilot running says there's nothing to stop and leaves no stop request behind (a
