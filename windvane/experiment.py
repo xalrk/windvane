@@ -42,7 +42,8 @@ class Experiments:
             self.fetch()
             base = gout(p.main_root(), "rev-parse", p.upstream)
             if not bench.planned(p, base, which):
-                self.log(f"{tid}: Kind: experiment, but {p.main} has no bench seeds to measure it with; merged as usual")
+                self.log(f"{tid}: Kind: experiment, but {p.main} has no bench seeds to measure it with; merged as "
+                         "usual")
                 return True
             todo = [(p.main, base)] * (not bench_runs(p, base, which)) + [("the head", sha)] * max(
                 0, repeat - len(bench_runs(p, sha, which)))
@@ -69,8 +70,8 @@ class Experiments:
         return True
 
     def bench_for(self, tid, todo, which, said):
-        """One `windvane bench --ref <sha>` for each (side, sha) of `todo`, one after another, `experiment_minutes` shared out
-        among them. True once all ran (each records itself, or a judge failure shows as a run missing), else None:
+        """One `windvane bench --ref <sha>` for each (side, sha) of `todo`, one after another, `experiment_minutes`
+        shared out among them. True once all ran (each records itself, or a judge failure shows as a run missing), else None:
         a stop or the deadline ends the job, and a bench that doesn't fit before the deadline doesn't start."""
         p = self.p
         minutes = int(p.ap["experiment_minutes"])
@@ -78,9 +79,11 @@ class Experiments:
         if hours < 0.25:
             return self.fail(tid, f"`experiment_minutes` = {minutes} leaves under 15 min for each of the bench's "
                                   f"{len(todo)} runs")
-        if now() + timedelta(minutes=minutes) > self.end():
+        if now() + timedelta(minutes=minutes) > self.end():  # not worked again this run: its head waits as it is
+            held = self.put_aside(tid, f"its bench ({minutes} min) didn't fit before the deadline",
+                                  "a run with `experiment_minutes` left before its deadline benches it")
             return self.log(f"{tid}: the experiment's bench ({minutes} min) doesn't fit before the deadline "
-                            f"({hhmm(self.end())}); the next run benches it")
+                            f"({hhmm(self.end())}); set aside, the next run benches it{held}")
         name = job_name(tid)
         base = jobs.job_base(p, name)
         for i, (side, sha) in enumerate(todo, 1):
