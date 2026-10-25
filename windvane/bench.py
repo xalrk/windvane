@@ -310,7 +310,10 @@ def ref_worktree(p, ref, path):
     sha = gout(p.main_root(), "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
     if not sha:
         raise SystemExit(f"bench: no commit {ref!r} in this checkout")
-    git(p.main_root(), "worktree", "add", "-q", "--detach", str(path), sha)
+    r = subprocess.run(["git", "worktree", "add", "-q", "--detach", str(path), sha], cwd=p.main_root(),
+                       capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit(f"bench: can't make a worktree of {ref} at {path}: {r.stderr.strip()}")
     return sha
 
 
@@ -321,8 +324,8 @@ def drop_worktree(p, path):
 
 
 def plan_lines(chosen, hours, ref, sha):
-    out = [f"plan: {len(chosen)} seed{'s' * (len(chosen) != 1)} side by side, up to {hours:g}h, windvane at {ref} "
-           f"({sha[:7]})"]
+    seeds_ = f"{len(chosen)} seeds side by side" if len(chosen) > 1 else "1 seed"
+    out = [f"plan: {seeds_}, up to {hours:g}h, windvane at {ref} ({sha[:7]})"]
     for s, ts in chosen:
         left = [t for t in s["tickets"] if t not in ts]
         out.append(f"  {s['name']}: {' '.join(ts)}" + (f" ({' '.join(left)} parked)" if left else ""))
@@ -341,8 +344,8 @@ def main(a, p):
     base = state_root() / "_bench" / run_id
     wt = base / "windvane"
     base.mkdir(parents=True)
-    sha = ref_worktree(p, a.ref, wt)
     try:
+        sha = ref_worktree(p, a.ref, wt)
         found = seeds(wt / "bench")
         if not found:
             raise SystemExit(f"bench: no seeds in bench/ at {a.ref}")
@@ -353,7 +356,7 @@ def main(a, p):
         return run(p, a, chosen, base, wt, sha, which, before)
     finally:
         drop_worktree(p, wt)
-        if a.dry_run:
+        if a.dry_run or not any(base.iterdir()):  # nothing ran: nothing to keep
             shutil.rmtree(base, ignore_errors=True)
 
 
