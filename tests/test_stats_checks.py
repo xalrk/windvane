@@ -60,6 +60,13 @@ class WaitApart(Base):
         self.assertEqual(self.lines(), ["checks: 2 runs, 14 min running (7.0 min a ticket checked), 24 min waiting "
                                         "for the machine, 1 cut off, 1 cancelled in the queue"])
 
+    def test_a_wait_past_the_logs_head_that_then_ran_is_cut_off(self):
+        self.ledger.write_text("")
+        self.killed("T-004", "long.log", QUEUED * 1000 + "heavy: waited 36000 s for the machine\ntests...\n", 660)
+        self.assertGreater((self.p.state / "checks/long.log").stat().st_size, 65536)
+        self.assertEqual(self.lines(), ["checks: 1 run, 60 min running (60.0 min a ticket checked), 600 min waiting "
+                                        "for the machine, 1 cut off"])
+
     def test_without_a_wait_the_line_reads_as_before(self):
         self.ledger.write_text("")
         self.add(event="check", ticket="T-001", role="worker", start=1.0, minutes=8, passed=True, reused=False)

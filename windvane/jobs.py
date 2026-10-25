@@ -324,11 +324,13 @@ def log_minutes(log, start):
 def killed_times(log, start):
     """A killed check's `minutes` (to its log's last write) and its wait for the machine (`waited_s`). A log with
     only the heavy queue's lines was cancelled while it waited (`cancelled_queued`): all its minutes were wait, and it
-    never ran, so it isn't a check cut off."""
+    never ran, so it isn't a check cut off. A head of only queue lines is read on to the end: a wait of hours fills
+    the head before its WAITED line."""
     mins = log_minutes(log, start)
-    if heavy.waiting(log):
+    head = log.stat().st_size + 1 if heavy.waiting(log) else 65536
+    if heavy.waiting(log, head):
         return {"minutes": mins, "waited_s": round(mins * 60), "cancelled_queued": True}
-    wait_s = heavy.waited(log)
+    wait_s = heavy.waited(log, head)
     return {"minutes": mins, **({"waited_s": wait_s} if wait_s else {})}
 
 
