@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import cli, critic, held, planner  # noqa: E402
 from windvane.config import Project  # noqa: E402
+from windvane.queue import Queue  # noqa: E402
 from windvane.util import append_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 
@@ -187,6 +188,20 @@ class PlanSafety(unittest.TestCase):
         # the ticket and its queue line come back
         self.assertIn("# T-003: planned", (self.s.root / ".windvane/tickets/T-003.md").read_text())
         self.assertIn("- T-003 planned", (self.s.root / ".windvane/QUEUE.md").read_text())
+
+    def test_a_dropped_plans_ids_stay_taken_so_its_patch_still_applies(self):
+        os.environ["FAKE_END_LINE"] = "PLAP: new=1 noted=0 one ticket"
+        os.environ["FAKE_REASK"] = "empty"
+        planner.plan(self.p, "make it great")
+        patch = next((self.p.state / "dropped").glob("plan-*.patch"))
+        del os.environ["FAKE_END_LINE"], os.environ["FAKE_REASK"]
+        self.assertEqual(planner.plan(self.p, "more", merge=True), 1)  # the next plan lands on main, under T-004
+        self.s.git("pull", "-q", "--ff-only", "origin", "main")
+        self.assertEqual(sorted(Queue(self.p, "HEAD").files), ["T-001", "T-002", "T-004"])
+        self.s.git("apply", "--unidiff-zero", str(patch))
+        self.assertIn("# T-003: planned", (self.s.root / ".windvane/tickets/T-003.md").read_text())
+        patch.unlink()  # pruned: the id is free again
+        self.assertEqual(planner.dropped_ids(self.p), set())
 
     def reask_ends(self, killed, error):
         """A plan misspelling its line, whose re-ask is cut off or fails."""

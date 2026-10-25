@@ -18,6 +18,7 @@ from .worktree import clean_detach, ensure_worktree
 PLAN_RE = re.compile(r"PLAN: (?:new=(\d+) noted=(\d+)|NONE)[ \t]*(.*)")
 PLAN_LINE = "`PLAN: new=<n> noted=<n> <gist>` (or `PLAN: NONE <why>`)"
 DROPPED = "dropped"  # the state dir's patches of sessions whose changes were thrown away for want of their end line
+NEW_FILE_RE = re.compile(r"^diff --git a/(\S+) b/\1\nnew file mode", re.M)  # a file a patch creates
 
 
 def end_reask(line, more=""):
@@ -160,7 +161,18 @@ def local_ids(p, checkout=None, own=None):
     project's root and `checkout` (`windvane new` leaves its ticket uncommitted in the user's checkout, a plan in its
     own worktree), and the ids a running plan or periodic session was handed (`claimed_ids`, but `own`'s)."""
     roots = {p.main_root(), Path(p.root)} | ({Path(checkout)} if checkout else set())
-    return set().union(*(folder_ids(p, r) for r in roots)) | claimed_ids(p, own)
+    return set().union(*(folder_ids(p, r) for r in roots)) | claimed_ids(p, own) | dropped_ids(p)
+
+
+def dropped_ids(p):
+    """The ids of the new tickets in the state dir's dropped patches (`keep_dropped`): taken until the patch is pruned,
+    so a later plan never writes other tickets under them and the patch still applies as its push says."""
+    ids = set()
+    for f in (p.state / DROPPED).glob("*.patch"):
+        for path in NEW_FILE_RE.findall(f.read_text(errors="replace")):
+            if path.startswith(p.tickets_rel + "/") and path.endswith(".md"):
+                ids.add(p.norm(Path(path).stem))
+    return ids - {""}
 
 
 @contextmanager

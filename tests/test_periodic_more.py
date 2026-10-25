@@ -322,8 +322,9 @@ class EndLine(Base):
         with mock.patch.dict(os.environ, {"FAKE_REASK": "empty"}), \
                 mock.patch("windvane.periodic.push", lambda *a, **k: pushes.append(a[:2])):
             self.pilot().periodic(self.p.periodic["playtest"])
-        self.assertIn("T-004", Queue(self.p, "origin/main").files)  # the playtest's ticket landed
-        patch = next((self.p.state / "dropped").glob("triage-*.patch"))
+            patch, = (self.p.state / "dropped").glob("triage-*.patch")
+            self.pilot().periodic(self.p.periodic["playtest"])  # a second round skips the dropped patch's T-005
+        self.assertEqual(sorted(Queue(self.p, "origin/main").files), ["T-001", "T-002", "T-003", "T-004", "T-006"])
         self.assertIn("triage: no PERIODIC line; dropped 2 changed files", self.log())
         self.assertNotIn("tickets/T-004.md", patch.read_text())  # landed already: only in its context lines
         self.s.git("pull", "-q", "--ff-only", "origin", "main")
