@@ -306,12 +306,30 @@ class EndLine(Base):
         self.assertNotIn("T-004", Queue(self.p, "origin/main").files)
         self.assertEqual(self.verdicts(), {"R-001": "none yet", "R-002": "none yet"})  # triaged again next run
         patch = next((self.p.state / "dropped").glob("requests-*.patch"))
-        self.assertIn(f"requests: no PERIODIC line; dropped 3 changed files (kept in {patch})", self.log())
+        self.assertIn(f"requests: no PERIODIC line; dropped 2 changed files (kept in {patch})", self.log())
         self.assertEqual(self.pushes, [("requests round failed", "The requests round didn't finish: it ended without "
-                                        "its PERIODIC line; its changes were dropped (3 changed files): "
-                                        f"`git apply {patch}` on main gets them back.")])
-        self.s.git("apply", str(patch))
+                                        "its PERIODIC line; its changes were dropped (2 changed files): "
+                                        f"`git apply --unidiff-zero {patch}` on main gets them back.")])
+        self.s.git("apply", "--unidiff-zero", str(patch))  # README, which never lands, isn't in it
+        self.assertEqual(self.s.git("status", "--porcelain"), "M .windvane/QUEUE.md\n?? .windvane/tickets/T-004.md")
         self.assertIn("asked in R-001", (self.s.root / ".windvane/tickets/T-004.md").read_text())
+
+    def test_a_chains_dropped_patch_holds_only_what_the_last_session_added(self):
+        self.make(PLAYTEST + TRIAGE, play="WRITE_TICKET")
+        self.s.write("tools/TRIAGE.md", "# Triage\nWRITE_TICKET\nNO_LINE\n")
+        self.s.publish("triage fails")
+        pushes = []
+        with mock.patch.dict(os.environ, {"FAKE_REASK": "empty"}), \
+                mock.patch("windvane.periodic.push", lambda *a, **k: pushes.append(a[:2])):
+            self.pilot().periodic(self.p.periodic["playtest"])
+        self.assertIn("T-004", Queue(self.p, "origin/main").files)  # the playtest's ticket landed
+        patch = next((self.p.state / "dropped").glob("triage-*.patch"))
+        self.assertIn("triage: no PERIODIC line; dropped 2 changed files", self.log())
+        self.assertNotIn("tickets/T-004.md", patch.read_text())  # landed already: only in its context lines
+        self.s.git("pull", "-q", "--ff-only", "origin", "main")
+        self.s.git("apply", "--unidiff-zero", str(patch))  # as the push says, on main after the playtest's land
+        self.assertIn("# T-005: found", (self.s.root / ".windvane/tickets/T-005.md").read_text())
+        self.assertIn("- T-005 found", (self.s.root / ".windvane/QUEUE.md").read_text())
 
     def test_a_stop_during_the_reask_is_a_stop(self):
         self.make(TRIAGE)

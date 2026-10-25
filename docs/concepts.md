@@ -51,8 +51,10 @@ too it refuses: run it again. `windvane plan "<goal>"` has a planner session wri
 critic's follow-up notes; it opens a pull request with them for you to look at (`--merge` merges them at once).
 A plan, like a `[[periodic]]` session, ends with a line the driver reads (`PLAN: ...`, `PERIODIC: ...`). A session
 that ends without it is asked for it once, in the same session: one short turn whose input comes from the cache, the
-tree left as the first turn wrote it. Should it still give none, its tickets don't land, but what it changed is kept
-as a patch in the state dir's `dropped/` (`git apply` it on `main` to get them back), and a push says where.
+tree left as the first turn wrote it. Should it still give none, its tickets don't land, but what it changed under
+`.windvane/` (since the last session of its chain that finished) is kept as a patch in the state dir's `dropped/`, and
+a push gives the command that gets them back on `main` (`git apply --unidiff-zero <patch>`: the patch has no context
+lines, so it still applies after the queue has moved).
 
 ### The queue and ticket status
 

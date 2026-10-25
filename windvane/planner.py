@@ -27,21 +27,39 @@ def end_reask(line, more=""):
     return f"Your reply has no end line. Reply with only it{more}: {line}"
 
 
-def keep_dropped(p, cd, label):
-    """Save what a session changed in `cd` (tracked changes, and new files under `.windvane/`) as one patch under the
-    state dir's `dropped/`, before its tree is reset, so its tickets can still be applied by hand. Returns (the
-    number of files in it, its path), or (0, None) when there's nothing to keep. A scratch index: the tree's own
-    index stays as the session left it."""
+def scratch_index(cd, tmp):
+    """The environment for git commands on a scratch index holding `cd`'s tree with its `.windvane/` as it is now:
+    the tree's own index stays as the session left it."""
+    env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+    for cmd in (["read-tree", "HEAD"], ["add", "-A", "--", ".windvane"]):
+        run(["git", *cmd], cd, env=env)
+    return env
+
+
+def snapshot(cd):
+    """`cd`'s `.windvane/` as it is now, as a tree id: what a later session's dropped patch is taken against."""
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
-        for cmd in (["read-tree", "HEAD"], ["add", "-u"], ["add", "--", ".windvane"]):
-            run(["git", *cmd], cd, env=env)
-        names = run(["git", "diff", "--cached", "--name-only", "HEAD"], cd, env=env).stdout.split()
-        patch = run(["git", "diff", "--cached", "--binary", "HEAD"], cd, env=env).stdout
+        return run(["git", "write-tree"], cd, env=scratch_index(cd, tmp)).stdout.strip() or "HEAD"
+
+
+def keep_dropped(p, cd, label, base="HEAD"):
+    """Save what a session changed under `.windvane/` in `cd` since `base` (HEAD, or the tree an earlier session in its
+    chain left, whose tickets land) as one patch under the state dir's `dropped/`, before its tree is reset, so its
+    tickets can still be applied by hand. Only `.windvane/`: nothing else a plan or periodic session writes ever
+    lands. Returns (the number of files in it, its path), or (0, None) when there's nothing to keep."""
+    with tempfile.TemporaryDirectory() as tmp:
+        env = scratch_index(cd, tmp)
+        names = run(["git", "diff", "--cached", "--name-only", base, "--", ".windvane"], cd, env=env).stdout.split()
+        # no context lines: the added queue lines still apply once main's queue has moved (a land placed them)
+        patch = run(["git", "diff", "--cached", "--binary", "-U0", base, "--", ".windvane"], cd, env=env).stdout
     if not names:
         return 0, None
     name = re.sub(r"[^\w.-]", "-", label)  # a periodic entry's name, from the config
-    path = p.state / DROPPED / f"{name}-{now():%Y%m%d-%H%M%S}.patch"
+    stem = p.state / DROPPED / f"{name}-{now():%Y%m%d-%H%M%S}"
+    path, n = stem.with_suffix(".patch"), 1
+    while path.exists():  # two in the same second
+        n += 1
+        path = stem.with_name(f"{stem.name}-{n}.patch")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(patch)
     return len(names), path
@@ -61,7 +79,7 @@ def kept_in(path):
 
 def reapply(path):
     """The push's way back for a dropped session's patch."""
-    return f"`git apply {kept_in(path)}` on main gets them back."
+    return f"`git apply --unidiff-zero {kept_in(path)}` on main gets them back."  # the patch has no context lines
 
 
 def changed_paths(cwd):

@@ -181,9 +181,10 @@ class PlanSafety(unittest.TestCase):
         self.assertIn(f"plan: no PLAN line; dropped 2 changed files (kept in {patch})", self.log())
         self.assertNotIn("nothing written", self.log())
         self.assertEqual(self.pushes, [("plan dropped", "The plan didn't land: it ended without its PLAN line. Its "
-                                        f"changes (2 changed files) are kept: `git apply {patch}` on main gets them "
-                                        "back.")])
-        self.s.git("apply", str(patch))  # the user's checkout, on main: the ticket and its queue line come back
+                                        f"changes (2 changed files) are kept: `git apply --unidiff-zero {patch}` on "
+                                        "main gets them back.")])
+        self.s.git("apply", "--unidiff-zero", str(patch))  # in the user's checkout, on main, as the push says
+        # the ticket and its queue line come back
         self.assertIn("# T-003: planned", (self.s.root / ".windvane/tickets/T-003.md").read_text())
         self.assertIn("- T-003 planned", (self.s.root / ".windvane/QUEUE.md").read_text())
 
@@ -205,7 +206,7 @@ class PlanSafety(unittest.TestCase):
         patch = self.reask_ends(None, "API Error: 529 overloaded")
         self.assertEqual(self.pushes, [("plan dropped", "The plan didn't land: its session failed (API Error: 529 "
                                         "overloaded). Its changes (2 changed files) are kept: "
-                                        f"`git apply {patch}` on main gets them back.")])
+                                        f"`git apply --unidiff-zero {patch}` on main gets them back.")])
 
     def test_a_patch_under_the_home_dir_is_named_from_it(self):
         self.assertEqual(planner.kept_in(Path.home() / ".local/state/x/dropped/plan-1.patch"),

@@ -135,7 +135,7 @@ class Periodic:
     def periodic(self, e):
         """Run `e` and the entries its `then` chains to, one after another in the ci tree on current main, then
         land the tickets they wrote. Whatever else they changed is discarded with the tree."""
-        from .planner import release_ids
+        from .planner import release_ids, snapshot
         from .worktree import clean_detach
         p, cd, done, prev = self.p, self.p.ci_dir, set(), None
         entries = self.asked_chain if e.get("asked") else p.periodic
@@ -149,6 +149,7 @@ class Periodic:
         kept, reply = None, ""  # what the last session that finished leaves; a cut-off one's changes are dropped
         land, last = "", e["name"]  # `land` is inherited along the chain: an entry's own setting wins
         self.handed = set()  # the ticket ids the chain's sessions were given: only those land
+        self.chain_base = "HEAD"  # the tree the last session that finished left: a dropped one's patch starts there
         self.triaged = []  # (the requests a session was given, its final reply, its name): verdicts after the land
         try:  # the ids its sessions were handed stay claimed until they've landed or been dropped
             while e and e["name"] not in done and not (p.state / "STOP").exists():
@@ -165,6 +166,7 @@ class Periodic:
                     break
                 reply, prev = got
                 kept, last = self.periodic_keep(cd, e["name"]), e["name"]
+                self.chain_base = snapshot(cd)
                 e = entries.get(e["then"])
             self.save()
             try:
@@ -275,7 +277,7 @@ class Periodic:
                 text = f"{text.rstrip()}\n{m.group(0)}"
         if killed or error or not m:
             why = killed or error or "no PERIODIC line"
-            n, kept = keep_dropped(p, cd, name)
+            n, kept = keep_dropped(p, cd, name, self.chain_base)
             self.log(f"{name}: {why}; dropped {files(n)} (kept in {kept})" if kept
                      else f"{name}: no result ({why}); its changes are dropped")
             if killed != "stop now":  # the user stopped it: nothing to tell
