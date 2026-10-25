@@ -1890,8 +1890,8 @@ class Pilot(Desk, Periodic, Experiments):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
-        if why.startswith("driver error:") and net.online() and getattr(self, "bad", False) is None:  # (a stand-in
-            self.on_trial(tid, "driver error", why, why)  # driver in a test has no `bad`)
+        if why.startswith("driver error:") and net.online() and self.bad is None:
+            self.on_trial(tid, "driver error", why, why)
         ending = getattr(self, "ending", False)  # the run winds down: it neither goes on nor takes a retry
         if head:
             retry = "" if ending else f"\nOnce {once or 'fixed'}, it merges the kept approval: `windvane retry {tid}`"
@@ -3151,9 +3151,10 @@ def undo_update(p, cd, home, trial, how, log):
     revert has landed: a driver killed meanwhile finishes it when it starts again (`trial_check`)."""
     st, new = p.state, trial["new"][:8]
     shas = [c[0][:8] for c in selfupdate.to_revert(p.main_root(), p.upstream, trial["good"], trial["new"]) or []]
+    take_up = f"take it up with `git -C {shell_path(home)} pull --ff-only` (the install can't pull on its own: " \
+              "its driver doesn't start), then start the run again"  # the trial is over: the next crash is the run's end
     by_hand = (f". To go on, revert {', '.join(shas) or new} on {p.main} by hand (`git revert -m 1 <sha>` for a merge) "
-               f"or fix it, push, take it up with `git -C {shell_path(home)} pull --ff-only` (the install can't pull "
-               "on its own: its driver doesn't start), then start the run again")
+               f"or fix it, push, {take_up}")
     if "reverting" not in trial and (st / selfupdate.REVERTED).exists():
         selfupdate.end_trial(st)
         return f"windvane {new} {how}, right after a revert, with no ticket merged since: nothing more is reverted{by_hand}"
@@ -3167,7 +3168,7 @@ def undo_update(p, cd, home, trial, how, log):
         waits = str(e).startswith("the revert waits")
         if waits:  # once it merges, it counts: the next bad update stops the run
             save_json(st / selfupdate.REVERTED, {"good": trial["good"], "waits": str(e)})
-        then = "; land it, then start the run again" if waits else by_hand
+        then = f"; merge it, {take_up}" if waits else by_hand
         return f"windvane {new} {how}, and it couldn't be reverted: {e}{then}"
     save_json(st / selfupdate.REVERTED, {"good": trial["good"], "revert": sha, "tickets": ids, "fix": tid})
     selfupdate.end_trial(st)
@@ -3175,7 +3176,7 @@ def undo_update(p, cd, home, trial, how, log):
     selfupdate.pull(home, said, trial["new"])
     if not selfupdate.landed(home, "HEAD", trial["new"], trial["reverting"]):
         return (f"windvane {new} {how}; it is reverted on {p.main} ({sha[:8]}), but the install didn't take that "
-                f"up ({'; '.join(said) or 'it is elsewhere'})")
+                f"up ({'; '.join(said) or 'it is elsewhere'}): fix that, {take_up}")
     back = f"; {', '.join(ids)} go{'es' * (len(ids) == 1)} again after it" if ids else ""
     log(f"windvane {new} {how}: reverted on {p.main} in {sha[:8]}; {tid} is to fix it{back}; the run goes on without it")
     push("windvane update reverted", whole(f"windvane {new} ", how, f". Reverted on {p.main} ({sha[:8]}); {tid} is to "
@@ -3190,8 +3191,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
     restart is logged and pushed with the error. A stop, the deadline, an empty queue or a failed setup end the run
     as they end the driver. A driver killed by the system (OOM) is only pushed: its sessions, in process groups of
     their own, may still be at work in the worktrees a restart would resume. New code on trial (a self-update's) that
-    crashes twice, or exits with an error before its run began, is reverted (`undo_update`), and the driver restarted
-    on the good code. Returns the driver's last exit code."""
+    crashes twice (an exit with an error before its run began counts as a crash) is reverted (`undo_update`), and the
+    driver restarted on the good code. Returns the driver's last exit code."""
     start = start or (lambda args, env: subprocess.run([*runnable(exe()), *args], env=env).returncode)
     began = util.clock()  # now, not this process's start: a schedule's process supervises each window in turn
     env = {**os.environ, SUPERVISED: "1", **({BEGAN: repr(began)} if began is not None else {})}

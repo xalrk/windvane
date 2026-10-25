@@ -4,7 +4,7 @@ import os
 import re
 import time
 
-from . import net
+from . import net, privacy
 from .util import git, gout, load_json, run, save_json
 
 CODE = ("windvane/", "bin/", "prompts/")  # read once by the driver: a change here needs a restart
@@ -227,6 +227,7 @@ def revert_update(p, cd, trial, how, log):
     for it. Returns (where it landed, the reverted ids, the new ticket's id, the revert's sha); raises Unreverted."""
     from . import held, planner, worktree
     root, good, new = p.main_root(), trial["good"], trial["new"]
+    how = privacy.censor(how, privacy.own_names(p))  # an exception's path or a check's line: it lands in a commit
     net.git(root, "fetch", "-q", p.remote)
     began = trial.get("reverting", {})
     if "tid" in began and landed(root, p.upstream, new, began):
@@ -288,7 +289,7 @@ def fix_ticket(p, cd, tid, trial, how, commits, ids, revert):
                "their change on top of the fix.\n" if ids else "")
             + "\n## Done when\n- A test shows the error above can't happen again.\n")
     (cd / p.tickets_rel).mkdir(parents=True, exist_ok=True)
-    (cd / p.tickets_rel / f"{tid}.md").write_text(text)
+    (cd / p.tickets_rel / f"{tid}.md").write_text(privacy.censor(text, privacy.own_names(p)))  # a check's output
     titles = {tid: title}
     for t in ids:
         f = cd / p.tickets_rel / f"{t}.md"
@@ -299,6 +300,8 @@ def fix_ticket(p, cd, tid, trial, how, commits, ids, revert):
                          f"`{revert[:8]}`: windvane {new[:8]} {how}. It waits for {tid}, then redoes its change.\n")
     q = cd / p.queue_rel
     text = q.read_text() if q.is_file() else "# Queue\n"
+    text = re.sub(rf"^\s*[-*]\s+(?:\*\*)?({'|'.join(map(re.escape, [tid, *ids]))})\b.*\n?", "", text,
+                  flags=re.M | re.I)  # moved up, not listed twice
     lines = "".join(f"- {t} {titles.get(t, '')}".rstrip() + "\n" for t in [tid, *ids])
     m = re.search(rf"^\s*[-*]\s+(?:\*\*)?{p.id_re}\b", text, re.M | re.I)
     q.write_text(text[:m.start()] + lines + text[m.start():] if m else text.rstrip("\n") + "\n\n" + lines)

@@ -91,8 +91,8 @@ def merged_branches(subjects, bp):
 def landed(log, bp):
     """The ticket ids merged on a ref, from its `git log --format=%p%x1f%s`, newest first: a merge names one
     (`merged_branches`), unless a newer revert names it too: the driver's own (`Revert T-012, T-013: ...`, from
-    `selfupdate.revert_update`) or git's (`Revert "Merge T-012: ... (branch t-012-x)"`). A reverted ticket is back in
-    the queue until it merges again."""
+    `selfupdate.revert_update`) or git's (`Revert "Merge T-012: ... (branch t-012-x)"`; a revert of that one merges it
+    again). A reverted ticket is back in the queue until it merges again."""
     done, undone = set(), set()
     for line in log.splitlines():
         parents, _, subject = line.partition("\x1f")
@@ -100,8 +100,12 @@ def landed(log, bp):
             done |= {t.lower() for t in merged_branches(subject, bp)} - undone
         elif m := re.match(rf"Revert ((?:{bp}-\d+[a-z]?(?:, )?)+):", subject, re.I):
             undone |= {t.lower() for t in re.findall(rf"{bp}-\d+[a-z]?", m.group(1), re.I)} - done
-        elif subject.startswith('Revert "'):
-            undone |= {t.lower() for t in merged_branches(subject, bp)} - done
+        elif subject.startswith('Revert "'):  # a revert of git's revert merges it again
+            ids = {t.lower() for t in merged_branches(subject, bp)}
+            if len(re.match(r'(?:Revert ")*', subject).group()) // 8 % 2:
+                undone |= ids - done
+            else:
+                done |= ids - undone
     return sorted(done)
 
 

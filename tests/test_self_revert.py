@@ -152,6 +152,63 @@ class Crashes(Trial):
         self.assertIn(f"`git -C {self.home} pull --ff-only`", self.pushes[-1][1])
         self.assertEqual(self.users_checkout(), self.checkout)
 
+    def take_up(self):
+        """Doing what the stop's push says: the install pulls the revert by hand, and the next run starts on it."""
+        self.assertIn(f"take it up with `git -C {self.home} pull --ff-only`", self.pushes[-1][1])
+        self.s.git("pull", "-q", "--ff-only", cwd=self.home)
+        self.pushes.clear()
+        self.assertEqual(self.supervise(), 0)
+        self.assertEqual(self.started, ["good\n"])
+        self.assertEqual(self.pushes, [])
+
+    def test_a_revert_left_waiting_on_a_pr_says_how_to_take_it_up(self):
+        from windvane import held
+        self.update("broken\n")
+        real = held.land
+
+        def land(*a, **k):
+            real(*a, **k)  # the PR the user then merges
+            return False, "PR #7"
+        held.land = land
+        try:
+            self.assertEqual(self.supervise(), 1)
+        finally:
+            held.land = real
+        self.assertEqual(self.titles(), ["windvane restarted", "windvane stopped"])
+        self.assertIn("the revert waits on PR #7; merge it, take it up", self.pushes[-1][1])
+        self.take_up()
+        self.assertEqual(self.users_checkout(), self.checkout)
+
+    def test_a_revert_the_install_did_not_take_up_says_how_to(self):
+        self.update("broken\n")
+        (self.home / ".windvane/tickets/T-001.md").write_text("edited in the install\n")
+        self.assertEqual(self.supervise(), 1)
+        self.assertEqual(self.main("show", "main:windvane/driver.py"), "good")
+        self.assertIn("the install didn't take that up (windvane not updated: it has local changes): fix that, take it up", self.pushes[-1][1])
+        self.take_up()
+        self.assertEqual(self.users_checkout(), self.checkout)
+
+    @unittest.skipUnless(os.path.expanduser("~").count("/") >= 2, "no home path to mask")
+    def test_an_error_naming_the_home_path_reaches_main_without_it(self):
+        self.update("broken\n")
+        home = os.path.expanduser("~").rstrip("/")
+        error = f"FileNotFoundError: [Errno 2] No such file or directory: '{home}/work/x.py'"
+
+        def start(argv, env):
+            if self.installed() == "broken\n":
+                (self.p.state / "crash.json").write_text(json.dumps({"error": error, "summary": ""}))
+                return 1
+            return 0
+        with redirect_stdout(io.StringIO()):
+            driver.supervise(self.p, ["run"], now() + timedelta(hours=2), start=start, sleep=lambda s: None,
+                             home=self.home)
+        self.assertEqual(self.main("show", "main:windvane/driver.py"), "good")
+        landed_text = self.main("log", "--format=%B", "main") + self.main("show", "main:.windvane/tickets/T-011.md") \
+            + self.main("show", "main:.windvane/tickets/T-010.md")
+        self.assertNotIn(home, landed_text)
+        self.assertIn("No such file or directory: '~/work/x.py'", landed_text)
+        self.assertEqual(self.main("show", "main:.windvane/QUEUE.md").count("- T-010 "), 1)  # moved up, not listed twice
+
     def test_a_crash_off_trial_is_restarted_as_before(self):
         self.update("broken\n")
         selfupdate.end_trial(self.p.state)
@@ -330,6 +387,9 @@ class Parts(unittest.TestCase):
                                     merge + "Merge T-001: x (branch t-001-x)"), "t"), ["t-001"])
         self.assertEqual(landed(log(plain + 'Revert "Merge T-001: x (branch t-001-x)"',
                                     merge + "Merge T-001: x (branch t-001-x)"), "t"), [])  # git's own revert
+        self.assertEqual(landed(log(plain + 'Revert "Revert "Merge T-001: x (branch t-001-x)""',
+                                    plain + 'Revert "Merge T-001: x (branch t-001-x)"',
+                                    merge + "Merge T-001: x (branch t-001-x)"), "t"), ["t-001"])  # and its revert
         self.assertEqual(landed(plain + "Merge T-001: squashed by hand (branch t-001-x)", "t"), [])  # not a merge
 
     def test_signature_reads_two_tickets_failing_alike_the_same(self):
