@@ -305,7 +305,7 @@ class Run(Base):
         self.assertIn("T-001", pilot.merged)  # its ticket landed, and the run worked it
 
 
-class Unfinished(Base):
+class Ended(Base):
     def setUp(self):
         self.make()
         self.record(rec(self.first))
