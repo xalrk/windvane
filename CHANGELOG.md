@@ -81,6 +81,9 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A SIGTERM, SIGHUP or `stop --now` during a retry's backoff ends the run within seconds, not when the backoff runs
+  out (up to minutes later, after a service manager's stop timeout), so the save, the teardown and the unlock still
+  happen.
 - A plan or periodic session that ends without its end line (a misspelt `PLAN:`) is asked for it once in the same
   session, instead of its tickets being thrown away. If it still gives none, what it wrote is kept as a patch in the
   state dir's `dropped/` and a push says where; the log no longer says "nothing written" for a plan that wrote files.

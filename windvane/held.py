@@ -318,7 +318,7 @@ def merge_pr(p, cd, branch, pr_n, title):
         if pr.get("state") == "MERGED":
             return True, ""
         marks, state = {pr.get("mergeable"), pr.get("mergeStateStatus")}, merge_state(pr, res.stderr)
-        if "UNKNOWN" in marks or not pr:
+        if "UNKNOWN" in marks or not pr:  # no signal check: MERGE_TRIES naps of MERGE_WAIT bound it to half a minute
             time.sleep(MERGE_WAIT * bool(tries))
         elif marks & {"CONFLICTING", "BEHIND", "DIRTY"} and replays and replayed(p, cd, branch):
             replays, tries = 0, max(tries, 1)  # a replay is always tried
