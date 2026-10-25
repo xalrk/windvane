@@ -491,6 +491,7 @@ class Pilot(Desk, Periodic, Experiments):
         # checkout put its regression ticket off to
         self.bench_seen, self.bench_wait = {}, {}
         self.overfit_read = None  # bench.jsonl's mtime when `overfit_watch` last looked
+        self.seed_seen = {}  # a seed entry -> ((main's head, the ledger's mtime), whether it was due then)
         self.asks_left = []  # the rounds asked for that the run ended before: in the final summary
         self.requests_tried = set()  # windvane requests a [[periodic]] round was given this run: never twice
         self.desk_init(s.get("desk", {}))  # the user's labelled PRs, merged between tickets (desk.py)

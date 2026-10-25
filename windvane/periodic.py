@@ -660,12 +660,18 @@ class Periodic:
 
     def seed_due(self, e):
         """A seed entry's turn: the pool on main short of `pool_size`, or `seed_every` experiments kept since a seed
-        last joined. Tried at most once a merge, so a seed refused again and again costs one session a ticket."""
+        last joined. Tried at most once a merge, so a seed refused again and again costs one session a ticket. Read
+        again only when main or the ledger moved: it's asked on every pass between tickets."""
         p = self.p
         if self.periodic_at.get(e["name"], -1) >= len(self.merged):
             return False
-        have = len(bench.planned(p, p.upstream, "full", True))
-        return have < e["pool_size"] or pool.kept_since_seed(p.state / "ledger.jsonl") >= e["seed_every"]
+        ledger = p.state / "ledger.jsonl"
+        key = (gout(p.main_root(), "rev-parse", p.upstream), ledger.stat().st_mtime if ledger.exists() else 0)
+        if self.seed_seen.get(e["name"], (None,))[0] != key:
+            have = len(bench.planned(p, p.upstream, "full", True))
+            self.seed_seen[e["name"]] = (key, have < e["pool_size"]
+                                         or pool.kept_since_seed(ledger) >= e["seed_every"])
+        return self.seed_seen[e["name"]][1]
 
     def seed_round(self, e):
         """One seed for the training pool: a session writes it in the ci tree on current main, the bench's scorer
@@ -727,7 +733,7 @@ class Periodic:
             return None
         self.log(f"{name}: seed {new.name} checked: its hidden tests fail on the bare seed and pass on its reference"
                  + (f"; SEED: {said.group(1)}" if said else ""))
-        shutil.copytree(new, keep / new.name, ignore=shutil.ignore_patterns("reference"))
+        shutil.copytree(new, keep / new.name, ignore=pool.no_reference(new))
         return keep / new.name
 
     def seed_land(self, e, cd, new):

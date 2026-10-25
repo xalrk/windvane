@@ -50,13 +50,18 @@ def staged(root):
     return found[0], ""
 
 
+def no_reference(new):
+    """A copytree `ignore` leaving out the seed folder `new`'s own `reference/`, and nothing deeper of that name."""
+    return lambda d, found: ["reference"] if Path(d) == Path(new) and "reference" in found else []
+
+
 def check(new):
     """Why the seed in the folder `new` can't join the pool, or "": it must load as a bench seed, map every ticket to
     hidden tests and have judge checks, and its hidden tests, run by the bench's scorer in scratch copies, must fail
     for every ticket on the bare seed and pass for every ticket on `reference/`."""
     with tempfile.TemporaryDirectory(prefix="windvane-seed-") as tmp:
         tmp = Path(tmp)
-        shutil.copytree(new, tmp / "set" / new.name, ignore=shutil.ignore_patterns("reference"))
+        shutil.copytree(new, tmp / "set" / new.name, ignore=no_reference(new))
         try:
             seed = seeds(tmp / "set").get(new.name)
         except (SystemExit, OSError, ValueError) as e:  # a bad config.toml or bench.toml
