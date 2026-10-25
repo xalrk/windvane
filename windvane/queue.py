@@ -88,6 +88,23 @@ def merged_branches(subjects, bp):
     return re.findall(rf"{start}({bp}-\d+[a-z]?)-[\w.-]", subjects, re.I)
 
 
+def landed(log, bp):
+    """The ticket ids merged on a ref, from its `git log --format=%p%x1f%s`, newest first: a merge names one
+    (`merged_branches`), unless a newer revert names it too: the driver's own (`Revert T-012, T-013: ...`, from
+    `selfupdate.revert_update`) or git's (`Revert "Merge T-012: ... (branch t-012-x)"`). A reverted ticket is back in
+    the queue until it merges again."""
+    done, undone = set(), set()
+    for line in log.splitlines():
+        parents, _, subject = line.partition("\x1f")
+        if len(parents.split()) > 1:
+            done |= {t.lower() for t in merged_branches(subject, bp)} - undone
+        elif m := re.match(rf"Revert ((?:{bp}-\d+[a-z]?(?:, )?)+):", subject, re.I):
+            undone |= {t.lower() for t in re.findall(rf"{bp}-\d+[a-z]?", m.group(1), re.I)} - done
+        elif subject.startswith('Revert "'):
+            undone |= {t.lower() for t in merged_branches(subject, bp)} - done
+    return sorted(done)
+
+
 def title(text, tid):
     first = text.split("\n", 1)[0]
     return re.sub(rf"^#\s*{re.escape(tid)}:?\s*", "", first).strip() or tid
@@ -124,8 +141,7 @@ class Queue:
         self.kinds = {t: " ".join(header_line(heads[t], "Kind").split()).strip(" .`*").lower() for t in self.files}
 
         bp = re.escape(p.prefix.lower())
-        merges = gout(cwd, "log", ref, "--merges", "--format=%s")
-        self.done = {p.norm(m) for m in merged_branches(merges, bp)}
+        self.done = {p.norm(m) for m in landed(gout(cwd, "log", "--topo-order", ref, "--format=%p%x1f%s"), bp)}
         self.done |= {p.norm(m) for m in re.findall(rf"^\s*-\s*done:\s*({p.id_re})", qmd, re.M | re.I)}
         self.rejected = {p.norm(m) for m in re.findall(rf"^\s*-\s*rejected:\s*({p.id_re})", qmd, re.M | re.I)}
         self.done |= self.rejected  # never picked again; its branch stays, unmerged
