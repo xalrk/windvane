@@ -342,6 +342,8 @@ def cmd_status(a, p):
         print(f"failed: {tid}; once its cause is fixed: windvane retry {tid}")
     for name in periodic_mod.asked(p) if on else ():
         print(f"asked: periodic {name}, at the next gap")
+    for line in periodic_mod.bench_status(p):
+        print(line)
     for key, q in questions.waiting_on(st.get("questions", {})).items():
         print(f"waiting on you: {key}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
     for q in questions.with_ids(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"), p):

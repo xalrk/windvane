@@ -35,7 +35,7 @@ from .desk import Desk
 from .heavy import minutes
 from .held import (CHECK_FIELDS, MERGE_STATES, author_ident, base_required, blocked_by, check_name, merge_state,
                    never_started, push_held, required_checks, running_checks, start_hint)
-from .periodic import Periodic, clear_asked
+from .periodic import Periodic, clear_asked, live_benches
 from .phone import NTFY, REASON, cut, whole
 from .planner import plan
 from .config import CHECKOUT, DIR, HOME, TokenError, exe, slots
@@ -456,6 +456,9 @@ class Pilot(Desk, Periodic):
         self.groups_seen, self.groups_read = {}, (None, None)  # name -> groups finished then; (main's sha, its queue)
         self.groups_wait = {}  # name -> merges when a round was skipped: its finished groups wait for the next merge
         self.asks_wait, self.asked_chain = {}, {}  # the same for an asked round; the entries an asked round chains in
+        # bench rounds: main's head each was last looked at for (and whether it was due), and the merge count a busy
+        # checkout put its regression ticket off to
+        self.bench_seen, self.bench_wait = {}, {}
         self.asks_left = []  # the rounds asked for that the run ended before: in the final summary
         self.requests_tried = set()  # windvane requests a [[periodic]] round was given this run: never twice
         self.desk_init(s.get("desk", {}))  # the user's labelled PRs, merged between tickets (desk.py)
@@ -2398,7 +2401,7 @@ class Pilot(Desk, Periodic):
                     return
                 continue
             due = self.periodic_due()
-            if due and self.running:  # it runs on a quiet tree: no new ticket until the running ones finish
+            if due and self.running and due.get("bench") != "start":  # a quiet tree: the running ones finish first
                 self.idle_note([f"{due['name']} is due: waiting for {', '.join(sorted(self.running))} to finish"])
                 self.pause()
                 continue
@@ -2460,6 +2463,12 @@ class Pilot(Desk, Periodic):
                 if self.checking:  # a merge held by its checks: tried again when its wait is up
                     self.idle_note(self.waits)
                     self.pause()
+                    continue
+                if live_benches(p):  # its verdict is read at the first pass after it ends
+                    self.idle_note(self.bench_waits())
+                    self.pause(60)
+                    continue
+                if self.bench_unread():  # it ended during this pass: read it, and land its ticket, before the end
                     continue
                 self.stop_reason = kind
                 return
@@ -2746,6 +2755,7 @@ class Pilot(Desk, Periodic):
             self.checks_unfinished()
             if not (crashed and os.environ.get(SUPERVISED)):  # a restart goes on with them
                 self.kept_at_end()
+                self.bench_at_end()
                 self.asks_left = clear_asked(p)
             if not quiet_now(p)[0]:
                 self.send_unsent()  # a question from a ticket that finished after the loop's last pass

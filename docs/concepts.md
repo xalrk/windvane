@@ -251,7 +251,10 @@ Hidden tests miss what a user also meets (an unclear error, a command hard to fi
 session then tries each finished seed as its user would, on the seed's own yes/no checks. It is told the goal and
 the tickets, never the critic's scale, its verdicts, the pass mark or which windvane built it, so no session
 can aim at its score either. `windvane bench compare A B` sets two windvane versions side by side, and with
-`--repeat` tells a real difference from the runs' own noise.
+`--repeat` tells a real difference from the runs' own noise. A benchmark nobody runs measures nothing, and one per
+ticket would cost more than the tickets, so a `[[periodic]]` entry with `builtin = "bench"` runs it after changes to
+the prompts or the pipeline have landed, in the background while the run goes on, and writes a ticket when the
+projects got worse or dearer than with the windvane last benchmarked.
 
 ## Questions and quiet times
 

@@ -151,7 +151,8 @@ def permissions(table, entries):
 
 
 LANDS = ("near", "next", "end", "hold", "ask")  # where a [[periodic]] chain's new tickets go in the queue
-BUILTINS = ("project-critic",)  # [[periodic]] sessions windvane brings, so a project needs no prompt of its own
+BUILTINS = ("project-critic", "bench")  # [[periodic]] sessions windvane brings, so a project needs no prompt of its own
+BENCH_MINUTES = 300  # a bench entry's default `minutes`: its whole time, both sides of a compare and their judges
 
 
 def periodic(entries):
@@ -159,7 +160,9 @@ def periodic(entries):
     group of tickets (`after_group`: a regex on their headers, group 1 the group's name) is finished, while windvane's
     request inbox holds untriaged requests (`requests = true`; its prompt defaults to windvane's TRIAGE-REQUESTS.md),
     or only as another entry's `then` when none is set. `builtin` names one of windvane's own sessions instead of a `prompt`
-    (`project-critic`: the critic on the whole project, its `dims` and `parallel` as `windvane critic --project`'s).
+    (`project-critic`: the critic on the whole project, its `dims` and `parallel` as `windvane critic --project`'s;
+    `bench`: `windvane bench` in the background once tickets touching `after_touch` paths have merged, `minutes` its
+    whole time, a regression past `bench_cost_up` % more tokens per merged ticket, or worse quality, ticketed).
     Mistakes stop the run at once rather than at the Nth merge."""
     out = {}
     for i, e in enumerate(entries if isinstance(entries, list) else [entries]):
@@ -175,7 +178,8 @@ def periodic(entries):
         if not e.get("prompt") and not builtin and not reqs:
             raise SystemExit(f"windvane: [[periodic]] {name} needs prompt = \"<the project's rules file>\"")
         try:
-            every, minutes = (int(e.get(k, d)) for k, d in (("every", 0), ("minutes", 60)))
+            first = BENCH_MINUTES if builtin == "bench" else 60
+            every, minutes = (int(e.get(k, d)) for k, d in (("every", 0), ("minutes", first)))
         except (TypeError, ValueError):
             raise SystemExit(f"windvane: [[periodic]] {name}: every and minutes are whole numbers")
         par = e.get("parallel", 4)
@@ -193,10 +197,20 @@ def periodic(entries):
                 raise re.error("no (group) to name the ticket's group")
         except re.error as err:
             raise SystemExit(f"windvane: [[periodic]] {name}: after_group = {group!r}: {err}")
+        touch = e.get("after_touch", [])
+        touch = [touch] if isinstance(touch, str) else touch
+        if (touch and builtin != "bench" or not isinstance(touch, list)
+                or not all(isinstance(t, str) and t for t in touch)):
+            raise SystemExit(f"windvane: [[periodic]] {name}: after_touch = {e.get('after_touch')!r}: a list of path "
+                             "prefixes, for builtin = \"bench\" only")
+        cost_up = e.get("bench_cost_up", 25)
+        if isinstance(cost_up, bool) or not isinstance(cost_up, (int, float)) or cost_up < 0:
+            raise SystemExit(f"windvane: [[periodic]] {name}: bench_cost_up = {cost_up!r}: a percent, 0 or more")
         out[name] = {"name": name, "land": land, "every": max(0, every), "after_group": group, "minutes": max(1, minutes),
                      "setup": e.get("setup", ""), "setup_minutes": setup_m,
                      "prompt": e.get("prompt", ""), "then": e.get("then", ""), "builtin": builtin,
                      "dims": dims, "parallel": max(1, par), "requests": reqs,
+                     "after_touch": touch, "bench_cost_up": cost_up,
                      "allow": e.get("allow", []), "deny": e.get("deny", [])}
     for e in out.values():
         if e["then"] and e["then"] not in out:
