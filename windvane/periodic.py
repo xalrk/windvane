@@ -558,8 +558,8 @@ class Periodic:
         self.bench_mine.add(name)
         what = (f"a baseline at {head[:7]}" if base is None else f"{base[:7]} against {head[:7]}, after "
                 + ", ".join(t for t, *_ in touched) if touched else f"{base[:7]} against {head[:7]}")
-        self.log(f"{name}: bench started in the background ({what}; {which}: {said}; up to {e['minutes']} min); "
-                 f"log {job}.log")
+        self.log(f"{name}: bench started in the background ({what}; {which}: {said}; up to {e['minutes']} min, "
+                 f"read at a run's first gap after it ends); log {job}.log")
 
     def bench_verdict(self, e, st):
         """The ended job's verdict, saved with the round: a baseline or no regression is one log line, a regression
@@ -567,7 +567,8 @@ class Periodic:
         p, name = self.p, e["name"]
         head = bench_runs(p, st["head"], st["size"], st["after"])
         base = st["base"] and bench_runs(p, st["base"], st["size"])
-        both = [{"name": st[k][:7], "sha": st[k], "runs": rs[-1:]} for k, rs in (("base", base), ("head", head)) if rs]
+        both = [{"name": side, "sha": st[k], "runs": rs[-1:]}
+                for k, side, rs in (("base", "last benchmarked", base), ("head", "main", head)) if rs]
         why, moved = bench.regression(both, e["bench_cost_up"]) if len(both) == 2 else (None, [])
         if not head or st["base"] and why is None:
             code = jobs.exit_code(Path(f"{st['job']}.exit"), 0)
@@ -617,7 +618,7 @@ class Periodic:
             release_ids(p, "periodic")
         save_json(bench_file(p, name), dict(st, verdict="ticketed", ticket=tid))
         where = "queued" if landed else f"on {held[tid]}, not merged" if tid in held else "not landed"
-        push(f"{name}: bench regression", phone.cut(f"{'; '.join(st['why'])} after {after_list(st)}. {tid} written "
+        push(f"{name}: regression", phone.cut(f"{'; '.join(st['why'])} after {after_list(st)}. {tid} written "
                                                     f"({where}); nothing was reverted.", log=self.log), 4, "warning")
 
     def bench_at_end(self):
@@ -841,6 +842,9 @@ def touching(p, since, head, prefixes):
         hit = [f for f in paths if f and any(f.startswith(x) for x in prefixes)]
         if hit:
             m = re.search(rf"\b{p.id_re}\b", subject, re.I)
+            if m:  # the driver's merge subject, `Merge T-007: <title> (branch ...) [skip ci]`, as its title
+                subject = re.sub(r"\s*\(branch [^)]*\)|\s*\[skip ci\]", "",
+                                 re.sub(rf"(?i)^Merge {re.escape(m.group(0))}:\s*", "", subject))
             out.append([p.norm(m.group(0)) if m else sha[:7], subject, hit])
     return out
 

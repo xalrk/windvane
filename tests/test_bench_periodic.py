@@ -101,11 +101,11 @@ class Due(Base):
         self.merge("Merge T-005: reword the guide", "docs/guide.md")
         pilot = self.pilot()
         self.assertIsNone(pilot.periodic_due())
-        head = self.merge("Merge T-006: a shorter worker prompt", "prompts/WORKER.md")
+        head = self.merge("Merge T-006: a shorter worker prompt (branch t-006-short) [skip ci]", "prompts/WORKER.md")
         due = pilot.periodic_due()
         self.assertEqual((due["name"], due["bench"]), ("bench", "start"))
         self.assertEqual(periodic.touching(self.p, self.first, head, ["prompts/"]),
-                         [["T-006", "Merge T-006: a shorter worker prompt", ["prompts/WORKER.md"]]])
+                         [["T-006", "a shorter worker prompt", ["prompts/WORKER.md"]]])
 
     def test_a_round_started_at_main_is_not_due_again_until_a_new_change(self):
         self.make()
@@ -165,10 +165,11 @@ class Rounds(Base):
         text = self.s.git("show", f"origin/main:{new[0]}")
         self.assertIn("# T-001: Bench regression after T-006\n", text)
         self.assertIn("hidden tests down 3", text)
-        self.assertIn("- T-006: Merge T-006: a shorter worker prompt (prompts/WORKER.md)", text)
+        self.assertIn("- T-006: a shorter worker prompt (prompts/WORKER.md)", text)
         self.assertNotIn("T-007", text)  # it touched none of the paths
         self.assertIn("alpha: hidden tests 8/10 → 5/10", text)  # the seed that moved; beta didn't
         self.assertNotIn("beta:", text.split("## Seeds that moved")[1])
+        self.assertIn(f"A = last benchmarked ({self.first[:7]})", text)
         self.assertIn("16/20", text)  # both sides' totals, in the compare table
         self.assertIn("13/20", text)
         self.assertEqual(Queue(self.p).order, ["T-001"])
