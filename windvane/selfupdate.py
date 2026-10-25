@@ -245,24 +245,28 @@ def fix_ticket(p, cd, tid, trial, how, commits, ids, revert):
     reverted tickets after it, and makes each of them wait for it."""
     good, new = trial["good"], trial["new"]
     listed = "\n".join(f"- `{s[:8]}` {subj}" for s, _, subj in commits)
-    text = (f"# {tid}: Find and fix what broke windvane {new[:8]}\nDepends on: nothing.\n\n## Goal\nOn trial after a "
-            f"self-update, windvane {new[:8]} {how}. The run reverted these on {p.main} in `{revert[:8]}` and went on "
-            f"on {good[:8]}:\n{listed}\n\n## Scope\n- Reproduce it (the reverted change is `git show {revert[:8]}`, "
+    title = f"Find and fix what broke windvane {new[:8]}"
+    text = (f"# {tid}: {title}\nDepends on: nothing.\n\n## Goal\nAfter a self-update, windvane {new[:8]} {how}. The "
+            f"run reverted these on {p.main} in `{revert[:8]}` and went on on {good[:8]}:\n{listed}\n\n## Scope\n- Reproduce it (the reverted change is `git show {revert[:8]}`, "
             "inverted), find the cause, and fix it with a test that fails without the fix.\n"
             + "".join(f"- {t}'s error ({step}):\n```\n{why[-1500:]}\n```\n"
                       for t, (step, _, why) in list(trial.get("seen", {}).items())[:1])
-            + (f"- {', '.join(ids)} wait for this ticket, then redo their change on top of the fix.\n" if ids else "")
+            + (f"- {', '.join(ids)} wait{'s' * (len(ids) == 1)} for this ticket, then redo{'es' * (len(ids) == 1)} "
+               "their change on top of the fix.\n" if ids else "")
             + "\n## Done when\n- A test shows the error above can't happen again.\n")
     (cd / p.tickets_rel).mkdir(parents=True, exist_ok=True)
     (cd / p.tickets_rel / f"{tid}.md").write_text(text)
+    titles = {tid: title}
     for t in ids:
         f = cd / p.tickets_rel / f"{t}.md"
         if f.is_file():
-            f.write_text(waits_for(f.read_text(), tid) + f"\n## Reverted\nIts merge was reverted in `{revert[:8]}` "
-                         f"({how}); it waits for {tid}, then redoes its change.\n")
+            old = f.read_text()
+            titles[t] = re.sub(rf"^#\s*{re.escape(t)}:?\s*", "", old.split("\n", 1)[0]).strip()
+            f.write_text(waits_for(old, tid).rstrip("\n") + f"\n\n## Reverted\nIts merge was reverted in "
+                         f"`{revert[:8]}`: windvane {new[:8]} {how}. It waits for {tid}, then redoes its change.\n")
     q = cd / p.queue_rel
     text = q.read_text() if q.is_file() else "# Queue\n"
-    lines = "".join(f"- {t}\n" for t in [tid, *ids])
+    lines = "".join(f"- {t} {titles.get(t, '')}".rstrip() + "\n" for t in [tid, *ids])
     m = re.search(rf"^\s*[-*]\s+(?:\*\*)?{p.id_re}\b", text, re.M | re.I)
     q.write_text(text[:m.start()] + lines + text[m.start():] if m else text.rstrip("\n") + "\n\n" + lines)
 

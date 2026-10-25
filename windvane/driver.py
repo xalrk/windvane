@@ -1886,7 +1886,8 @@ class Pilot(Desk, Periodic, Experiments):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
-        self.on_trial(tid, "failed", why)
+        if getattr(self, "bad", False) is None:  # no bad update found yet (a stand-in driver in a test has none)
+            self.on_trial(tid, "failed", why)
         ending = getattr(self, "ending", False)  # the run winds down: it neither goes on nor takes a retry
         if head:
             retry = "" if ending else f"\nOnce {once or 'fixed'}, it merges the kept approval: `windvane retry {tid}`"
