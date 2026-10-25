@@ -524,7 +524,8 @@ def cmd_queue(a, p):
         print(f"warning: {w}")
     run = st if running(p) else {"questions": st.get("questions", {})}  # a finished run's set-asides and failures
     print(q.listing(questions.tickets(st.get("questions", {})), hints=True, run=run,  # start afresh in the next one
-                    compact=not a.all, keep=run.get("merged", ()), more="`windvane queue --all` lists them")
+                    compact=not getattr(a, "all", False), keep=run.get("merged", ()),
+                    more="`windvane queue --all` lists them")
           or f"no tickets on {p.upstream} yet")
     local = sorted(t for t in (p.norm(f.stem) for f in (p.root / p.tickets_rel).glob("*.md")) if t and t not in q.files)
     if local:
