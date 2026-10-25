@@ -431,6 +431,29 @@ class Parts(unittest.TestCase):
                                     merge + "Merge T-001: x (branch t-001-x)"), "t"), ["t-001"])  # the user undid ours
         self.assertEqual(landed(plain + "Merge T-001: squashed by hand (branch t-001-x)", "t"), [])  # not a merge
 
+    def test_reverts_git_itself_writes_are_read_level_by_level(self):
+        """git's own subjects for a revert of a revert (`Reapply "..."` since 2.43, `Revert "Reapply "...""` after),
+        from real `git revert`s: each one flips whether the ticket is merged."""
+        s = Sandbox()
+        self.addCleanup(s.close)
+        read = lambda: landed(s.git("log", "--topo-order", "--format=%p%x1f%s"), "t")
+        s.git("switch", "-q", "-c", "t-001-x")
+        s.write("x", "x\n")
+        s.git("add", "x")
+        s.git("commit", "-qm", "x")
+        s.git("switch", "-q", "main")
+        s.git("merge", "-q", "--no-ff", "-m", "Merge T-001: x (branch t-001-x)", "t-001-x")
+        self.assertEqual(read(), ["t-001"])
+        s.git("revert", "--no-edit", "-m", "1", "HEAD")
+        for want in ([], ["t-001"], [], ["t-001"], []):
+            self.assertEqual(read(), want, s.git("log", "-1", "--format=%s"))
+            s.git("revert", "--no-edit", "HEAD")
+        s.write("x", "y\n")  # the driver's own revert, then the user's reverts of it
+        s.git("commit", "-qam", "Revert T-001: windvane abc crashed")
+        for want in ([], ["t-001"], [], ["t-001"]):
+            self.assertEqual(read(), want, s.git("log", "-1", "--format=%s"))
+            s.git("revert", "--no-edit", "HEAD")
+
     def test_signature_reads_two_tickets_failing_alike_the_same(self):
         id_re = r"T-\d+[a-z]?"
         a = selfupdate.signature("Error at 1a2b3c4: exit 1 after 12.5s in /w/work-1/x.py (t-001-work, T-001)", id_re)

@@ -92,15 +92,16 @@ def landed(log, bp):
     """The ticket ids merged on a ref, from its `git log --format=%p%x1f%s`, newest first: a merge names one
     (`merged_branches`), unless a newer revert names it too: the driver's own (`Revert T-012, T-013: ...`, from
     `selfupdate.revert_update`) or git's (`Revert "Merge T-012: ... (branch t-012-x)"`); a revert of either merges it
-    again. A reverted ticket is back in the queue until it merges again."""
+    again (git ≥2.43 writes a revert of `Revert "X"` as `Reapply "X"`). A reverted ticket is back in the queue until it merges again."""
     done, undone = set(), set()
     for line in log.splitlines():
         parents, _, subject = line.partition("\x1f")
         if len(parents.split()) > 1:
             done |= {t.lower() for t in merged_branches(subject, bp)} - undone
-        elif subject.startswith("Revert "):  # each revert of a revert (git's `Revert "..."`) merges it again
-            depth = len(re.match(r'(?:Revert ")*', subject).group()) // 8
-            if m := re.match(rf"Revert ((?:{bp}-\d+[a-z]?(?:, )?)+):", subject[depth * 8:], re.I):
+        elif subject.startswith(("Revert ", "Reapply ")):  # each revert of a revert merges it again
+            prefix = re.match(r'(?:Revert "|Reapply ")*', subject).group()  # git's: a `Reapply "` is two levels
+            depth = prefix.count('Revert "') + 2 * prefix.count('Reapply "')
+            if m := re.match(rf"Revert ((?:{bp}-\d+[a-z]?(?:, )?)+):", subject[len(prefix):], re.I):
                 ids, depth = {t.lower() for t in re.findall(rf"{bp}-\d+[a-z]?", m.group(1), re.I)}, depth + 1
             else:
                 ids = {t.lower() for t in merged_branches(subject, bp)}
