@@ -149,6 +149,7 @@ class Crashes(Trial):
         self.assertEqual(self.titles(), ["windvane restarted", "windvane stopped"])
         self.assertIn("right after a revert, with no ticket merged since: nothing more is reverted. To go on, revert "
                       f"{self.new[:8]} on main by hand", self.pushes[-1][1])
+        self.assertIn(f"`git -C {self.home} pull --ff-only`", self.pushes[-1][1])
         self.assertEqual(self.users_checkout(), self.checkout)
 
     def test_a_crash_off_trial_is_restarted_as_before(self):

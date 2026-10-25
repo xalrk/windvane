@@ -3152,7 +3152,8 @@ def undo_update(p, cd, home, trial, how, log):
     st, new = p.state, trial["new"][:8]
     shas = [c[0][:8] for c in selfupdate.to_revert(p.main_root(), p.upstream, trial["good"], trial["new"]) or []]
     by_hand = (f". To go on, revert {', '.join(shas) or new} on {p.main} by hand (`git revert -m 1 <sha>` for a merge) "
-               "or fix it, push, then start the run again")
+               f"or fix it, push, take it up with `git -C {shell_path(home)} pull --ff-only` (the install can't pull "
+               "on its own: its driver doesn't start), then start the run again")
     if "reverting" not in trial and (st / selfupdate.REVERTED).exists():
         selfupdate.end_trial(st)
         return f"windvane {new} {how}, right after a revert, with no ticket merged since: nothing more is reverted{by_hand}"
