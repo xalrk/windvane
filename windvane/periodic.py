@@ -35,6 +35,8 @@ from .util import append_jsonl, edit_json, git, gout, hhmm, last_match, load_jso
 
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
 SCORE_RE = re.compile(r"\bscore=(-?\d+(?:\.\d+)?)\b")
+PERIODIC_LINE = "`PERIODIC: <one-line summary of what you found and the tickets you wrote>`"
+REASK_TIME = timedelta(minutes=3)  # a re-ask for the end line, past a session that ended at its limit
 ASKED = "asked.json"  # the state dir's `windvane periodic <name>` asks a run holds for its next gap: {name: when}
 ASK_LAND = (("near", "queue them right after the ticket in progress"), ("end", "queue them after everything else"),
             ("hold", "hold them, parked in QUEUE.md, for you at the desk"))
@@ -200,8 +202,9 @@ class Periodic:
         started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
         it due, {group: its tickets}, named in its prompt; `entries`: the chain's (main's for an asked round). An
         asked round's ask is taken once its session starts or is skipped for good (`asked_taken`)."""
-        from .planner import pick_ids
+        from .planner import end_reask, files, keep_dropped, pick_ids
         from .runner import rules
+        from .worktree import short_path
         name, p = e["name"], self.p
         entries = entries or p.periodic
         if not self.periodic_fits(e):
@@ -258,23 +261,36 @@ class Periodic:
         deny = ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
                 "Bash(git reset *)", "Bash(gh *)", NO_REQUEST] + ([] if p.ap["subagents"] else ["Agent"])
         system = rules(p, "PERIODIC.md") + "\n" + own_rules
+        session = {}
         text, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}", prompt, system, cd, limit,
-                                          ["Bash(windvane *)"], deny)
-        m = last_match(PERIODIC_RE, text)
+                                          ["Bash(windvane *)"], deny, session=session)
+        m, said = last_match(PERIODIC_RE, text), text
+        if not (killed or error or m) and session.get("id"):  # ended well but without its line: asked once, tree as is
+            more = " (your `REQUEST:` lines first)" if reqs else ""
+            again, _, _ = self.claude(f"periodic:{name}", f"periodic-{name}-reask", end_reask(PERIODIC_LINE, more),
+                                      system, cd, max(limit, now() + REASK_TIME), deny=critic.DENY,
+                                      resume=session["id"])
+            m = last_match(PERIODIC_RE, again)
+            if m:  # the reply stays the first one's; a verdict the re-ask repeats wins over its first one
+                said = f"{again}\n{text}"
+                text = f"{text.rstrip()}\n{m.group(0)}"
         if killed or error or not m:
             why = killed or error or "no PERIODIC line"
-            self.log(f"{name}: no result ({why}); its changes are dropped")
+            n, kept = keep_dropped(p, cd, name)
+            self.log(f"{name}: {why}; dropped {files(n)} (kept in {kept})" if kept
+                     else f"{name}: no result ({why}); its changes are dropped")
             if killed != "stop now":  # the user stopped it: nothing to tell
                 what = (f"it was cut off ({killed})" if killed else f"the session failed ({phone.cut(plain_error(error), log=self.log)})"
                         if error else "it ended without its PERIODIC line")
-                self.periodic_failed(name, f"{what}; its changes were dropped.")
+                self.periodic_failed(name, f"{what}; its changes were dropped" + (
+                    f" ({files(n)}, kept in the state dir's {short_path(p, kept)})." if kept else "."))
             return None
         self.log(f"{name}: PERIODIC: {m.group(1)}")
         push(name, phone.cut(m.group(1), log=self.log) or "done", 3, "mag")
         if notes:  # used: the next plan (or triage) starts after them
             append_jsonl(p.state / "critic.jsonl", {"ticket": "PLAN", "step": f"periodic:{name}", "notes": len(notes)})
         if reqs:
-            self.triaged.append((reqs, text, name))
+            self.triaged.append((reqs, said, name))
         score = SCORE_RE.search(m.group(1))
         if score:
             append_jsonl(p.state / "ledger.jsonl", {"role": f"periodic:{name}", "event": "score",

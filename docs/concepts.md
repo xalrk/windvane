@@ -49,6 +49,10 @@ reserves its ids under one lock in the state dir (`ids.lock`), so two started at
 never overwrites a ticket file: one that appeared by other means is skipped for the next id, and should that be taken
 too it refuses: run it again. `windvane plan "<goal>"` has a planner session write several, from a goal and the
 critic's follow-up notes; it opens a pull request with them for you to look at (`--merge` merges them at once).
+A plan, like a `[[periodic]]` session, ends with a line the driver reads (`PLAN: ...`, `PERIODIC: ...`). A session
+that ends without it is asked for it once, in the same session: one short turn whose input comes from the cache, the
+tree left as the first turn wrote it. Should it still give none, its tickets don't land, but what it changed is kept
+as a patch in the state dir's `dropped/` (`git apply` it on `main` to get them back), and a push says where.
 
 ### The queue and ticket status
 
@@ -276,5 +280,6 @@ On this machine only, under `~/.local/state/windvane/<name>/`:
 | `quiet.txt` | quiet times |
 | `held.json`, `held_why.json`, `closed_plans.json` | changes kept on a local branch to land when pushed again, and why their push was refused; plan branches whose PRs were closed |
 | `tmp/<ID>/` | the `TMPDIR` of a ticket's sessions and checks, removed when it merges or fails; the driver also removes `windvane-*` dirs over an hour old that nothing uses from the machine's temp dir, at the start and between tickets |
+| `dropped/` | the changes of a plan or periodic session dropped for want of its end line (or cut off), one patch each; removed after `keep_days` like old transcripts |
 | `id_claims/`, `ids.lock` | the ticket ids a running plan or periodic session was handed, so `windvane new` skips them until its branch is pushed; a claim whose process is gone is removed. The lock is held while an id is picked and reserved |
 | `work/`, `ci/`, `plan/` | worktrees: the sessions', the driver's checks and merges, the planner's (`work-1/`, `ci-1/` and so on for extra slots) |

@@ -77,6 +77,9 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A plan or periodic session that ends without its end line (a misspelt `PLAN:`) is asked for it once in the same
+  session, instead of its tickets being thrown away. If it still gives none, what it wrote is kept as a patch in the
+  state dir's `dropped/` and a push says where; the log no longer says "nothing written" for a plan that wrote files.
 - A project's own name in `private-terms.txt` no longer blocks work in that project's own repository: the sessions'
   pre-push hook, the scans before windvane pushes or merges, `windvane answer` and the masking of what windvane posts
   there let it through, while every other private word is still refused, and the name still is in every other

@@ -1,7 +1,8 @@
 """A project's state dir, kept lean. What runs leave there and nothing reads again grows until the disk is full (gigabytes
 within days of steady runs): slot worktrees past their run, each with its own build output; session
 transcripts (`runs/*.jsonl`: `stats` reads the ledger, `watch` only the newest stream); critic packs and `bg` job
-logs of merged tickets. `reclaimable` lists what may go, with sizes, as `scratch.leftovers` does for temp dirs, and `clean` removes it.
+logs of merged tickets; old patches of dropped plan and periodic sessions. `reclaimable` lists what may go, with
+sizes, as `scratch.leftovers` does for temp dirs, and `clean` removes it.
 
 Work is never lost: a worktree with a commit not on main, uncommitted changes, or a running session (the driver's
 `running` slots, a process inside it) stays, and so does anything touched in the last hour (`scratch.AGE`). Slot 0's
@@ -193,6 +194,17 @@ def desk_job_items(p, keep_days, now):
                  sum(f.stat().st_size for f in paths), paths, "files")]
 
 
+def dropped_items(p, keep_days, now):
+    """Patches of plan and periodic sessions dropped for want of their end line (`planner.keep_dropped`), older than
+    the window: by then their tickets were applied by hand or aren't wanted."""
+    since = now - max(keep_days * DAY, scratch.AGE)
+    paths = [f for f in sorted((p.state / "dropped").glob("*.patch")) if f.stat().st_mtime < since]
+    if not paths:
+        return []
+    return [Item(f"dropped/ ({len(paths)} dropped session patch{'es' * (len(paths) > 1)} over {keep_days:g} days old)",
+                 sum(f.stat().st_size for f in paths), paths, "files")]
+
+
 def jobs_live(d, now):
     """Whether a job in bg dir `d` runs, or is kept until a time still ahead."""
     bases = {f.with_suffix("") for f in d.glob("*.start")} | {f.with_suffix("") for f in d.glob("*.keep")}
@@ -223,6 +235,8 @@ def survey(p, busy=None, keep_slots=0, trim=None, procs=None, now=None):
     items += bg_items(p, done, s["keep_days"], now)
     if (p.state / "bg").is_dir():
         items += desk_job_items(p, s["keep_days"], now)
+    if (p.state / "dropped").is_dir():
+        items += dropped_items(p, s["keep_days"], now)
     return sorted(items, key=lambda i: -i.size), kept
 
 

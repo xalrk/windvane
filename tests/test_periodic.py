@@ -1,5 +1,6 @@
 """[[periodic]] sessions: a project's own session (a playtest, then a triage) every N merges, between tickets."""
 import json
+import os
 import sys
 import unittest
 from datetime import timedelta
@@ -168,6 +169,7 @@ class Periodic(unittest.TestCase):
     def test_no_periodic_line_lands_nothing(self):
         self.make(PLAYTEST.replace("PLAYTEST", "TRIAGE"), tickets=2, rules="NO_LINE")
         self.s.write("tools/TRIAGE.md", "# Triage\nWRITE_TICKET\nNO_LINE\n")
+        os.environ["FAKE_REASK"] = "empty"  # asked again for its line, it still gives none
         self.s.publish("no line")
         pilot = self.run_pilot()
         self.assertEqual(pilot.merged, ["T-001", "T-002"])

@@ -1,9 +1,12 @@
-"""T-043: a paid plan is never lost (a refused push keeps a local branch and says so; two plans in one minute both
-land on their own branches), a plan branch whose PR was closed frees its ids, the desk's `plan` says when another
+"""T-043, T-269: a paid plan is never lost (a refused push keeps a local branch and says so; two plans in one minute
+both land on their own branches; a reply without its PLAN line is asked for it once, and what a plan that still has
+none wrote is kept as a patch), a plan branch whose PR was closed frees its ids, the desk's `plan` says when another
 plan holds the lock, and the planner gets each ticket's follow-ups from its latest critique only."""
 import contextlib
 import fcntl
 import io
+import json
+import os
 import sys
 import unittest
 from argparse import Namespace
@@ -145,6 +148,59 @@ class PlanSafety(unittest.TestCase):
 
     def test_desk_plan_unlocked_runs(self):
         self.assertIn("1 ticket planned", self.cmd_plan())
+
+    def calls(self):
+        """The planner sessions the fake ran: (prompt, its flags, its deny rules)."""
+        log = Path(os.environ["FAKE_LOG"])
+        rows = [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
+        return [(r["prompt"], r["flags"], r["deny"]) for r in rows if r["system"].startswith("# windvane planner")]
+
+    def test_a_misspelt_plan_line_is_asked_for_once_and_the_ticket_lands(self):
+        os.environ["FAKE_END_LINE"] = "PLAP: new=1 noted=0 one ticket"
+        self.assertEqual(planner.plan(self.p, "make it great"), 1)
+        (_, first, _), (again, flags, deny) = self.calls()
+        self.assertNotIn("--resume", first)
+        self.assertEqual(flags[flags.index("--resume") + 1], "fake-session")  # the same session, its context cached
+        self.assertTrue(again.startswith("Your reply has no end line. Reply with only it: `PLAN: new=<n>"))
+        self.assertIn("Bash", deny)  # it may only answer: the tree stays as the first turn left it
+        head = self.s.git("ls-remote", "--heads", "origin", "plan-*").split()[1].removeprefix("refs/heads/")
+        files = self.s.git("ls-tree", "-r", "--name-only", f"origin/{head}").split()
+        self.assertIn(".windvane/tickets/T-003.md", files)
+        body = self.s.git("log", "-1", "--format=%B", f"origin/{head}")
+        self.assertIn("PLAP: new=1 noted=0 one ticket\nPLAN: new=1 noted=0 one ticket", body)  # both turns' words
+        self.assertNotIn("nothing written", self.log())
+        self.assertEqual(self.pushes[-1][0], "planned 1 ticket")
+
+    def test_a_plan_still_without_its_line_keeps_its_changes_as_a_patch(self):
+        os.environ["FAKE_END_LINE"] = "PLAP: new=1 noted=0 one ticket"
+        os.environ["FAKE_REASK"] = "empty"
+        self.assertEqual(planner.plan(self.p, "make it great"), 0)
+        self.assertEqual(len(self.calls()), 2)
+        self.assertEqual(self.s.git("ls-remote", "--heads", "origin", "plan-*"), "")
+        patch = next((self.p.state / "dropped").glob("plan-*.patch"))
+        self.assertIn(f"plan: no PLAN line; dropped 2 changed files (kept in {patch})", self.log())
+        self.assertNotIn("nothing written", self.log())
+        self.assertEqual(self.pushes, [("plan dropped", "The plan ended without its PLAN line, so its changes were "
+                                        f"dropped (2 changed files). They're kept in the state dir's dropped/"
+                                        f"{patch.name}: `git apply` it on main to get them back.")])
+        self.s.git("apply", str(patch))  # the user's checkout, on main: the ticket and its queue line come back
+        self.assertIn("# T-003: planned", (self.s.root / ".windvane/tickets/T-003.md").read_text())
+        self.assertIn("- T-003 planned", (self.s.root / ".windvane/QUEUE.md").read_text())
+
+    def test_a_plan_that_changed_nothing_is_still_nothing_written(self):
+        orig = planner.run_claude
+        self.addCleanup(setattr, planner, "run_claude", orig)
+        planner.run_claude = lambda *a, **k: ("no line here", None, None)  # no session id: no re-ask either
+        self.assertEqual(planner.plan(self.p, "make it great"), 0)
+        self.assertIn("plan: nothing written (no PLAN line)", self.log())
+        self.assertFalse((self.p.state / "dropped").exists())
+        self.assertEqual(self.pushes, [])
+
+    def test_a_failed_plan_is_not_asked_again(self):
+        os.environ["FAKE_FAIL"] = "error"
+        self.assertEqual(planner.plan(self.p, "make it great"), 0)
+        self.assertEqual([f for _, f, _ in self.calls() if "--resume" in f], [])
+        self.assertEqual(self.pushes, [])
 
 
 class Followups(unittest.TestCase):

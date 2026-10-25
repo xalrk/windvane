@@ -520,12 +520,13 @@ class Pilot(Desk, Periodic):
             return "time" if now() >= min(limit, self.end()) else over_caps(self.usage, self.a.cap, self.a.week_cap)
         return stop_if
 
-    def claude(self, role, label, prompt, system, cwd, limit, allow=(), deny=(), ticket="", env=None):
+    def claude(self, role, label, prompt, system, cwd, limit, allow=(), deny=(), ticket="", env=None, session=None,
+               resume=None):
         login.gate()
         self.tl.started = time.time()  # a login wait reruns at once a session started before the login came back
         text, killed, error = run_claude(self.p, role, label, prompt, system, cwd, allow, deny, self.usage,
                                          self.stopper(limit), ticket,
-                                         (min(limit, self.end()), self.a.cap, self.a.week_cap), env)
+                                         (min(limit, self.end()), self.a.cap, self.a.week_cap), env, resume, session)
         if killed:
             self.log(f"  stopped {label}: {killed} ({self.usage.text()})")
         elif not error:
