@@ -1,0 +1,8 @@
+name = "maze"
+forge = "git"
+check = "python3 -m unittest discover -s tests"
+goal = "A small text maze game with a deterministic engine: move, take keys, open doors, escape, save and load."
+
+[critic]
+enabled = true
+pass = 8

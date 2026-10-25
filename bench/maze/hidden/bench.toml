@@ -1,0 +1,8 @@
+# Run in a scratch copy of the seed's final main, with this folder's test files at its top.
+command = "python3 -m unittest discover -p 'accept_*.py' -v"
+
+[tickets]  # the test modules that check each ticket
+"T-001" = ["accept_maze_move"]
+"T-002" = ["accept_maze_keys"]
+"T-003" = ["accept_maze_escape"]
+"T-004" = ["accept_maze_save"]
