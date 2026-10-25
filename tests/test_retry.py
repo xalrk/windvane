@@ -188,7 +188,7 @@ class Refused(Base):
         self.state(failed=["T-001"])
         r = self.retry("t-001")
         self.assertEqual(r.returncode, 0)
-        self.assertIn("autopilot isn't running; the next `windvane run` takes T-001 up anyway", r.stdout)
+        self.assertIn("autopilot isn't running; the next `windvane run` takes T-001 up\n", r.stdout)
         self.assertEqual(sorted(f.name for f in self.p.state.iterdir()), ["state.json"])
 
     def test_status_names_each_failed_ticket_with_its_retry_once(self):
