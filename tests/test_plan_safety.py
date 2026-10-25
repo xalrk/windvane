@@ -201,6 +201,7 @@ class PlanSafety(unittest.TestCase):
         self.s.git("apply", "--unidiff-zero", str(patch))
         self.assertIn("# T-003: planned", (self.s.root / ".windvane/tickets/T-003.md").read_text())
         patch.unlink()  # pruned: the id is free again
+        (patch.parent / "odd.patch").mkdir()  # and an entry it can't read is skipped
         self.assertEqual(planner.dropped_ids(self.p), set())
 
     def reask_ends(self, killed, error):

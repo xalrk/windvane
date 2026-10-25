@@ -169,7 +169,11 @@ def dropped_ids(p):
     so a later plan never writes other tickets under them and the patch still applies as its push says."""
     ids = set()
     for f in (p.state / DROPPED).glob("*.patch"):
-        for path in NEW_FILE_RE.findall(f.read_text(errors="replace")):
+        try:
+            text = f.read_text(errors="replace")
+        except OSError:  # not a file it can read: never a reason for a picker to fail
+            continue
+        for path in NEW_FILE_RE.findall(text):
             if path.startswith(p.tickets_rel + "/") and path.endswith(".md"):
                 ids.add(p.norm(Path(path).stem))
     return ids - {""}
