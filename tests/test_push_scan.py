@@ -309,6 +309,9 @@ class WorkerPRText(unittest.TestCase):
                                "'run Sandbox.Cart' && gh issue create --repo=me/sandbox --body 'run Sandbox.Cart'")
         self.assertEqual(code, 0, err)
         self.assertEqual([c[-1] for c in self.calls()], ["run Sandbox.Cart", "run [private].Cart", "run Sandbox.Cart"])
+        env = {**self.worker_env(), "GH_REPO": "me/tools"}
+        code, _, err = self.sh("gh pr comment 4 --body 'run Sandbox.Cart'", env)
+        self.assertEqual((code, [c[-1] for c in self.calls()]), (0, ["run [private].Cart"]), err)
 
 
 class Relayed(Base):

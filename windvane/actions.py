@@ -735,7 +735,9 @@ def censored(a):
     try:
         sys.path.insert(0, WINDVANE)
         from windvane import privacy
-        own = privacy.own_names_in(".")  # the repo the worker's PR or issue goes to, unless -R names another
+        own = privacy.own_names_in(".")  # the repo the worker's PR or issue goes to, unless GH_REPO or -R names another
+        if os.environ.get("GH_REPO"):
+            own = frozenset({privacy.repo_name(os.environ["GH_REPO"]).lower()})
         for i, x in enumerate(a):
             other = x[len("--repo="):] if x.startswith("--repo=") else \
                 a[i + 1] if x in ("-R", "--repo") and i + 1 < len(a) else x[2:] if x.startswith("-R") else ""
