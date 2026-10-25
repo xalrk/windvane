@@ -11,13 +11,17 @@ summed), then `slowest: ...` with the five slowest modules; the failed modules' 
 tools/check_pythons.sh runs it under the Python it tests, then `--fold` to merge the versions' rerun lines and add the
 check's line to --log, so how often checks rerun something can be followed over weeks. With --imports it only
 byte-compiles and imports every module of the folders given, in seconds, which is how the check tries the newest
-Python without running the whole suite there.
+Python without running the whole suite there. With --quick it runs only the modules likely to fail for this change
+(see `pick`), and stops at the first that fails again alone, so a failing check says so in about a minute.
 Standard library only.
 Usage: test_pool.py --jobs K --tails FILE [--times FILE] [--share DIR --check ID] [DIR]   (DIR defaults to tests)
+       test_pool.py --quick --jobs K --tails FILE [--times FILE] [--reruns FILE] [DIR]
        test_pool.py --fold VERSION=LOG... [--log FILE --check ID]
        test_pool.py --imports DIR...
 """
 import argparse
+import ast
+import itertools
 import json
 import os
 import re
@@ -40,6 +44,13 @@ RERUN = 10  # more failed modules than this is a real breakage, not a busy machi
 MEANS = {"passed": "flaky beside others, no action", "failed again": "a real failure: see below"}
 LOGGED = 500  # newest lines --log keeps: months of checks, and never a file that grows without end
 STALE = 3600  # seconds after which a half-made marker is left over whatever its pid says (pids get reused)
+QUICK_WALL = 45  # seconds of module time per job the quick pass may pick: about a minute of wall time, reruns and all
+RECENT = 100  # the newest checks (reruns log lines, check logs) whose real failures the quick pass picks
+FREQUENT = 1  # failed for real in this many of them: picked, most often first
+# The cross-cutting tests, always in the quick pass: each reads every source file or every call of a kind (every
+# push, every stdlib name, every prompt's or doc's text), so a change anywhere can break them though they import
+# nothing it touched.
+SWEEPS = ("test_push_fit", "test_push_sweep", "test_py311", "test_prompts", "test_docs", "test_clean_machine")
 KEYS = ("failures", "errors", "skipped", "expected failures", "unexpected successes")  # unittest's order
 
 running = {}  # module -> Popen, so a signal can stop every module's process group
@@ -260,6 +271,135 @@ def imports(dirs):
     return 1 if failed else 0
 
 
+def real_failures(text):
+    """The test modules a check's output shows failing for real: `failed again` on their alone rerun, or, where nothing
+    reran (too many failed, or a log from before reruns), the failed ones on every version whose end it shows. A
+    module that passed its rerun was only flaky beside the others, and doesn't count."""
+    line = next((l for l in text.splitlines() if l.startswith("rerun alone: ")), None)
+    if line:
+        return set(re.findall(r"(\w+) failed again\b", line))
+    parts = re.split(r"^--- python[\d.]+(?: imports)?, the end of its output:$", text, flags=re.M)
+    found = [set(re.findall(r"^--- (test_\w+):$", part, re.M))
+             | set(re.findall(r"^(?:FAIL|ERROR): \S+ \((?:unittest\.loader\._FailedTest\.)?(test_\w+)\b", part, re.M))
+             | {m for more in re.findall(r"^--- and \d+ more failed: (.*)$", part, re.M) for m in more.split(", ")}
+             for part in (parts[1:] or parts)]
+    found = [f for f in found if f]
+    return set.intersection(*found) if found else set()
+
+
+def history(reruns=None, logs=(), recent=None, before="~"):
+    """How many of the newest checks each module failed for real in: the `failed again` ones of the reruns log's
+    newest `recent` lines, and the real failures of the newest `recent` check logs given (a check is in both when it
+    reran something: either way it counts toward what keeps failing). `before` (2026-10-25T19:00:00) leaves out the
+    reruns log's later lines, for a replay of past checks."""
+    counts, lines, recent = {}, [], recent or RECENT
+    if reruns:
+        try:
+            lines = [l for l in Path(reruns).read_text(errors="replace").splitlines() if l < before][-recent:]
+        except OSError:
+            pass
+    found = [set(re.findall(r"(\w+) failed again\b", l)) for l in lines]
+    for log in sorted(logs, key=lambda f: f.name)[-recent:]:
+        try:
+            found.append(real_failures(log.read_text(errors="replace")))
+        except OSError:
+            pass
+    for modules in found:
+        for m in modules:
+            counts[m] = counts.get(m, 0) + 1
+    return counts
+
+
+def changed_files(root):
+    """The paths this change touches: `WINDVANE_CHANGED`'s list when the check is told it, else the diff of the
+    working tree against where it left origin/main (committed or not, as when run by hand)."""
+    if listed := os.environ.get("WINDVANE_CHANGED"):
+        try:
+            return [l for l in Path(listed).read_text().splitlines() if l.strip()]
+        except OSError:
+            return []
+    def git(*args):
+        r = subprocess.run(["git", "-c", "core.quotepath=off", *args], cwd=root, capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    base = git("merge-base", "origin/main", "HEAD")
+    return git("diff", "--name-only", base).splitlines() if base else []
+
+
+def imported(source):
+    """The dotted names a module imports: `from a.b import c` gives a.b and a.b.c, so a test that imports a changed
+    module either way is found. None when it doesn't parse (it then fails whatever changed: run it)."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+    names = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            names.update(a.name for a in n.names)
+        elif isinstance(n, ast.ImportFrom) and n.module and not n.level:
+            names.add(n.module)
+            names.update(f"{n.module}.{a.name}" for a in n.names)
+    return names
+
+
+def touches(changed):
+    """For each changed file, (the dotted names importing it would use, the strings that name it): a .py file's every
+    dotted tail (windvane/driver.py: windvane.driver, driver; a package's __init__.py: the package), and the file by
+    its path or its quoted name."""
+    out = []
+    for path in changed:
+        parts = Path(path).with_suffix("").parts if path.endswith(".py") else ()
+        if parts and parts[-1] == "__init__":
+            parts = parts[:-1]
+        dotted = {".".join(parts[i:]) for i in range(len(parts))}
+        name = Path(path).name
+        out.append((path, dotted, (path, f'"{name}"', f"'{name}'")))
+    return out
+
+
+def pick(tests, changed, failures, times, budget, sweeps=SWEEPS):
+    """The modules of `tests` most likely to fail for this change, as [(module, why)], in this order until `budget`
+    seconds of module time (the last run's `times`; a module never timed counts as the median) are used: the changed
+    test modules themselves, the ones named after a changed file, the sweeps, the ones that failed for real in the
+    most recent checks (`failures`, from `history`), then the ones importing or naming a changed file, those touching
+    the most changed files first. One that doesn't fit is skipped for a smaller one after it."""
+    sources = {f.stem: f.read_text(errors="replace") for f in sorted(Path(tests).glob("test_*.py"))}
+    known = sorted(times.get(m) for m in sources if m in times)
+    median = known[len(known) // 2] if known else 10
+    ranked = []
+    files = touches(changed)
+    for path, _, _ in files:
+        p = Path(path)
+        if p.parent.name == Path(tests).name and p.stem in sources:
+            ranked.append((p.stem, "changed"))
+    for path, _, _ in files:
+        stem = Path(path).stem.lower().removeprefix("test_")
+        ranked += [(m, f"named after {path}") for m in sources if m == f"test_{stem}" or m.startswith(f"test_{stem}_")]
+    ranked += [(m, "sweep") for m in sweeps if m in sources]
+    often = sorted((m for m, n in failures.items() if n >= FREQUENT and m in sources), key=lambda m: -failures[m])
+    ranked += [(m, f"failed for real in {failures[m]} of the recent checks") for m in often]
+    hits = {}
+    for m, src in sources.items():
+        names = imported(src)
+        hit = [path for path, dotted, words in files
+               if names is None or names & dotted or any(w in src for w in words)]
+        if hit:
+            hits[m] = hit
+    for m in sorted(hits, key=lambda m: (-len(hits[m]), times.get(m, median), m)):
+        ranked.append((m, f"{'imports or names' if len(hits[m]) == 1 else 'touches'} {', '.join(hits[m][:2])}"
+                          + (f" and {len(hits[m]) - 2} more" if len(hits[m]) > 2 else "")))
+    chosen, used = [], 0.0
+    for m, why in ranked:
+        if m in (c for c, _ in chosen):
+            continue
+        t = times.get(m, median)
+        if chosen and used + t > budget:
+            continue
+        chosen.append((m, why))
+        used += t
+    return chosen
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--jobs", type=int, default=2)
@@ -270,6 +410,8 @@ def main(argv=None):
     p.add_argument("--fold", nargs="+", metavar="VERSION=LOG", help="print one rerun line for these pools' logs")
     p.add_argument("--log", type=Path, help="with --fold: the file that keeps one line a check")
     p.add_argument("--imports", nargs="+", metavar="DIR", help="only byte-compile and import these folders' modules")
+    p.add_argument("--quick", action="store_true", help="only the modules likely to fail; stop at the first that does")
+    p.add_argument("--reruns", type=Path, help="with --quick: the reruns log, for the modules that keep failing")
     p.add_argument("dir", nargs="?", default="tests")
     a = p.parse_args(argv)
     if a.imports:
@@ -293,12 +435,19 @@ def main(argv=None):
         except (OSError, ValueError, AttributeError, TypeError):
             pass
     todo = order([f.stem for f in tests.glob("test_*.py")], times)
+    chosen = None
+    if a.quick:
+        listed = os.environ.get("WINDVANE_CHANGED")
+        logs = Path(listed).parent.glob("*.log") if listed else ()  # the project's check logs sit beside the list
+        chosen = pick(tests, changed_files(tests.parent), history(a.reruns, logs), times, a.jobs * QUICK_WALL)
+        todo = order([m for m, _ in chosen], times)
     tmpbase = Path(os.environ.get("TMPDIR") or "/tmp")
     logdir = tmpbase / "logs"
     logdir.mkdir(parents=True, exist_ok=True)
     share = Share(a.share, a.check, a.jobs) if a.share and fcntl else None
     try:
-        return pool(a, tests, todo, logdir, tmpbase, share)
+        return quick(a, tests, todo, chosen, logdir, tmpbase, share) if a.quick else \
+            pool(a, tests, todo, logdir, tmpbase, share)
     finally:
         if share:
             share.close()
@@ -373,6 +522,105 @@ def pool(a, tests, todo, logdir, tmpbase, share):
         except OSError:
             pass
     return 1 if failed else 0
+
+
+KINDS = {"changed": "changed", "named": "named after a change", "sweep": "sweeps", "failed": "recent failures",
+         "imports": "importing or naming a change", "touches": "importing or naming a change"}
+
+
+def picked(chosen, total):
+    """One line on what the quick pass runs and why, by kind of reason, so a miss can be told from a bad pick."""
+    kinds = {}
+    for _, why in chosen:
+        kind = KINDS[why.split(" ", 1)[0]]
+        kinds[kind] = kinds.get(kind, 0) + 1
+    return f"quick: {len(chosen)} of {total} modules (" + ", ".join(f"{n} {k}" for k, n in kinds.items()) + ")"
+
+
+def quick(a, tests, todo, chosen, logdir, tmpbase, share):
+    """The pool over the picked modules only, stopping at the first real failure: when one fails, the others running
+    are stopped (and put back to run again) while it reruns alone; failing again ends the pass with its tail, passing
+    (it was only flaky beside them) lets the pool go on. The exit code."""
+    queue, results, outs, reruns, failing, added = list(todo), {}, {}, [], [], 0.0
+    halted, stopped, numbers = threading.Event(), set(), itertools.count(1)
+    start = time.monotonic()
+    total = len(list(tests.glob("test_*.py")))
+    print(picked(chosen, total), flush=True)
+
+    def worker(i):
+        while not halted.is_set():
+            while share and queue and i >= share.jobs_now() and not halted.is_set():
+                time.sleep(1)
+            with lock:
+                if not queue or halted.is_set():
+                    return
+                module, n = queue.pop(0), next(numbers)
+            log = logdir / f"{module}.log"
+            secs, code = run_module(module, n, tests, log, tmpbase)
+            out = log.read_text(errors="replace")
+            with lock:
+                if module in stopped:  # stopped for another's rerun: it runs again after
+                    stopped.discard(module)
+                    queue.insert(0, module)
+                    continue
+                results[module], outs[module] = (secs, code), out
+                if code == 0 and parse(out)[2]:
+                    continue
+                failing.append(module)
+                if not halted.is_set():
+                    halted.set()
+                    for other, proc in running.items():
+                        stopped.add(other)
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except OSError:
+                            pass
+
+    real = None
+    while queue and real is None:
+        threads = [threading.Thread(target=worker, args=(i,), daemon=True)
+                   for i in range(max(1, min(a.jobs, len(queue))))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        alone = time.monotonic()
+        for module in failing:
+            log = logdir / f"{module}.rerun.log"
+            secs, code = run_module(module, next(numbers), tests, log, tmpbase)
+            outs[module] = log.read_text(errors="replace")
+            results[module] = results[module][0], code
+            if code == 0 and parse(outs[module])[2]:
+                reruns.append(f"{module} passed ({MEANS['passed']})")
+            else:
+                reruns.append(f"{module} failed again ({MEANS['failed again']})")
+                real = module
+                break
+        added += time.monotonic() - alone
+        failing.clear()
+        halted.clear()
+        stopped.clear()
+
+    total_run, counts = 0, dict.fromkeys(KEYS, 0)
+    for module in results:
+        ran, c, _ = parse(outs[module])
+        total_run += ran or 0
+        for k, n in (c if ran is not None else {"errors": 1}).items():
+            counts[k] += n
+    with open(a.tails, "w") as f:
+        if real:
+            f.write(f"--- {real}:\n" + "".join(outs[real].splitlines(True)[-TAIL:]))
+    detail = ", ".join(f"{k}={counts[k]}" for k in KEYS if counts[k])
+    word = "FAILED" if real else "OK"
+    print(f"Ran {total_run} test{'' if total_run == 1 else 's'} in {time.monotonic() - start:.3f}s\n\n"
+          f"{word}{f' ({detail})' if detail else ''}")
+    slow = sorted(results, key=lambda m: -results[m][0])[:5]
+    print("slowest: " + ", ".join(f"{m} {results[m][0]:.0f}s" for m in slow))
+    if reruns:
+        print(f"rerun alone: {', '.join(reruns)}; added {added:.0f}s")
+    if real:
+        print(f"quick: stopped at {real} ({dict(chosen)[real]}), {len(results)} of {len(todo)} modules run")
+    return 1 if real else 0
 
 
 if __name__ == "__main__":
