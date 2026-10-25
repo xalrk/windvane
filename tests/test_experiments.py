@@ -4,6 +4,7 @@ its branch kept, with a `rejected:` line in QUEUE.md and a record in EXPERIMENTS
 is a fake job that records results for the commit it's given, as `windvane bench --ref` does."""
 import json
 import re
+import subprocess
 import sys
 import unittest
 from datetime import timedelta
@@ -64,7 +65,7 @@ class Experiment(unittest.TestCase):
         self.addCleanup(setattr, driver, "NAP", driver.NAP)
         driver.NAP = 0.05
 
-    def run_pilot(self, head, moved=None):
+    def run_pilot(self, head, moved=None, hours=6):
         """A run with the bench faked: each head run records `head`'s numbers (one dict a run); `moved`: numbers of a
         commit that lands on main while the head's first run goes, recorded when main's side is benched again."""
         def command(p, a):
@@ -83,7 +84,7 @@ class Experiment(unittest.TestCase):
         with mock.patch.object(experiment, "bench_command", command):
             pilot = driver.Pilot(self.p, args())
             pilot.sleep = lambda s: None
-            pilot.run(now() + timedelta(hours=6))  # the bench's 240 min fit
+            pilot.run(now() + timedelta(hours=hours))  # a bench run's 90 min fit
         return pilot
 
     def sessions(self, role):
@@ -197,9 +198,14 @@ class Experiment(unittest.TestCase):
         self.stop_after_first = False
         # the driver died while its second bench run went on: the job is still there when the next one starts
         script = "import time; time.sleep(1)\n" + FAKE
+        jobs.bg(self.p, "experiment-T-001", [sys.executable, "-c", "import time; time.sleep(1)"], self.p.root,
+                quiet=True)
+        followed = subprocess.run(["windvane", "-C", str(self.s.root), "await", "experiment-T-001"],
+                                  capture_output=True, text=True, timeout=60).stdout  # as the log line says
+        self.assertTrue(followed.startswith("DONE experiment-T-001 exit 0"), followed)
         jobs.bg(self.p, "experiment-T-001", [sys.executable, "-c", script, json.dumps([rec(
             self.head(), seed="tiny", **better)]), str(bench.results(self.p))], self.p.root, quiet=True)
-        pilot = self.run_pilot([better, better])
+        pilot = self.run_pilot([better, better], hours=1)  # under a run's 90 min: only the job left is waited on
         self.assertEqual(pilot.merged, ["T-001"])
         self.assertIn("T-001: its bench job from before a restart still runs; waiting for it", self.log())
         self.assertEqual((self.calls, self.sessions("worker"), self.sessions("review")), ([self.head()], 1, 1))

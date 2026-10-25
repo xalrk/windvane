@@ -88,7 +88,7 @@ class Experiments:
             self.log(f"{tid}: {branch} moved off its approved head {sha[:7]}: the worker takes it up again")
             return False
         self.log(f"{tid}: {branch} is still at its approved head {sha[:7]}: straight to its bench")
-        if self.bench_fits(tid, sha) and self.experiment(tid, branch, sha):
+        if self.experiment(tid, branch, sha):  # a job left running is waited for before any fit is asked
             self.integrate(tid, branch, sha)
         return True
 
