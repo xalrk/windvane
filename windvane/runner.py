@@ -13,7 +13,8 @@ from pathlib import Path
 
 from . import actions, scratch
 from .config import HOME, author, github_token, user_dir
-from .util import append_jsonl, last_match, load_json, recorded_stamp, same_process, save_json, stamp, started_at
+from .util import (append_jsonl, last_match, load_json, recorded_stamp, same_process, save_json, stamp, started_at,
+                   without_tmux)
 
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
@@ -54,8 +55,9 @@ def env(extra=None, p=None):
     CLAUDE_TMPDIR or CLAUDE_CODE_TMPDIR of a session the driver was started from (CLAUDECODE set): Claude Code keeps
     one it inherits as its sandbox's TMPDIR instead of making its own under the session's (scratch.sandbox_dir). A
     CLAUDE_CODE_TMPDIR from the user's own shell is their setting, and kept. Never a bg job's IN_JOB: a session
-    started from inside one isn't in it."""
-    out = scrub(os.environ, p.cfg["env"]["keep"] if p else ())
+    started from inside one isn't in it. Never TMUX or TMUX_PANE (`without_tmux`): a session's scratch tmux server
+    would be the driver's."""
+    out = scrub(without_tmux(os.environ), p.cfg["env"]["keep"] if p else ())
     out.pop(NO_AUTO, None)
     out.pop(IN_JOB, None)
     out.pop("CLAUDE_TMPDIR", None)

@@ -240,6 +240,12 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
 - **Credentials.** A session gets your environment without the variables named like credentials (`*TOKEN*`,
   `*SECRET*`, `*PASSWORD*`, `*_KEY`, `AWS_*`), except what Claude Code and `gh` log in with and what
   [`[env] keep`](configuration.md#env) names.
+- **Your tmux server.** A run started with `run --detach` lives in a tmux pane, but nothing it starts (sessions, the
+  project check, `setup` and `teardown`) gets `TMUX` or `TMUX_PANE`. tmux goes by `$TMUX` before `TMUX_TMPDIR`, so a
+  test or a critic that makes a scratch server and ends it with `tmux kill-server` would end yours instead, and every
+  detached run on it. One limit: a session of a run detached from a pane of a server on another socket (`tmux -L` or
+  `-S`) looks for the run's tmux session on the default socket, so its `windvane status` says `running` without
+  `in tmux`; `stop` and `periodic` go by the run's lock and still reach it.
 - **GitHub.** By default a session uses your `gh` login, and git your usual credentials: they reach every repository
   you can, private ones too. A [`[github] token_file`](configuration.md#github) with a fine-grained token for this
   repository alone narrows that for sessions and the driver alike; `windvane doctor` checks it can't see your other

@@ -167,7 +167,9 @@ ending in `_KEY`, or starting with `AWS_`. What Claude Code logs in with stays (
 `AWS_*` when `CLAUDE_CODE_USE_BEDROCK` is set), and so do gh's tokens (`GH_TOKEN`, `GITHUB_TOKEN` and their
 enterprise forms), though the commands a session runs in its Bash sandbox don't get Claude Code's
 ([safety](safety.md#whats-trusted-and-what-a-session-can-reach)). `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is dropped too:
-Claude Code turns auto mode off when it is set, and a headless session can then write nothing.
+Claude Code turns auto mode off when it is set, and a headless session can then write nothing. So are `TMUX` and
+`TMUX_PANE` from a run in tmux, for the project check and `setup`/`teardown` too: a scratch tmux server made there
+would otherwise be yours ([safety](safety.md#whats-trusted-and-what-a-session-can-reach)).
 
 | Key | Default | Meaning |
 |---|---|---|
