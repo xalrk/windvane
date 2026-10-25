@@ -58,6 +58,7 @@ if log:
         flags = [a for a in args if a not in (prompt, system)]
         f.write(json.dumps({"system": system[:40], "prompt": prompt, "deny": deny, "flags": flags,
                             "tool_ms": os.environ.get("BASH_DEFAULT_TIMEOUT_MS"),
+                            "max_turns": os.environ.get("CLAUDE_CODE_MAX_TURNS"), "cwd": os.getcwd(),
                             "ticket_env": os.environ.get("WINDVANE_TICKET"),
                             "tmpdir": os.environ.get("TMPDIR"),
                             # the gh the Bash tool would run: after the session's env file, as Claude Code does
@@ -253,6 +254,8 @@ elif system.startswith("# windvane critic"):
             f"CRITIC: {score}/10 {tid} fixes={fixes} good")
     if os.environ.get("FAKE_CRITIC_TEXT"):  # a whole critique, `{tid}` filled in
         text = os.environ["FAKE_CRITIC_TEXT"].replace("{tid}", tid)
+    if os.environ.get("FAKE_CRITIC_LIGHT") and "## Depth: light" in prompt:  # its reply as a light read
+        text = os.environ["FAKE_CRITIC_LIGHT"].replace("{tid}", tid)
     if os.environ.get("FAKE_CRITIC_READS"):  # "<check> <words>": yes only when the prompt's diff adds those words
         check, words = os.environ["FAKE_CRITIC_READS"].split(" ", 1)
         seen = prompt.split("## What users read, as changed\n", 1)[1:]

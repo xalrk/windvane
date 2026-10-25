@@ -10,9 +10,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import driver  # noqa: E402
+from windvane import critic, driver  # noqa: E402
 from windvane.config import Project  # noqa: E402
-from windvane.util import now  # noqa: E402
+from windvane.util import now, read_jsonl  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_parallel import args  # noqa: E402
 
@@ -46,6 +46,9 @@ class Budgets(unittest.TestCase):
         pilot.run(now() + timedelta(minutes=40))
         return pilot
 
+    def sent_back(self, pilot):
+        return [r["by"] for r in read_jsonl(pilot.p.state / critic.SENT_BACK) if r["ticket"] == "T-001"]
+
     def failure(self):
         return next(l for l in self.lines if "T-001: FAILED" in l)
 
@@ -54,6 +57,7 @@ class Budgets(unittest.TestCase):
         pilot = self.run_pilot()
         self.assertEqual((pilot.merged, pilot.failed), (["T-001"], []))
         self.assertEqual(pilot.bounces["T-001"], {"check": 2})
+        self.assertEqual(self.sent_back(pilot), ["check", "check"], "kept for the critic's depth (T-261)")
 
     def test_a_third_red_check_sets_it_aside_naming_check_retries(self):
         self.config(check=RED_TWICE, check_retries=1)
@@ -83,6 +87,7 @@ class Budgets(unittest.TestCase):
         self.assertEqual(pilot.failed, ["T-001"])
         self.assertIn("the critic sent it back 2 times; `[critic] revisions` = 0 allows 1 (one more for a READY "
                       "without the evidence pack):", self.failure())
+        self.assertEqual(self.sent_back(pilot), [], "a missing pack is no fault in the change")
 
     def test_review_changes_name_review_rounds(self):
         os.environ["FAKE_REVIEW"] = "CHANGES"
@@ -91,6 +96,7 @@ class Budgets(unittest.TestCase):
         self.assertEqual(pilot.failed, ["T-001"])
         self.assertIn("the reviewer asked for changes 1 time, the most `[autopilot] review_rounds` = 1 allows",
                       self.failure())
+        self.assertEqual(self.sent_back(pilot), ["reviewer"])
 
 
 if __name__ == "__main__":

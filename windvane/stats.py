@@ -611,29 +611,29 @@ def misses(p, by, since):
 
 
 def depths(p, by, since):
-    """The critic's cost and misses by depth (`critic.depth`): a ticket counts at its first verdict's depth, the one
-    `auto` picked from its size and risk, with its critic sessions' weighted tokens from the ledger, how many of its
-    light reads asked for the trial, and the reviews after a pass at each depth that still asked for changes.
-    Nothing until a verdict records its depth."""
-    first = {t: rs[0]["depth"] for t, rs in by.items() if rs[0].get("depth")}
-    if not first:
+    """The critic's cost and misses by depth (`critic.depth`): a ticket counts at the depth `auto` started it at (a
+    light read that asked for the trial counts as light), with its critic sessions' weighted tokens from the ledger,
+    then the reviews after a pass that still asked for changes, by the depth of the verdict that passed it. Nothing
+    until a verdict records its depth."""
+    began = {t: "light" if rs[0].get("asked_trial") else rs[0]["depth"] for t, rs in by.items() if rs[0].get("depth")}
+    if not began:
         return
     cost = Counter()
     for row in read_jsonl(p.state / "ledger.jsonl"):
-        if row.get("role") == "critic" and row.get("ticket") in first and row.get("at", "") >= since:
+        if row.get("role") == "critic" and row.get("ticket") in began and row.get("at", "") >= since:
             cost[row["ticket"]] += weighted(row)
-    seen = Counter(v["depth"] for _, v in reviewed(p, by, since) if v.get("depth"))
-    missed = Counter(v["depth"] for m, v in reviewed(p, by, since) if v.get("depth") and m[3] == "changes")
     parts = []
     for d in ("light", "full"):
-        ts = [t for t, v in first.items() if v == d]
-        if not ts:
-            continue
-        asked = sum(any(r.get("asked_trial") for r in by[t]) for t in ts)
-        parts.append(f"{d} {plural(len(ts), 'ticket')}, {sum(cost[t] for t in ts) / len(ts) / 1000:.0f}k weighted "
-                     f"critic tokens each" + (f", {asked} asked for the trial" if d == "light" else "")
-                     + (f", missed {missed[d]} of {plural(seen[d], 'review')}" if seen[d] else ""))
-    note("by depth (a ticket at its first verdict's): " + "; ".join(parts))
+        if ts := [t for t, v in began.items() if v == d]:
+            asked = sum(any(r.get("asked_trial") for r in by[t]) for t in ts)
+            parts.append(f"{d} {plural(len(ts), 'ticket')}, {sum(cost[t] for t in ts) / len(ts) / 1000:.0f}k"
+                         + " weighted critic tokens" * (not parts) + " each"
+                         + f", {asked} asked for the trial" * (d == "light"))
+    seen = [(v["depth"], m[3] == "changes") for m, v in reviewed(p, by, since) if v.get("depth")]
+    missed = [f"{d} {sum(x for e, x in seen if e == d)} of {sum(e == d for e, _ in seen)}" for d in ("light", "full")
+              if any(e == d for e, _ in seen)]
+    note("by depth (a ticket by the depth it started at): " + "; ".join(parts) + "."
+         + (f" Reviews after a pass that asked for changes: {', '.join(missed)}" if missed else ""))
 
 
 def undecided(recs, lad, bar, least=5):
