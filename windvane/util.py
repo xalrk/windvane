@@ -68,12 +68,12 @@ def no_prompts(cwd, env=None):
     return env
 
 
-def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1):
+def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1, env=None):
     """Run shell `cmd` with no input in a process group of its own until it ends, `until` passes or `stop()` gives a
     reason; then the whole group is killed (a build's own children too). (exit code, why it was stopped or "", its
     last `keep` lines); `echo` shows its output as it comes, so a long `npm ci` doesn't look stuck. It runs without
     the driver's tmux pane (`without_tmux`): a setup's install scripts come from the repo, and a teardown that stops a
-    helper in tmux finds it on the default server, where a pane-less command looks."""
+    helper in tmux finds it on the default server, where a pane-less command looks. `env` adds to its environment."""
     lines = deque(maxlen=keep)
 
     def read(out):
@@ -83,7 +83,7 @@ def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1):
             lines.append(line.rstrip())
     with subprocess.Popen(cmd, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True,
-                          env=without_tmux(os.environ)) as proc:
+                          env={**without_tmux(os.environ), **(env or {})}) as proc:
         reader = threading.Thread(target=read, args=(proc.stdout,), daemon=True)
         reader.start()
         why = ""

@@ -56,7 +56,10 @@ DEFAULTS = {
                "text": [],  # globs of the files users read beyond Markdown: the critic reads their diff
                "depth": "auto",  # "light" (a read of the diff), "full" (the trial), or "auto": by size, risk, send-backs
                "light_lines": 250,  # lines changed outside DIR up to which `auto` reads lightly
-               "risky": []},  # globs of the files whose change always gets the full trial under `auto`
+               "risky": [],  # globs of the files whose change always gets the full trial under `auto`
+               "show": "",  # a command that leaves images of the project's output in $WINDVANE_SHOW_DIR, per tree
+               "show_heavy": False,  # run `show` under `windvane heavy` (its wait counts in show_minutes)
+               "show_minutes": 10},  # `show`'s time, a heavy wait included: then the critic judges without it
     # parallel: "auto" starts another ticket whenever one fits beside the running ones (Touches) and in the usage
     # window, up to max_parallel; a number caps the slots at that
     "autopilot": {"parallel": "auto", "max_parallel": 4, "cap": 75, "week_cap": 95, "ticket_hours": 3,
@@ -263,6 +266,19 @@ def trial_minutes(v):
     return v
 
 
+def critic_show(c):
+    """`[critic] show`, `show_heavy` and `show_minutes`, checked at once: a list or a number for the command would
+    run as something else entirely."""
+    if not isinstance(c["show"], str):
+        raise SystemExit(f"windvane: [critic] show = {c['show']!r} in config.toml: use one shell command as a string "
+                         "(\"\": none)")
+    if not isinstance(c["show_heavy"], bool):
+        raise SystemExit(f"windvane: [critic] show_heavy = {c['show_heavy']!r} in config.toml: use true or false")
+    v = c["show_minutes"]
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+        raise SystemExit(f"windvane: [critic] show_minutes = {v!r} in config.toml: use a number of minutes over 0")
+
+
 def actions_budget(c):
     """`actions_minutes` and `actions_cap`, checked at once: a typo here would let `windvane ci` spend unchecked."""
     m, cap = c["actions_minutes"], c["actions_cap"]
@@ -365,6 +381,7 @@ class Project:
         critic_text(self.critic["text"])
         critic_depth(self.critic)
         trial_minutes(self.critic["trial_minutes"])
+        critic_show(self.critic)
         self.ap = c["autopilot"]
         setup_minutes(c["setup_minutes"])
         setup_minutes(c["teardown_minutes"], key="teardown_minutes")

@@ -18,20 +18,24 @@ notes.
 """
 import contextlib
 import hashlib
+import json
 import os
 import re
+import shlex
+import shutil
 import statistics
 import subprocess
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from pathlib import Path
 
-from . import net, privacy, renumber, worktree
-from .config import DIR, HOME, user_dir
+from . import heavy, net, privacy, renumber, worktree
+from .config import DIR, HOME, exe, user_dir
 from .phone import cut
 from .runner import plain_error, run_claude
-from .util import append_jsonl, git, gout, last_match, load_json, log, read_jsonl
+from .util import append_jsonl, git, gout, last_match, load_json, log, now, read_jsonl, run_limited
 
 OLD_RE = re.compile(r"CRITIC: (\d+(?:\.\d+)?)/10 (\S+) fixes=(\d+)[ \t]*(.*)")
 CRITIC_RE = re.compile(r"CRITIC: (\S+) ((?:[\w-]+=(?:\d+(?:\.\d+)?|-)[ \t]+)+?)fixes=(\d+)[ \t]*(.*)")
@@ -108,6 +112,10 @@ NOTES_CAP = 4000  # the characters of notes.md the critic reads
 TEXT_CAP = 12000  # the characters of changed user-facing text the critic's prompt holds
 TEXT_SUFFIXES = (".md", ".markdown", ".rst")  # read by users by default, outside DIR: README, docs, CHANGELOG
 HUNK_RE = re.compile(r"^(?=@@ )", re.M)
+IMAGES = (".png", ".jpg", ".jpeg", ".webp")
+SHOW_ENV = "WINDVANE_SHOW_DIR"  # the empty folder a `[critic] show` command leaves its images in
+SHOW_IMAGES = 6  # the most of them the critic is shown
+SHOW_LINES = 15  # the last lines of its output the critic reads
 
 
 def pack_dir(p, tid):
@@ -118,7 +126,7 @@ def pack(p, tid):
     """(notes or None, [image paths], user-facing?)."""
     d = pack_dir(p, tid)
     notes = capped_notes((d / "notes.md").read_text()) if (d / "notes.md").is_file() else None
-    images = sorted(x for x in d.glob("*") if x.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"))[:4]
+    images = sorted(x for x in d.glob("*") if x.suffix.lower() in IMAGES)[:4]
     facing = not re.match(r"\s*(user|player)-facing:\s*no", notes or "", re.I)
     return notes, images, facing
 
@@ -738,6 +746,7 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
             f"## The ticket\n{ticket[:6000]}",
             f"## The worker's pack notes\n{notes}",
             "## Pack images (Read them)\n" + "\n".join(map(str, images)) if images else "",
+            shows[0],
             f"## Files the change touches\n{stat}",
             (f"## What users read, as changed\n{said}" if deep == "full" else f"## The change\n{said}") if said else "",
             "## Your earlier critiques of this ticket, oldest first\n" + "\n---\n".join(earlier) if earlier else "",
@@ -746,14 +755,20 @@ def judge(p, tid, cwd, rev="HEAD", usage=None, stop_if=None, retry=None):
         ]))
     deep, why = depth(p, tid, cwd, rev)
     told = {"depth": deep, "depth_why": cut(why)}
+    shows = ["", {}]  # `look`'s prompt part and record, once per judge: a light read's trial reuses them
     if deep == "light":
+        shows[:] = look(p, tid, cwd, rev, None, "", stop_if)
+        told |= shows[1]
         got = critique(p, tid, cwd, rev, prompt(deep, why), n, lad, usage, stop_if, retry, None, {}, "", told, prior)
         if got[0] != TRIAL:
             return got
         why = f"the light read asked for it: {got[1]}"
-        told = {"depth": "full", "depth_why": cut(why), "asked_trial": cut(got[1])}
+        told = {"depth": "full", "depth_why": cut(why), "asked_trial": cut(got[1]), **shows[1]}
         sent_back(p, tid, ASKED)  # before the trial: one that dies or gives no verdict is no way back to a light pass
     with tried(p, tid, cwd, rev, stop_if) as (tree, git_env, note):
+        if deep != "light":
+            shows[:] = look(p, tid, cwd, rev, tree, note, stop_if)
+            told |= shows[1]
         return critique(p, tid, cwd, rev, prompt("full", why), n, lad, usage, stop_if, retry, tree, git_env, note,
                         told, prior)
 
@@ -965,6 +980,82 @@ def trial_part(p, cwd, rev, tree, note):
     return (f"## Your copy\nYou work in a throwaway copy of the ticket's head ({gout(cwd, 'rev-parse', '--short', rev)}"
             f"), removed after you; {note or 'set up as the project sets up a fresh tree'}. You have "
             f"{p.critic['trial_minutes']:g} minutes for commands: then you're stopped and answer on what you saw.")
+
+
+def show_dir(p, tid, cwd, rev):
+    """Where `show`'s results for `rev`'s tree are kept, in the ticket's pack (pruned with it): a re-critique of the
+    same tree, after a revision of only the pack, reuses them."""
+    return pack_dir(p, tid) / f"show-{gout(cwd, 'rev-parse', f'{rev}^{{tree}}')[:12]}"
+
+
+def look(p, tid, cwd, rev, tree, note, stop_if=None):
+    """(the prompt's part on `[critic] show`, what the verdict records of it), both empty with no `show`. Kept from an
+    earlier critique of this tree, else run in the critic's copy `tree`, or in a copy of its own when the critic has
+    none (a light read, `trial_minutes = 0`): the driver runs it, never the critic's session, so it costs no turns."""
+    if not p.critic["show"]:
+        return "", {}
+    d = show_dir(p, tid, cwd, rev)
+    rec = load_json(d / "show.json", None)
+    if rec and rec.get("cmd") == p.critic["show"]:
+        return show_part(p, d, rec), {"show": "reused", **({"show_failed": rec["failed"]} if rec["failed"] else {})}
+    if tree is None and note:  # the critic's copy couldn't be made: neither can show's
+        rec = {"failed": cut(note)}
+    elif tree is None:
+        with worktree.trial(p, cwd, rev, tid, stop=stop_if or (lambda: "")) as (copy, _, why):
+            rec = show(p, tid, d, copy, stop_if) if copy else {"failed": cut(why)}
+    else:
+        rec = show(p, tid, d, tree, stop_if)
+    if rec["failed"]:
+        log(p, f"{tid}: the critic's show failed ({rec['failed']}): it judges on the pack")
+    return show_part(p, d, rec), {"show": "failed" if rec["failed"] else "ran", "show_minutes": rec.get("minutes", 0),
+                                  **({"show_failed": rec["failed"]} if rec["failed"] else {})}
+
+
+def show(p, tid, d, tree, stop_if=None):
+    """Runs `[critic] show` in `tree` with SHOW_ENV an empty folder in `d`, outside every worktree, and keeps the first
+    SHOW_IMAGES images it leaves there and its last lines: the project knows how to show its output (a render, a
+    recorded smoke run), so the critic judges what it really makes, not only a worker's screenshots. Under
+    `show_heavy` it queues for the machine like any heavy job, the wait within `show_minutes`. A record is kept for
+    the tree unless a stop cut it short (a timeout or a failure would come again)."""
+    cmd, mins = p.critic["show"], p.critic["show_minutes"]
+    for old in pack_dir(p, tid).glob("show-*"):  # an earlier tree's: only the head's is ever shown
+        shutil.rmtree(old, ignore_errors=True)
+    out = d / "images"
+    out.mkdir(parents=True)
+    env = {SHOW_ENV: str(out)}
+    run = cmd
+    if p.critic["show_heavy"]:
+        run = shlex.join([*exe(), "heavy", "--", "sh", "-c", cmd])
+        env[heavy.STOP_ENV] = str(p.state / "STOP")  # a stop ends its wait for the machine
+    t0 = time.time()
+    code, why, lines = run_limited(run, tree, now() + timedelta(minutes=mins), stop_if or (lambda: ""),
+                                   keep=SHOW_LINES, env=env)
+    minutes = round((time.time() - t0) / 60, 2)
+    last = f": {cut(lines[-1])}" if lines else ""
+    failed = (f"it ran past show_minutes = {mins:g}" if why == "out of time" else f"stopped ({why})" if why else
+              f"it waited past the machine's heavy_wait{last}" if p.critic["show_heavy"] and code == heavy.TIMED_OUT
+              else f"exit {code}{last}" if code else "")
+    images = sorted(f for f in out.rglob("*") if f.is_file() and f.suffix.lower() in IMAGES)[:SHOW_IMAGES]
+    for f in out.rglob("*"):
+        if f.is_file() and f not in images:
+            f.unlink()
+    rec = {"cmd": cmd, "failed": failed, "code": code, "minutes": minutes, "lines": [clip(x, 300) for x in lines],
+           "images": [str(f.relative_to(d)) for f in images]}
+    if not why or why == "out of time":
+        (d / "show.json").write_text(json.dumps(rec) + "\n")
+    return rec
+
+
+def show_part(p, d, rec):
+    """The prompt's section on what `show` made, or why it made nothing: a failed show is no verdict on the ticket."""
+    if rec["failed"]:
+        return f"## The project's show\nshow failed: {rec['failed']}. That says nothing of the ticket: judge on the pack."
+    images = [str(d / f) for f in rec["images"]]
+    text = "\n".join(rec["lines"])
+    fence = "`" * max(3, max(map(len, re.findall(r"`+", text)), default=0) + 1)
+    return "\n".join([f"## What the project's show made (`{rec['cmd']}`, run by the driver on this head"
+                      + ("; Read the images)" if images else ")"), *images,
+                      f"Its last lines of output:\n{fence}text\n{text}\n{fence}" if text else "It printed nothing."])
 
 
 def boxed(stop_if, minutes):
