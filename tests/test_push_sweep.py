@@ -23,7 +23,7 @@ FIX = ("Split the ticket into one ticket for the driver and one for its prompts,
 # Sites whose push says none of the free text, by design: what they push is fixed words, times, counts and paths
 NO_TEXT = {"dollar_budget", "paused", "started_and_stopped:windvane started", "killed", "tmp_full", "held_for_good",
            "secret_aside", "kept_secret", "push_refused",  # a secret's push: a kind and a place, never text
-           "not_taken_up",
+           "not_taken_up", "protected_aside", "kept_protected",  # protected paths and the commands to land by hand
            "scale_warned"}  # a scale's id and path
 
 
