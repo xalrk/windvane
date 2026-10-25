@@ -65,6 +65,14 @@ Options of `windvane run`:
 | `windvane mode` | How a design question is handled right now: asked, or built provisionally (quiet time). |
 | `windvane quiet` | Show the quiet times files (yours and the project's) and what they mean now. See [Quiet times](configuration.md#quiet-times). |
 
+## Measuring windvane
+
+| Command | What it does |
+|---|---|
+| `windvane bench [--ref HEAD] [--hours 4] [--full\|--small] [--cap N] [--week-cap N]` | Build the seed projects in `bench/` with the real pipeline and score each on acceptance tests no session sees. Per seed: a fresh repo with a local bare remote (`forge = "git"`) and a state dir of its own under `~/.local/state/windvane/_bench/<run id>/<seed>/`, run with `windvane run` for up to `--hours`, the seeds side by side, with the windvane of `--ref` (a detached worktree of this checkout, removed after) and no phone, `gh` or GitHub token; every product question gets its recommendation built. Then the hidden tests run in a scratch clone of each seed's final `main`. Full is every seed and ticket; small (two seeds, three tickets each, the fourth parked) when the latest weekly usage is over `machine.toml`'s `bench_week_small` (75); the first line says which and why (`bench: small (weekly usage 81% > 75%)`). Ends with a table per seed: tickets merged, failed and parked, hidden tests passed per ticket, weighted tokens, API $ and minutes; the sessions are denied the hidden tests by path, and a seed whose run streams name one anyway is marked `contaminated` and not counted. Each seed's record goes to `bench.jsonl` in this project's state dir. A Ctrl-C, SIGTERM or SIGHUP ends every seed run (and its sessions), removes the worktree and says where the logs are; a full run takes hours and spends real usage. |
+| `windvane bench --dry-run` | The plan (size and why, the seeds and their tickets) and what earlier runs of that size cost, without running anything. |
+| `windvane bench --last` | The latest run's table again. |
+
 ## Machine-heavy work
 
 | Command | What it does |

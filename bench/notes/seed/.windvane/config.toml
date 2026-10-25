@@ -1,0 +1,8 @@
+name = "notes"
+forge = "git"
+check = "python3 -m unittest discover -s tests"
+goal = "A small notes web app: a page and a JSON API to write, read, find and delete notes kept in a file."
+
+[critic]
+enabled = true
+pass = 8

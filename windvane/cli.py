@@ -15,8 +15,8 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import (doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, publiccheck, questions,
-               requests, schedule, scratch, util, watch)
+from . import (bench, doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, publiccheck,
+               questions, requests, schedule, scratch, util, watch)
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
@@ -28,7 +28,7 @@ from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 
 
 # commands the phone and the desk use to look and stop: a token file that can't be read mustn't block them
-LOCAL = {"stop", "status", "overview", "stats", "watch", "deadline", "retry", "quiet", "mode", "await"}
+LOCAL = {"stop", "status", "overview", "stats", "watch", "deadline", "retry", "quiet", "mode", "await", "bench"}
 STOP_WAIT = 90  # seconds `stop --now` waits for the run to end: a 5 s poll, then up to 60 s for SIGTERM to work
 
 
@@ -943,6 +943,17 @@ def parser():
     s.add_argument("--periodic", action="store_true", help="the scores [[periodic]] sessions gave, oldest first")
     s.add_argument("--last", type=int, default=10, help="with --critic: over the last N tickets (default 10)")
     s.add_argument("--since", help="with --critic: only verdicts at or after a date (YYYY-MM-DD) or a commit")
+    s = sub.add_parser("bench", help="build the bench/ seed projects with the real pipeline and score them on "
+                       "tests no session sees")
+    s.add_argument("--ref", default="HEAD", help="the windvane commit to measure (default: HEAD)")
+    s.add_argument("--hours", type=float, default=4, help="each seed's run stops after this long (default 4)")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--full", action="store_true", help="every seed and ticket, whatever the weekly usage")
+    g.add_argument("--small", action="store_true", help="two seeds, three tickets each")
+    s.add_argument("--cap", type=float, help="the seed runs' 5-hour cap %% (default: this project's)")
+    s.add_argument("--week-cap", type=float, help="the seed runs' weekly cap %% (default: this project's)")
+    s.add_argument("--dry-run", action="store_true", help="print the plan and what earlier runs that size cost")
+    s.add_argument("--last", action="store_true", help="print the latest run's results again")
     sub.add_parser("mode", help="how a design question is handled right now")
     sub.add_parser("quiet", help="show the quiet times (yours for every project, and this project's)")
     s = sub.add_parser("watch", help="follow the running sessions live (costs no tokens)")
@@ -1019,4 +1030,8 @@ def main(argv=None):
         return
     if a.cmd == "watch":
         return watch.main(p, a.n, a.o)
+    if a.cmd == "bench":
+        a.cap, a.week_cap = (p.ap["cap"] if a.cap is None else a.cap), (p.ap["week_cap"] if a.week_cap is None
+                                                                       else a.week_cap)
+        return sys.exit(bench.main(a, p))
     return globals()[f"cmd_{a.cmd}"](a, p)

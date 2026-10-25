@@ -1,0 +1,8 @@
+name = "ledger"
+forge = "git"
+check = "python3 -m unittest discover -s tests"
+goal = "A small, dependable command-line ledger: add, list, sum and remove entries kept in a JSON file."
+
+[critic]
+enabled = true
+pass = 8

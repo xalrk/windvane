@@ -237,6 +237,17 @@ tickets (first and final scores, revisions, how many sit exactly on the pass mar
 last 10 tickets, on first heads and on any head; it and `overview` name a check `yes` on every ticket ("sharpen
 it") and one never `yes` ("lower it"). Each verdict's answers are kept in `critic.jsonl`.
 
+**The benchmark.** The critic's scale says whether one ticket is good enough to merge, and revisions stop once it
+says yes, so its scores can't tell a better windvane from a worse one. `windvane bench` measures what windvane is
+for, the projects it builds: small seed projects (a command-line tool, a web app, a text game) in `bench/`, each
+built by the real pipeline from its first tickets, then scored on acceptance tests that check only what the
+tickets promise, with what each merged ticket cost. The tests are held out: every role's sessions are denied them by
+path (reading anything under `bench/` or the reference solutions, and any shell command that names a seed's hidden
+folder), they are copied only into a scratch clone of the final `main`, and since a deny rule matches paths, not
+intent, every session's stream is searched afterwards: a seed whose streams name a hidden test file or folder is
+reported as contaminated and not counted. A score the builders could see would
+be trained to; one they never see shows whether a prompt or pipeline change made the built project better.
+
 ## Questions and quiet times
 
 Workers make engineering calls themselves and say why in the pull request. **Product calls** (what users see or
@@ -289,6 +300,7 @@ On this machine only, under `~/.local/state/windvane/<name>/`:
 | `autopilot.log` | the driver's log, one line per event |
 | `runs/` | each session's full stream, which `windvane watch` reads |
 | `ledger.jsonl` | tokens, turns and minutes per session, which `windvane stats` reads |
+| `bench.jsonl` | `windvane bench`'s results, one record per seed per run (the seed runs themselves live under `~/.local/state/windvane/_bench/`) |
 | `critic.jsonl`, `critic/<ID>/` | the critic's verdicts, and each ticket's evidence pack |
 | `quiet.txt` | quiet times |
 | `held.json`, `held_why.json`, `closed_plans.json` | changes kept on a local branch to land when pushed again, and why their push was refused; plan branches whose PRs were closed |

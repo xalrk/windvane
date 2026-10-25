@@ -113,6 +113,8 @@ def state_dir():
 
 
 def conf():
+    if os.environ.get("WINDVANE_NO_PHONE"):  # a `windvane bench` seed's run: nobody to push to or ask
+        return {}
     try:
         return tomllib.loads(conf_path().read_text())
     except (OSError, ValueError):
