@@ -11,7 +11,7 @@
 # version as `python3` too, as CI's setup-python does, so the `windvane` and tools the tests start run on it, and a
 # TMPDIR inside this script's own temp dir, so even a killed or leaky run leaves nothing in /tmp (a windvane-check-*
 # dir a SIGKILL leaves, the cleaner removes). Bash and the Pythons only: nothing to install.
-# Usage: tools/check_pythons.sh [--all] [unittest args]
+# Usage: tools/check_pythons.sh [--all] [unittest args]   (--all may come anywhere)
 #   (none: every tests/test_*.py pooled on the oldest, imports on the newest; --all: pooled on every version;
 #    with args: one unittest run per version)
 # CHECK_JOBS sets K; by default the CPUs (shared out among the versions with --all), at least 2 each: the tests' own
@@ -22,9 +22,10 @@
 # each pooled check adds a line to the cache's reruns.log (its newest 500 kept), so whether reruns get rarer shows
 # over weeks.
 cd "$(dirname "$0")/.." || exit 2
-all=""
-[ "$1" = --all ] && { all=1; shift; }
-args=("$@")
+all="" args=()
+for a in "$@"; do
+    if [ "$a" = --all ]; then all=1; else args+=("$a"); fi
+done
 [ ${#args[@]} -eq 0 ] || all=1
 VERSIONS="3.11 3.12 3.13 3.14"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/windvane-check-XXXXXX") || exit 2

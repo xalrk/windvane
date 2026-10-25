@@ -267,6 +267,27 @@ class CheckPool(unittest.TestCase):
         self.assertEqual(max(sum(1 for s, e in after if s <= t < e) for t, _ in after), 4, spans)
         self.assertEqual(list(self.markers.iterdir()), [], "the killed check's marker was swept")
 
+    def test_a_check_stopped_mid_run_leaves_nothing_and_the_next_one_runs_whole(self):
+        self.sleepers(12)
+        self.seen = self.root / "seen"
+        proc = self.start_script(jobs=None)
+        for _ in range(100):  # its pool is running modules
+            if any(self.seen.iterdir()):
+                break
+            time.sleep(0.05)
+        proc.terminate()
+        proc.communicate(timeout=30)
+        self.assertEqual(list((self.root / "tmp").iterdir()), [], "its temp dir went with it")
+        self.assertEqual(list(self.markers.iterdir()), [], "and its marker")
+        for f in self.seen.iterdir():
+            f.unlink()
+        out, code = self.run_script(jobs=None)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("shared:", out, "no share kept for the stopped check")
+        self.assertRegex(out, rf"python{V}: Ran 12 tests in [\d.]+s OK\n")
+        self.assertIn(f"python{V} imports: Ran 12 imports in ", out)
+        self.assertEqual(len(list(self.seen.iterdir())), 12, out)
+
     def test_explicit_arguments_run_as_one_unittest_call(self):
         out, code = self.run_script("discover", "-s", "tests", "-q")
         self.assertEqual(code, 1, out)

@@ -129,6 +129,11 @@ class CheckPythons(unittest.TestCase):
             self.assertRegex(d, rf"^{re.escape(str(self.tmp))}/windvane-check-\w+/tmp3\.1[12]$")
         self.assertEqual(list(self.tmp.iterdir()), [])
 
+    def test_all_may_come_after_unittest_arguments(self):
+        out, code = self.run_script("tests.test_units", "--all", python3_11="FAILED")
+        self.assertEqual(code, 1)
+        self.assertIn("args: -m unittest tests.test_units\n", out)
+
     def test_arguments_go_to_unittest_on_every_version(self):
         out, code = self.run_script("tests.test_units", python3_11="FAILED", python3_14="OK")
         self.assertEqual(code, 1)
