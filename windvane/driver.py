@@ -338,13 +338,18 @@ def land_by_hand(p, branch):
     return merge_words(p.cfg["forge"], p.remote, branch, p.main)
 
 
+def on_main(root, upstream, sha):
+    """Whether `upstream` has `sha` (a held head landed by hand)."""
+    return subprocess.run(["git", "merge-base", "--is-ancestor", sha, upstream], cwd=root,
+                          capture_output=True).returncode == 0
+
+
 def protected_lines(p):
     """`windvane status`'s lines on the tickets held for changing protected paths, read only: one main has since
     taken (landed by hand) isn't listed."""
     root, out = p.main_root(), []
     for tid, g in sorted(load_json(p.state / "state.json", {}).get("protected", {}).items()):
-        if subprocess.run(["git", "merge-base", "--is-ancestor", g["sha"], p.upstream], cwd=root,
-                          capture_output=True).returncode == 0:
+        if on_main(root, p.upstream, g["sha"]):
             continue
         out.append(f"held for you: {tid} ({g['branch']}) changes protected paths ({', '.join(g['paths'])}); "
                    f"if it's right, {land_by_hand(p, g['branch'])}")
@@ -819,13 +824,15 @@ class Pilot(Desk, Periodic):
 
     def protected_unchanged(self):
         """Hold again, without a session, each ticket `protected_aside` held whose branch still changes protected
-        paths; one landed by hand, deleted, or rid of those changes goes back to the queue as usual."""
+        paths; one landed by hand (main has its head: the queue counts it merged), deleted, or rid of those changes
+        is forgotten, so it goes back to the queue as usual."""
         root = self.p.main_root()
         for tid, g in list(self.held_protected.items()):
             if tid in self.skip:
                 continue
             head = gout(root, "rev-parse", "-q", "--verify", f"{self.p.remote}/{g['branch']}")
-            paths = head and (g["paths"] if head == g["sha"] else self.protected_paths(head))
+            landed = on_main(root, self.p.upstream, head or g["sha"])
+            paths = head and not landed and (g["paths"] if head == g["sha"] else self.protected_paths(head))
             if paths:
                 with self.lock:
                     self.held_protected[tid] = {**g, "sha": head, "paths": paths}
@@ -834,8 +841,9 @@ class Pilot(Desk, Periodic):
                 continue
             with self.lock:
                 self.held_protected.pop(tid, None)
-            self.log(f"{tid}: {g['branch']} {'no longer changes protected paths' if head else 'is gone'}; back in "
-                     "the queue")
+            self.log(f"{tid}: {g['branch']} " + (f"was landed by hand; {self.p.main} has it" if landed else
+                                                 f"{'no longer changes protected paths' if head else 'is gone'}; "
+                                                 "back in the queue"))
 
     def critic_retry(self, tid):
         """`critic.judge`'s retry for the driver's own critic run: the same backoff as any dead session, but spent
