@@ -229,13 +229,10 @@ def cmd_stop(a, p):
     killed = jobs.end_kept(p, why="windvane stop")  # a run's own end would too, but one past its stop has no run
     if killed:
         print(f"{p.display}: killed kept jobs: {', '.join(killed)}")
-    if a.if_running and not running(p):
-        print(f"{p.display}: autopilot isn't running")
-        return
+    if not running(p):  # a waiting schedule is running (calling it off is real); else a STOP stops nothing
+        return print(f"{p.display}: autopilot isn't running" + ("" if a.if_running else "; nothing to stop"))
     p.state.mkdir(parents=True, exist_ok=True)
     stop_now = getattr(a, "now", False)  # callers that predate --now pass a Namespace without it
-    if stop_now and not running(p):
-        return print(f"{p.display}: autopilot isn't running")
     with schedule.turn(p):  # a window starting meanwhile: nothing starts, or it's running and its driver keeps STOP
         st = schedule.state(p)
         if st:
@@ -283,7 +280,7 @@ def cmd_retry(a, p):
     lets it go, as `windvane queue` says it."""
     tid = p.norm(a.ticket) or sys.exit(f"windvane retry: {a.ticket} isn't a ticket id")
     if not driver.locked(p):
-        return print(f"{p.display}: autopilot isn't running; the next `windvane run` takes {tid} up anyway")
+        return print(f"{p.display}: autopilot isn't running; " + idle_retry(Queue(p), tid))
     st = load_json(p.state / "state.json", {})
     if tid not in st.get("failed", []) and tid not in st.get("aside", {}):
         why = Queue(p).release(tid, questions.tickets(st.get("questions", {})), st)
@@ -292,6 +289,18 @@ def cmd_retry(a, p):
     with open(p.state / driver.RETRY, "a") as f:
         f.write(tid + "\n")
     print(f"{p.display}: {tid} goes back in the queue; the autopilot takes it up between tickets")
+
+
+def idle_retry(q, tid):
+    """What the next run does with `tid`, for a retry with none going: it starts only a ticket that's on main, not
+    merged and not parked, so a retry can't promise more."""
+    if not q.known(tid):
+        sys.exit(f"{tid} isn't a ticket here")
+    if q.is_done(tid):
+        return f"{tid} is already merged"
+    if tid in q.parked:
+        return f"{tid} is parked in QUEUE.md: delete its `parked:` line to queue it"
+    return f"the next `windvane run` takes {tid} up"
 
 
 def parallel_arg(v):
@@ -783,16 +792,18 @@ def public_check(root, github):
     return publiccheck.main(root, github)
 
 
-def main(argv=None):
+def parser():
+    """The command line, apart from `main` so a test can check every argument has help."""
     ap = argparse.ArgumentParser(prog="windvane", description=__doc__)
     ap.add_argument("-C", dest="cwd", help="run as if started in this directory")
     ap.add_argument("--version", action=Version, help="which windvane this is: a release, or a clone's commit")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("init", help="set windvane up in a repository")
-    s.add_argument("dir", nargs="?")
-    s.add_argument("--name")
+    s.add_argument("dir", nargs="?", help="the project's repository (default: here)")
+    s.add_argument("--name", help="the project's name in pushes and logs (default: the directory's)")
     s.add_argument("--check", help="the project's CI command")
-    s.add_argument("--forge", choices=("github", "git"))
+    s.add_argument("--forge", choices=("github", "git"), help="github: a PR per ticket; git: branches only "
+                   "(default: github when origin is on GitHub and gh is installed)")
     s = sub.add_parser("install", help="add the windvane skill and the mention hook to Claude Code, asking first")
     s.add_argument("--yes", action="store_true", help="make every change without asking (for scripts)")
     s = sub.add_parser("uninstall", help="remove exactly what install added")
@@ -840,12 +851,12 @@ def main(argv=None):
     s.add_argument("--for", dest="for_", default="4h", help="how long the run will be (default 4h)")
     s.add_argument("--json", action="store_true", help="print them for a Claude session to ask")
     s = sub.add_parser("stop", help="stop after the current ticket")
-    s.add_argument("--if-running", action="store_true")
+    s.add_argument("--if-running", action="store_true", help="do nothing, quietly, when no autopilot runs")
     s.add_argument("--now", action="store_true", help="kill the running sessions now; their worktrees keep the work")
     s = sub.add_parser("deadline", help="move a running autopilot's deadline")
     s.add_argument("when", nargs="+", help="HH:MM, 'YYYY-MM-DD HH:MM', or from now: +90m, +2h")
     s = sub.add_parser("retry", help="put a failed ticket back in a running autopilot's queue")
-    s.add_argument("ticket")
+    s.add_argument("ticket", help="its id, e.g. T-007")
     s = sub.add_parser("status", help="running or not, open questions, the log's tail")
     s.add_argument("--line", action="store_true", help="one line (for the phone)")
     s.add_argument("--running", action="store_true",
@@ -860,10 +871,10 @@ def main(argv=None):
     sub.add_parser("overview", help="where the project stands (for the phone)")
     sub.add_parser("queue", help="the ticket queue")
     s = sub.add_parser("answer", help="answer a ticket's question at the desk")
-    s.add_argument("ticket")
+    s.add_argument("ticket", help="the ticket whose open question this answers, e.g. T-007")
     s.add_argument("answer", help="a letter, or free text in quotes")
     s = sub.add_parser("check", help="the project's check, reusing a pass for the same tree")
-    s.add_argument("--lines", type=int, default=60)
+    s.add_argument("--lines", type=int, default=60, help="lines of a failure's output to show (default 60)")
     s.add_argument("--mem", type=gb, help="with heavy_check: GB of free memory this check needs "
                                           "(default: the project's heavy_mem, else machine.toml's min_free_gb)")
     s = sub.add_parser("ci", help="start a GitHub Actions workflow, only within the month's minutes cap")
@@ -871,7 +882,7 @@ def main(argv=None):
     s.add_argument("--ref", default="", help="the branch to run it on (default: the current one)")
     s.add_argument("--dry-run", action="store_true", help="count and say, but start nothing")
     s = sub.add_parser("critic", help="have the critic judge a ticket's evidence pack, or the whole project")
-    s.add_argument("ticket", nargs="?")
+    s.add_argument("ticket", nargs="?", help="the ticket whose evidence pack to judge, e.g. T-007")
     s.add_argument("--project", action="store_true", help="judge the project on main against its CRITIC.md")
     s.add_argument("--dims", help="with --project: only these dimensions, comma-separated (default: all)")
     s.add_argument("--parallel", type=int, help="with --project: at most N dimension sessions at once")
@@ -886,8 +897,8 @@ def main(argv=None):
     s.add_argument("--measure", action="store_true", help="with --heavy: it measures timing, so wait for a quiet CPU too "
                                                           "(as `heavy --measure`)")
     s.add_argument("--cancel", action="store_true", help="end your own job of that name instead, waiting or running")
-    s.add_argument("name")
-    s.add_argument("command", nargs=argparse.REMAINDER)
+    s.add_argument("name", help="the job's name, for `await` and `--cancel`")
+    s.add_argument("command", nargs=argparse.REMAINDER, help="the command and its arguments")
     s = sub.add_parser("heavy", help="run a machine-heavy command (engine, render) one at a time on this machine")
     s.add_argument("--wait", type=float, help="minutes to wait for the machine before giving up "
                                               "(default: the session's stop, else machine.toml's heavy_wait, 60)")
@@ -898,24 +909,25 @@ def main(argv=None):
     s.add_argument("--measure", action="store_true", help="it measures timing: also wait until the 1-minute load "
                                                           "average is at or under machine.toml's measure_load")
     s.add_argument("--status", action="store_true", help="who holds the lock and who waits, without waiting")
-    s.add_argument("command", nargs=argparse.REMAINDER)
+    s.add_argument("command", nargs=argparse.REMAINDER, help="the command and its arguments, after --")
     s = sub.add_parser("await", help="wait (up to ~9.5 min) for a bg command (this ticket's own)")
-    s.add_argument("name")
-    s.add_argument("lines", nargs="?", type=int, default=40)
+    s.add_argument("name", help="the job's name, as given to `bg`")
+    s.add_argument("lines", nargs="?", type=int, default=40, help="lines of its output's tail to show (default 40)")
     s = sub.add_parser("plan", help="a planner run writes tickets for a goal and the critic's follow-ups")
-    s.add_argument("goal", nargs="*")
+    s.add_argument("goal", nargs="*", help="what the tickets should get done (default: config's goal)")
     s.add_argument("--merge", action="store_true", help="merge the tickets at once (default: a PR to look at)")
     s.add_argument("--no-followups", action="store_true", help="leave out the critic's notes")
     s.add_argument("--max", type=int, default=6, help="at most this many new tickets (default 6)")
     s = sub.add_parser("periodic", help="run a [[periodic]] session (and its `then` chain) now; while a run is on, "
                        "ask it for one at its next gap between tickets")
-    s.add_argument("name")
+    s.add_argument("name", help="the [[periodic]] session's name in config.toml")
     s.add_argument("--cancel", action="store_true", help="take back an ask a running autopilot hasn't taken yet")
     s = sub.add_parser("new", help="write a new ticket file with the next id")
-    s.add_argument("title", nargs="+")
+    s.add_argument("title", nargs="+", help="the ticket's title, one line")
     s = sub.add_parser("stats", help="tokens per role or ticket, from the ledger")
-    s.add_argument("--days", type=float, default=7)
-    s.add_argument("--by", choices=("role", "ticket"), default="role")
+    s.add_argument("--days", type=float, default=7, help="over the last N days (default 7)")
+    s.add_argument("--by", choices=("role", "ticket"), default="role", help="one row per role or per ticket "
+                   "(default: role)")
     s.add_argument("--wide", action="store_true", help="add the context columns, base and cached/turn: wider than 100 columns")
     s.add_argument("--critic", action="store_true", help="the spread of the critic's scores instead")
     s.add_argument("--periodic", action="store_true", help="the scores [[periodic]] sessions gave, oldest first")
@@ -926,7 +938,11 @@ def main(argv=None):
     s = sub.add_parser("watch", help="follow the running sessions live (costs no tokens)")
     s.add_argument("-n", type=int, default=30, help="start with this many past events")
     s.add_argument("-o", type=int, default=6, help="lines of each command's output (0 hides output)")
-    a = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None):
+    a = parser().parse_args(argv)
     cmd = "doctor --clean" if a.cmd == "doctor" and a.clean else a.cmd  # --clean removes what the state dir holds
     if why := critic_mod.refused(cmd, os.environ.get(ROLE, ""), os.environ.get(LIVE, "")):
         sys.exit(why)
