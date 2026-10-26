@@ -208,7 +208,10 @@ check`), until the run's end (even one `windvane deadline` moves) for the driver
 lose its place in line. Then it gives up without running the command: it says what it waited for (the holder, or what
 keeps the machine busy) and exits 75.
 It never takes another tool's lock, so a heavy command that is itself a locking tool can't deadlock waiting on itself.
-Set `heavy_check = true` to run the project's check this way; sessions use `windvane bg --heavy` for long heavy jobs.
+Set `heavy_check = true` to run the project's check this way, and `check_measure = true` as well when it holds timing
+tests: it then waits for a quiet CPU as a `--measure` job does. Sessions use `windvane bg --heavy` for long heavy jobs.
+Any check's log says the load at its start, end and peak, and a failed check whose peak passed `measure_load` says
+so in its summary, since timing tests fail on a busy machine whatever the change.
 A check that gave up says `CHECK NOT RUN: waited N min for the machine lock (held by ...); run it again`: a busy
 machine says nothing about the change, so it isn't a failure (its ledger row says not run, `stats` lists it apart),
 and the driver's merge gate runs it again, logging each wait, until the run's stop or deadline, without a worker run

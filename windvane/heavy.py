@@ -34,8 +34,10 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import tomllib
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -61,6 +63,7 @@ WAITED_RE = re.compile("^" + re.escape(WAITED).replace(r"\{\}", r"(\d+)") + "$",
 # a timing run made on a contended machine shows as one. The peak is sampled every LOAD_EVERY seconds while it runs.
 LOAD_START, LOAD_END, LOAD_EVERY = "heavy: load {} at start", "heavy: load {} at end, {} peak", 5
 LOAD_START_RE = re.compile("^" + re.escape(LOAD_START).replace(r"\{\}", r"\S+") + "$", re.M)
+LOAD_END_RE = re.compile("^" + re.escape(LOAD_END).replace(r"\{\}", r"(\S+)") + "$", re.M)
 NO_LOAD = "heavy: no load average on this machine: --measure doesn't wait for a quiet CPU"
 # Said once in a measurement's wait on load, as DEFAULT_NEED is for memory: where its limit comes from.
 LOAD_LIMIT = ("the {} is measure_load in {} (default: a quarter of the CPU count): if this machine is never that "
@@ -955,6 +958,32 @@ def waited(log, head=65536):
     return int(m.group(1)) if m else 0
 
 
+def peak(log, tail=65536):
+    """The peak load a job whose output went to `log` ran at, from `watch_load`'s end line (its last), or None when
+    it said none (no load source, a job cut off): read from the log's end, where that line is."""
+    try:
+        with open(log, "rb") as f:
+            f.seek(max(0, f.seek(0, os.SEEK_END) - tail))
+            text = f.read().decode(errors="replace")
+    except OSError:
+        return None
+    ends = LOAD_END_RE.findall(text)
+    try:
+        return float(ends[-1][1]) if ends else None
+    except ValueError:
+        return None
+
+
+def measure_limit(cfg=None, say=None):
+    """machine.toml's `measure_load`, or the default when it isn't a number, which `say` (if given) says."""
+    limit = (cfg or machine())["measure_load"]
+    if not isinstance(limit, (int, float)) or isinstance(limit, bool):
+        limit = default_load()
+        if say:
+            say(BAD_LIMIT.format(f"{limit:.10g}"))
+    return limit
+
+
 def waiting(log, head=65536):
     """Whether a heavy job whose output went to `log` is still waiting for the machine: `take` said why (always its
     first line) and `run` hasn't said WAITED or the load at its start yet. A job that got the machine at once says
@@ -1168,10 +1197,7 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None, measure=F
         return subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
     outside_sandbox("the heavy lock")  # its $XDG_RUNTIME_DIR is read-only, and its pid namespace hides the holder
     need = cfg["min_free_gb"] if mem is None else mem
-    limit = cfg["measure_load"] if measure else None
-    if limit is not None and (not isinstance(limit, (int, float)) or isinstance(limit, bool)):
-        limit = default_load()
-        say(BAD_LIMIT.format(f"{limit:.10g}"))
+    limit = measure_limit(cfg, say) if measure else None
     if limit is not None and load_avg() is None:
         say(NO_LOAD)
         limit = None
@@ -1189,7 +1215,8 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None, measure=F
             if (s := round(time.time() - t0)) >= 1:
                 say(WAITED.format(s))
             t1 = time.time()
-            code = watch_load(lambda: subprocess.Popen(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)), say)
+            with watch_load(say):
+                code = subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
             record(key, (time.time() - t1) / 60)  # still holding the lock: the next job's estimate counts it
             return code
         finally:
@@ -1200,28 +1227,29 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None, measure=F
         os.close(lock)  # frees the lock
 
 
-def watch_load(start_job, say):
-    """Start the job (`start_job` gives its process) and wait for it, saying the load at its start, end and peak
-    (sampled every LOAD_EVERY seconds from here, not by a thread in the command). The start is said before the job
-    runs, so it comes before the job's own output. Its exit code."""
-    start = peak = load_avg()
+@contextmanager
+def watch_load(say):
+    """Say the load at the start of the job run in its block, then at its end with the peak (sampled every LOAD_EVERY
+    seconds by a thread here, not in the command). The start is said before the job runs, so it comes before the
+    job's own output; a block cut off by an exception says no end."""
+    start = load_avg()
+    peak, done = [start], threading.Event()
     say(LOAD_START.format("unknown" if start is None else loadf(start)))
-    proc = start_job()
+
+    def sample():
+        while not done.wait(LOAD_EVERY):
+            if (now := load_avg()) is not None:
+                peak[0] = now if peak[0] is None else max(peak[0], now)
+
+    sampler = threading.Thread(target=sample, daemon=True)
+    sampler.start()
     try:
-        while True:
-            try:
-                code = proc.wait(timeout=LOAD_EVERY)
-                break
-            except subprocess.TimeoutExpired:
-                if (now := load_avg()) is not None:
-                    peak = now if peak is None else max(peak, now)
-    except BaseException:  # as subprocess.run: an interrupted wait doesn't leave the command running
-        proc.kill()
-        proc.wait()
-        raise
+        yield
+    finally:
+        done.set()
+        sampler.join()
     if (end := load_avg()) is not None:
-        say(LOAD_END.format(loadf(end), loadf(end if peak is None else max(peak, end))))
-    return code
+        say(LOAD_END.format(loadf(end), loadf(end if peak[0] is None else max(peak[0], end))))
 
 
 def status(reuse=None):

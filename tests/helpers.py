@@ -538,6 +538,10 @@ class Sandbox:
         self.git("init", "-q", "--bare", "-b", "main", str(self.remote), cwd=self.tmp)
         with open(self.remote / "config", "a") as f:  # a push's receive-pack doesn't get GIT_CONFIG_*: git drops it
             f.writelines(f"[{k.split('.')[0]}]\n\t{k.split('.')[1]} = {v}\n" for k, v in GIT_CONFIG)
+        # never too busy: a check's summary names a load over measure_load, and the tests' own would vary with the
+        # machine's; a test that writes its own machine.toml replaces this one
+        (self.tmp / "config/windvane").mkdir(parents=True)
+        (self.tmp / "config/windvane/machine.toml").write_text("measure_load = 1000000\n")
         self.root.mkdir()
         self.git("init", "-q", "-b", "main")
         self.write(".windvane/config.toml", textwrap.dedent(f"""\

@@ -45,6 +45,7 @@ DEFAULTS = {
     "replan": 0,  # `run --replan`'s default: plans when the queue runs dry, at most this many, or "forever"
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
     "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
+    "check_measure": False,  # with heavy_check: the check measures timing, so it waits for a quiet CPU (--measure)
     "heavy_mem": None,  # GB free this project's heavy jobs and heavy check wait for (unset: machine.toml's min_free_gb)
     "heavy_keep_hours": 0,  # how long a kept job (`bg --heavy --keep`) may run on past the run's stop (0: killed then)
     "heavy_reuses": [],  # process-name regexes of helpers its heavy jobs reuse (an emulator): their memory counts free
@@ -303,6 +304,18 @@ def heavy_mem(v):
     return v
 
 
+def check_measure(c):
+    """A `check_measure`: true or false, and true only with `heavy_check`: only a heavy check holds the machine lock
+    that keeps other heavy jobs off its run, so a quiet CPU at its start would last no longer than that."""
+    v = c["check_measure"]
+    if not isinstance(v, bool):
+        raise SystemExit(f"windvane: check_measure = {v!r} in config.toml: use true or false")
+    if v and c["heavy_check"] is not True:
+        raise SystemExit("windvane: check_measure = true in config.toml needs heavy_check = true: only a heavy check "
+                         "holds the machine lock that keeps other heavy jobs off it while it measures")
+    return v
+
+
 def heavy_keep_hours(v):
     """A `heavy_keep_hours`: a number of hours, 0 or more."""
     if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
@@ -550,6 +563,7 @@ class Project:
         setup_minutes(c["setup_minutes"])
         setup_minutes(c["teardown_minutes"], key="teardown_minutes")
         heavy_mem(c["heavy_mem"])
+        check_measure(c)
         replan(c["replan"])
         plateau(c["experiments"]["plateau"])
         mix(c["experiments"])
