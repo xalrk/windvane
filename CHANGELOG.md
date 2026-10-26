@@ -13,9 +13,17 @@ release on the same day adds a number (`2026.10.9.1`).
   the machine hurt (`stats --projects --json`, numbers only, each project by letter) and the newest bench runs, and
   ranks its ideas by what costs projects most. Once a week, at the usage window's reset, one push gives the week's
   trend.
-- A plateau stop for experiments, in every run: when the last `plateau` (8) experiments were all rejected,
+- A plateau stop for experiments, in every run: when the last `plateau` (8) experiments were all rejected, the next
+  plan is one exploration round of only `bold`, `ablation` and `scout` ideas; if that round is all rejected too,
   experiment planning stops with one push and the run goes on with other tickets, until an experiment is kept, the
   goal or a seed changes, or `windvane experiments resume`.
+- A mix of ideas for experiments, so the loop doesn't drift into small tweaks of the same few things: each
+  experiment ticket names its kind (`Idea: fix`, `bold`, `ablation`, `revisit` or `scout`), and each plan's
+  experiments follow `[experiments] mix` (fix 40%, bold 25%, ablation 20%, revisit 15%, scout on top), moved toward
+  the kinds the bench keeps but never under `floor` (10%). The planner sees the rejected experiments one line each,
+  grouped by the mechanism they changed, and a repeat of one of the last 20 needs a `Different because:` line or is
+  dropped from the plan. A rejected bold experiment gets one revision, its worker shown which hidden tests and judge
+  checks moved on each seed. `windvane experiments` shows each kind's share, kept rate and last kept experiment.
 - `windvane stats --bench --trend`: this week against the last in four lines, each a before → after: the frozen
   seeds' hidden tests, judge and tokens per merged ticket, this project's weighted tokens per merged ticket, the
   experiments run, kept and rejected, and the bench budget used.
