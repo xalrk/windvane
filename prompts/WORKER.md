@@ -62,8 +62,8 @@ extend it. Stay in your worktree. Scratch files go in `$TMPDIR` (this ticket's, 
   Recommendation: A, because ...
   ```
   Two options, up to five (A-E) only when really needed. Then `windvane mode` says what to do right now:
-  - **ask**: put it under `## Open`, commit and push your ticket branch as it is, and finish `BLOCKED`. The driver
-    sends it to the user's phone; a later run gets the answer.
+  - **ask**: put it under `## Open`, commit, push, finish `BLOCKED`. Asked under another ticket already? Put
+    `<its ID>'s answer` in your `Depends on:`, then `BLOCKED`.
     If the question must never be answered by default (it spends money, uses an asset of unclear licence, or undoes
     merged work), add a line `Waits for the user: <why>` under the recommendation.
   - **provisional** (the user's quiet time): build your recommendation and carry on. Put the question under

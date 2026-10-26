@@ -12,7 +12,9 @@ branches (fetch first).
   wip      an unmerged remote branch `t-003-...`: resumed before new work, unless no commit touched it for
            `stale_days`: then it waits for its turn in the order like new work
   waiting  a dependency isn't done; a `Depends on:` item that isn't a ticket id (`the user`, `M9`) waits until
-           `- done: M9 (why)` in QUEUE.md names it. A wip ticket's own branch may add ticket ids to main's line
+           `- done: M9 (why)` in QUEUE.md names it. A wip ticket's own branch may add ticket ids to main's line.
+           `T-002's answer` (or `the answer to T-002`) waits for T-002 and then while a question keyed to it (`T-002`,
+           `T-002.q1`) is under `## Open` on main: a verdict asked after it merged
   asked    a question for it under `## Open` in QUESTIONS.md, whoever wrote it: blocked until it's answered
   touches  `Touches: windvane/driver.py, prompts/` in the header: tickets whose lists don't overlap may run at once
   related  `Related: T-004.` in the header: the same feature through other files, so never run beside T-004
@@ -24,11 +26,12 @@ import time
 from pathlib import Path
 
 from .phone import cut
-from .questions import blocks, part, ticket_of, waiting_on
+from .questions import blocks, options, part, ticket_of, waiting_on
 from .util import git, gout, log_has, log_paths, shell_path
 
 ANSWERED = "it's answered"  # (a quote can't go in an f-string's braces before Python 3.12)
 PEOPLE = ("the user", "user", "you")  # outside items that stand for someone's answer, not a milestone
+OPEN_Q = "'s open question"  # a `waits_on` item: a done ticket's question that the waiting ticket needs answered
 TITLE = 100  # bytes of a title in a listing row: cut at a word, so a row reads whole on one line
 
 
@@ -66,11 +69,24 @@ def outside(head, p):
     return [x for x in items if x and x.lower().split()[0] not in ("nothing", "none") and not re.search(p.id_re, x, re.I)]
 
 
+def answer_depends(head, p):
+    """The ticket ids whose answer the `Depends on:` line waits for (`T-002's answer`, `the answer to T-002`): a
+    question already open under another ticket isn't asked twice, its answer is waited on."""
+    line, idp = header_line(head, "Depends on"), rf"`?({p.id_re})`?"
+    found = re.findall(rf"{idp}['’]s\s+answer|\banswer\s+to\s+{idp}", line, re.I)
+    return list(dict.fromkeys(t for t in (p.norm(a or b) for a, b in found) if t))
+
+
+def branch_head(cwd, ref, path):
+    """A ticket's header as `ref` (its pushed branch) has it."""
+    return "\n".join(gout(cwd, "show", f"{ref}:{path}").splitlines()[:8])
+
+
 def branch_depends(cwd, ref, path, p):
     """The ticket ids in the `Depends on:` line of a ticket's header as `ref` (its pushed branch) has it: a worker that
-    finds its ticket can't go on until another merges says so there. Other words (`the user`) are left out: a
-    question to the user is a BLOCKED run, not a dependency."""
-    return depends_on("\n".join(gout(cwd, "show", f"{ref}:{path}").splitlines()[:8]), p)
+    finds its ticket can't go on until another merges, or another's question is answered, says so there. Other words
+    (`the user`) are left out: a question to the user is a BLOCKED run, not a dependency."""
+    return depends_on(branch_head(cwd, ref, path), p)
 
 
 def touches(head):
@@ -177,6 +193,7 @@ class Queue:
         heads = {t: "\n".join(self.text[t].splitlines()[:8]) for t in self.files}
         self.deps = {t: depends_on(heads[t], p) for t in self.files}
         self.outside = {t: outside(heads[t], p) for t in self.files}
+        self.answers = {t: a for t in self.files if (a := answer_depends(heads[t], p))}  # also in deps: done first
         self.related = {t: depends_on(heads[t], p, "Related") for t in self.files}
         self.titles = {t: title(self.text[t], t) for t in self.files}
         self.touches = {t: touches(heads[t]) for t in self.files}
@@ -194,11 +211,13 @@ class Queue:
         self.parked = set(self.parked_lines)
         self.done_words = {" ".join(m.split()).strip(" .`*").lower()
                            for m in re.findall(r"^\s*-\s*done:\s*([^(\n]+)", qmd, re.M | re.I)}
-        self.asked, self.asked_ids = {}, {}
-        for t, question, _ in blocks(part(show(p.questions_rel), "Open")):
-            if p.norm(t) in self.files:
-                self.asked.setdefault(p.norm(t), question)
-                self.asked_ids.setdefault(p.norm(t), []).append(t)
+        self.asked, self.asked_ids, self.asked_opts = {}, {}, {}
+        for t, question, body in blocks(part(show(p.questions_rel), "Open")):
+            tid = p.norm(re.sub(r"\.q\d+$", "", t, flags=re.I))  # one of several: `T-003.q2`
+            if tid in self.files:
+                self.asked.setdefault(tid, question)
+                self.asked_opts.setdefault(tid, options(body))
+                self.asked_ids.setdefault(tid, []).append(t)
         self.done.discard(None)
         self.wip, fresh = {}, set()
         old = time.time() - float(p.ap["stale_days"]) * 86400
@@ -216,9 +235,26 @@ class Queue:
         for tid, branches in self.wip.items():
             if tid in self.files:
                 for b in branches:
-                    for d in branch_depends(cwd, f"{p.remote}/{b}", self.files[tid], p):  # a typo'd id: no wait
+                    head = branch_head(cwd, f"{p.remote}/{b}", self.files[tid])
+                    for d in depends_on(head, p):  # a typo'd id: no wait
                         if self.known(d) and d != tid and d not in self.deps[tid] + self.branch_deps.get(tid, []):
                             self.branch_deps.setdefault(tid, []).append(d)
+                    self.wait_on_answers({tid: answer_depends(head, p)})
+
+    def wait_on_answers(self, waits):
+        """Add {ticket: [ids whose open questions it waits on]}: its branch's header, or the driver's record of a
+        BLOCKED run that pointed at another ticket's question (its state.json `answer_waits`)."""
+        for tid, ids in waits.items():
+            if tid in self.files:
+                mine = self.answers.setdefault(tid, [])
+                mine += [d for d in ids if self.known(d) and d != tid and d not in mine]
+                if not mine:
+                    del self.answers[tid]
+
+    def open_answer(self, d, blocked=()):
+        """Whether ticket `d` has a question still waiting for the user: under `## Open` on main, or held by the
+        running driver (`blocked`)."""
+        return d in self.asked or d in blocked
 
     def known(self, tid):
         """Whether `tid` is a ticket on the ref, or a split ticket's parent."""
@@ -233,8 +269,13 @@ class Queue:
                 return True
             if t not in seen:
                 seen.add(t)
-                todo += [d for d in self.deps.get(t, []) + self.branch_deps.get(t, []) if not self.is_done(d)]
+                todo += [d for d in self.needs(t) if not self.is_done(d)]
         return False
+
+    def needs(self, tid):
+        """The tickets `tid` waits to merge first: main's `Depends on:`, its branch's, and those whose answer it waits
+        for."""
+        return list(dict.fromkeys(self.deps.get(tid, []) + self.branch_deps.get(tid, []) + self.answers.get(tid, [])))
 
     def is_done(self, tid):
         if tid in self.done:
@@ -249,15 +290,30 @@ class Queue:
             return "parked"
         if tid in blocked or tid in self.asked:
             return "blocked"
-        if self.waits_on(tid):
+        if self.waits_on(tid, blocked):
             return "waiting"
         return "wip" if tid in self.wip else "todo"
 
-    def waits_on(self, tid):
+    def waits_on(self, tid, blocked=()):
         """What `tid` still waits on: its undone dependencies, ticket ids and outside ones alike, main's and its
-        branch's."""
-        return ([d for d in self.deps.get(tid, []) + self.branch_deps.get(tid, []) if not self.is_done(d)]
-                + [x for x in self.outside.get(tid, []) if x.lower() not in self.done_words])
+        branch's, then `<id>'s open question` for each done ticket whose answer it waits for that still has one."""
+        return ([d for d in self.needs(tid) if not self.is_done(d)]
+                + [x for x in self.outside.get(tid, []) if x.lower() not in self.done_words]
+                + [f"{d}{OPEN_Q}" for d in self.answers.get(tid, []) if self.is_done(d) and self.open_answer(d, blocked)])
+
+    def answer_holds(self, blocked=(), skip=()):
+        """{ticket: the tickets (not in `skip`) waiting on its open question}: waits only the user's answer ends."""
+        out = {}
+        for t in self.order:
+            if t not in skip and self.status(t, blocked) == "waiting":
+                for x in self.waits_on(t, blocked):
+                    if x.endswith(OPEN_Q):
+                        out.setdefault(x[:-len(OPEN_Q)], []).append(t)
+        return out
+
+    def offer(self, tid):
+        """The options of `tid`'s first open question on main, as `A: keep, B: revert`: the letter needs them."""
+        return ", ".join(f"{k}: {v}" for k, v in sorted(self.asked_opts.get(tid, {}).items()))
 
     def to_run(self, skip=(), blocked=()):
         """The tickets not marked last that could still start (wip or todo, not in `skip`): while one is left, every
@@ -282,7 +338,7 @@ class Queue:
         branch's: what a set-aside or parked `tid` holds up."""
         on = lambda d: d == tid or re.fullmatch(rf"{re.escape(d)}[a-z]", tid)  # noqa: E731
         return [t for t in self.order if t != tid and t not in self.done and t not in self.parked
-                and any(on(d) for d in self.deps.get(t, []) + self.branch_deps.get(t, []))]
+                and any(on(d) for d in self.needs(t))]
 
     def hints(self, blocked=(), run=None):
         """How to release each wait that won't end by itself, one line per cause naming every ticket waiting on it:
@@ -293,7 +349,7 @@ class Queue:
         causes = {}
         for t in self.order:
             if self.status(t, blocked) == "waiting":
-                for d in self.waits_on(t):
+                for d in self.waits_on(t, blocked):
                     causes.setdefault(d, []).append(t)
         asks = self.asks(run)
         out = {}
@@ -334,8 +390,9 @@ class Queue:
                     "why)"
                     f"{until('it merges')}; `windvane retry {d}` puts it back in this run, or the next `windvane run` "
                     "takes it up")
+        d = d[:-len(OPEN_Q)] if d.endswith(OPEN_Q) else d  # its answer: what holds it is the same question
         if d in self.files and (d in blocked or d in self.asked):
-            ids = asks.get(d) or self.asked_ids.get(d)
+            ids = list(dict.fromkeys(asks.get(d) or self.asked_ids.get(d) or []))
             if not ids:  # answered: it waits only for its ticket's next run
                 return ""
             named = f" ({', '.join(ids)})" if ids != [d] else ""
@@ -372,11 +429,11 @@ class Queue:
         rows, said, order = [], self.hints(blocked, run) if hints else {}, self.order
         if compact:
             open_ = [t for t in self.order if self.status(t, blocked) != "done"]
-            kept = {*keep, *(d for t in open_ for d in self.deps.get(t, []) + self.branch_deps.get(t, []))}
+            kept = {*keep, *(d for t in open_ for d in self.needs(t))}
             order = open_ + [t for t in self.order if t in kept and t not in open_]
         for t in order:
             s = self.status(t, blocked)
-            on = (f"{x} (from its branch)" if x in self.branch_deps.get(t, []) else x for x in self.waits_on(t))
+            on = (f"{x} (from its branch)" if x in self.branch_deps.get(t, []) else x for x in self.waits_on(t, blocked))
             why = {"waiting": f"waiting on: {', '.join(on)}",
                    "blocked": f"question: {self.asked[t][:60]}" if t in self.asked else ""}.get(s, "")
             rows.append(f"{t:8} {s:8} {'(last) ' * (t in self.last)}{cut(self.titles[t], TITLE)}"

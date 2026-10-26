@@ -183,5 +183,33 @@ class SetAsidePush(Base):
         self.assertEqual(pilot.holds_up("T-001"), "; T-002, T-003, T-004, T-005, T-006, T-007, T-008 wait on it")
 
 
+class AnswerCauses(Base):
+    """A ticket waiting on a merged ticket's open question (T-302): the hint names the answer that releases it."""
+    OPEN = ("# Questions\n\n## Open\n\n### T-001: Keep it?\n- **A**: keep\n- **B**: drop\nRecommendation: A, because.\n"
+            "\n## Provisional\n\n## Answered\n")
+
+    def setUp(self):
+        super().setUp()
+        self.s.ticket("T-001")
+        self.s.ticket("T-002", "T-001's answer")
+        self.s.ticket("T-003", "the answer to T-001")
+        self.s.write(".windvane/QUESTIONS.md", self.OPEN)
+
+    def test_both_wordings_wait_on_the_open_question_and_name_the_answer(self):
+        self.publish("- done: T-001 (merged)\n")
+        out = self.queue_cli()
+        self.assertRegex(out, r"T-002 +waiting .*\(waiting on: T-001's open question\)")
+        self.assertRegex(out, r"T-003 +waiting .*\(waiting on: T-001's open question\)")
+        self.assertEqual(self.hints(out), ["hint: T-001 has an open question: T-002, T-003 wait until it's answered: "
+                                           "`windvane answer T-001 <letter>`"])
+
+    def test_a_run_s_record_makes_a_ticket_without_the_header_item_wait_too(self):
+        self.s.ticket("T-004")
+        self.publish("- done: T-001 (merged)\n")
+        self.assertRegex(self.queue_cli(), r"T-004 +todo")
+        out = self.queue_cli({"answer_waits": {"T-004": ["T-001"]}})
+        self.assertRegex(out, r"T-004 +waiting .*\(waiting on: T-001's open question\)")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -191,7 +191,14 @@ elif system.startswith("# windvane worker run"):
         open("NOTES.md", "w").write(nt + f"\n## {tid}\nFound things.\n")
     elif notes == "edit":
         sh("git", "merge", "-q", "-X", "ours", "-m", "merge main", "origin/main")
-    if behaviour in ("question", "questions") and "answered" not in prompt and "didn't answer" not in prompt:
+    on = os.environ.get("FAKE_WAITS_ON")  # "T-001": BLOCKED while that ticket's question is open on main, none of its own
+    if on and on != tid:
+        asked = subprocess.run(["git", "show", "origin/main:.windvane/QUESTIONS.md"], capture_output=True, text=True)
+        on = on if re.search(rf"^### {on}\b", asked.stdout.split("## Open", 1)[-1].split("\n## ", 1)[0], re.M) else ""
+    if on and on != tid:
+        sh("git", "add", "-A"); sh("git", "commit", "-qm", "started"); sh("git", "push", "-q", "-u", "origin", "HEAD")
+        text = f"RESULT: BLOCKED {tid} {on}: Which colour for the button?"
+    elif behaviour in ("question", "questions") and "answered" not in prompt and "didn't answer" not in prompt:
         more = (f"### {tid}: Big or small?\n- **A**: big\n- **B**: small\nRecommendation: A, because.\n"
                 * (behaviour == "questions"))  # questions: two at once
         q = open(".windvane/QUESTIONS.md").read().replace("## Open\n", f"## Open\n### {tid}: Red or blue?\nContext.\n- **A**: red\n- **B**: blue\nRecommendation: A, because.\n{more}", 1)
