@@ -267,6 +267,25 @@ class WaitsOnAnother(unittest.TestCase):
         self.assertEqual(pl.merged, ["T-002"])
         self.assertIn("waiting for answers on T-001's open question (for T-002)",
                       (self.p.state / "autopilot.log").read_text())
+        told = [m for t, m in self.pushes if t.startswith("Waiting on you: ")]
+        self.assertEqual(len(told), 1, self.pushes)  # once, when the wait began
+        self.assertIn("T-002 waits on its open question: Keep the new layout?", told[0])
+        self.assertIn("To answer: windvane answer T-001 <letter>", told[0])
+
+    def test_a_run_that_ends_before_the_answer_says_who_waits_on_it(self):
+        self.s.ticket("T-002", "T-001's answer")
+        self.s.publish()
+        pl = driver.Pilot(self.p, args(answer_wait=60))
+        pl.nap = lambda until, answers=False: (self.p.state / "STOP").touch()
+        pl.run(now() + timedelta(hours=1))
+        self.assertEqual((pl.merged, pl.failed, self.workers()), ([], [], []))
+        self.assertTrue([m for _, m in self.pushes if "Waiting on you: T-001's open question (for T-002)." in m],
+                        self.pushes)
+        status = io.StringIO()
+        with redirect_stdout(status):
+            cli.main(["-C", str(self.s.root), "status"])
+        self.assertIn("waiting on you: T-001's open question, for T-002: Keep the new layout?  "
+                      "(windvane answer T-001 <letter>)", status.getvalue())
 
     def test_a_blocked_run_on_another_ticket_s_question_waits_and_is_released_by_its_answer(self):
         self.s.ticket("T-002")

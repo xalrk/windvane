@@ -352,6 +352,13 @@ def cmd_status(a, p):
         print(budget.Budget(p.cfg["experiments"]).waiting(held))
     for key, q in questions.waiting_on(st.get("questions", {})).items():
         print(f"waiting on you: {key}: {q['q']}  ({', '.join(f'{k}: {v}' for k, v in sorted(q['opts'].items()))})")
+    asked = questions.tickets(questions.waiting_on(st.get("questions", {})))
+    queue = Queue(p)
+    queue.wait_on_answers(st.get("answer_waits", {}))
+    for d, ts in queue.answer_holds(asked).items():
+        if d in queue.asked and d not in asked:  # a phone question is listed above
+            print(f"waiting on you: {d}'s open question, for {', '.join(ts)}: {queue.asked[d]}  "
+                  f"(windvane answer {queue.asked_ids[d][0]} <letter>)")
     for q in questions.with_ids(gout(p.main_root(), "show", f"{p.upstream}:{p.questions_rel}"), p):
         print(f"provisional: {q['ticket']}: {q['question']} Built {q['built'] or '?'}"
               + (f": {q['option']}" if q["option"] else "") + f". To change: windvane answer {q['id']} <letter>")

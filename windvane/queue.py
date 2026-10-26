@@ -300,6 +300,16 @@ class Queue:
                 + [x for x in self.outside.get(tid, []) if x.lower() not in self.done_words]
                 + [f"{d}{OPEN_Q}" for d in self.answers.get(tid, []) if self.is_done(d) and self.open_answer(d, blocked)])
 
+    def answer_holds(self, blocked=(), skip=()):
+        """{ticket: the tickets (not in `skip`) waiting on its open question}: waits only the user's answer ends."""
+        out = {}
+        for t in self.order:
+            if t not in skip and self.status(t, blocked) == "waiting":
+                for x in self.waits_on(t, blocked):
+                    if x.endswith(OPEN_Q):
+                        out.setdefault(x[:-len(OPEN_Q)], []).append(t)
+        return out
+
     def to_run(self, skip=(), blocked=()):
         """The tickets not marked last that could still start (wip or todo, not in `skip`): while one is left, every
         last ticket waits, even when that one only waits for a running ticket's files."""
