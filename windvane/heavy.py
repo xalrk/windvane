@@ -163,10 +163,10 @@ def cpu_times():
     return out
 
 
-def busiest(n=3, gap=1):
+def busiest(n=3, gap=1, ages=False):
     """The `n` processes using the most CPU over `gap` seconds (two samples), as "pid 412 qemu-system-x86 310% in
-    emu/slot-1" (% of one CPU, as `top` says it): a measurement waiting on load says who makes it. Empty without
-    /proc."""
+    emu/slot-1" (% of one CPU, as `top` says it): a measurement waiting on load says who makes it. `ages` adds how
+    long each has run (`running`). Empty without /proc."""
     first = cpu_times()
     if not first:
         return []
@@ -175,7 +175,14 @@ def busiest(n=3, gap=1):
     took = max(time.monotonic() - t0, 0.01)
     used = sorted(((t - first[pid], pid) for pid, t in cpu_times().items() if pid in first), reverse=True)
     return [f"pid {pid} {comm(pid)} {s / took * 100:.0f}% " + (f"in {w}" if (w := folder(pid)) else "(folder unreadable)")
-            for s, pid in used[:n] if s > 0]
+            + (running(pid) if ages else "") for s, pid in used[:n] if s > 0]
+
+
+def running(pid):
+    """", running 3 h 10 min": how long process `pid` has run, so a helper up for hours reads apart from a build
+    started a minute ago. For lines read live only (`status`, `await`): a log line read later would go stale."""
+    at = started_at(pid)
+    return "" if at is None else f", running {span(max(time.time() - at, 0))}"
 
 
 def comm(pid):
@@ -202,11 +209,12 @@ def holders(n=3):
     return [(pid, comm(pid), kb / 1048576, folder(pid)) for kb, pid in sorted(rss, reverse=True)[:n] if kb]
 
 
-def largest(n=3, big=None):
+def largest(n=3, big=None, ages=False):
     """The `n` processes holding the most memory (or `big`, from `holders`), as "pid 412 qemu-system-x86 3.4 GB in
-    emu/slot-1": a job waiting on memory says who holds it, an idle helper of another project plainly among them."""
+    emu/slot-1": a job waiting on memory says who holds it, an idle helper of another project plainly among them.
+    `ages` adds how long each has run (`running`)."""
     return [f"pid {pid} {name} {gb:.1f} GB " + (f"in {where}" if where else "(folder unreadable)")
-            for pid, name, gb, where in (holders(n) if big is None else big)]
+            + (running(pid) if ages else "") for pid, name, gb, where in (holders(n) if big is None else big)]
 
 
 HINT_MIN_GB = 1  # a holder smaller than this frees too little to be worth a config line
@@ -246,19 +254,31 @@ def reuse_hint(proc):
 
 
 MAIN_CLASS = re.compile(r"(?:[A-Za-z_][\w$]*\.)+([A-Z][\w$]*)")
+INTERPRETER = re.compile(r"(python|node|ruby|perl|php|bash|dash|zsh|fish|sh)[\d.]*")
 
 
 def reuse_word(pid, name):
     """The word to put in `heavy_reuses` for process `pid` named `name`: its name, but for a JVM the last part of its
     main class (`GradleDaemon`, `KotlinCompileDaemon`), since every JVM is named `java` and "java" would count each of
-    the project's JVMs as a helper."""
-    if name != "java":
+    the project's JVMs as a helper. For an interpreter (`python3`, `node`) the script's file name or `-m` module,
+    for the same reason, and None when it runs neither (`-c`, a prompt): no word names it alone."""
+    jvm = name == "java"
+    if not jvm and not INTERPRETER.fullmatch(name):
         return name
     try:
         words = os.fsdecode((util.PROC / str(pid) / "cmdline").read_bytes()).split("\0")
     except OSError:
-        return name
-    return next((m.group(1) for w in words[1:] if (m := MAIN_CLASS.fullmatch(w))), name)
+        return name if jvm else None
+    if jvm:
+        return next((m.group(1) for w in words[1:] if (m := MAIN_CLASS.fullmatch(w))), name)
+    for i, w in enumerate(words[1:], 1):
+        if w == "-m" and i + 1 < len(words):
+            return words[i + 1] or None
+        if w and not w.startswith("-"):
+            return Path(w).name
+        if w == "-c":
+            return None
+    return None
 
 
 def hints_in(log, head=65536):
@@ -1034,7 +1054,8 @@ def take(lock, entry, need, cfg, deadline, say, stopped=lambda: False, reuse=Non
             extra, too = f"; {too}" if too else "", None  # said on the wait line it changes, not a line of its own
             if key != said and low:
                 big = holders()
-                own = [] if hinted else unreused(reuse, big, [info["pid"]] if info.get("pid") else [])
+                own = [] if hinted else [h for h in unreused(reuse, big, [info["pid"]] if info.get("pid") else [])
+                                         if reuse_word(h[0], h[1])]  # nothing to name: no advice
                 hinted = hinted or bool(own)
                 say(f"heavy: waiting: {why}" + (f"; largest: {', '.join(largest(big=big))}" if big else "")
                     + "".join(f"; {reuse_hint(h)}" for i, h in enumerate(own)  # a word once: the largest of it
@@ -1196,16 +1217,18 @@ def status(reuse=None):
 
 def standing(job, reuse=None):
     """Where the `bg` job `job` (its base path) stands in the queue now, as `status` reads it, for `await`: the
-    holder's line and this job's (its place in line, what it waits on, the work ahead), or [] when no waiter in the
-    queue is that job's (it just took the machine, or an older windvane queued it)."""
+    holder's line and this job's (its place in line, what it waits on, the work ahead), then, when it's this job that
+    is short of memory or a quiet CPU, who holds most now (the log's list is as old as the wait), or [] when no
+    waiter in the queue is that job's (it just took the machine, or an older windvane queued it)."""
     info, times = lock_info(), load_times()
-    w = next((w for w in queue_view(info, times, reuse, big=False) if w["job"] == job), None)
+    w = next((w for w in queue_view(info, times, reuse, big=job) if w["job"] == job), None)
     if w is None:
         return []
     holder = holder_line(info, times)
     where = w["why"] if w["place"] is None else w["place"] + (f" ({w['why']})" if w["why"] else "")  # paused
     return ["now: the machine lock is " + holder,
-            f"now: this job (pid {w['pid']}, queued at {w['since']}) is {where}" + (f"; {w['est']}" if w["est"] else "")]
+            f"now: this job (pid {w['pid']}, queued at {w['since']}) is {where}" + (f"; {w['est']}" if w["est"] else ""),
+            *(f"  {b}" for b in w["big"])]
 
 
 def lock_info():
@@ -1239,12 +1262,13 @@ def queue_view(info, times, reuse=None, big=True):
     live waiter ahead lets it by (`lets_by`), and then waits on its own memory (this project's helpers, `reuse`,
     counting as free for this project's jobs alone), a quiet CPU or a short job it lets by (`short_first`); else on
     the jobs ahead, or a measurement ahead holding the line. Its work ahead counts the jobs it waits behind. The first
-    waiter short of memory or a quiet CPU lists the processes holding most (`big`: false skips that look, which takes
-    a second)."""
+    waiter short of memory or a quiet CPU lists the processes holding most, with how long each has run (`big`: false
+    skips that look, which takes a second for CPU; a `bg` job's base path looks for that job's waiter alone)."""
     q, out, line, listed = queue_dir(), [], [], not big
     mem, load, hold = free_gb(), load_avg(), hold_minutes(machine())
     helpers = None
     live = []
+    look = (lambda w: w["job"] == big) if isinstance(big, str) else (lambda w: not listed)
     for name in sorted(os.listdir(q)) if q.is_dir() else []:
         path, pid = q / name, entry_pid(name)
         if name.startswith(".") or not pid or not alive(path):
@@ -1272,15 +1296,15 @@ def queue_view(info, times, reuse=None, big=True):
             if short(need, mem, mine):
                 w["why"] = f"waiting for {need:.10g} GB, {down(mem)} free" + (
                     f" + {down(mine)} in this project's helpers" if mine else "") + "; letting smaller jobs by"
-                if not listed:
+                if look(w):
                     procs = holders()
                     own = {h[0] for h in unreused(reuse, procs, [info["pid"]] if info.get("pid") else [])}
                     w["big"] = ["holds memory: " + b + (" (this project's)" if h[0] in own else "")
-                                for h, b in zip(procs, largest(big=procs))]
+                                for h, b in zip(procs, largest(big=procs, ages=True))]
             elif too_busy(limit, load):
                 by = "holding the line" if holds(path) else "letting other jobs by"
                 w["why"] = f"waiting for load ≤ {limit:.10g}, now {loadf(load)}; {by}"
-                w["big"] = [] if listed else [f"uses CPU: {b}" for b in busiest()]
+                w["big"] = [f"uses CPU: {b}" for b in busiest(ages=True)] if look(w) else []
             listed = listed or bool(w["why"])
             if not w["why"] and let:
                 w["why"] = f"letting pid {entry_pid(let.name)} by, a short job"

@@ -11,6 +11,7 @@ import hashlib
 import itertools
 import json
 import os
+import re
 import shlex
 import signal
 import stat
@@ -58,6 +59,7 @@ CRITIC_LINES = 400  # of a critique's log `windvane critic` prints: the whole cr
 # A heavy wait's own lines (`heavy.take`) that `await`'s live state covers, and the hints that keep one shown anyway.
 WAIT_LINES = ("heavy: waiting", "heavy: the machine lock is free")
 HINTS = (heavy.OWN, "is min_free_gb in", "is measure_load in")
+OLD_LIST = re.compile(r"; (?:largest|busiest): [^;]*")
 CHECK_LOG = "check: log "  # a check job's first line names the check's log, where its wait for the machine is said
 # A bg job's shell: it links its own pid in first, should `bg` be killed before writing it (a link: never half-written,
 # and never over the one `bg` wrote, which its stamp must not predate), then runs the command and writes its exit.
@@ -847,10 +849,11 @@ def reuse(p):
 def said(log, n, covered=False):
     """A running job's last `n` log lines, headed by how long ago the last one was written, since a waiting job's
     lines are written only when what it waits on changes; an estimate in them that ran out reads as overdue. With
-    the live state shown (`covered`), the wait lines it covers are dropped, unless one carries a hint."""
+    the live state shown (`covered`), the wait lines it covers are dropped, unless one carries a hint, which keeps
+    it without its list of who held memory or CPU then: as old as the wait, it reads as now."""
     lines = [heavy.overdue(ln) for ln in tail(log, n).splitlines()]
     if covered:
-        lines = [ln for ln in lines if not ln.startswith(WAIT_LINES) or any(h in ln for h in HINTS)]
+        lines = [OLD_LIST.sub("", ln) for ln in lines if not ln.startswith(WAIT_LINES) or any(h in ln for h in HINTS)]
     try:
         ago = (time.time() - Path(log).stat().st_mtime) / 60
     except OSError:

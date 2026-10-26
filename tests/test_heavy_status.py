@@ -220,6 +220,42 @@ class LiveStanding(unittest.TestCase):
         with mock.patch.object(heavy, "helpers_gb", lambda r: 6.0):
             self.assertIn(") is next in line; work ahead unknown", heavy.standing("/st/bg/T-1/eval", reuse)[1])
 
+    def test_a_measurement_waiting_on_load_names_who_uses_the_cpu(self):
+        """T-296: `await` reads the CPU's users live, as `status` does, each with how long it has run."""
+        holder = self.proc()
+        self.hold(holder.pid)
+        with mock.patch.dict(os.environ, {heavy.JOB_ENV: "/st/bg/T-1/bench"}):
+            entry = heavy.join_queue(0, load=1)
+        self.addCleanup(heavy.leave_queue, entry)
+        cpu = ["pid 412 qemu-system-x86 310% in emu/slot-1, running 3 h", "pid 9 cc1plus 95% in o/p, running 2 min"]
+        with mock.patch.object(heavy, "load_avg", lambda: 9.0), \
+                mock.patch.object(heavy, "busiest", lambda ages=False: cpu if ages else []):
+            now = heavy.standing("/st/bg/T-1/bench")
+        self.assertIn(") is next in line (waiting for load ≤ 1, now 9", now[1])
+        self.assertEqual(now[2:], [f"  uses CPU: {c}" for c in cpu])
+
+    def test_a_holder_line_says_how_long_it_has_run(self):
+        p = self.proc()
+        with mock.patch.object(heavy, "started_at", lambda pid: time.time() - 95 * 60):
+            self.assertEqual(heavy.largest(big=[(p.pid, "emu", 3.4, "a/b")], ages=True),
+                             [f"pid {p.pid} emu 3.4 GB in a/b, running 1 h 35 min"])
+        self.assertEqual(heavy.largest(big=[(p.pid, "emu", 3.4, None)]), [f"pid {p.pid} emu 3.4 GB (folder unreadable)"])
+
+    def test_an_interpreter_is_named_by_its_script_not_its_name(self):
+        """A retro's advice to add "python3" to heavy_reuses would count every Python process as free memory."""
+        lines = {1: "python3\0-u\0/x/tools/serve.py\0--port\0" "8000", 2: "python3\0-m\0http.server\0",
+                 3: "python3\0-c\0print(1)\0", 4: "node\0", 5: "java\0-cp\0x\0org.gradle.GradleDaemon\0"}
+        proc = self.d / "proc"
+        for pid, line in lines.items():
+            (proc / str(pid)).mkdir(parents=True)
+            (proc / str(pid) / "cmdline").write_bytes(line.encode())
+        with mock.patch.object(util, "PROC", proc):
+            self.assertEqual([heavy.reuse_word(1, "python3"), heavy.reuse_word(2, "python3.12"),
+                              heavy.reuse_word(3, "python3"), heavy.reuse_word(4, "node"),
+                              heavy.reuse_word(5, "java"), heavy.reuse_word(6, "qemu-system-x86"),
+                              heavy.reuse_word(6, "python3")],
+                             ["serve.py", "http.server", None, None, "GradleDaemon", "qemu-system-x86", None])
+
     def test_a_paused_waiter_says_paused_once(self):
         holder = self.proc()
         self.hold(holder.pid)
