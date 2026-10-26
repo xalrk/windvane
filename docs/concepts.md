@@ -333,8 +333,9 @@ experiment.
 
 **The scout.** Every other source of ideas looks inward. A `builtin = "scout"` [[periodic]] entry looks out: it is
 shown what changed in the installed Claude Code and which models are new to the ledger, reads the changelog, the docs
-and write-ups on other agent loops, and writes at most 3 `scout` experiments, each naming its `Source:`. A model new to the ledger also makes the next plan's
-experiments one `ablation` round: rules written for an older model are the first thing to test.
+and write-ups on other agent loops, and writes at most 3 `scout` experiments, each naming its `Source:`. A model new
+to the ledger also makes the next plan's experiments one `ablation` round: rules written for an older model are the
+first thing to test.
 
 A question a ticket asks follows the usual rules
 (below): quiet times and `answer_wait` build the recommendation, so nothing in the loop waits for the desk but the

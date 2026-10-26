@@ -256,10 +256,11 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
   (a ticket's PR, a plan's, a held branch's) asks whether the PR comes from another repository and drops it, with
   one log line, so an outsider's PR named after a ticket's branch never reaches a worker or the reviewer.
 - **Web pages.** Only the scout reads the web, in `dontAsk` mode with no shell: it may read its own `ci/` tree, write
-  `.windvane/` there, search, and fetch from a short list of hosts (each host its entry's `allow` adds is one a fetch
-  could carry the tree's text to). The driver lands only its new tickets, dropping with a log line one that names a
-  web address outside its `Source:` line, a fetch (`curl`, `wget`, `git clone`) or an install command (`pip install
-  x`, `npx x`): a pattern check, so the rest still pass the experiment gate and review.
+  `.windvane/` there, search, and fetch from a short list of hosts (a fetch could carry the tree's text to any host
+  on it: a little through GitHub's traffic stats, more through each host its entry's `allow` adds). The driver lands
+  only its new tickets, dropping with a log line one that names a web address outside its `Source:` line, a fetch
+  (`curl`, `wget`, `git clone`) or an install command (`pip install x`, `npx x`): a pattern check, so the rest still
+  pass the experiment gate and review.
 - **Credentials.** A session gets your environment without the variables named like credentials (`*TOKEN*`,
   `*SECRET*`, `*PASSWORD*`, `*_KEY`, `AWS_*`), except what Claude Code and `gh` log in with and what
   [`[env] keep`](configuration.md#env) names.
