@@ -29,17 +29,22 @@ An entry with `builtin = "seed"` writes one new training seed for `bench/pool/` 
 the pool on main is short of its `pool_size`, and after every `seed_every` experiments the bench kept: it lands only
 when its hidden tests fail on the bare seed and pass on the session's reference solution, which is never committed.
 Between tickets, a newly recorded holdout run is read against the week's pool runs (`overfit_watch`).
+
+An entry with `builtin = "scout"` brings in ideas from outside (scout.py, `prompts/SCOUT.md`): what changed in Claude
+Code, models new to the ledger, how other agent loops work. It alone reads the web, with no shell, and only its new
+tickets that pass `scout.vet` land; its spend counts in the experiment budget.
 """
 import difflib
 import os
 import re
 import shutil
 import tempfile
+import time
 import tomllib
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import bench, budget, critic, jobs, phone, pool, requests
+from . import bench, budget, critic, jobs, phone, pool, requests, scout
 from .config import DIR, POOL, exe, periodic as periodic_entries, permissions
 from .questions import quiet_now
 from .queue import Queue, mend_queue, title as title_of
@@ -81,6 +86,10 @@ class Periodic:
                 continue
             if e["builtin"] == "seed":
                 if self.seed_due(e):
+                    return e
+                continue
+            if e["builtin"] == "scout":
+                if self.scout_due(e):
                     return e
                 continue
             if e["every"] and len(self.merged) - self.periodic_at.get(e["name"], 0) >= e["every"]:
@@ -141,6 +150,16 @@ class Periodic:
         seen = self.groups_seen.setdefault(e["name"], sorted(done, key=natural))
         return {g: [t + " (parked)" * (t in q.parked) for t in found[g][0]] for g in sorted(done - set(seen), key=natural)}
 
+    def scout_due(self, e):
+        """The scout entry `e`'s turn (`scout.due`), after the model watch read the ledger if it changed."""
+        from .mix import exploring
+        ledger = self.p.state / "ledger.jsonl"
+        key = ledger.stat().st_mtime if ledger.exists() else 0
+        if self.scout_read != key:
+            self.scout_read = key
+            scout.models_watch(self.p, self.log)
+        return scout.due(self.p, e, len(self.group_queue().done), exploring(self.p))
+
     def periodic_ran(self, e, skipped=False):
         """`e` ran: its count starts again, and the groups finished now are seen. A round skipped before its session
         keeps them owed, due again after the next merge rather than at once (which would only skip it again)."""
@@ -196,6 +215,8 @@ class Periodic:
                     break
                 reply, prev = got
                 kept, last = self.periodic_keep(cd, e["name"]), e["name"]
+                if e["builtin"] == "scout":
+                    kept = scout.vet(p, kept, e["name"], self.log)
                 self.chain_base = snapshot(cd)
                 e = entries.get(e["then"])
             self.save()
@@ -252,39 +273,43 @@ class Periodic:
                 return False
             if not self.periodic_fits(e):
                 return False
-        if e["builtin"]:
+        if e["builtin"] == "project-critic":
             return self.project_critic(e, cd)
+        scouting = e["builtin"] == "scout"
         reqs = requests.pending(self.requests_tried)[:requests.PER_ROUND] if e["requests"] else []
         if e["requests"] and not reqs:
             self.log(f"{name}: skipped: no untriaged requests")
             return False
         self.requests_tried |= {f.stem for f in reqs}
         self.fetch()  # its rules as they are on main now: never a copy an earlier session in the chain edited
-        own_rules = (gout(cd, "show", f"{p.upstream}:{e['prompt']}") if e["prompt"]
-                     else rules(p, "TRIAGE-REQUESTS.md"))
+        own_rules = (rules(p, "SCOUT.md") if scouting else gout(cd, "show", f"{p.upstream}:{e['prompt']}")
+                     if e["prompt"] else rules(p, "TRIAGE-REQUESTS.md"))
         if not own_rules:
             self.log(f"{name}: skipped: its prompt {e['prompt']} isn't on {p.upstream}")
             self.periodic_failed(name, f"its prompt {e['prompt']} isn't on {p.upstream}.")
             return False
         # the chain's earlier ones: in cd, and still claimed with the new ones
-        ids = pick_ids(p, "periodic", 6, cd, own="periodic", keep=self.handed)
+        ids = pick_ids(p, "periodic", scout.MOST if scouting else 6, cd, own="periodic", keep=self.handed)
         self.handed |= set(ids)
         triage = any(x["then"] == name for x in entries.values())
         notes = critic.followups(p) if triage else []
         limit = now() + timedelta(minutes=e["minutes"])
+        from .mix import exploring
+        look, seen = scout.start(p, len(self.group_queue().done), exploring(p)) if scouting else ("", {})
         prompt = "\n\n".join(filter(None, [
             f"Periodic session {name} on {p.upstream} at {gout(cd, 'rev-parse', '--short', 'HEAD')}, after "
             f"{len(self.merged)} merged tickets this run. Today is {now():%Y-%m-%d}. End with the PERIODIC line.",
             finished and "## Finished since the last run: " + "; ".join(
                 f"{g} ({len(ts)} ticket{'s' * (len(ts) != 1)}: {', '.join(ts)})" for g, ts in finished.items()),
             prev and f"## The previous session's output\n{prev}",
+            look,
             notes and "## The critic's follow-up notes since the last plan (ticket, point)\n"
             + "\n".join(f"- ({t}) {b}" for t, b in notes[:60]),
             triage and "## Existing tickets (id, status, title)\n"
             + (Queue(p).listing(compact=True, keep=self.merged) or "(none yet)"),
             rejected_part(cd),  # so an idea the bench turned down isn't ticketed again unchanged
             stopped_part(p),
-            f"## Ids for new tickets, in order (at most 6)\n{', '.join(ids)}",
+            f"## Ids for new tickets, in order (at most {len(ids)})\n{', '.join(ids)}",
             f"Time limit: {hhmm(limit)}; check with `date`.",
             reqs and requests.prompt_part(reqs),
         ]))
@@ -294,10 +319,12 @@ class Periodic:
         self.log(f"{name}: periodic session ({e['minutes']} min{said})")
         deny = ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
                 "Bash(git reset *)", "Bash(gh *)", NO_REQUEST] + ([] if p.ap["subagents"] else ["Agent"])
+        deny += [] if scouting or e["prompt"] else scout.WEB  # the web is the scout's alone among windvane's own
         system = rules(p, "PERIODIC.md") + "\n" + own_rules
-        session = {}
+        session, before, started = {}, budget.reading() if scouting else {}, time.time()
         text, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}", prompt, system, cd, limit,
-                                          ["Bash(windvane *)"], deny, session=session)
+                                          scout.WEB if scouting else ["Bash(windvane *)"], deny, session=session,
+                                          tools=scout.TOOLS if scouting else None)
         m, said = last_match(PERIODIC_RE, text), text
         if not (killed or error or m) and session.get("id"):  # ended well but without its line: asked once, tree as is
             more = " (your `REQUEST:` lines first)" if reqs else ""
@@ -308,6 +335,9 @@ class Periodic:
             if m:  # the reply stays the first one's; a verdict the re-ask repeats wins over its first one
                 said = f"{again}\n{text}"
                 text = f"{text.rstrip()}\n{m.group(0)}"
+        if scouting:  # its reading is experiment work: it counts against the experiment budget, however it ended
+            budget.record_session(f"{now():%Y%m%d-%H%M%S}-{name}", p.state / "ledger.jsonl", f"periodic:{name}",
+                                  started, before)
         if killed or error or not m:
             why = killed or error or "no PERIODIC line"
             n, kept = keep_dropped(p, cd, name, self.chain_base)
@@ -320,6 +350,8 @@ class Periodic:
                     f" ({files(n)}): {reapply(kept)}" if kept else "."))
             return None
         self.log(f"{name}: PERIODIC: {m.group(1)}")
+        if scouting:
+            scout.recorded(p, seen)
         push(name, phone.cut(m.group(1), log=self.log) or "done", 3, "mag")
         if notes:  # used: the next plan (or triage) starts after them
             append_jsonl(p.state / "critic.jsonl", {"ticket": "PLAN", "step": f"periodic:{name}", "notes": len(notes)})
@@ -730,7 +762,7 @@ class Periodic:
             f"Time limit: {hhmm(limit)}; check with `date`."])
         self.log(f"{name}: seed session ({e['minutes']} min)")
         deny = ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
-                "Bash(git reset *)", "Bash(gh *)", NO_REQUEST] + ([] if p.ap["subagents"] else ["Agent"])
+                "Bash(git reset *)", "Bash(gh *)", NO_REQUEST, *scout.WEB] + ([] if p.ap["subagents"] else ["Agent"])
         text, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}", prompt, rules(p, "SEED.md"), cd,
                                           limit, [], deny)
         if killed or error:

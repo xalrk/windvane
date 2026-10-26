@@ -15,6 +15,7 @@ from .mix import mix_part
 from .phone import whole
 from .queue import Queue, folder_ids, id_after, mend_queue, ref_ids
 from .runner import NO_REQUEST, plain_error, rules, run_claude
+from .scout import ablated
 from .util import edit_json, git, gout, last_match, load_json, log, now, push, run, same_process, save_json, stamp
 from .worktree import clean_detach, ensure_worktree
 
@@ -495,6 +496,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=(), end
             log(p, f"plan: {n_tickets(n)} on {pr or branch}")
         else:
             log(p, f"plan: {n_tickets(n)} pushed to {branch}")
+    ablated(p, tried, lambda m: log(p, m))  # a new model's ablation round, unless this plan explored
     explored(p, tried)
     push(f"planned {n_tickets(n)}", whole("", m.group(3) or "See the queue.", log=lambda m: log(p, m)), 3, "memo")
     clean_detach(p, cd, p.upstream)

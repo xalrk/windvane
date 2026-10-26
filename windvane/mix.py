@@ -7,7 +7,7 @@ reordered, what a session is shown), `ablation` (something taken out), `revisit`
 changed) or `scout` (an idea from outside, on top of the mix). Each round's experiments follow `[experiments] mix`,
 moved toward the kinds the bench keeps (each kind's kept rate over its last RECENT) but never under `floor`, so no
 kind dies out. A plateau first gets one exploration round (EXPLORE kinds only) before planning stops
-(`experiment.Experiments.plateau_watch`).
+(`experiment.Experiments.plateau_watch`); a model new to the ledger, one ablation round (`scout.models_watch`).
 
 Novelty: the planner sees EXPERIMENTS.md as one line per record, grouped by the mechanism each changed
 (`Mechanism:` in the ticket's header), and a new experiment changing the same mechanism and files as one rejected in
@@ -141,9 +141,18 @@ def exploring(p):
 
 def round_kinds(p, cd):
     """The kinds this round shares out: the mix's, `revisit` only with a rejected record to revisit; an exploration
-    round's EXPLORE ones."""
+    round's EXPLORE ones; an ablation round's (a new model) `ablation` alone."""
+    from .scout import ablation
     kinds = [k for k in KINDS if k != "revisit" or records(cd)]
-    return [k for k in kinds if k in EXPLORE] if exploring(p) else kinds
+    return [k for k in kinds if k in EXPLORE] if exploring(p) else ["ablation"] if ablation(p) else kinds
+
+
+def round_lead(p):
+    """Why this round shares out only some kinds ("" when it shares out the mix's)."""
+    from .scout import ablation
+    new = ablation(p)
+    return ("this round explores" if exploring(p) else
+            f"this round tests the rules against a new model ({', '.join(new['models'])})" if new else "")
 
 
 def round_shares(p, cd, ideas):
@@ -163,8 +172,8 @@ def mix_part(p, cd, n, q):
         return ""
     got = plan_counts(p, cd, n, q)
     lead = ("## This round explores (a plateau: the last experiments were all rejected)\nOnly `bold`, `ablation` "
-            "and `scout` experiments this round" if exploring(p) else "## This round's experiment mix\nWrite this "
-            "round's experiments")
+            "and `scout` experiments this round" if exploring(p) else f"## {round_lead(p).capitalize()}: rules written for "
+            "an older model are the first to test\nOnly `ablation` experiments this round" if round_lead(p) else "## This round's experiment mix\nWrite this round's experiments")
     return (f"{lead} in this mix: " + ", ".join(f"{k} {c}" for k, c in got.items() if c) + "; `scout` ideas from "
             "outside come on top. Writing fewer, keep to the mix: a kind's experiments past its part of the ones you "
             "write are dropped from the plan.")
@@ -277,7 +286,7 @@ def vet(p, cd, new, order, q, log):
             room[kind] -= 1
             continue
         log(f"plan: dropped {tid} ({kind}): past {kind}'s share of this round's experiments ({said})"
-            if kind in share else f"plan: dropped {tid} ({kind}): this round explores, with no {kind} experiments")
+            if kind in share else f"plan: dropped {tid} ({kind}): {round_lead(p)}, with no {kind} experiments")
         drop.append(tid)
     return drop
 

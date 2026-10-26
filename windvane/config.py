@@ -167,7 +167,7 @@ def permissions(table, entries):
 
 
 LANDS = ("near", "next", "end", "hold", "ask")  # where a [[periodic]] chain's new tickets go in the queue
-BUILTINS = ("project-critic", "bench", "seed")  # [[periodic]] sessions windvane brings, so a project needs no prompt of its own
+BUILTINS = ("project-critic", "bench", "seed", "scout")  # [[periodic]] sessions windvane brings, so a project needs no prompt of its own
 BENCH_MINUTES = 300  # a bench entry's default `minutes`: its whole time, both sides of a compare and their judges
 
 
@@ -180,7 +180,8 @@ def periodic(entries):
     `bench`: `windvane bench` in the background once tickets touching `after_touch` paths have merged, `minutes` its
     whole time, a regression past `bench_cost_up` % more tokens per merged ticket, or worse quality, ticketed;
     `seed`: a new training seed for `bench/pool/` after every `seed_every` kept experiments, the pool keeping the newest
-    `pool_size`).
+    `pool_size`; `scout`: ideas from outside, every `scout_every` tickets finished on main and in each plateau's
+    exploration round).
     Mistakes stop the run at once rather than at the Nth merge."""
     out = {}
     for i, e in enumerate(entries if isinstance(entries, list) else [entries]):
@@ -228,6 +229,11 @@ def periodic(entries):
                 raise SystemExit(f"windvane: [[periodic]] {name}: {key} = {v!r}: a whole number, 1 or more, for "
                                  "builtin = \"seed\" only")
             pool[key] = v
+        every_n = e.get("scout_every", 15)
+        if "scout_every" in e and builtin != "scout" or isinstance(every_n, bool) or not isinstance(every_n, int) \
+                or every_n < 1:
+            raise SystemExit(f"windvane: [[periodic]] {name}: scout_every = {every_n!r}: a whole number, 1 or more, "
+                             "for builtin = \"scout\" only")
         cost_up = e.get("bench_cost_up", 25)
         if isinstance(cost_up, bool) or not isinstance(cost_up, (int, float)) or cost_up < 0:
             raise SystemExit(f"windvane: [[periodic]] {name}: bench_cost_up = {cost_up!r}: a percent, 0 or more")
@@ -235,7 +241,7 @@ def periodic(entries):
                      "setup": e.get("setup", ""), "setup_minutes": setup_m,
                      "prompt": e.get("prompt", ""), "then": e.get("then", ""), "builtin": builtin,
                      "dims": dims, "parallel": max(1, par), "requests": reqs,
-                     "after_touch": touch, "bench_cost_up": cost_up, **pool,
+                     "after_touch": touch, "bench_cost_up": cost_up, **pool, "scout_every": every_n,
                      "allow": e.get("allow", []), "deny": e.get("deny", [])}
     for e in out.values():
         if e["then"] and e["then"] not in out:

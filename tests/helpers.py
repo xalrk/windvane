@@ -45,9 +45,15 @@ if gone and "--append-system-prompt" in args:  # a session (the usage probe has 
     print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "num_turns": 0,
                       "result": "Failed to authenticate: OAuth session expired and could not be refreshed"}))
     sys.exit(1)
+if args in (["--version"], ["--help"]):  # FAKE_VERSION, FAKE_HELP: what the installed CLI says of itself
+    print(os.environ.get("FAKE_" + args[0][2:].upper(), {"--version": "2.0.0 (Claude Code)",
+                                                         "--help": "Usage: claude [options]"}[args[0]]))
+    sys.exit(0)
 prompt = args[args.index("-p") + 1]
 system = args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else ""
 emit = lambda ev: print(json.dumps(ev), flush=True)
+if os.environ.get("FAKE_MODEL"):  # the full model id the session reports, as Claude Code's init event does
+    emit({"type": "system", "subtype": "init", "model": os.environ["FAKE_MODEL"]})
 emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {
     "five_hour": {"utilization": float(os.environ.get("FAKE_FIVE", "0.1")), "resetsAt": 0},
     "seven_day": {"utilization": float(os.environ.get("FAKE_WEEK", "0.2"))}}}})
@@ -307,6 +313,10 @@ elif system.startswith("# windvane periodic run"):  # the project's rules file s
         open(f".windvane/tickets/{ids[0]}.md", "w").write(f"# {ids[0]}: found\nDepends on: nothing.\n")
         q = open(".windvane/QUEUE.md").read()
         open(".windvane/QUEUE.md", "w").write(q.replace("# Queue\n", "") + f"- {ids[0]} found\n")  # drops a line
+    if os.environ.get("FAKE_TICKETS"):  # a file of ticket texts split by `---` lines, `{id}` each one's id, in order
+        for tid, body in zip(ids, open(os.environ["FAKE_TICKETS"]).read().split("\n---\n")):
+            open(f".windvane/tickets/{tid}.md", "w").write(body.replace("{id}", tid))
+            open(".windvane/QUEUE.md", "a").write(f"- {tid} {body.splitlines()[0].split(': ', 1)[-1]}\n")
     if "WRITE_STRAY_ID" in system:  # a ticket under an id it wasn't given
         open(".windvane/tickets/T-099.md", "w").write("# T-099: stray\nDepends on: nothing.\n")
     if "WRITE_REPORT" in system:
