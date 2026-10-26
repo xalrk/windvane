@@ -128,6 +128,17 @@ def no_answer(p, patch, s):
     return {"No answer": ("Going with A: API Error",)}
 
 
+def answer_held(p, patch, s):
+    s.ticket("T-002", "T-001's answer")
+    s.write(".windvane/QUEUE.md", "# Queue\n- done: T-001 (merged)\n")
+    s.write(".windvane/QUESTIONS.md", f"# Q\n\n## Open\n### T-001: {LONG}\n- **A**: {LONG}\n- **B**: b\n\n## Answered\n")
+    s.publish()
+    pl = pilot(p)
+    pl.queue = Queue(p)
+    pl.tell_answer_holds()
+    return {"Waiting on you": ("T-002 waits on its open question: API Error",)}
+
+
 def quiet_unreadable(p, patch, s):
     patch(driver, "quiet_now", lambda p: (None, LONG))
     pilot(p).quiet_check()
@@ -401,7 +412,7 @@ def scale_warned(p, patch, s):
 
 
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
-         quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, update_reverted, crashed_stopped,
+         answer_held, quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, update_reverted, crashed_stopped,
          held, secret_aside, push_refused, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned,
          plan_dropped, experiment_rejected, plateaued, weekly_trend, tmp_full, protected_aside, kept_protected,
          not_taken_up, scale_warned]
