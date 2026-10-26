@@ -192,8 +192,20 @@ def refused(text):
     m = INSTALL.search(text)
     if m:
         return f"it names a package to install ({' '.join(m.group(0).split())[:60]})"
-    m = URL.search(re.sub(r"(?im)\bSource:.*$", "", text)) or FETCH.search(text)
+    m = URL.search(without_source(text)) or FETCH.search(text)
     return f"it names a URL to fetch ({m.group(0)[:60]})" if m else ""
+
+
+def without_source(text):
+    """The ticket with only its header's `Source:` line taken out: that's the one place a link belongs, so a page
+    that asks for its link "as a source" in the body is still refused."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines[:10]):
+        if not line.strip():
+            break  # the header ends at the first blank line
+        if re.match(r"(?i)(?:\*\*)?Source:|.*[ \t]·[ \t](?:\*\*)?Source:", line):
+            return "\n".join(lines[:i] + lines[i + 1:])
+    return text
 
 
 def vet(p, kept, name, log):
@@ -202,7 +214,7 @@ def vet(p, kept, name, log):
     keep, tickets, (old_q, queue), notes = kept
     drop = []
     for tid in tickets:
-        f = next(f for f in keep if p.norm(Path(f).stem) == tid)
+        f = next(f for f in keep if p.norm(Path(f).stem) == tid)  # `periodic_keep` keeps a file per new ticket id
         why = refused(keep[f])
         if not why:
             continue
