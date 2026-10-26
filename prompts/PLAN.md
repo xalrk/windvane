@@ -34,8 +34,7 @@ by a fresh session that has only the ticket and the repo. You write work for cap
    do gets `Kind: experiment · Idea: <kind> · Mechanism: <what it changes>`, kinds in your prompt's mix: `fix` (a
    cause the numbers show), `bold` (a session added, merged or dropped, steps reordered, what one is shown),
    `ablation` (a rule, session, check or wait taken out), `revisit` (a rejected idea whose context changed), `scout`.
-   Reuse a rejected group's mechanism name; a repeat (a shared file with an unrecorded one counts) needs
-   `Different because: <what changed>`.
+   Reuse a rejected group's mechanism name; a repeat needs `Different because: <what changed>`.
 5. Append the new ids, most valuable first, as `- <ID> <title>` bullets to `.windvane/QUEUE.md` with a shell `>>`,
    unread.
 
