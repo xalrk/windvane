@@ -19,7 +19,7 @@ from .worktree import clean_detach, ensure_worktree
 # tickets change a provisional answer), a rejected experiment's record. Until one merges its ticket ids are taken
 # (`planner.pending_ids` counts only these), so a new kind of branch that can carry tickets goes here too, or its ids
 # are handed out again.
-OWN_BRANCHES = ("plan-", "periodic-", "answers-", "experiment-", SEED_BRANCH)
+OWN_BRANCHES = ("plan-", "periodic-", "answers-", "experiment-", SEED_BRANCH, "revert-")
 
 
 def own_branch(branch):
