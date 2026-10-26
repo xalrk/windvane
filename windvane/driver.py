@@ -56,7 +56,7 @@ RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)"
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "fixes", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes", "opened", "heavy_waits",
-           "stuck_pushed", "retried", "replan_wait")  # the run's own memory, handed to the driver a restart starts
+           "stuck_pushed", "retried", "reverted", "replan_wait")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
@@ -82,6 +82,7 @@ REPLAN_WAIT = 60  # minutes an endless run (`--replan forever`) waits to plan ag
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
+SETUP_FAILED = 3  # the driver's exit code when it couldn't start (a failed setup): not a crash, even on trial
 # The environment variable set for a driver under `supervise`: it hands a crash over instead of pushing it
 SUPERVISED = "WINDVANE_SUPERVISED"
 BEGAN = "WINDVANE_BEGAN"  # when the supervisor started the run, for `run_began`
@@ -429,6 +430,7 @@ class Pilot(Desk, Periodic, Experiments):
         self.required_said = False  # that gh couldn't say which checks are required: logged once a run
         self.skip, self.merged, self.failed = set(), [], []
         self.retried = []  # failed tickets `windvane retry` put back in this run's queue (take_retries)
+        self.reverted = []  # tickets whose merge this run reverted (`trial_check`): back in the queue, not merged
         self.aside = {}  # ticket -> why the run went on without it, for the summary's "Set aside" line
         self.fixes = {}  # ticket set aside -> what keeps it from being set aside again, for `windvane queue`'s hint
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
@@ -483,6 +485,7 @@ class Pilot(Desk, Periodic, Experiments):
         # ticket runs), and the drain once that is DRAIN_AFTER old: [since, last pass, idle slots then, slot-seconds].
         self.loaded = selfupdate.loaded(self.home) if self.home else None
         self.behind, self.drain = None, None
+        self.bad = None  # how new code on trial failed every ticket the same way, until it is reverted (`trial_check`)
         # The install whose restart exec failed (`install_mark`: no retry until it changes), and whether the phone
         # has been told this run that new code can't be taken up.
         self.exec_failed, self.stuck_pushed = None, False
@@ -1202,7 +1205,12 @@ class Pilot(Desk, Periodic, Experiments):
         if not ok:
             self.feedback[tid] = f"The check fails on {sha[:12]}: {summary}\n```\n{tail(logf, 40)}\n```"
             critic.sent_back(p, tid, "check")
+            errors = selfupdate.error_lines(tail(logf, 60)) if net.online() else []  # an outage's red check is no one's
+            if errors:
+                head = summary.split(" in ")[0]
+                self.on_trial(tid, "check", f"{head}: {errors[-1]}", "\n".join([head, *errors]))
             return self.bounce(tid, "check")
+        selfupdate.passed(p.state, "check")
         if res and not res[0]:  # git merged it cleanly: like any approved head that merges, nothing new to review
             self.log(f"{tid}: a clean merge of {p.main}; no review needed")
             return self.integrate(tid, branch, sha)
@@ -1831,6 +1839,8 @@ class Pilot(Desk, Periodic, Experiments):
             if branch and git(wd, "merge-base", "--is-ancestor", branch, p.upstream).returncode == 0:
                 git(wd, "branch", "-q", "-D", branch)  # -d's own test would use the deleted remote branch
         self.merged.append(tid)
+        self.reverted = [t for t in self.reverted if t != tid]  # redone since its revert
+        (p.state / selfupdate.REVERTED).unlink(missing_ok=True)  # a merge between two bad updates: the next is reverted too
         jobs.end_kept(p, tid, "its ticket merged")
         self.note_heavy(tid)
         scratch.drop(p, tid)
@@ -1902,6 +1912,8 @@ class Pilot(Desk, Periodic, Experiments):
             self.fail_streak += 1
         else:  # the outage's fault, not the tickets': it mustn't stop the run
             self.log(f"{tid}: failed with the network down: not counted toward two failures in a row")
+        if why.startswith("driver error:") and net.online() and self.bad is None:
+            self.on_trial(tid, "driver error", why, why)
         ending = getattr(self, "ending", False)  # the run winds down: it neither goes on nor takes a retry
         if head:
             retry = "" if ending else f"\nOnce {once or 'fixed'}, it merges the kept approval: `windvane retry {tid}`"
@@ -2498,8 +2510,11 @@ class Pilot(Desk, Periodic, Experiments):
             if why:
                 self.stop_reason = why
                 return
+            waits = self.trial_check()  # first: a revert a killed driver began is finished before any pull
+            if self.halt:  # it couldn't be: the next pass stops the run, on this code
+                continue
             self.self_update()
-            if self.draining():
+            if waits or self.draining():
                 self.pause()
                 continue
             free = [i for i in range(self.n) if i not in self.running.values()]
@@ -2733,17 +2748,87 @@ class Pilot(Desk, Periodic, Experiments):
         # The lock stays open: its fd closes on exec (Python's are non-inheritable), so the restarted driver takes
         # it again, and an exec that fails leaves the lock held for this run.
         os.environ["WINDVANE_RESTARTED"] = "1"  # no second "windvane started" push; it reads restart.json
+        self.trial_start()
         cmd = [*exe(), *selfupdate.restart_args(self.argv, self.end())]
         try:
             self.execv(cmd[0], cmd)
         except OSError as e:  # a noexec mount, a bad #! line, the install removed since the check: not a crash
             os.environ.pop("WINDVANE_RESTARTED", None)  # nothing took over: this driver goes on with the run
+            selfupdate.end_trial(self.p.state)
             (self.p.state / "restart.json").unlink(missing_ok=True)
             self.behind = self.drain = None
             self.exec_failed = self.install_mark() if self.home else None
             self.not_taken_up(f"{cmd[0]} can't be run ({(e.strerror or str(e)).lower()})",
                               "and the run restarts on it",
                               "Check it can run there (a noexec mount or a bad #! line stops it), or ")
+
+    def trial_start(self):
+        """Puts the code a restart takes up on trial (`selfupdate.on_trial`): `good` stays the last code that passed
+        one. Code that is a good one's again (a revert taken up) isn't, nor code that isn't this project's own merges (a
+        run on another project): only those can be reverted."""
+        p = self.p
+        t, new = selfupdate.on_trial(p.state), gout(self.home, "rev-parse", "HEAD")
+        if t and "reverting" in t:  # the restarted driver finishes it (`trial_check`)
+            return
+        good = t["good"] if t else self.loaded
+        back = load_json(p.state / selfupdate.REVERTED, {}).get("good")
+        if not good or any(g and not selfupdate.code_changed(self.home, g) for g in (good, back)) or \
+                git(p.main_root(), "merge-base", "--is-ancestor", new, p.upstream).returncode:
+            return selfupdate.end_trial(p.state)
+        selfupdate.put_on_trial(p.state, good, new, len(self.merged))
+
+    def on_trial(self, tid, step, why, detail):
+        """A ticket's setback while the driver's code is on trial: the same setback for every ticket marks the update
+        bad, and the loop reverts it once no ticket runs (`trial_check`)."""
+        if self.bad is None and selfupdate.setback(self.p.state, tid, step, why, detail, self.p.id_re):
+            seen = selfupdate.on_trial(self.p.state)["seen"]
+            self.bad = f"failed {', '.join(seen)} the same way at the {step}: {why}"
+            self.log(f"windvane's new code {self.bad}; no new tickets until it is reverted")
+
+    def trial_check(self):
+        """Each pass: new code on trial is kept once a ticket merges on it (or after an hour, `on_trial`); a bad one
+        is reverted once no ticket runs, and the run goes on on the good code. True while that waits."""
+        t = selfupdate.on_trial(self.p.state)
+        if t and self.bad is None and "reverting" in t:  # a driver killed while it reverted: finished here
+            self.bad = t["reverting"]["how"]
+        if t and self.bad is None and len(self.merged) > t["merged"]:
+            selfupdate.end_trial(self.p.state)
+            self.log(f"windvane {t['new'][:8]} passed its trial: {self.merged[-1]} merged on it")
+        if self.bad is None or not t:
+            self.bad = None
+            return False
+        if self.running:
+            return True
+        with self.merge_lock:
+            stop = undo_update(self.p, self.cd, self.home, t, self.bad, self.log)
+        self.bad = None
+        if stop:
+            self.halt = stop
+            return False
+        self.take_back()
+        failed = [x for x in t["seen"] if x in self.failed]
+        if failed:  # theirs was the update's failure: they go again on the good code
+            with open(self.p.state / RETRY, "a") as f:
+                f.write("".join(f"{x}\n" for x in failed))
+        self.fail_streak = 0
+        self.pull()  # the revert the install took up: the driver restarts on it now, as no ticket runs
+        if self.behind:
+            self.restart()
+        return False
+
+    def take_back(self, this_run=True):
+        """The tickets the last revert took off main, merged earlier in this run maybe: not any more, so the picker
+        takes them up again after the fix and the summary lists them as reverted. Done once per revert (`taken` in
+        reverted.json), by whichever driver goes on after it: this one after a bad check (`trial_check`), the
+        restarted one after two crashes (`carry_over`); a new run's merges never had them."""
+        f = self.p.state / selfupdate.REVERTED
+        r = load_json(f, {})
+        if not r.get("tickets") or r.get("taken"):
+            return
+        if this_run:
+            self.merged = [x for x in self.merged if x not in r["tickets"]]
+            self.reverted += [x for x in r["tickets"] if x not in self.reverted]
+        save_json(f, {**r, "taken": True})
 
     def hand_over(self):
         """Leaves the run's memory for the driver that replaces this one (`carry_over`)."""
@@ -2765,6 +2850,7 @@ class Pilot(Desk, Periodic, Experiments):
                 if k in CARRIED:
                     setattr(self, k, set(v) if k == "skip" else v)
         f.unlink(missing_ok=True)
+        self.take_back(bool(restarted))
 
     def take_lock(self):
         """One driver per project; `locked` reads this lock to tell the phone a run is on."""
@@ -3015,6 +3101,7 @@ class Pilot(Desk, Periodic, Experiments):
                     + f"Failed: {names(self.failed, titled)}.\n"
                     + "".join(f"Set aside: {names([t], titled)} ({reason}{self.holds_up(t)}).\n"
                               for t, reason in self.aside.items())
+                    + (f"Reverted (back in the queue): {names(self.reverted, titled)}.\n" if self.reverted else "")
                     + (f"Held for you (parked in QUEUE.md): {names(self.held, titled)}.\n" if self.held else "")
                     + (f"Stopped at the deadline (resumes next run): {names(self.stopped, titled)}.\n"
                        if self.stopped else "")
@@ -3109,12 +3196,56 @@ def join(t):
         time.sleep(0.05)
 
 
-def supervise(p, argv, deadline, start=None, sleep=time.sleep):
+def undo_update(p, cd, home, trial, how, log):
+    """New driver code that broke the run on trial (`how`): reverted on main with a ticket to fix it
+    (`selfupdate.revert_update`), the install fast-forwarded to the revert, and one push; None when the run goes on
+    on the good code that way, else why it stops. Never two reverts without a ticket merged between them: a second bad
+    update in a row stops the run, as only the user can tell what goes on. The trial stays (`reverting`) until the
+    revert has landed: a driver killed meanwhile finishes it when it starts again (`trial_check`)."""
+    st, new = p.state, trial["new"][:8]
+    shas = [c[0][:8] for c in selfupdate.to_revert(p.main_root(), p.upstream, trial["good"], trial["new"]) or []]
+    take_up = f"take it up with `git -C {shell_path(home)} pull --ff-only` (the install can't pull on its own: " \
+              "its driver doesn't start), then start the run again"  # the trial is over: the next crash is the run's end
+    by_hand = (f". To go on, revert {', '.join(shas) or new} on {p.main} by hand (`git revert -m 1 <sha>` for a merge) "
+               f"or fix it, push, {take_up}")
+    if "reverting" not in trial and (st / selfupdate.REVERTED).exists():
+        selfupdate.end_trial(st)
+        return f"windvane {new} {how}, right after a revert, with no ticket merged since: nothing more is reverted{by_hand}"
+    trial.setdefault("reverting", {"how": how})
+    save_json(st / selfupdate.TRIAL, trial)
+    how = trial["reverting"]["how"]
+    try:
+        _, ids, tid, sha = selfupdate.revert_update(p, cd, trial, how, log)
+    except (selfupdate.Unreverted, SetupFailed) as e:
+        selfupdate.end_trial(st)  # nothing reached main
+        waits = str(e).startswith("the revert waits")
+        if waits:  # once it merges, it counts: the next bad update stops the run
+            save_json(st / selfupdate.REVERTED, {"good": trial["good"], "waits": str(e)})
+        then = f"; merge it, {take_up}" if waits else by_hand
+        return f"windvane {new} {how}, and it couldn't be reverted: {e}{then}"
+    save_json(st / selfupdate.REVERTED, {"good": trial["good"], "revert": sha, "tickets": ids, "fix": tid})
+    selfupdate.end_trial(st)
+    said = []
+    selfupdate.pull(home, said, trial["new"])
+    if not selfupdate.revert_landed(home, "HEAD", trial["new"], trial["reverting"]):
+        return (f"windvane {new} {how}; it is reverted on {p.main} ({sha[:8]}), but the install didn't take that "
+                f"up ({'; '.join(said) or 'it is elsewhere'}): fix that, {take_up}")
+    back = f"; {', '.join(ids)} go{'es' * (len(ids) == 1)} again after it" if ids else ""
+    log(f"windvane {new} {how}: reverted on {p.main} in {sha[:8]}; {tid} is to fix it{back}; the run goes on without it")
+    push("windvane update reverted", whole(f"windvane {new} ", how, f". Reverted on {p.main} ({sha[:8]}); {tid} is to "
+                                                                     f"fix it{back}. The run goes on without it.",
+                                           log=log), 4, "rewind", ("Status=status",))
+    return None
+
+
+def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
     """`run --detach`'s loop around the driver (`windvane <argv>`): a driver that dies of an exception is restarted
     with the run's deadline as it now is and what it had done (`carry_over`), up to RESTARTS times an hour; each
     restart is logged and pushed with the error. A stop, the deadline, an empty queue or a failed setup end the run
     as they end the driver. A driver killed by the system (OOM) is only pushed: its sessions, in process groups of
-    their own, may still be at work in the worktrees a restart would resume. Returns the driver's last exit code."""
+    their own, may still be at work in the worktrees a restart would resume. New code on trial (a self-update's) that
+    crashes twice (an exit with an error before its run began counts as a crash, a failed setup's SETUP_FAILED doesn't)
+    is reverted (`undo_update`), and the driver restarted on the good code, with one push for both crashes. Returns the driver's last exit code."""
     start = start or (lambda args, env: subprocess.run([*runnable(exe()), *args], env=env).returncode)
     began = util.clock()  # now, not this process's start: a schedule's process supervises each window in turn
     env = {**os.environ, SUPERVISED: "1", **({BEGAN: repr(began)} if began is not None else {})}
@@ -3134,7 +3265,9 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
                  ("Status=status",))
             tear_down(p, lock=True, tell=True)  # a driver that crashed before it left its helpers up
             return 1
-        info = load_json(crash, None)
+        info, trial = load_json(crash, None), selfupdate.on_trial(p.state)
+        if info is None and trial and rc > 0 and rc != SETUP_FAILED:  # new code on trial that died before its run could say why: a crash too
+            info = {"error": f"it exited with code {rc} before its run began", "summary": ""}
         if info is None:
             if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
                 why = f"the driver was killed ({signal.Signals(-rc).name})"
@@ -3149,21 +3282,35 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep):
         except (OSError, ValueError):
             pass
         crashes = [t for t in crashes if t > time.time() - 3600] + [time.time()]
+        bad = None  # new code on trial that crashed twice: "" once reverted, else why the run stops
+        if trial:
+            trial["crashes"] = trial.get("crashes", 0) + 1
+            save_json(p.state / selfupdate.TRIAL, trial)
+            if trial["crashes"] >= 2:
+                bad = undo_update(p, p.ci_dir, home or HOME, trial, f"crashed the driver twice on trial ({why})",
+                                  lambda m: log(p, m)) or ""
         asked = lambda: "asked to stop" if (p.state / "STOP").exists() else None
-        stop = (f"crashed {len(crashes)} times in an hour" if len(crashes) > RESTARTS
-                else asked() or ("deadline" if now() >= deadline else None))
-        if not stop:
-            log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour")
-            push("windvane restarted", whole("The driver crashed: ", why,
-                                            f". Restart {len(crashes)} of {RESTARTS} this hour.",
-                                            log=lambda m: log(p, m))
-                 + f"\nIt goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
+        stop = bad or (f"crashed {len(crashes)} times in an hour" if len(crashes) > RESTARTS
+                       else asked() or ("deadline" if now() >= deadline else None))
+        if not stop and bad == "":  # its push said so
+            log(p, f"driver restarted on {trial['good'][:8]}")
+            sleep(RESTART_PAUSE)
+            stop = asked()
+        elif not stop:
+            log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour"
+                   + "; new code on trial: pushed only if it crashes again" * bool(trial))
+            if not trial:  # a crash on trial is told once, by the revert's push, if a second one follows
+                push("windvane restarted", whole("The driver crashed: ", why,
+                                                f". Restart {len(crashes)} of {RESTARTS} this hour.",
+                                                log=lambda m: log(p, m))
+                     + f"\nIt goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
             sleep(RESTART_PAUSE)
             stop = asked()
         if stop:
             log(p, f"driver crashed ({why}); not restarted: {stop}")
-            push("windvane stopped", whole("Why: the driver crashed (", why, f"); not restarted: {stop}.",
-                                          log=lambda m: log(p, m)) + "\n"
+            push("windvane stopped", (whole("Why: ", stop, ".", log=lambda m: log(p, m)) if bad else
+                                      whole("Why: the driver crashed (", why, f"); not restarted: {stop}.",
+                                            log=lambda m: log(p, m))) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             tear_down(p, lock=True, tell=True)  # after the push, as the driver's own end does
             if not locked(p):  # its sessions ended with it (a killed one's may not have: not checked there); a run

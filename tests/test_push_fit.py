@@ -214,6 +214,32 @@ def crashing(p, stop):
     driver.supervise(p, ["run"], now() + timedelta(hours=2), start=start, sleep=lambda s: None)
 
 
+def update_reverted(p, patch, s):
+    """New driver code on trial that crashes twice with a long error: reverted, and the push still says so."""
+    from windvane import selfupdate
+    s.write("windvane/driver.py", "good\n")
+    s.publish("driver")
+    good = s.git("rev-parse", "HEAD")
+    s.write("windvane/driver.py", "broken\n")
+    s.git("switch", "-q", "-c", "t-001-x")
+    s.git("commit", "-qam", "break")
+    s.git("switch", "-q", "main")
+    s.git("merge", "-q", "--no-ff", "-m", "Merge T-001: do T-001 (branch t-001-x)", "t-001-x")
+    s.git("push", "-q", "origin", "main")
+    home = s.tmp / "install"
+    s.git("clone", "-q", str(s.remote), str(home), cwd=s.tmp)
+    p.state.mkdir(parents=True, exist_ok=True)
+    selfupdate.put_on_trial(p.state, good, s.git("rev-parse", "HEAD"), 0)
+
+    def start(a, e):
+        if (home / "windvane/driver.py").read_text() == "good\n":
+            return 0
+        (p.state / "crash.json").write_text(json.dumps({"error": LONG, "summary": "Merged: none."}))
+        return 1
+    driver.supervise(p, ["run"], now() + timedelta(hours=2), start=start, sleep=lambda s: None, home=home)
+    return {"windvane update reverted": ("crashed the driver twice", "Reverted on main", "The run goes on without it")}
+
+
 def restarted(p, patch, s):
     crashing(p, stop=False)
     return {"windvane restarted": ("The driver crashed: API Error", "Restart 1 of")}
@@ -375,7 +401,7 @@ def scale_warned(p, patch, s):
 
 
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
-         quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
+         quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, update_reverted, crashed_stopped,
          held, secret_aside, push_refused, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned,
          plan_dropped, experiment_rejected, plateaued, weekly_trend, tmp_full, protected_aside, kept_protected,
          not_taken_up, scale_warned]
