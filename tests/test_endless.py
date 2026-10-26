@@ -18,6 +18,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import budget, config, driver, experiment, planner, stats  # noqa: E402
+from windvane import mix as mix_mod  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.util import append_jsonl, now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
@@ -158,7 +159,7 @@ class PlannerPrompt(Base):
             self.assertNotIn(leak, part)
         self.assertNotIn(str(self.s.root), prompt)
         self.assertIn("## Experiments the bench rejected (.windvane/EXPERIMENTS.md)", prompt)
-        self.assertIn("### T-005: a shorter worker prompt", prompt)
+        self.assertIn("- T-005 (kind not recorded): a shorter worker prompt", prompt)
         self.assertIn("## The newest bench runs (`windvane stats --bench`)\nrun ", prompt)
         self.assertIn("20261020-100000", prompt)
         planner.plan(self.p, "make it better")  # a plan by count, or at the desk: none of it
@@ -187,32 +188,51 @@ class PlannerPrompt(Base):
 
 
 class Plateau(Base):
-    def verdicts(self, *kinds):
+    def verdicts(self, *kinds, ticket="T-001"):
         for v in kinds:
             row = {"event": "experiment", "verdict": "kept"} if v == "kept" else \
                 {"event": "outcome", "outcome": "rejected"}
-            append_jsonl(self.p.state / "ledger.jsonl", {**row, "ticket": "T-001", "at": at(time.time())})
+            append_jsonl(self.p.state / "ledger.jsonl", {**row, "ticket": ticket, "at": at(time.time())})
 
     def watch(self, pilot):
         with mock.patch.object(experiment, "push") as push:
             pilot.plateau_watch()
         return [c.args for c in push.call_args_list]
 
-    def test_eight_rejected_in_a_row_stop_experiment_planning_with_one_push(self):
+    def plateau(self, pilot, explorer="T-090"):
+        """Eight rejected, then the exploration round's one experiment rejected too: the pushes of the last look."""
+        self.verdicts(*["rejected"] * 8)
+        self.assertEqual(self.watch(pilot), [])
+        planner.explored(self.p, [explorer])
+        self.verdicts("rejected", ticket=explorer)
+        return self.watch(pilot)
+
+    def test_eight_rejected_in_a_row_then_a_rejected_exploration_round_stop_planning_with_one_push(self):
         self.make()
         pilot = self.pilot(replan=2)  # any run, not only an endless one
         self.verdicts("kept", *["rejected"] * 7)
         self.assertEqual(self.watch(pilot), [])
         self.assertEqual(experiment.stopped(self.p), "")
         self.verdicts("rejected")
+        self.assertEqual(self.watch(pilot), [])  # first, one exploration round
+        self.assertEqual(experiment.stopped(self.p), "")
+        self.assertEqual(mix_mod.exploring(self.p), {"at": 9, "ids": None})
+        for tid in ("T-090", "T-091"):  # open tickets: the round waits for each to be decided
+            self.s.write(f".windvane/tickets/{tid}.md", f"# {tid}: explore\nDepends on: nothing.\n")
+        self.s.publish()
+        planner.explored(self.p, ["T-090", "T-091"])
+        self.verdicts("rejected", ticket="T-090")
+        self.assertEqual(self.watch(pilot), [])  # T-091 not decided yet
+        self.verdicts("rejected", ticket="T-091")
         pushes = self.watch(pilot)
         self.assertEqual(len(pushes), 1)
         self.assertEqual(pushes[0][0], "Experiments plateaued")
-        self.assertIn("The last 8 experiments were all rejected", pushes[0][1])
+        self.assertIn("The last 8 experiments were all rejected, and an exploration round after them "
+                      "kept none (2 rejected)", pushes[0][1])
         self.assertIn("frozen seeds: no run this week", pushes[0][1])  # the week's trend
         self.assertIn("a plateau", experiment.stopped(self.p))
-        self.assertIn("## Experiments are stopped\nthe last 8 experiments were all rejected",
-                      planner.stopped_part(self.p))
+        self.assertIn("## Experiments are stopped\nthe last 8 experiments were all rejected and the exploration round "
+                      "after them kept none (2 rejected; a plateau)", planner.stopped_part(self.p))
         self.verdicts("rejected")
         self.assertEqual(self.watch(pilot), [])  # one push, not one per rejection
         self.assertIn("Other tickets go on", pushes[0][1])
@@ -220,8 +240,7 @@ class Plateau(Base):
     def test_a_kept_experiment_starts_them_again(self):
         self.make()
         pilot = self.pilot()
-        self.verdicts(*["rejected"] * 8)
-        self.watch(pilot)
+        self.plateau(pilot)
         self.assertTrue(experiment.stopped(self.p))
         self.verdicts("kept")
         self.assertEqual(self.watch(pilot), [])
@@ -232,28 +251,27 @@ class Plateau(Base):
     def test_resume_starts_them_again_and_the_old_rejections_no_longer_count(self):
         self.make()
         pilot = self.pilot()
-        self.verdicts(*["rejected"] * 8)
-        self.watch(pilot)
+        self.plateau(pilot)
         self.assertTrue(experiment.resume(self.p))
         self.assertEqual(self.watch(pilot), [])
-        self.assertEqual(experiment.stopped(self.p), "")
+        self.assertEqual((experiment.stopped(self.p), mix_mod.exploring(self.p)), ("", None))
         self.verdicts(*["rejected"] * 7)
-        self.assertEqual(self.watch(pilot), [])
+        self.watch(pilot)
+        self.assertIsNone(mix_mod.exploring(self.p))
         self.verdicts("rejected")
-        self.assertEqual(len(self.watch(pilot)), 1)
+        self.watch(pilot)
+        self.assertEqual(mix_mod.exploring(self.p)["ids"], None)
 
     def test_a_new_goal_or_a_new_seed_starts_them_again(self):
         self.make()
         pilot = self.pilot()
-        self.verdicts(*["rejected"] * 8)
-        self.watch(pilot)
+        self.plateau(pilot)
+        self.assertTrue(experiment.stopped(self.p))
         pilot.a.goal = "something else"
         self.watch(pilot)
         self.assertEqual(experiment.stopped(self.p), "")
         self.assertIn("the goal changed", self.p.state.joinpath("autopilot.log").read_text())
-        experiment.save_json(experiment.plateau_file(self.p), {"from": 0})  # the same 8 rejections, read again
-        pilot.plateau_read = None
-        self.watch(pilot)
+        self.assertEqual(len(self.plateau(pilot, "T-091")), 1)
         self.assertTrue(experiment.stopped(self.p))
         self.s.write("bench/other/seed/README.md", "other\n")
         self.s.write("bench/other/hidden/bench.toml", "")

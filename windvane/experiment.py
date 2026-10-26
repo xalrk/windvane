@@ -13,8 +13,11 @@ Main moving on during the bench: the head is compared with the newest main a ben
 
 `stop` halts experiment planning (the overfit alarm, `periodic.Periodic.overfit_watch`): the planner and the periodic
 sessions are told to write no experiment until `windvane experiments resume`. A plateau stops it too
-(`plateau_watch`): `plateau` rejections in a row mean the ideas stopped paying, so the bench's share of the week goes
-unspent until something changes what an experiment could find: a kept one, a new goal, a new seed, or a resume.
+(`plateau_watch`): `plateau` rejections in a row first get one exploration round (only bold, ablation and scout
+ideas, `mix.EXPLORE`); that round all rejected too means the ideas stopped paying, so the bench's share of the week
+goes unspent until something changes what an experiment could find: a kept one, a new goal, a new seed, or a resume.
+A rejected `Idea: bold` experiment gets one revision first (`revise`): its worker sees which hidden tests and judge
+checks moved on each seed, since a big change is rarely right first time.
 An endless run (`run --replan forever`) also pushes the week's `stats.trend` once a week, at the usage window's reset
 (`trend_watch`), so whether the loop works shows without a look at the desk.
 """
@@ -22,7 +25,8 @@ import math
 import time
 from datetime import datetime, timedelta
 
-from . import bench, budget, jobs, net, phone, privacy, stats
+from . import bench, budget, jobs, mix, net, phone, privacy, stats
+from .bench_score import counted, judged
 from .config import DIR
 from .held import land
 from .periodic import bench_command, bench_runs
@@ -79,7 +83,8 @@ class Experiments:
         if not kept:
             return self.reject(tid, branch, sha, both, numbers, why)
         self.log(f"{tid}: experiment kept by the bench ({why}): {numbers}")
-        append_jsonl(p.state / "ledger.jsonl", {"event": "experiment", "ticket": tid, "verdict": "kept"})  # pool.py
+        append_jsonl(p.state / "ledger.jsonl", {"event": "experiment", "ticket": tid, "verdict": "kept",  # pool.py
+                                                "idea": self.idea(tid)})
         self.bench_body(tid, branch, numbers, why, bench.compare_table(both, which))
         return self.settled(tid)
 
@@ -156,10 +161,11 @@ class Experiments:
         return False
 
     def plateau_watch(self):
-        """Between tickets: the last `plateau` experiments all rejected (since experiments last started again) stop
-        experiment planning with one push holding the week's trend; the run goes on with other tickets. A plateau's
-        stop ends by itself on a kept experiment, a changed goal or a new seed. Read only when the ledger, main or
-        the goal moved."""
+        """Between tickets: the last `plateau` experiments all rejected (since experiments last started again) start
+        one exploration round (`mix.EXPLORE` kinds only, planned next); once all of that round's experiments are
+        rejected too, experiment planning stops with one push holding the week's trend, and the
+        run goes on with other tickets. A kept experiment ends the round; a plateau's stop ends by itself on a kept
+        experiment, a changed goal or a new seed. Read only when the ledger, main or the goal moved."""
         p, goal = self.p, self.goal()
         try:
             key = ((p.state / "ledger.jsonl").stat().st_mtime, gout(p.main_root(), "rev-parse", p.upstream), goal)
@@ -175,19 +181,44 @@ class Experiments:
                 resume(p)
                 self.log(f"experiments: planned again after the plateau: {why}")
             return
-        n = int(p.cfg["experiments"]["plateau"])
-        last = verdicts[load_json(plateau_file(p), {}).get("from", 0):][-n:]
-        if st or len(last) < n or "kept" in last:  # stopped already (the overfit alarm): that stop stands
+        if st:  # stopped already (the overfit alarm): that stop stands
             return
-        stop(p, f"the last {n} experiments were all rejected (a plateau); a kept experiment, a new goal or seed, "
-             "or `windvane experiments resume` starts them again", kind=PLATEAU, goal=goal, seeds=seed_names(p),
-             verdicts=len(verdicts))
-        self.log(f"plateau: the last {n} experiments were all rejected; experiment planning stopped, other tickets "
-                 "go on")
+        n, pf = int(p.cfg["experiments"]["plateau"]), load_json(plateau_file(p), {})
+        explore = pf.get("explore")
+        if explore:
+            return self.explore_watch(pf, explore, verdicts, n, goal)
+        last = verdicts[pf.get("from", 0):][-n:]
+        if len(last) < n or "kept" in last:
+            return
+        save_json(plateau_file(p), {**pf, "explore": {"at": len(verdicts), "ids": None}})
+        self.log(f"plateau: the last {n} experiments were all rejected; one exploration round (bold, ablation and "
+                 "scout ideas only) comes before experiment planning stops")
+
+    def explore_watch(self, pf, explore, verdicts, n, goal):
+        """The exploration round's end: a kept experiment since it began goes back to the usual mix; each of its own
+        experiments closed unkept (rejected, failed, parked, done or gone) stops experiment planning, its push
+        saying how each ended."""
+        p = self.p
+        if "kept" in verdicts[explore["at"]:]:
+            save_json(plateau_file(p), {k: v for k, v in pf.items() if k != "explore"})
+            return self.log("plateau: an experiment was kept during the exploration round; the usual mix again")
+        ids = explore.get("ids")
+        if ids is None:
+            return
+        got = fates(p, ids)
+        if "kept" in got.values() or None in got.values():  # a kept one: seen above once the ledger has it
+            return
+        what = tally(got)
+        stop(p, f"the last {n} experiments were all rejected and the exploration round after them kept none ({what}; "
+             "a plateau); a kept experiment, a new goal or seed, or `windvane experiments resume` starts them again",
+             kind=PLATEAU, goal=goal, seeds=seed_names(p), verdicts=len(verdicts))
+        self.log(f"plateau: the exploration round ({', '.join(ids)}) kept none ({what}); "
+                 "experiment planning stopped, other tickets go on")
         push("Experiments plateaued", phone.cut(
-            f"The last {n} experiments were all rejected, so no more are planned until one is kept, the goal or a seed "
-            "changes, or `windvane experiments resume`. Other tickets go on. This week: "
-            + "; ".join(stats.trend(p)), phone.MOST, log=self.log), 3, "chart_with_downwards_trend")
+            f"The last {n} experiments were all rejected, and an exploration round after them kept none "
+            f"({what}), so no more are planned until one is kept, the goal or a seed changes, or `windvane "
+            "experiments resume`. Other tickets go on. This week: " + "; ".join(stats.trend(p)), phone.MOST,
+            log=self.log), 3, "chart_with_downwards_trend")
 
     def trend_watch(self):
         """An endless run's weekly push: once the usage window's week has reset, the week that ended in
@@ -329,6 +360,8 @@ class Experiments:
         lands its own changes; the branch stays. One push. Until it lands, the head stays owed (`benching`), so the next run
         goes straight back here with no worker, critic, review or bench run again."""
         p, cd = self.p, self.cd
+        if self.idea(tid) == "bold" and not revised(p, tid, sha):
+            return self.revise(tid, sha, both, numbers, why)
         self.skip.add(tid)
         self.log(f"{tid}: experiment rejected by the bench ({why}): {numbers}; branch {branch} kept, not merged")
         files = gout(p.main_root(), "diff", "--name-only", f"{p.upstream}...{sha}").split()
@@ -340,7 +373,8 @@ class Experiments:
                 q.write_text(q.read_text().rstrip("\n") + f"\n- rejected: {tid} ({numbers})\n" if q.is_file()
                              else f"- rejected: {tid} ({numbers})\n")
                 rec.write_text((rec.read_text().rstrip("\n") + "\n" if rec.is_file() else HEADER)
-                               + record(tid, self.queue.titles.get(tid, tid), branch, files, both, why))
+                               + record(tid, self.queue.titles.get(tid, tid), branch, files, both, why,
+                                        self.idea(tid), mix.mechanism(self.head_of(tid))))
                 git(cd, "add", "-A", DIR)
                 with self.critical():  # a signal waits until the record is pushed
                     ok, where = land(p, cd, branch_name(p, cd, "experiment"), f"Experiment {tid} rejected",
@@ -350,7 +384,8 @@ class Experiments:
         if ok:
             self.approved.pop(tid, None)
             self.settled(tid)
-            append_jsonl(p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "rejected"})
+            append_jsonl(p.state / "ledger.jsonl", {"event": "outcome", "ticket": tid, "outcome": "rejected",
+                                                    "idea": self.idea(tid)})
         else:  # its head stays owed (`benching`): the next run reuses the recorded runs and lands the record again
             self.log(f"{tid}: its rejection record isn't on {p.main} ({where}): the next run lands it with no worker, "
                      "critic or review run again")
@@ -358,6 +393,96 @@ class Experiments:
                                                   f". Not merged; branch {branch} kept"
                                                   + ("." if ok else f"; the record waits on {where}."), log=self.log),
              3, "test_tube")
+
+    def revise(self, tid, sha, both, numbers, why):
+        """A bold experiment's first rejection: not closed but sent back to its worker once, with which hidden tests
+        and judge checks moved on each seed, to fix what broke; its next head is critiqued, checked, reviewed and
+        benched again, and a second rejection closes it. The ledger row names the head first: a restart before the
+        feedback is saved benches that same head again and sends it back again (`revised`). None: nothing to merge."""
+        append_jsonl(self.p.state / "ledger.jsonl", {"event": "experiment", "ticket": tid, "verdict": "revise",
+                                                     "idea": "bold", "sha": sha})
+        self.feedback[tid] = (
+            f"The bench rejected your head {sha[:12]} ({why}: {numbers}). A bold experiment gets one revision: find "
+            "what broke from what moved below (main → your head), fix it, keep the idea, and finish READY again; a "
+            "second rejection closes it.\n" + "\n".join(seed_diff(both)))
+        self.approved.pop(tid, None)
+        self.settled(tid)
+        self.log(f"{tid}: bold experiment rejected by the bench ({why}): {numbers}; back to its worker for its one "
+                 "revision")
+        return None
+
+    def idea(self, tid):
+        """The ticket's `Idea:` kind ("" when it names none)."""
+        return getattr(self.queue, "ideas", {}).get(tid, "")
+
+    def head_of(self, tid):
+        """The ticket's header, its first 8 lines."""
+        return "\n".join(self.queue.text.get(tid, "").splitlines()[:8])
+
+
+def revised(p, tid, sha):
+    """Whether the bold experiment had its one revision: a head other than `sha` was sent back, or this one twice
+    (a revision that pushed no change can't loop)."""
+    sent = [r.get("sha") for r in read_jsonl(p.state / "ledger.jsonl")
+            if r.get("event") == "experiment" and r.get("verdict") == "revise" and r.get("ticket") == tid]
+    return any(x != sha for x in sent) or len(sent) >= 2
+
+
+def seed_diff(both):
+    """What moved between main's newest run (A) and the head's (B), per seed counted on both: each ticket's hidden
+    tests that changed, and each judge check whose answer did (B's reason with it)."""
+    per, common = counted(both)
+    out = []
+    for seed in common:
+        a, b = per[0][-1][seed], per[1][-1][seed]
+        for t in sorted(set(a.get("hidden", {})) | set(b.get("hidden", {}))):
+            ha, hb = a.get("hidden", {}).get(t), b.get("hidden", {}).get(t)
+            if (ha or {}).get("passed") != (hb or {}).get("passed"):
+                score = lambda h: f"{h['passed']}/{h['total']}" if h else "none"  # noqa: E731
+                out.append(f"- {seed} {t}: hidden tests {score(ha)} → {score(hb)}")
+        ja, jb = ({x["id"]: x for x in (judged(r) or {}).get("answers", [])} for r in (a, b))
+        for c in sorted(set(ja) | set(jb)):
+            sa, sb = (j.get(c, {}).get("answer", "none") for j in (ja, jb))
+            if sa != sb:
+                reason = jb.get(c, {}).get("reason", "")
+                out.append(f"- {seed} judge {c}: {sa} → {sb}" + (f" ({reason})" if reason else ""))
+    return out or ["- no hidden test or judge check changed on a seed counted on both sides: the totals moved"]
+
+
+def fates(p, ids):
+    """{ticket: "kept", "rejected", "failed", "parked", "done" (without a kept verdict), "gone" (no longer a ticket
+    anywhere), or None while it's open}: so an exploration round's experiment that never reaches the bench still
+    ends it. A ticket not on main yet but on an unmerged plan branch is open: its plan hasn't merged."""
+    from .planner import pending_ids
+    from .queue import Queue
+    last = {}
+    for r in read_jsonl(p.state / "ledger.jsonl"):
+        t = r.get("ticket")
+        if r.get("event") == "experiment" and r.get("verdict") == "kept":
+            last[t] = "kept"
+        elif r.get("event") == "outcome" and r.get("outcome") in ("rejected", "failed"):
+            last[t] = r["outcome"]
+        elif r.get("event") == "outcome" and r.get("outcome") == "retried":  # a failed ticket worked again
+            last.pop(t, None)
+    q = Queue(p)
+    missing = [t for t in ids if t not in q.files and t not in last]
+    waiting = pending_ids(p, ask_forge=False) if missing else set()
+
+    def fate(t):
+        if t in last:
+            return last[t]
+        if t not in q.files:
+            return None if t in waiting else "gone"
+        return q.status(t) if q.status(t) in ("done", "parked") else None
+    return {t: fate(t) for t in ids}
+
+
+def tally(got):
+    """`2 rejected, 1 failed`: an exploration round's fates, as its push says them."""
+    n = {}
+    for v in got.values():
+        n[v] = n.get(v, 0) + 1
+    return ", ".join(f"{c} {v}" for v, c in sorted(n.items(), key=lambda x: -x[1])) or "no experiment planned"
 
 
 def todo(p, base, sha, which, repeat):
@@ -428,13 +553,15 @@ def job_name(tid):
     return f"experiment-{tid}"
 
 
-def record(tid, title, branch, files, both, why):
-    """A rejected experiment's entry in EXPERIMENTS.md: the idea, its files, both sides' numbers."""
+def record(tid, title, branch, files, both, why, kind="", mechanism=""):
+    """A rejected experiment's entry in EXPERIMENTS.md: the idea, its kind and mechanism, its files, both sides'
+    numbers."""
     a, b = both
     shown = ", ".join(files[:12]) + (f" and {len(files) - 12} more" if len(files) > 12 else "")
     return "\n".join([
         "", f"### {tid}: {title} ({now():%Y-%m-%d})",
-        f"- Idea: {title}", f"- Files: {shown or '(none)'}",
+        f"- Idea: {title}", *([f"- Kind: {kind}"] if kind else []),
+        *([f"- Mechanism: {mechanism}"] if mechanism else []), f"- Files: {shown or '(none)'}",
         f"- {a['name']} {a['sha'][:7]} ({bench.runs_n(len(a['runs']))}) → {b['name']} {b['sha'][:7]} "
         f"({bench.runs_n(len(b['runs']))}): {bench.headline(both)}",
         f"- Verdict: {why}; branch `{branch}` kept", ""])

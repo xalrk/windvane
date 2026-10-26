@@ -16,7 +16,8 @@ branches (fetch first).
   asked    a question for it under `## Open` in QUESTIONS.md, whoever wrote it: blocked until it's answered
   touches  `Touches: windvane/driver.py, prompts/` in the header: tickets whose lists don't overlap may run at once
   related  `Related: T-004.` in the header: the same feature through other files, so never run beside T-004
-  kind     `Kind: experiment` in the header: merged only when the bench shows it better than main (experiment.py)
+  kind     `Kind: experiment` in the header: merged only when the bench shows it better than main (experiment.py);
+           `Idea: bold` its kind of idea and `Mechanism: <what it changes>` (mix.py)
 """
 import re
 import time
@@ -122,6 +123,8 @@ class Queue:
         self.titles = {t: title(self.text[t], t) for t in self.files}
         self.touches = {t: touches(heads[t]) for t in self.files}
         self.kinds = {t: " ".join(header_line(heads[t], "Kind").split()).strip(" .`*").lower() for t in self.files}
+        from .mix import idea
+        self.ideas = {t: idea(heads[t]) for t in self.files}
 
         bp = re.escape(p.prefix.lower())
         merges = gout(cwd, "log", ref, "--merges", "--format=%s")

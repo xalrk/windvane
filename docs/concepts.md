@@ -306,12 +306,30 @@ meanwhile are picked up as usual. In a project with `bench/`, the planner's prom
 this machine hurt (`stats --projects --json` over 30 days, numbers only: each project by letter, the costliest
 first, with no paths, ticket ids or reasons, since ticket titles reach the merge commits) and the newest bench runs,
 and ranks its ideas by what that says costs projects most. In any run, when the last `plateau` experiments (8) were
-all rejected, experiment planning stops with one push holding the week's trend, and the run goes on with other
-tickets; a kept experiment, a changed goal, a new seed or `windvane experiments resume` starts it again (only the
-rejections after that count). Once a week, at the usage window's reset, an endless run pushes the week's trend:
+all rejected, the next plan that writes experiments is one exploration round: only `bold`, `ablation` and `scout` ideas. If none of that
+round's experiments is kept (each rejected, failed, parked or dropped; one still on an unmerged plan
+branch counts as open), experiment planning stops with one push holding the week's trend, and the run
+goes on with other tickets; a kept experiment, a changed goal, a new seed or `windvane experiments resume` starts it
+again (only the rejections after that count). Once a week, at the usage window's reset, an endless run pushes the week's trend:
 the frozen seeds' hidden tests, judge and tokens per merged ticket, then this project's weighted tokens per merged
 ticket, the experiments run, kept and rejected, and the bench budget used, each a before → after
-(`windvane stats --bench --trend` prints the week so far). A question a ticket asks follows the usual rules
+(`windvane stats --bench --trend` prints the week so far).
+
+**The mix.** A loop that keeps only what wins drifts toward small, safe tweaks of the same few things, so every
+experiment ticket says what kind of idea it is (`Idea:` in its header): `fix` (a cause the numbers or a bench
+failure show), `bold` (a structural change: a session added, merged or dropped, the steps reordered, what a session
+is shown, another way to check work), `ablation` (a rule, session, check or wait taken out, to see whether projects
+miss it), `revisit` (a rejected idea whose context changed) or `scout` (an idea from outside). Each plan's
+experiments follow `[experiments] mix`: the planner is told how many of each kind to write (a kind a small round
+left out gets the next round's slot), and the driver drops the experiments of a kind past the larger of its share of those
+the plan wrote, rounded up, and the count the mix gives it for that many after recent rounds (a plan written to the
+counts it was told keeps them all), so one kind can't crowd out the rest. The shares move toward the kinds the bench keeps (each kind's kept rate over its last 10),
+never below `floor`, and `scout` ideas come on top. The planner sees the rejected experiments one line each, grouped by
+the mechanism each changed (`Mechanism:` in the header); a new one changing the same mechanism and files as one of the
+last 20 rejected needs a `Different because:` line, or the driver drops it from the plan with a log line. A rejected
+`bold` experiment gets one revision before it's closed: its worker gets which hidden tests and judge checks moved on
+each seed, and a second rejection closes it. `windvane experiments` shows each kind's share, kept rate and last kept
+experiment. A question a ticket asks follows the usual rules
 (below): quiet times and `answer_wait` build the recommendation, so nothing in the loop waits for the desk but the
 budget's question and held protected changes.
 
@@ -368,7 +386,7 @@ On this machine only, under `~/.local/state/windvane/<name>/`:
 | `runs/` | each session's full stream, which `windvane watch` reads |
 | `ledger.jsonl` | tokens, turns and minutes per session, which `windvane stats` reads |
 | `bg/experiment-<id>.log` | an experiment ticket's bench, as `windvane await experiment-<id>` follows it |
-| `experiments-stopped.json`, `plateau.json`, `trend.json` | why experiment planning is stopped (the overfit alarm, a plateau) and when a plateau's stop ends itself; the verdict count a resume starts the next plateau's count from; when the next weekly trend push is due |
+| `experiments-stopped.json`, `plateau.json`, `trend.json` | why experiment planning is stopped (the overfit alarm, a plateau) and when a plateau's stop ends itself; the verdict count a resume starts the next plateau's count from, and a plateau's exploration round (its experiments); when the next weekly trend push is due |
 | `bench.jsonl` | `windvane bench`'s results, one record per seed per run (the seed runs themselves live under `~/.local/state/windvane/_bench/`) |
 | `critic.jsonl`, `critic/<ID>/` | the critic's verdicts, and each ticket's evidence pack |
 | `quiet.txt` | quiet times |

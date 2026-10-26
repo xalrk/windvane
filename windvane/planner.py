@@ -11,6 +11,7 @@ from pathlib import Path
 from . import actions, critic, login, net, privacy, requests
 from .config import DIR
 from .held import OWN_BRANCHES, author_ident, free_name, is_local, land, local_push, n_tickets, push_branch
+from .mix import mix_part
 from .phone import whole
 from .queue import Queue, folder_ids, id_after, mend_queue, ref_ids
 from .runner import NO_REQUEST, plain_error, rules, run_claude
@@ -126,7 +127,6 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
 
 
 EXPERIMENTS = f"{DIR}/EXPERIMENTS.md"  # the experiments the bench rejected (experiment.py), one record each
-EXPERIMENTS_SHOWN = 6000  # characters of it a planner or periodic prompt gets: the newest records
 
 
 def stopped_part(p):
@@ -138,12 +138,32 @@ def stopped_part(p):
 
 
 def rejected_part(cd):
-    """The prompt's section on the experiments the bench rejected, from `cd`'s EXPERIMENTS.md, or "" when none was."""
-    f = Path(cd) / EXPERIMENTS
-    text = f.read_text().strip() if f.is_file() else ""
-    if len(text) > EXPERIMENTS_SHOWN:  # whole records only
-        text = "(older records left out)\n### " + text[-EXPERIMENTS_SHOWN:].split("\n### ", 1)[-1]
-    return text and f"## Experiments the bench rejected ({EXPERIMENTS})\n{text}"
+    """The prompt's section on the experiments the bench rejected, one line each by mechanism (`mix.grouped_part`),
+    or "" when none was."""
+    from .mix import grouped_part
+    return grouped_part(cd)
+
+
+def vet_plan(p, cd, q, order_ids):
+    """Drop the new experiment tickets the round's mix or the novelty rule doesn't keep (`mix.vet`): their files go
+    and their queue bullets with them. Returns (the ids dropped, the new experiments kept)."""
+    from .mix import is_experiment, vet
+    tick = cd / p.tickets_rel
+    new = {}
+    for path in changed_paths(cd):
+        f = cd / path
+        if path.startswith(p.tickets_rel + "/") and path.endswith(".md") and f.is_file() and \
+                git(cd, "cat-file", "-e", f"HEAD:{path}").returncode:
+            new[p.norm(f.stem)] = f.read_text(errors="replace")
+    new.pop("", None)
+    drop = vet(p, cd, new, order_ids(), q, lambda m: log(p, m))
+    for tid in drop:
+        (tick / f"{tid}.md").unlink(missing_ok=True)
+    qf = cd / p.queue_rel
+    if drop and qf.is_file():
+        gone = re.compile(rf"^\s*-\s*(?:\*\*)?(?:{'|'.join(map(re.escape, drop))})\b.*\n?", re.M | re.I)
+        qf.write_text(gone.sub("", qf.read_text()))
+    return drop, [t for t, text in new.items() if t not in drop and is_experiment(text)]
 
 
 DIGEST_SHOWN = 8000  # characters of the cross-project digest an endless plan's prompt gets
@@ -392,7 +412,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=(), end
         f"## Existing tickets (id, status, title)\n{q.listing(compact=True, keep=merged) or '(none yet)'}",
         *(endless_parts(p) if endless else []),
         rejected_part(cd),
-        stopped_part(p),
+        stopped_part(p) or mix_part(p, cd, max_new, q),
         f"## Ids for new tickets, in order (at most {max_new})\n{', '.join(ids)}",
     ]))
     log(p, f"plan run ({len(notes)} critic notes)")
@@ -439,7 +459,12 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=(), end
         clean_detach(p, cd, p.upstream)
         log(p, f"plan: wrote outside .windvane/ ({outside[0]}); discarded")
         return 0
-    n = int(m.group(1) or 0)
+    drop, tried = vet_plan(p, cd, q, lambda: queue_ids(p, cd))
+    n = max(0, int(m.group(1) or 0) - len(drop))
+    if drop and not changed_paths(cd):
+        clean_detach(p, cd, p.upstream)
+        log(p, "plan: every new ticket was dropped; nothing written")
+        return 0
     branch = branch_name(p, cd, "plan")
     git(cd, "add", "-A", ".windvane")
     title = actions.tag(p, f"Plan: {n_tickets(n)} ({m.group(3)[:60]})", cd)
@@ -470,6 +495,24 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=(), end
             log(p, f"plan: {n_tickets(n)} on {pr or branch}")
         else:
             log(p, f"plan: {n_tickets(n)} pushed to {branch}")
+    explored(p, tried)
     push(f"planned {n_tickets(n)}", whole("", m.group(3) or "See the queue.", log=lambda m: log(p, m)), 3, "memo")
     clean_detach(p, cd, p.upstream)
     return n
+
+
+def queue_ids(p, cd):
+    """The ticket ids in `cd`'s QUEUE.md bullets, in order: the planner lists its new ones most valuable first."""
+    f = cd / p.queue_rel
+    text = f.read_text() if f.is_file() else ""
+    return [p.norm(x) for x in re.findall(rf"^\s*-\s*(?:\*\*)?({p.id_re})", text, re.M | re.I)]
+
+
+def explored(p, ids):
+    """A plateau's exploration round, once its plan is out: its experiments are the round `plateau_watch` waits on.
+    A plan that wrote none (a desk plan, one of other tickets) leaves the round waiting for one that explores."""
+    f = p.state / "plateau.json"
+    st = load_json(f, {})
+    if ids and st.get("explore") and st["explore"].get("ids") is None:
+        save_json(f, {**st, "explore": {**st["explore"], "ids": sorted(ids)}})
+        log(p, f"plateau: the exploration round planned {', '.join(sorted(ids))}")
