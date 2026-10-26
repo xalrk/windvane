@@ -307,7 +307,8 @@ this machine hurt (`stats --projects --json` over 30 days, numbers only: each pr
 first, with no paths, ticket ids or reasons, since ticket titles reach the merge commits) and the newest bench runs,
 and ranks its ideas by what that says costs projects most. In any run, when the last `plateau` experiments (8) were
 all rejected, the next plan is one exploration round: only `bold`, `ablation` and `scout` ideas. If none of that
-round's experiments is kept (each rejected, failed, parked or dropped), experiment planning stops with one push holding the week's trend, and the run
+round's experiments is kept (each rejected, failed, parked or dropped; one still on an unmerged plan
+branch counts as open), experiment planning stops with one push holding the week's trend, and the run
 goes on with other tickets; a kept experiment, a changed goal, a new seed or `windvane experiments resume` starts it
 again (only the rejections after that count). Once a week, at the usage window's reset, an endless run pushes the week's trend:
 the frozen seeds' hidden tests, judge and tokens per merged ticket, then this project's weighted tokens per merged

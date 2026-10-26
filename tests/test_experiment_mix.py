@@ -182,6 +182,20 @@ class Bold(unittest.TestCase):
         self.assertIn("- Kind: bold", record)
         self.assertIn(f"→ T-001 {heads[1][:7]} (2 runs)", record)
 
+    def test_the_revision_counts_once_another_head_was_sent_back(self):
+        s = Sandbox()
+        self.addCleanup(s.close)
+        p = Project(s.root)
+        p.state.mkdir(parents=True, exist_ok=True)
+        self.assertFalse(experiment.revised(p, "T-001", "a" * 40))
+        row = {"event": "experiment", "ticket": "T-001", "verdict": "revise", "sha": "a" * 40}
+        append_jsonl(p.state / "ledger.jsonl", row)
+        # killed before its feedback was saved: the same head benched again is sent back again
+        self.assertFalse(experiment.revised(p, "T-001", "a" * 40))
+        self.assertTrue(experiment.revised(p, "T-001", "b" * 40))  # the revision's own head: closed
+        append_jsonl(p.state / "ledger.jsonl", row)
+        self.assertTrue(experiment.revised(p, "T-001", "a" * 40))  # a revision that pushed nothing new: no loop
+
     def test_the_diff_names_the_judge_checks_that_moved(self):
         a, b = rec("a" * 7, seed="tiny"), rec("b" * 7, seed="tiny", passed=6)
         a["judge"]["answers"] = [{"id": "c1", "answer": "yes", "reason": ""}, {"id": "c2", "answer": "yes",
@@ -221,7 +235,9 @@ class Plateau(Base):
         with mock.patch.object(experiment, "push") as push:  # failed before its bench: it closes the round too
             pilot.plateau_watch()
         self.assertEqual(push.call_count, 1)
-        self.assertIn("exploration round after them were all rejected", experiment.stopped(self.p))
+        self.assertIn("exploration round after them kept none (1 rejected, 1 failed; a plateau)",
+                      experiment.stopped(self.p))
+        self.assertIn("kept none (1 rejected, 1 failed), so no more are planned", push.call_args.args[1])
 
     def test_a_round_experiment_parked_retried_or_gone_is_told_apart(self):
         self.make()
@@ -232,7 +248,23 @@ class Plateau(Base):
         append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-003", "outcome": "failed"})
         append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-003", "outcome": "retried"})
         self.assertEqual(experiment.fates(self.p, ["T-003", "T-004", "T-777"]),
-                         {"T-003": None, "T-004": "closed", "T-777": "closed"})
+                         {"T-003": None, "T-004": "parked", "T-777": "gone"})
+
+    def test_a_round_still_on_an_unmerged_plan_branch_stays_open(self):
+        self.make()
+        self.s.git("checkout", "-q", "-b", "plan-20261025-000000")
+        self.s.write(".windvane/tickets/T-095.md", "# T-095: explore\nDepends on: nothing.\n")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-qm", "Plan: 1 ticket")
+        self.s.git("push", "-q", "origin", "HEAD")
+        self.s.git("checkout", "-q", "main")
+        self.s.git("fetch", "-q", "origin")
+        self.assertEqual(experiment.fates(self.p, ["T-095", "T-096"]), {"T-095": None, "T-096": "gone"})
+        experiment.save_json(experiment.plateau_file(self.p), {"explore": {"at": 0, "ids": ["T-095"]}})
+        append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-001", "outcome": "rejected"})
+        with mock.patch.object(experiment, "push") as push:
+            driver.Pilot(self.p, args(goal="make it better")).plateau_watch()
+        self.assertEqual((push.call_count, experiment.stopped(self.p)), (0, ""))
 
     def test_a_kept_experiment_during_exploration_goes_back_to_the_mix(self):
         self.make()

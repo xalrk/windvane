@@ -227,11 +227,12 @@ class Plateau(Base):
         pushes = self.watch(pilot)
         self.assertEqual(len(pushes), 1)
         self.assertEqual(pushes[0][0], "Experiments plateaued")
-        self.assertIn("The last 8 experiments were all rejected, and so was an exploration round", pushes[0][1])
+        self.assertIn("The last 8 experiments were all rejected, and an exploration round of bold ideas after them "
+                      "kept none (2 rejected)", pushes[0][1])
         self.assertIn("frozen seeds: no run this week", pushes[0][1])  # the week's trend
         self.assertIn("a plateau", experiment.stopped(self.p))
-        self.assertIn("## Experiments are stopped\nthe last 8 experiments and the exploration round after them were "
-                      "all rejected", planner.stopped_part(self.p))
+        self.assertIn("## Experiments are stopped\nthe last 8 experiments were all rejected and the exploration round "
+                      "after them kept none (2 rejected; a plateau)", planner.stopped_part(self.p))
         self.verdicts("rejected")
         self.assertEqual(self.watch(pilot), [])  # one push, not one per rejection
         self.assertIn("Other tickets go on", pushes[0][1])
