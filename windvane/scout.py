@@ -199,10 +199,13 @@ def refused(text):
 def without_source(text):
     """The ticket with only its header's `Source:` line taken out: that's the one place a link belongs, so a page
     that asks for its link "as a source" in the body is still refused."""
-    lines = text.splitlines()
+    lines, keys = text.splitlines(), False
     for i, line in enumerate(lines[:10]):
-        if not line.strip():
-            break  # the header ends at the first blank line
+        if not line.strip() or line.startswith("#"):
+            if keys:
+                break  # the header's keys end at a blank line or a heading
+            continue  # the title, and blank lines around it
+        keys = True
         if re.match(r"(?i)(?:\*\*)?Source:|.*[ \t]·[ \t](?:\*\*)?Source:", line):
             return "\n".join(lines[:i] + lines[i + 1:])
     return text

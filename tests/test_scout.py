@@ -169,6 +169,9 @@ class Scout(unittest.TestCase):
             self.assertEqual(scout.refused(GOOD + text), "", text)
         mid = GOOD.replace("Mechanism: worker check\nSource:", "Mechanism: worker check · Source:")
         self.assertEqual(scout.refused(mid), "")  # a `· Source:` header key is the header's line too
+        spaced = GOOD.replace("\nKind:", "\n\nKind:").replace("Done when", "## Goal\nDone when")
+        self.assertEqual(scout.refused(spaced), "")  # a blank line after the title
+        self.assertIn("URL to fetch", scout.refused(spaced + "Source: https://x.example/y\n"))
         self.assertIn("URL to fetch", scout.refused(GOOD.replace("Source: https://example.com/changelog#2.1\n",
                                                                  "Source: the changelog\n") + "\nSource: https://x.example/y\n"))
 
