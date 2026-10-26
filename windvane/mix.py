@@ -166,8 +166,8 @@ def mix_part(p, cd, n, q):
             "and `scout` experiments this round" if exploring(p) else "## This round's experiment mix\nWrite this "
             "round's experiments")
     return (f"{lead} in this mix: " + ", ".join(f"{k} {c}" for k, c in got.items() if c) + "; `scout` ideas from "
-            "outside come on top. Writing fewer, keep the mix: no kind keeps more than its share of the experiments "
-            "you write (rounded up), and the rest are dropped from the plan.")
+            "outside come on top. Writing fewer, keep to the mix: a kind's experiments past its part of the ones you "
+            "write are dropped from the plan.")
 
 
 def records(cd):
@@ -245,7 +245,8 @@ def repeats(head, text, recs):
 
 def vet(p, cd, new, order, q, log):
     """Drop from a plan the experiments it may not keep: a repeat (`repeats`), then each kind's past its share of
-    the experiments the plan wrote, rounded up (scouts aside), keeping the first in queue order (the most valuable):
+    the experiments the plan wrote, rounded up, or past what `allot` gives it for that many after the queue's recent
+    ones (the prompt's counts), whichever is more (scouts aside), keeping the first in queue order (the most valuable):
     a planner can't make up ideas of a kind, but one kind can't crowd out the rest.
     `new`: {id: ticket text}; `q`: the queue on main. Returns the ids dropped, each with a log line."""
     recs, drop, kinds = records(cd), [], {}
@@ -266,7 +267,8 @@ def vet(p, cd, new, order, q, log):
         else:
             kinds[tid] = kind
     share, n = round_shares(p, cd, q.ideas), sum(k != SCOUT for k in kinds.values())
-    room = {k: math.ceil(v * n - 1e-9) for k, v in share.items()}
+    asked = allot(share, n, planned(q))  # what the prompt's counts gave each kind, making up for recent rounds
+    room = {k: max(math.ceil(v * n - 1e-9), asked[k]) for k, v in share.items()}
     said = ", ".join(f"{k} {c}" for k, c in room.items())
     for tid, kind in kinds.items():
         if kind == SCOUT:

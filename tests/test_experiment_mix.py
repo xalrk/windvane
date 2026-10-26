@@ -77,7 +77,7 @@ class Mix(Base):
         prompt, on_main, log = self.plan(fix + [("T-008", "bold", "steps", "windvane/driver.py", ""),
                                                 ("T-009", "scout", "outside", "windvane/x.py", "")])
         self.assertIn("## This round's experiment mix\nWrite this round's experiments in this mix: fix 4, bold 3, "
-                      "ablation 2, revisit 1; `scout` ideas from outside come on top. Writing fewer, keep the mix",
+                      "ablation 2, revisit 1; `scout` ideas from outside come on top. Writing fewer, keep to the mix",
                       prompt)
         # seven experiments besides the scout: fix's share of them, rounded up, is three: the first three in order
         self.assertEqual(on_main & {f"T-00{i}" for i in range(1, 10)}, {"T-001", "T-002", "T-003", "T-004", "T-008",
@@ -88,6 +88,22 @@ class Mix(Base):
         queue = self.s.git("show", "origin/main:.windvane/QUEUE.md")
         self.assertNotIn("T-006", queue)
         self.assertIn("- T-004 idea T-004", queue)
+
+    def test_a_plan_written_to_the_prompts_counts_keeps_them_all_after_a_run_of_fixes(self):
+        self.make()
+        for i in range(1, 6):
+            self.s.write(f".windvane/tickets/T-00{i}.md", f"# T-00{i}: old fix {i}\nDepends on: nothing.\n"
+                         f"Kind: experiment · Idea: fix · Mechanism: m{i}\n")
+        self.s.publish()
+        # the queue's recent experiments are all fixes, so the prompt asks for more of the other kinds than their
+        # share of six, rounded up: the plan written to those counts loses none of them
+        wrote = [("T-007", "bold", "a", "windvane/a.py", ""), ("T-008", "bold", "b", "windvane/b.py", ""),
+                 ("T-009", "bold", "c", "windvane/c.py", ""), ("T-010", "ablation", "d", "windvane/d.py", ""),
+                 ("T-011", "ablation", "e", "windvane/e.py", ""), ("T-012", "revisit", "f", "windvane/f.py", "")]
+        prompt, on_main, log = self.plan(wrote, max_new=6)
+        self.assertIn("in this mix: bold 3, ablation 2, revisit 1;", prompt)
+        self.assertLessEqual({t for t, *_ in wrote}, on_main)
+        self.assertNotIn("plan: dropped", log)
 
     def test_a_kind_rarely_kept_keeps_its_floor(self):
         self.make()
