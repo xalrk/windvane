@@ -187,6 +187,19 @@ class SeedRound(Base):
         self.s.publish("Merge T-009: something")
         self.assertEqual(pilot.periodic_due()["name"], "seed")  # nothing was tried: due again once main moves
 
+    def test_an_asked_round_with_a_busy_checkout_waits_for_the_next_merge(self):
+        self.make()
+        pilot = self.pilot()
+        pilot.keep_changes = lambda why: False
+        periodic.ask(self.p, "seed")
+        due = pilot.periodic_due()
+        self.assertTrue(due["asked"])
+        pilot.periodic(due)
+        self.assertIsNone(pilot.periodic_due())  # not again on the next pass
+        self.assertEqual(self.log().count("seed: skipped: the checkout is busy"), 1)
+        pilot.merged.append("T-010")
+        self.assertTrue(pilot.periodic_due()["asked"])  # still owed
+
     def test_config(self):
         e = entries([{"name": "s", "builtin": "seed"}])["s"]
         self.assertEqual((e["seed_every"], e["pool_size"]), (5, 4))

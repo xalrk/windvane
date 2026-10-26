@@ -669,12 +669,18 @@ class Periodic:
         st = load_json(seed_file(p, e["name"]), {})
         if st.get("head") == head and (st.get("tries", 0) >= SEED_TRIES or e["name"] in self.seed_tried):
             return False
-        key = (head, ledger.stat().st_mtime if ledger.exists() else 0)
+        key = self.seed_key(head)
         if self.seed_seen.get(e["name"], (None,))[0] != key:
             have = len(bench.planned(p, p.upstream, "full", True))
             self.seed_seen[e["name"]] = (key, have < e["pool_size"]
                                          or pool.kept_since_seed(ledger) >= e["seed_every"])
         return self.seed_seen[e["name"]][1]
+
+    def seed_key(self, head=None):
+        """What `seed_due`'s answer rests on: the head of main and when the ledger last changed."""
+        ledger = self.p.state / "ledger.jsonl"
+        return (head or gout(self.p.main_root(), "rev-parse", self.p.upstream),
+                ledger.stat().st_mtime if ledger.exists() else 0)
 
     def seed_round(self, e):
         """One seed for the training pool: a session writes it in the ci tree on current main, the bench's scorer
@@ -685,8 +691,9 @@ class Periodic:
         busy = cd == p.work_dir and any(self.owner.values()) or not self.keep_changes(f"the {name} round")
         if busy:
             self.log(f"{name}: skipped: the checkout is busy")
+            self.periodic_busy(e)  # an asked round waits for the next merge
         if busy or not self.periodic_fits(e):  # due again once main or the ledger moves, not on the very next pass
-            self.seed_seen[name] = (self.seed_seen.get(name, (None,))[0], False)
+            self.seed_seen[name] = (self.seed_key(), False)
             return
         if e.get("asked"):
             self.asked_taken(e)
