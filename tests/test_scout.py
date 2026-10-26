@@ -97,7 +97,11 @@ class Scout(unittest.TestCase):
                                                      "model_id": "claude-sonnet-5-5"})
         pilot.scout_due(self.p.periodic["scout"])
         pilot.scout_read = None
-        self.assertNotIn("claude-sonnet-5-5 new", self.log())
+        for older in ("claude-opus-4-1", "claude-opus-5-5[1m]"):  # a pinned older model, a context variant
+            append_jsonl(self.p.state / "ledger.jsonl", {"role": "critic", "model": older})
+            pilot.scout_due(self.p.periodic["scout"])
+            pilot.scout_read = None
+        self.assertNotIn(" new in the ledger", self.log())
         (Path(self.p.root) / "bench").mkdir()  # the round is queued only where the planner is told the mix
         append_jsonl(self.p.state / "ledger.jsonl", {"role": "worker", "model": "opus", "model_id": "claude-opus-6"})
         for _ in range(3):  # read again only when the ledger moved, and the round is queued once either way

@@ -125,17 +125,18 @@ def ledger_models(p):
     return out
 
 
-def family(model_id):
-    """"claude-opus-6" -> "opus": a new id in a family the ledger ran is a new model, not a role's first run."""
-    parts = model_id.split("-")
-    return parts[1] if len(parts) > 1 else model_id
+def model_key(model_id):
+    """"claude-opus-5-5[1m]" -> ("opus", (5, 5)): its family and version, a context variant or a date the same model."""
+    parts = re.sub(r"\[.*\]$", "", model_id).split("-")[1:]
+    return (next((x for x in parts if not x.isdigit()), ""),
+            tuple(int(x) for x in parts if x.isdigit() and len(x) <= 2))
 
 
 def models_watch(p, log):
     """Model ids new to the ledger: told to the next scout, and the first time one shows, one ablation round queued
     (the next plan that writes experiments, in a project with `bench/` whose planner is told the mix). The first ids
-    ever seen are only the baseline, and so is the first id of a family the ledger hasn't run (a role that first
-    runs later, on its own model)."""
+    ever seen are only the baseline, and so is an id no newer than its family's newest the ledger has run, or of a
+    family it hasn't (a role that first runs later, on its own model)."""
     ids = ledger_models(p)
     st = load_json(state_file(p), {})
     if "models" not in st:
@@ -146,7 +147,12 @@ def models_watch(p, log):
     fresh = ids - seen
     if not fresh:
         return
-    new = sorted(m for m in fresh if family(m) in {family(s) for s in seen})
+    newest = {}
+    for m in seen:
+        fam, ver = model_key(m)
+        newest[fam] = max(newest.get(fam, ver), ver)
+    # newer than its family's newest: a role pinned to an older model, or its first run on another family, isn't one
+    new = sorted(m for m in fresh if model_key(m)[0] in newest and model_key(m)[1] > newest[model_key(m)[0]])
     st["models"] = sorted(seen | fresh)
     if not new:
         save_json(state_file(p), st)
