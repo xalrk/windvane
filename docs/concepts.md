@@ -306,7 +306,7 @@ meanwhile are picked up as usual. In a project with `bench/`, the planner's prom
 this machine hurt (`stats --projects --json` over 30 days, numbers only: each project by letter, the costliest
 first, with no paths, ticket ids or reasons, since ticket titles reach the merge commits) and the newest bench runs,
 and ranks its ideas by what that says costs projects most. In any run, when the last `plateau` experiments (8) were
-all rejected, the next plan is one exploration round: only `bold`, `ablation` and `scout` ideas. If none of that
+all rejected, the next plan that writes experiments is one exploration round: only `bold`, `ablation` and `scout` ideas. If none of that
 round's experiments is kept (each rejected, failed, parked or dropped; one still on an unmerged plan
 branch counts as open), experiment planning stops with one push holding the week's trend, and the run
 goes on with other tickets; a kept experiment, a changed goal, a new seed or `windvane experiments resume` starts it

@@ -163,7 +163,7 @@ class Experiments:
     def plateau_watch(self):
         """Between tickets: the last `plateau` experiments all rejected (since experiments last started again) start
         one exploration round (`mix.EXPLORE` kinds only, planned next); once all of that round's experiments are
-        rejected too (or it planned none), experiment planning stops with one push holding the week's trend, and the
+        rejected too, experiment planning stops with one push holding the week's trend, and the
         run goes on with other tickets. A kept experiment ends the round; a plateau's stop ends by itself on a kept
         experiment, a changed goal or a new seed. Read only when the ledger, main or the goal moved."""
         p, goal = self.p, self.goal()
@@ -212,10 +212,10 @@ class Experiments:
         stop(p, f"the last {n} experiments were all rejected and the exploration round after them kept none ({what}; "
              "a plateau); a kept experiment, a new goal or seed, or `windvane experiments resume` starts them again",
              kind=PLATEAU, goal=goal, seeds=seed_names(p), verdicts=len(verdicts))
-        self.log(f"plateau: the exploration round ({', '.join(ids) or 'no experiment planned'}) kept none ({what}); "
+        self.log(f"plateau: the exploration round ({', '.join(ids)}) kept none ({what}); "
                  "experiment planning stopped, other tickets go on")
         push("Experiments plateaued", phone.cut(
-            f"The last {n} experiments were all rejected, and an exploration round of bold ideas after them kept none "
+            f"The last {n} experiments were all rejected, and an exploration round after them kept none "
             f"({what}), so no more are planned until one is kept, the goal or a seed changes, or `windvane "
             "experiments resume`. Other tickets go on. This week: " + "; ".join(stats.trend(p)), phone.MOST,
             log=self.log), 3, "chart_with_downwards_trend")

@@ -14,7 +14,7 @@ release on the same day adds a number (`2026.10.9.1`).
   ranks its ideas by what costs projects most. Once a week, at the usage window's reset, one push gives the week's
   trend.
 - A plateau stop for experiments, in every run: when the last `plateau` (8) experiments were all rejected, the next
-  plan is one exploration round of only `bold`, `ablation` and `scout` ideas; if that round is all rejected too,
+  plan that writes experiments is one exploration round of only `bold`, `ablation` and `scout` ideas; if that round is all rejected too,
   experiment planning stops with one push and the run goes on with other tickets, until an experiment is kept, the
   goal or a seed changes, or `windvane experiments resume`.
 - A mix of ideas for experiments, so the loop doesn't drift into small tweaks of the same few things: each

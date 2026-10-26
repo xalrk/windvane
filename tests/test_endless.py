@@ -227,7 +227,7 @@ class Plateau(Base):
         pushes = self.watch(pilot)
         self.assertEqual(len(pushes), 1)
         self.assertEqual(pushes[0][0], "Experiments plateaued")
-        self.assertIn("The last 8 experiments were all rejected, and an exploration round of bold ideas after them "
+        self.assertIn("The last 8 experiments were all rejected, and an exploration round after them "
                       "kept none (2 rejected)", pushes[0][1])
         self.assertIn("frozen seeds: no run this week", pushes[0][1])  # the week's trend
         self.assertIn("a plateau", experiment.stopped(self.p))

@@ -509,10 +509,10 @@ def queue_ids(p, cd):
 
 
 def explored(p, ids):
-    """A plateau's exploration round, once its plan is out: its experiments are the round `plateau_watch` waits on
-    (none planned: the round is over at once)."""
+    """A plateau's exploration round, once its plan is out: its experiments are the round `plateau_watch` waits on.
+    A plan that wrote none (a desk plan, one of other tickets) leaves the round waiting for one that explores."""
     f = p.state / "plateau.json"
     st = load_json(f, {})
-    if st.get("explore") and st["explore"].get("ids") is None:
+    if ids and st.get("explore") and st["explore"].get("ids") is None:
         save_json(f, {**st, "explore": {**st["explore"], "ids": sorted(ids)}})
-        log(p, f"plateau: the exploration round planned {', '.join(sorted(ids)) or 'no experiment'}")
+        log(p, f"plateau: the exploration round planned {', '.join(sorted(ids))}")

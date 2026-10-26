@@ -124,7 +124,7 @@ def allot(share, n, have=None):
 def planned(q, most=PLANNED):
     """{kind: count} of the newest `most` experiment tickets in the queue (scouts aside): what the mix has given so
     far, so the next round makes up for a kind a small round left out."""
-    num = lambda t: int(re.search(r"\d+", t).group())  # noqa: E731
+    num = lambda t: int(re.search(r"(\d+)\D*$", t).group(1))  # noqa: E731: the number after any prefix
     ids = sorted((t for t in q.files if q.kinds.get(t) == "experiment" and q.ideas.get(t) != SCOUT), key=num)
     out = {}
     for t in ids[-most:]:

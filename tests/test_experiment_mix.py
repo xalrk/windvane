@@ -29,7 +29,8 @@ WRITE = ("import json, os, sys\n"
          "os.makedirs('.windvane/tickets', exist_ok=True)\n"
          "for tid, idea, mech, touches, extra in json.load(open(sys.argv[1])):\n"
          "    open(f'.windvane/tickets/{tid}.md', 'w').write(f'# {tid}: idea {tid}\\nDepends on: nothing.\\n'\n"
-         "        f'Touches: {touches}.\\nKind: experiment · Idea: {idea} · Mechanism: {mech}\\n'\n"
+         "        f'Touches: {touches}.\\n' + (f'Kind: experiment · Idea: {idea} · Mechanism: {mech}\\n' if idea\n"
+         "        else 'Kind: feature\\n') +\n"
          "        f'{extra}\\n\\n## Goal\\nx\\n')\n"
          "    open('.windvane/QUEUE.md', 'a').write(f'- {tid} idea {tid}\\n')\n")
 
@@ -105,6 +106,10 @@ class Mix(Base):
         self.assertEqual(mix.planned(q), {"fix": 9, "ablation": 2, "revisit": 1})
         self.assertEqual(mix.plan_counts(self.p, self.p.root, 1, q), {"fix": 0, "bold": 1, "ablation": 0,
                                                                        "revisit": 0})
+        ids = ["X2-10", "X2-11", "X2-9"]  # a prefix with a digit: sorted by the number after it
+        q = mock.Mock(files=ids, kinds=dict.fromkeys(ids, "experiment"), ideas={"X2-9": "bold", "X2-10": "fix",
+                                                                              "X2-11": "fix"})
+        self.assertEqual(mix.planned(q, most=2), {"fix": 2})
         self.assertEqual(mix.shares({"fix": 1, "bold": 0}, 0.1, {}, ("fix", "bold")), {"fix": 0.9, "bold": 0.1})
 
     def test_windvane_experiments_shows_each_kinds_share_kept_rate_and_last_kept(self):
@@ -238,6 +243,16 @@ class Plateau(Base):
         self.assertIn("exploration round after them kept none (1 rejected, 1 failed; a plateau)",
                       experiment.stopped(self.p))
         self.assertIn("kept none (1 rejected, 1 failed), so no more are planned", push.call_args.args[1])
+
+    def test_a_plan_with_no_experiment_leaves_the_exploration_round_waiting(self):
+        self.make()
+        experiment.save_json(experiment.plateau_file(self.p), {"explore": {"at": 0, "ids": None}})
+        _, on_main, _ = self.plan([("T-002", "", "", "windvane/a.py", "")])  # a desk plan of one feature
+        self.assertIn("T-002", on_main)
+        self.assertIsNone(mix.exploring(self.p)["ids"])
+        with mock.patch.object(experiment, "push") as push:
+            driver.Pilot(self.p, args(goal="make it better")).plateau_watch()
+        self.assertEqual((push.call_count, experiment.stopped(self.p)), (0, ""))
 
     def test_a_round_experiment_parked_retried_or_gone_is_told_apart(self):
         self.make()
