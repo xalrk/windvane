@@ -121,7 +121,7 @@ class Waits(Base):
         pilot.sleep = sleep
         self.run_pilot(pilot)
         self.assertEqual((pilot.merged, pilot.failed, pilot.aside), ([], [], {}))
-        self.assertRegex(pilot.stop_reason, r"^the Claude login expired at \d\d:\d\d$")
+        self.assertRegex(pilot.stop_reason, r"^the Claude login expired at (?:\w{3} )?\d\d:\d\d$")
         self.assertNotIn("Set aside", self.log())
         self.assertEqual(self.pushes.count("Claude login expired"), 1)
 

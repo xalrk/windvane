@@ -7,13 +7,14 @@ import re
 import sys
 import unittest
 from contextlib import redirect_stderr
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import cli, driver  # noqa: E402
+from windvane import cli, driver, util  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.util import now  # noqa: E402
@@ -82,13 +83,18 @@ class WrapUpGate(unittest.TestCase):
         self.assertEqual((pilot.stop_reason, pilot.partials), ("too late", {}))
 
     def test_a_worker_with_time_before_its_wrap_up_starts(self):
+        """Started at 23:58, so the wrap-up falls past midnight and the prompt names its day (`Tue 00:05`)."""
         os.environ.pop("FAKE_WORKER")
-        started = now()
-        pilot = driver.Pilot(self.p, args(min_slot=0))
-        pilot.run(started + timedelta(minutes=27))
+        shift = datetime.combine(datetime.now().date(), time(23, 58)) - datetime.now()
+        late = lambda: datetime.now() + shift  # noqa: E731  (the clock runs on, so the run's waits still end)
+        with mock.patch.object(driver, "now", late), mock.patch.object(util, "now", late):  # util's for hhmm
+            started = late()
+            pilot = driver.Pilot(self.p, args(min_slot=0))
+            pilot.run(started + timedelta(minutes=27))
         calls = self.workers()
         self.assertTrue(calls)
-        wrap = re.search(r"Wrap-up time: (\d\d:\d\d)", calls[0]["prompt"]).group(1)
+        self.assertRegex(calls[0]["prompt"], r"Wrap-up time: \w{3} \d\d:\d\d ")
+        wrap = re.search(r"Wrap-up time: (?:\w{3} )?(\d\d:\d\d)", calls[0]["prompt"]).group(1)
         at = datetime.combine(started.date(), datetime.strptime(wrap, "%H:%M").time())
         if at < started - timedelta(hours=12):  # the wrap-up is past midnight
             at += timedelta(days=1)
