@@ -105,7 +105,7 @@ class Bench(unittest.TestCase):
         self.reading(50)
         self.assertEqual(self.bench("--dry-run").splitlines()[0], "bench: full (weekly usage 50% ≤ 75%), the holdout")
         self.assertEqual(self.bench("--dry-run", "--small").splitlines()[0], "bench: small (--small), the holdout")
-        (self.s.tmp / "config/windvane").mkdir(parents=True, exist_ok=True)
+        (self.s.tmp / "config/windvane").mkdir(parents=True)
         (self.s.tmp / "config/windvane/machine.toml").write_text("bench_week_small = 40\n")
         self.assertEqual(self.bench("--dry-run").splitlines()[0], "bench: small (weekly usage 50% > 40%), the holdout")
         self.assertFalse(list((self.s.tmp / "state/windvane/_bench").glob("*/*")))  # a dry run leaves nothing behind

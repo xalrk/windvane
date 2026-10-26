@@ -262,7 +262,8 @@ class Unset(Base):
         code, out = self.windvane("check")
         self.assertEqual(code, 1, out)
         log = next((self.p.state / "checks").glob("*.log"))
-        self.assertRegex(out.splitlines()[-1], rf"^CHECK FAILED \(exit 1\) in \d+\.\d min; log {re.escape(str(log))}$")
+        self.assertRegex(out.splitlines()[-1], rf"^CHECK FAILED \(exit 1\) in \d+\.\d min(, load peaked .+ to tell)?; "
+                                                 rf"log {re.escape(str(log))}$")  # a busy machine adds the load
         self.assertEqual(self.saw("check"), (["worker"], changed))
         self.assertIsNone(self.saw("quick"))
 
