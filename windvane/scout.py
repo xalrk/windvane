@@ -125,21 +125,34 @@ def ledger_models(p):
     return out
 
 
+def family(model_id):
+    """"claude-opus-6" -> "opus": a new id in a family the ledger ran is a new model, not a role's first run."""
+    parts = model_id.split("-")
+    return parts[1] if len(parts) > 1 else model_id
+
+
 def models_watch(p, log):
     """Model ids new to the ledger: told to the next scout, and the first time one shows, one ablation round queued
-    (the next plan that writes experiments). The first ids ever seen are only the baseline."""
+    (the next plan that writes experiments, in a project with `bench/` whose planner is told the mix). The first ids
+    ever seen are only the baseline, and so is the first id of a family the ledger hasn't run (a role that first
+    runs later, on its own model)."""
     ids = ledger_models(p)
     st = load_json(state_file(p), {})
     if "models" not in st:
         if ids:
             save_json(state_file(p), {**st, "models": sorted(ids)})
         return
-    new = sorted(ids - set(st["models"]))
-    if not new:
+    seen = set(st["models"])
+    fresh = ids - seen
+    if not fresh:
         return
-    st["models"] = sorted(set(st["models"]) | set(new))
+    new = sorted(m for m in fresh if family(m) in {family(s) for s in seen})
+    st["models"] = sorted(seen | fresh)
+    if not new:
+        save_json(state_file(p), st)
+        return
     st["new_models"] = sorted(set(st.get("new_models", [])) | set(new))
-    if not st.get("ablation"):
+    if not st.get("ablation") and (Path(p.root) / "bench").is_dir():
         st["ablation"] = {"models": new}
         log(f"scout: {', '.join(new)} new in the ledger: the next plan's experiments are one ablation round, "
             "rules written for an older model first")

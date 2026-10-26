@@ -182,7 +182,7 @@ def periodic(entries):
     whole time, a regression past `bench_cost_up` % more tokens per merged ticket, or worse quality, ticketed;
     `seed`: a new training seed for `bench/pool/` after every `seed_every` kept experiments, the pool keeping the newest
     `pool_size`; `scout`: ideas from outside, every `scout_every` tickets finished on main and in each plateau's
-    exploration round).
+    exploration round, never chained by `then`).
     Mistakes stop the run at once rather than at the Nth merge."""
     out = {}
     for i, e in enumerate(entries if isinstance(entries, list) else [entries]):
@@ -247,6 +247,10 @@ def periodic(entries):
     for e in out.values():
         if e["then"] and e["then"] not in out:
             raise SystemExit(f"windvane: [[periodic]] {e['name']}: then = {e['then']!r} names no [[periodic]] entry")
+        if e["then"] and "scout" in (e["builtin"], out[e["then"]]["builtin"]):
+            # the scout's drop only vets what its own session wrote: chained, the other session's files mix with it
+            raise SystemExit(f"windvane: [[periodic]] {e['name']}: then can't chain a builtin = \"scout\" entry: "
+                             "it runs on its own")
     return out
 
 

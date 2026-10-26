@@ -92,6 +92,13 @@ class Scout(unittest.TestCase):
         pilot = self.pilot()
         pilot.scout_due(self.p.periodic["scout"])  # the first ids are the baseline
         self.assertIsNone(scout.ablation(self.p))
+        # a role first running later on another family is no new model
+        append_jsonl(self.p.state / "ledger.jsonl", {"role": "preflight", "model": "sonnet",
+                                                     "model_id": "claude-sonnet-5-5"})
+        pilot.scout_due(self.p.periodic["scout"])
+        pilot.scout_read = None
+        self.assertNotIn("claude-sonnet-5-5 new", self.log())
+        (Path(self.p.root) / "bench").mkdir()  # the round is queued only where the planner is told the mix
         append_jsonl(self.p.state / "ledger.jsonl", {"role": "worker", "model": "opus", "model_id": "claude-opus-6"})
         for _ in range(3):  # read again only when the ledger moved, and the round is queued once either way
             pilot.scout_due(self.p.periodic["scout"])
@@ -100,7 +107,7 @@ class Scout(unittest.TestCase):
         self.assertEqual(scout.ablation(self.p), {"models": ["claude-opus-6"]})
         self.assertEqual(mix.round_kinds(self.p, self.p.root), ["ablation"])
         self.assertEqual(mix.round_lead(self.p), "this round tests the rules against a new model (claude-opus-6)")
-        self.assertIn("## Models new to the ledger since the last scout\nclaude-opus-6", self.round()["prompt"])
+        self.assertIn("## Models new to the ledger since the last scout\nclaude-opus-6\n", self.round()["prompt"])
         logged = []
         scout.ablated(self.p, ["T-009"], logged.append)  # the plan that wrote experiments was the round
         self.assertIsNone(scout.ablation(self.p))
@@ -197,6 +204,14 @@ class Scout(unittest.TestCase):
             entries([{"name": "t", "prompt": "x.md", "scout_every": 3}])
         with self.assertRaises(SystemExit):
             entries([{"name": "s", "builtin": "scout", "scout_every": 0}])
+
+    def test_scout_is_never_chained(self):
+        """Chained, the scout's drop would vet the other session's files and miss its own left in the tree."""
+        for chain in ([{"name": "s", "builtin": "scout", "then": "t"}, {"name": "t", "prompt": "x.md"}],
+                      [{"name": "t", "prompt": "x.md", "every": 3, "then": "s"}, {"name": "s", "builtin": "scout"}]):
+            with self.assertRaises(SystemExit) as err:
+                entries(chain)
+            self.assertIn("scout", str(err.exception))
 
 
 if __name__ == "__main__":

@@ -22,8 +22,9 @@ release on the same day adds a number (`2026.10.9.1`).
   trend.
 - A scout for ideas from outside (`builtin = "scout"` in a [[periodic]] entry): every `scout_every` (15) tickets
   and in each plateau's exploration round, it reads what changed in Claude Code, new models and write-ups on other
-  agent loops, and writes at most 3 `Idea: scout` experiments. It alone reads the web, fenced as docs/safety.md says.
-  A model new to the ledger also makes the next plan's experiments one `ablation` round. `windvane stats --periodic`
+  agent loops, and writes at most 3 `Idea: scout` experiments. It alone reads the web, fenced as docs/safety.md says,
+  and runs on its own (no `then`). A new model in a family the ledger has run (with `bench/`) also makes the next
+  plan's experiments one `ablation` round. `windvane stats --periodic`
   shows each entry's sessions and cost.
 - A plateau stop for experiments, in every run: when the last `plateau` (8) experiments were all rejected, the next
   plan that writes experiments is one exploration round of only `bold`, `ablation` and `scout` ideas; if that round is all rejected too,
