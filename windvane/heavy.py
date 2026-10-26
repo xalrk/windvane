@@ -257,18 +257,24 @@ MAIN_CLASS = re.compile(r"(?:[A-Za-z_][\w$]*\.)+([A-Z][\w$]*)")
 INTERPRETER = re.compile(r"(python|node|ruby|perl|php|bash|dash|zsh|fish|sh)[\d.]*")
 SCRIPT = re.compile(r".*\.(py|js|mjs|cjs|ts|rb|pl|php|sh)")
 WORD = re.compile(r"[\w.-]+")  # a word safe to give as a pattern: it can't break the regex or the TOML string
-INLINE = {"-c", "-e", "--eval", "-p", "--print", "-E"}  # the code is on the command line: no file names it
+SHELL = ({"-c"}, {"-o", "-O"})
+# Per interpreter: the options whose code is on the command line (no file names it), and those taking a value.
+OPTIONS = {"python": ({"-c"}, {"-W", "-X", "--check-hash-based-pycs"}),
+           "node": ({"-e", "--eval", "-p", "--print"}, {"-r", "--require", "--import", "--loader",
+                                                         "--experimental-loader", "-C", "--conditions", "--input-type"}),
+           "ruby": ({"-e"}, {"-r", "-I", "-C", "-E", "-F"}), "perl": ({"-e", "-E"}, {"-I", "-M", "-m"}),
+           "php": ({"-r"}, {"-c", "-d", "-z"}), "bash": SHELL, "dash": SHELL, "zsh": SHELL, "fish": SHELL, "sh": SHELL}
 
 
 def reuse_word(pid, name):
     """The word to put in `heavy_reuses` for process `pid` named `name`, or None when no safe word names it alone:
     its name, but for a JVM the last part of its main class (`GradleDaemon`, `KotlinCompileDaemon`), since every JVM
     is named `java` and "java" would count each of the project's JVMs as a helper. For an interpreter (`python3`,
-    `node`) the same holds: its `-m` module or script's file name, the first word that ends like a script or is a
-    file in its working directory, so an option's value (`-W ignore`, `-r ts-node/register`) isn't taken for it, and
-    None for code given inline (`-c`, `-e`)."""
-    jvm = name == "java"
-    if not jvm and not INTERPRETER.fullmatch(name):
+    `node`) the same holds: its `-m` module or script's file name, the first word past its options (and their values:
+    `-W ignore`, `-r ./preload.js`) that ends like a script or is a file in its working directory, and None for code
+    given inline (`-c`, `-e`)."""
+    jvm, kind = name == "java", INTERPRETER.fullmatch(name)
+    if not jvm and not kind:
         return name if WORD.fullmatch(name) else None
     try:
         words = os.fsdecode((util.PROC / str(pid) / "cmdline").read_bytes()).split("\0")[1:]
@@ -276,12 +282,18 @@ def reuse_word(pid, name):
         return name if jvm else None
     if jvm:
         return next((m.group(1) for w in words if (m := MAIN_CLASS.fullmatch(w))), name)
+    inline, valued = OPTIONS[kind.group(1)]
+    skip = False
     for i, w in enumerate(words):
-        if w in INLINE:
+        if skip:
+            skip = False
+        elif w in inline:
             return None
-        if w == "-m":
+        elif w == "-m" and kind.group(1) == "python":
             return words[i + 1] if i + 1 < len(words) and WORD.fullmatch(words[i + 1]) else None
-        if not w.startswith("-") and (SCRIPT.fullmatch(w) or is_file(pid, w)):
+        elif w in valued:
+            skip = True
+        elif not w.startswith("-") and (SCRIPT.fullmatch(w) or is_file(pid, w)):
             return Path(w).name if WORD.fullmatch(Path(w).name) else None
     return None
 
