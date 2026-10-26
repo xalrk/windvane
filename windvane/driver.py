@@ -16,6 +16,7 @@ resets. A detached run's driver is itself restarted after a crash (`supervise`).
 import fcntl
 import hashlib
 import json
+import math
 import os
 import signal
 import sys
@@ -77,6 +78,7 @@ DROPPED_MOST = 20  # dropped late answers state.json keeps for `windvane status`
 SPLIT = "Split it into smaller tickets (`windvane new`), then mark it `done:` in QUEUE.md"  # a too-big ticket's fix
 RETRY = "RETRY"  # in the state dir: the failed tickets `windvane retry` puts back in the running autopilot's queue
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
+REPLAN_WAIT = 60  # minutes an endless run (`--replan forever`) waits to plan again after a plan wrote no ticket
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
@@ -432,6 +434,8 @@ class Pilot(Desk, Periodic, Experiments):
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
         self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
+        self.replan_at = now()  # an endless run's next plan, once one wrote nothing (REPLAN_WAIT later)
+        self.plateau_read = None  # what plateau_watch last read: the ledger, main and the goal unchanged, it skips
         self.digest_tried = 0.0  # when a push last tried the phone's missed provisional answers (see quiet_check)
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
         # Sessions dead per ticket: ticket -> [crashes, self.oks at its first], and the sessions that ended well, so a
@@ -591,6 +595,10 @@ class Pilot(Desk, Periodic, Experiments):
                 return "stop now"
             return "time" if now() >= min(limit, self.end()) else over_caps(self.usage, self.a.cap, self.a.week_cap)
         return stop_if
+
+    def goal(self):
+        """What `--replan`'s plans aim at: `--goal`, else the config's."""
+        return self.a.goal or self.p.cfg["goal"]
 
     def claude(self, role, label, prompt, system, cwd, limit, allow=(), deny=(), ticket="", env=None, session=None,
                resume=None):
@@ -2497,6 +2505,8 @@ class Pilot(Desk, Periodic, Experiments):
                     return
                 continue
             self.overfit_watch()
+            self.plateau_watch()
+            self.trend_watch()
             due = self.periodic_due()
             if due and self.running and due.get("bench") != "start":  # a quiet tree: the running ones finish first
                 self.idle_note([f"{due['name']} is due: waiting for {', '.join(sorted(self.running))} to finish"])
@@ -2550,13 +2560,16 @@ class Pilot(Desk, Periodic, Experiments):
                         self.idle = True
                     self.nap(now() + timedelta(minutes=1), answers=True)
                     continue
-                if self.a.replan and self.plans < self.a.replan:
+                endless = self.a.replan == math.inf
+                if self.a.replan and self.plans < self.a.replan and now() >= self.replan_at:
                     self.plans += 1
                     with self.critical():  # its session dies at its next poll on a signal; the merge finishes
-                        n = plan(p, self.a.goal or p.cfg["goal"], True, self.usage,
-                                 self.stopper(now() + timedelta(minutes=40)), merge=True, merged=self.merged)
+                        n = plan(p, self.goal(), True, self.usage, self.stopper(now() + timedelta(minutes=40)),
+                                 merge=True, merged=self.merged, endless=endless)
                     if n:
                         continue
+                    if endless:
+                        self.replan_at = now() + timedelta(minutes=REPLAN_WAIT)
                 if self.checking:  # a merge held by its checks: tried again when its wait is up
                     self.idle_note(self.waits)
                     self.pause()
@@ -2566,6 +2579,10 @@ class Pilot(Desk, Periodic, Experiments):
                     self.pause(60)
                     continue
                 if self.bench_unread():  # it ended during this pass: read it, and land its ticket, before the end
+                    continue
+                if endless:  # only the deadline, a stop or the caps end it; a ticket merged meanwhile is picked up
+                    self.idle_note([f"the plan wrote no ticket: planning again at {hhmm(self.replan_at)}"])
+                    self.nap(min(self.replan_at, now() + timedelta(minutes=1)))
                     continue
                 self.stop_reason = kind
                 return

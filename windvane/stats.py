@@ -8,7 +8,7 @@ import sys
 import textwrap
 import time
 from collections import Counter
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -53,7 +53,7 @@ def cmd_stats(a, p):
     if a.critic:
         return critic_stats(a, p)
     if getattr(a, "bench", False):
-        return bench_stats(p)
+        return print("\n".join(trend(p))) if getattr(a, "trend", False) else bench_stats(p)
     rows = read_jsonl(p.state / "ledger.jsonl")
     since = f"{now() - timedelta(days=a.days):%Y-%m-%d %H:%M}"
     rows = [r for r in rows if r.get("at", "") >= since]
@@ -77,13 +77,19 @@ def cmd_stats(a, p):
 def bench_stats(p):
     """`windvane bench`'s recorded runs, a line each, oldest first: a drift in what the projects built get or cost
     shows without a compare. A contaminated seed's result isn't counted, as in the run's own table."""
+    print("\n".join(bench_lines(p)) or "no bench runs yet (windvane bench runs one)")
+
+
+def bench_lines(p, last=None):
+    """`bench_stats`' table as lines (the `last` runs only), none when no run is recorded: the endless planner's
+    prompt gets the newest few."""
     runs = {}
     for r in read_jsonl(p.state / "bench.jsonl"):
         runs.setdefault(r.get("run"), []).append(r)
     if not runs:
-        return print("no bench runs yet (windvane bench runs one)")
-    print(f"{'run':<17} {'ref':<22} {'size':<5} {'seeds':>5} {'hidden':>7} {'judge':>6} {'tokens/merged':>13}")
-    for run, recs in runs.items():
+        return []
+    out = [f"{'run':<17} {'ref':<22} {'size':<5} {'seeds':>5} {'hidden':>7} {'judge':>6} {'tokens/merged':>13}"]
+    for run, recs in list(runs.items())[-last if last else 0:]:
         good = [r for r in recs if not r.get("contaminated")]
         merged = sum(len(r["tickets"]["merged"]) for r in good)
         judged = [r["judge"] for r in good if r.get("judge")]
@@ -92,10 +98,84 @@ def bench_stats(p):
         judge = f"{sum(j['yes'] for j in judged)}/{sum(j['total'] for j in judged)}" if judged and not failed else "-"
         ref = f"{recs[0]['ref']} ({recs[0]['sha'][:7]})"
         hidden = f"{sum(r['passed'] for r in good)}/{sum(r['total'] for r in good)}"
-        print(f"{run:<17} {ref[:22]:<22} {recs[0]['size']:<5} {len(good):>5} {hidden:>7} {judge:>6} "
-              f"{k(sum(r['weighted'] for r in good) / merged) if merged else '-':>13}"
-              + (f"  ({len(recs) - len(good)} contaminated)" if len(good) < len(recs) else "")
-              + (f"  (judge failed: {', '.join(failed)})" if failed else ""))
+        out.append(f"{run:<17} {ref[:22]:<22} {recs[0]['size']:<5} {len(good):>5} {hidden:>7} {judge:>6} "
+                   f"{k(sum(r['weighted'] for r in good) / merged) if merged else '-':>13}"
+                   + (f"  ({len(recs) - len(good)} contaminated)" if len(good) < len(recs) else "")
+                   + (f"  (judge failed: {', '.join(failed)})" if failed else ""))
+    return out
+
+
+# ---------- `stats --bench --trend` and the endless loop's weekly push: the week's before → after
+
+def trend(p, end=None):
+    """Whether the loop is working, in four lines, each a before → after: the frozen seeds' hidden tests, judge and
+    tokens per merged ticket (the last holdout run before the week, else its first, against its last), then, last
+    week → this week, the weighted tokens per merged ticket here, the experiments the bench decided and the bench
+    budget used. The week is the usage window's (`budget.Budget`): the one ending at `end` (epoch seconds: the
+    weekly push), else this one so far."""
+    from . import budget
+    b = budget.Budget(p.cfg["experiments"])
+    start = end - budget.WEEK if end else b.start
+    end = end or time.time()
+    weeks = [(start - budget.WEEK, start), (start, end)]
+    rows = read_jsonl(p.state / "ledger.jsonl")
+    log = last_log(p, None)
+    per = [per_merged(rows, log, *w) for w in weeks]
+    ex = [decided(rows, *w) for w in weeks]
+    spent = [round(sum(x.get("spent") or 0 for x in budget.runs() if a <= x.get("ended", x.get("started", 0)) < z), 2)
+             for a, z in weeks]
+    arrow = lambda pair, f=str: " → ".join(map(f, pair))
+    return [frozen_line(p, start, end),
+            f"weighted tokens per merged ticket here: {arrow(per, lambda x: k(x[0] / x[1]) if x[1] else '-')} "
+            f"({arrow([x[1] for x in per])} merged)",
+            f"experiments: run {arrow([a + r for a, r in ex])}, kept {arrow([a for a, _ in ex])}, rejected "
+            f"{arrow([r for _, r in ex])}",
+            f"bench budget used: {arrow(spent, lambda x: f'{x:g}%')} of the weekly limit (cap {b.cap:g}%)"]
+
+
+def at_text(t):
+    """Epoch seconds as the ledger's and the log's `at` (local time, to the minute)."""
+    return f"{datetime.fromtimestamp(t):%Y-%m-%d %H:%M}"
+
+
+def per_merged(rows, log, a, z):
+    """(weighted tokens of the sessions, tickets merged) between epoch seconds `a` and `z`."""
+    a, z = at_text(a), at_text(z)
+    w = sum(weighted(r) for r in rows if not r.get("event") and r.get("role") and a <= r.get("at", "") < z)
+    return w, len({m[2] for line in log if (m := MERGED_RE.match(line)) and a <= m[1] < z})
+
+
+def decided(rows, a, z):
+    """(kept, rejected): the experiments the bench decided between epoch seconds `a` and `z`."""
+    a, z = at_text(a), at_text(z)
+    rs = [r for r in rows if a <= r.get("at", "") < z]
+    return (sum(r.get("event") == "experiment" and r.get("verdict") == "kept" for r in rs),
+            sum(r.get("event") == "outcome" and r.get("outcome") == "rejected" for r in rs))
+
+
+def frozen_line(p, start, end):
+    """The frozen seeds' line of `trend`: the holdout's runs of the newest run's size (another size works other
+    seeds), the week's last against the last before it, else against the week's first."""
+    runs = {}
+    for r in read_jsonl(p.state / "bench.jsonl"):
+        if not r.get("pool") and not r.get("contaminated"):
+            runs.setdefault(str(r.get("run")), []).append(r)
+    run_id = lambda t: f"{datetime.fromtimestamp(t):%Y%m%d-%H%M%S}"
+    week = [rs for run, rs in runs.items() if run_id(start) <= run < run_id(end)]
+    if not week:
+        return "frozen seeds: no run this week (`windvane bench` runs one)"
+    size = week[-1][0].get("size")
+    before = [rs for run, rs in runs.items() if run < run_id(start) and rs[0].get("size") == size]
+    pair = [before[-1] if before else week[0], week[-1]] if before or len(week) > 1 else [week[-1]]
+    judged = lambda rs: [r["judge"] for r in rs if r.get("judge")]
+    judge = lambda rs: (f"{sum(j['yes'] for j in judged(rs))}/{sum(j['total'] for j in judged(rs))}"
+                        if judged(rs) and not any(j.get("error") or j.get("stopped") for j in judged(rs)) else "-")
+    merged = lambda rs: sum(len(r["tickets"]["merged"]) for r in rs)
+    tokens = lambda rs: k(sum(r["weighted"] for r in rs) / merged(rs)) if merged(rs) else "-"
+    hidden = lambda rs: f"{sum(r['passed'] for r in rs)}/{sum(r['total'] for r in rs)}"
+    arrow = lambda f: " → ".join(f(rs) for rs in pair)
+    return (f"frozen seeds: hidden tests {arrow(hidden)}, judge {arrow(judge)}, tokens/merged {arrow(tokens)}"
+            + (" (one run)" if len(pair) == 1 else ""))
 
 
 def check_runs(p, checks, running=jobs.running):
@@ -831,13 +911,18 @@ def projects_stats(a):
     """`stats --projects`: each project's state dir under the state root (one with a ledger) read side by side over
     `--since` (default 30 days), then each measure's spread across them. Reads only: no lock is taken, so a run in
     another project never waits on it, and no file is written."""
-    since = projects_since(a.since)
-    repos = phone.projects()  # every run records its checkout there as it starts
-    rows = [project_digest(d, repos.get(d.name), since) for d in project_dirs(user_dir("XDG_STATE_HOME", ".local/state"))]
-    digest = {"since": since, "projects": rows, "across": across(rows)}
+    digest = projects_digest(projects_since(a.since))
     if a.json:
         return print(json.dumps(digest, indent=1))
     print_digest(digest)
+
+
+def projects_digest(since):
+    """`stats --projects --json`'s data: every project's measures since `since`, and their spread."""
+    repos = phone.projects()  # every run records its checkout there as it starts
+    rows = [project_digest(d, repos.get(d.name), since)
+            for d in project_dirs(user_dir("XDG_STATE_HOME", ".local/state"))]
+    return {"since": since, "projects": rows, "across": across(rows)}
 
 
 def projects_since(when):

@@ -1,6 +1,7 @@
 """The plan run: a planner session writes tickets for a goal (and the critic's follow-ups) on a branch the driver
 commits, then pushes or lands it."""
 import fcntl
+import json
 import os
 import re
 import tempfile
@@ -104,10 +105,11 @@ class PlanBusy(Exception):
 
 
 def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max_new=6, busy_raises=False,
-         merged=()):
+         merged=(), endless=False):
     """A planner run writes tickets for `goal` (and the critic's follow-ups) on a branch the driver commits;
     `merge` merges it at once. Returns how many tickets it merged (with `merge`) or wrote; while another plan runs,
-    0 (or PlanBusy with `busy_raises`). `merged`, the run's merged tickets, stay in full in its ticket listing."""
+    0 (or PlanBusy with `busy_raises`). `merged`, the run's merged tickets, stay in full in its ticket listing;
+    `endless` (`run --replan forever`) adds `endless_parts`."""
     p.state.mkdir(parents=True, exist_ok=True)
     with open(p.state / "plan.lock", "w") as lock:
         try:
@@ -118,7 +120,7 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
                 raise PlanBusy("another plan is running")
             return 0
         try:
-            return _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged)
+            return _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged, endless)
         finally:  # pushed or given up: its ids are on a branch now, or free
             release_ids(p, "plan")
 
@@ -142,6 +144,50 @@ def rejected_part(cd):
     if len(text) > EXPERIMENTS_SHOWN:  # whole records only
         text = "(older records left out)\n### " + text[-EXPERIMENTS_SHOWN:].split("\n### ", 1)[-1]
     return text and f"## Experiments the bench rejected ({EXPERIMENTS})\n{text}"
+
+
+DIGEST_SHOWN = 8000  # characters of the cross-project digest an endless plan's prompt gets
+BENCH_SHOWN = 6  # the newest bench runs it gets
+
+
+def endless_parts(p):
+    """An endless plan's sections, in a project with `bench/` (one whose work is how projects get built): where the
+    projects on this machine hurt (`stats --projects --json` over 30 days), so it ranks ideas by what costs them most,
+    and the newest bench runs. Projects go by letter and their checkout paths are left out: a ticket title reaches
+    the merge commits."""
+    from .stats import bench_lines, projects_digest, projects_since
+    if not (Path(p.root) / "bench").is_dir():
+        return []
+    digest = projects_digest(projects_since(None))
+    for d in digest["projects"]:
+        d.pop("repo", None)
+    names = sorted(((d["name"], f"project {letter(i)}") for i, d in enumerate(digest["projects"])),
+                   key=lambda x: -len(x[0]))  # "app" never eats into "app-two"
+    text = json.dumps(by_letter(digest, names), separators=(",", ":"))
+    if len(text) > DIGEST_SHOWN:
+        text = text[:DIGEST_SHOWN] + " (cut)"
+    runs = bench_lines(p, BENCH_SHOWN)
+    return [f"## Where projects hurt (`windvane stats --projects --json`, last 30 days; projects by letter)\n"
+            "Rank ideas by what this says costs projects most (tokens, failures, send-backs, check time), and say "
+            f"which measure a ticket should move.\n{text}",
+            "## The newest bench runs (`windvane stats --bench`)\n" + "\n".join(runs) if runs else ""]
+
+
+def by_letter(v, names):
+    """`v` with each project name in its strings (never its keys) replaced by its letter: [(name, label)]."""
+    if isinstance(v, dict):
+        return {key: by_letter(x, names) for key, x in v.items()}
+    if isinstance(v, list):
+        return [by_letter(x, names) for x in v]
+    if isinstance(v, str):
+        for name, label in names:
+            v = re.sub(rf"(?<![\w-]){re.escape(name)}(?![\w-])", label, v)
+    return v
+
+
+def letter(i):
+    """A, B, ... Z, then AA, AB: a project's name in an endless plan's prompt."""
+    return (letter(i // 26 - 1) if i >= 26 else "") + chr(65 + i % 26)
 
 
 def branch_name(p, cd, kind):
@@ -321,7 +367,7 @@ def unmerged(p, n, where):
     return 0
 
 
-def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=()):
+def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=(), endless=False):
     cd = p.plan_dir
     net.git(p.main_root(), "fetch", "-q", "--prune", p.remote)
     ensure_worktree(p, cd, setup=False)
@@ -341,6 +387,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=()):
         "## The critic's follow-up notes since the last plan (ticket, point)\n"
         + "\n".join(f"- ({t}) {b}" for t, b in notes[:60]) if notes else "",
         f"## Existing tickets (id, status, title)\n{q.listing(compact=True, keep=merged) or '(none yet)'}",
+        *(endless_parts(p) if endless else []),
         rejected_part(cd),
         stopped_part(p),
         f"## Ids for new tickets, in order (at most {max_new})\n{', '.join(ids)}",
