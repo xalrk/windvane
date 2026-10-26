@@ -157,7 +157,7 @@ what every project's benches spent.
 |---|---|---|
 | `week_below` | `75` | A bench starts only while the weekly usage is below this. |
 | `week_share` | `30` | The most of a week benches may use: one starts only while this week's bench spend plus its estimate (the mean of the last three runs of its size) stays within it, plus what you allowed for this week. |
-| `plateau` | `8` | An endless run (`--replan forever`) stops planning experiments once this many in a row were rejected, until one is kept, the goal or a seed changes, or `windvane experiments resume`. |
+| `plateau` | `8` | Experiment planning stops (in every run, with one push) once this many experiments in a row were rejected, until one is kept, the goal or a seed changes, or `windvane experiments resume`. |
 
 A bench that doesn't fit isn't started: an experiment ticket waits, set aside but not failed, and the run goes on
 with other tickets; `windvane status` says so on one line. At the share, the run asks once a week per cap on the

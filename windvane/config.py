@@ -83,7 +83,7 @@ DEFAULTS = {
                   "experiment_repeat": 2, "experiment_saving": 10, "experiment_minutes": 60},
     # the bench's share of the account's week (machine-wide, percent points of the weekly limit): benches start only
     # under `week_below` weekly usage, and while this week's bench spend plus the next run stays within `week_share`
-    # `plateau`: an endless run stops planning experiments once this many in a row were rejected
+    # `plateau`: experiment planning stops once this many experiments in a row were rejected
     "experiments": {"week_below": 75, "week_share": 30, "plateau": 8},
     "permissions": {},  # <role>_allow / <role>_deny: rules added to that role's sessions (none by default)
     "env": {"keep": []},  # names of credential-like variables sessions still get (runner.scrub drops the rest)

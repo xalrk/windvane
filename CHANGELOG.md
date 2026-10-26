@@ -8,12 +8,14 @@ release on the same day adds a number (`2026.10.9.1`).
 
 ### Added
 - `windvane run --replan forever` (or `replan = "forever"` in the config): an autopilot that keeps improving the
-  project with no input. It plans whenever the queue runs dry, with no count to reach, and a plan that writes
-  nothing is tried again an hour later. In a project with `bench/`, the planner also gets where the projects on the
-  machine hurt (`stats --projects --json`, each project by letter) and the newest bench runs, and ranks its ideas by
-  what costs projects most. When the last `plateau` (8) experiments were all rejected, experiment planning stops
-  with one push and the run goes on with other tickets, until an experiment is kept, the goal or a seed changes, or
-  `windvane experiments resume`. Once a week, at the usage window's reset, one push gives the week's trend.
+  project with no input. It plans whenever the queue runs dry, with no count to reach; with nothing merged since
+  the last plan, the next waits an hour. In a project with `bench/`, the planner also gets where the projects on
+  the machine hurt (`stats --projects --json`, numbers only, each project by letter) and the newest bench runs, and
+  ranks its ideas by what costs projects most. Once a week, at the usage window's reset, one push gives the week's
+  trend.
+- A plateau stop for experiments, in every run: when the last `plateau` (8) experiments were all rejected,
+  experiment planning stops with one push and the run goes on with other tickets, until an experiment is kept, the
+  goal or a seed changes, or `windvane experiments resume`.
 - `windvane stats --bench --trend`: this week against the last in four lines, each a before → after: the frozen
   seeds' hidden tests, judge and tokens per merged ticket, this project's weighted tokens per merged ticket, the
   experiments run, kept and rejected, and the bench budget used.

@@ -300,12 +300,13 @@ it means the loop is learning its training seeds, so it sends one push and stops
 periodic sessions are told to write no `Kind: experiment` ticket) until `windvane experiments resume`.
 
 **The endless loop.** `windvane run --replan forever` (or `replan = "forever"` in the config) plans whenever the
-queue runs dry, with no count to reach: only the deadline, a stop or the usage caps end the run. A plan that writes
-nothing is tried again an hour later, and tickets merged meanwhile are picked up as usual. In a project with
-`bench/`, the planner's prompt also gets where the projects on this machine hurt (`stats --projects --json` over 30
-days, each project by letter and without its path, since ticket titles reach the merge commits) and the newest bench
-runs, and ranks its ideas by what that says costs projects most. When the last `plateau` experiments (8) were all
-rejected, experiment planning stops with one push holding the week's trend, and the run goes on with other
+queue runs dry, with no count to reach: only the deadline, a stop or the usage caps end the run. When nothing merged
+since the last plan (it wrote nothing, or its tickets all failed), the next one waits an hour; tickets that turn up
+meanwhile are picked up as usual. In a project with `bench/`, the planner's prompt also gets where the projects on
+this machine hurt (`stats --projects --json` over 30 days, numbers only: each project by letter, the costliest
+first, with no paths, ticket ids or reasons, since ticket titles reach the merge commits) and the newest bench runs,
+and ranks its ideas by what that says costs projects most. In any run, when the last `plateau` experiments (8) were
+all rejected, experiment planning stops with one push holding the week's trend, and the run goes on with other
 tickets; a kept experiment, a changed goal, a new seed or `windvane experiments resume` starts it again (only the
 rejections after that count). Once a week, at the usage window's reset, an endless run pushes the week's trend:
 the frozen seeds' hidden tests, judge and tokens per merged ticket, then this project's weighted tokens per merged

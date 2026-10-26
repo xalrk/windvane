@@ -49,7 +49,7 @@ Options of `windvane run`:
 | `--detach` | Run in a tmux session (`windvane-<name>`). A driver that crashes there is restarted with the same deadline and what it had done, pushing the error each time; a fourth crash within an hour ends the run. |
 | `--parallel N\|auto` | The most tickets at a time (default from config). |
 | `--cap`, `--week-cap`, `--ticket-hours`, `--min-slot`, `--answer-wait` | Override the matching [config keys](configuration.md#autopilot) for this run. |
-| `--replan N [--goal G]` | When the queue runs dry, plan new tickets, up to N times (default: the config's `replan`). `--replan forever` plans every time it runs dry, stops planning experiments at a plateau, and pushes a weekly trend ([the endless loop](concepts.md#the-critic-and-calibration)). |
+| `--replan N [--goal G]` | When the queue runs dry, plan new tickets, up to N times (default: the config's `replan`). `--replan forever` plans every time it runs dry (an hour apart while nothing merges) and pushes a weekly trend ([the endless loop](concepts.md#the-critic-and-calibration)). |
 | `--no-preflight` | Start without asking the next tickets' questions. |
 
 ## Watching

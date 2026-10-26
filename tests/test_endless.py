@@ -94,7 +94,25 @@ class Replan(Base):
             pilot.run(now() + timedelta(seconds=4))
         self.assertEqual(len(self.prompts()), 1)
         self.assertLess(time.time() - started, 60)
-        self.assertIn("the plan wrote no ticket: planning again at", self.p.state.joinpath("autopilot.log").read_text())
+        self.assertIn("nothing merged since the last plan: planning again at",
+                      self.p.state.joinpath("autopilot.log").read_text())
+
+    def test_the_next_plan_waits_for_a_merge_or_an_hour_and_the_wait_survives_a_restart(self):
+        self.make()
+        pilot = self.pilot()
+        self.assertTrue(pilot.replan_due())  # no plan yet
+        pilot.replan_wait = {"until": time.time() + 3600, "merged": 0}
+        self.assertFalse(pilot.replan_due())  # it wrote nothing, or its tickets all failed
+        pilot.merged.append("T-001")
+        self.assertTrue(pilot.replan_due())
+        pilot.merged.clear()
+        pilot.hand_over()
+        again = self.pilot()
+        again.carry_over(True)
+        self.assertEqual(again.replan_wait, pilot.replan_wait)
+        self.assertFalse(again.replan_due())
+        again.replan_wait["until"] = time.time() - 1
+        self.assertTrue(again.replan_due())
 
     def test_the_config_and_the_flag_take_a_count_or_forever(self):
         self.assertEqual(config.replan("forever"), math.inf)
@@ -127,11 +145,17 @@ class PlannerPrompt(Base):
         (other / "autopilot.log").write_text(f"{at(time.time())} X-001: FAILED: the secretproj build broke\n")
         planner.plan(self.p, "make it better", endless=True)
         prompt = self.prompts()[-1]
-        self.assertIn("## Where projects hurt (`windvane stats --projects --json`, last 30 days; projects by letter)",
-                      prompt)
+        self.assertIn("## Where projects hurt (`windvane stats --projects --json`, last 30 days, numbers only, "
+                      "projects by letter, costliest first)", prompt)
         self.assertIn("Rank ideas by what this says costs projects most", prompt)
-        self.assertIn('"failed":{"X-001":"the project ', prompt)
-        self.assertNotIn("secretproj", prompt)
+        part = prompt.split("## Where projects hurt")[1].split("\n## ")[0]
+        digest = json.loads(part.splitlines()[-1])
+        self.assertEqual(list(digest)[:3], ["since", "across", "projects"])
+        self.assertEqual([d["name"] for d in digest["projects"]], ["project A", "project B"])
+        self.assertEqual(digest["projects"][0]["tokens"]["weighted"], 5000)  # the costliest first
+        self.assertEqual(digest["projects"][1]["tickets"]["failed"], 1)
+        for leak in ("secretproj", "X-001", "build broke", self.p.name, str(self.s.root)):
+            self.assertNotIn(leak, part)
         self.assertNotIn(str(self.s.root), prompt)
         self.assertIn("## Experiments the bench rejected (.windvane/EXPERIMENTS.md)", prompt)
         self.assertIn("### T-005: a shorter worker prompt", prompt)
@@ -139,6 +163,22 @@ class PlannerPrompt(Base):
         self.assertIn("20261020-100000", prompt)
         planner.plan(self.p, "make it better")  # a plan by count, or at the desk: none of it
         self.assertNotIn("## Where projects hurt", self.prompts()[-1])
+
+    def test_a_digest_too_long_leaves_whole_cheaper_projects_out(self):
+        row = lambda i: {"name": f"p{i}", "tokens": {"weighted": i, "per_merged": None, "roles": {}},
+                         "tickets": {"merged": i}, "critic": {}, "checks": {}, "check_quick": None,
+                         "calibration_lines": 0, "refixes": [["T-1", "T-2"]], "failed": {"T-1": "why"}}
+        digest = {"since": "2026-10-01", "projects": [row(i) for i in range(60)],
+                  "across": [{"measure": "merged tickets", "low": 0, "low_projects": ["p0"], "high": 59,
+                              "high_projects": ["p59"]}]}
+        text = planner.numbers_only(digest, 2000)
+        self.assertLessEqual(len(text), 2000)
+        out = json.loads(text)
+        self.assertEqual(out["across"][0]["high_projects"], ["project A"])  # p59, the costliest
+        self.assertEqual(out["projects"][0], {
+            "name": "project A", "tickets": {"merged": 59}, "tokens": row(59)["tokens"], "critic": {}, "checks": {},
+            "check_quick": None, "calibration_lines": 0, "refixes": 1})
+        self.assertEqual(out["left_out"], f"{60 - len(out['projects'])} cheaper projects")
 
     def test_a_project_without_a_bench_gets_no_digest(self):
         s = Sandbox()
@@ -160,7 +200,7 @@ class Plateau(Base):
 
     def test_eight_rejected_in_a_row_stop_experiment_planning_with_one_push(self):
         self.make()
-        pilot = self.pilot()
+        pilot = self.pilot(replan=2)  # any run, not only an endless one
         self.verdicts("kept", *["rejected"] * 7)
         self.assertEqual(self.watch(pilot), [])
         self.assertEqual(experiment.stopped(self.p), "")
@@ -171,7 +211,8 @@ class Plateau(Base):
         self.assertIn("The last 8 experiments were all rejected", pushes[0][1])
         self.assertIn("frozen seeds: no run this week", pushes[0][1])  # the week's trend
         self.assertIn("a plateau", experiment.stopped(self.p))
-        self.assertIn("## Experiments are stopped\nthe last 8 experiments were all rejected", planner.stopped_part(self.p))
+        self.assertIn("## Experiments are stopped\nthe last 8 experiments were all rejected",
+                      planner.stopped_part(self.p))
         self.verdicts("rejected")
         self.assertEqual(self.watch(pilot), [])  # one push, not one per rejection
         self.assertIn("Other tickets go on", pushes[0][1])

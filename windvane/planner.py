@@ -148,41 +148,44 @@ def rejected_part(cd):
 
 DIGEST_SHOWN = 8000  # characters of the cross-project digest an endless plan's prompt gets
 BENCH_SHOWN = 6  # the newest bench runs it gets
+NUMBERS = ("tickets", "tokens", "critic", "checks", "check_quick", "calibration_lines")  # a digest's numeric parts
 
 
 def endless_parts(p):
     """An endless plan's sections, in a project with `bench/` (one whose work is how projects get built): where the
-    projects on this machine hurt (`stats --projects --json` over 30 days), so it ranks ideas by what costs them most,
-    and the newest bench runs. Projects go by letter and their checkout paths are left out: a ticket title reaches
-    the merge commits."""
+    projects on this machine hurt, so it ranks ideas by what costs them most (`numbers_only`), and the newest bench
+    runs."""
     from .stats import bench_lines, projects_digest, projects_since
     if not (Path(p.root) / "bench").is_dir():
         return []
-    digest = projects_digest(projects_since(None))
-    for d in digest["projects"]:
-        d.pop("repo", None)
-    names = sorted(((d["name"], f"project {letter(i)}") for i, d in enumerate(digest["projects"])),
-                   key=lambda x: -len(x[0]))  # "app" never eats into "app-two"
-    text = json.dumps(by_letter(digest, names), separators=(",", ":"))
-    if len(text) > DIGEST_SHOWN:
-        text = text[:DIGEST_SHOWN] + " (cut)"
     runs = bench_lines(p, BENCH_SHOWN)
-    return [f"## Where projects hurt (`windvane stats --projects --json`, last 30 days; projects by letter)\n"
-            "Rank ideas by what this says costs projects most (tokens, failures, send-backs, check time), and say "
-            f"which measure a ticket should move.\n{text}",
+    return [f"## Where projects hurt (`windvane stats --projects --json`, last 30 days, numbers only, projects by "
+            "letter, costliest first)\nRank ideas by what this says costs projects most (tokens, failures, "
+            "send-backs, check time), and say which measure a ticket should move.\n"
+            + numbers_only(projects_digest(projects_since(None))),
             "## The newest bench runs (`windvane stats --bench`)\n" + "\n".join(runs) if runs else ""]
 
 
-def by_letter(v, names):
-    """`v` with each project name in its strings (never its keys) replaced by its letter: [(name, label)]."""
-    if isinstance(v, dict):
-        return {key: by_letter(x, names) for key, x in v.items()}
-    if isinstance(v, list):
-        return [by_letter(x, names) for x in v]
-    if isinstance(v, str):
-        for name, label in names:
-            v = re.sub(rf"(?<![\w-]){re.escape(name)}(?![\w-])", label, v)
-    return v
+def numbers_only(digest, most=DIGEST_SHOWN):
+    """`stats --projects --json`'s digest as compact JSON within `most` characters: `across` (the spread, what to
+    rank by) first, then each project's numbers, the costliest (weighted tokens) first, whole projects left out from
+    the cheapest end to fit. No free text (failure and park reasons, ticket ids), no paths and no names, only letters:
+    a ticket title reaches the merge commits."""
+    rows = sorted(digest["projects"], key=lambda d: -(d["tokens"]["weighted"] or 0))
+    label = {d["name"]: f"project {letter(i)}" for i, d in enumerate(rows)}
+    names = lambda ns: [label.get(n, "project ?") for n in ns]
+    across = [{**m, "low_projects": names(m["low_projects"]), "high_projects": names(m["high_projects"])}
+              for m in digest["across"]]
+    projects = [{"name": label[d["name"]], **{k: d[k] for k in NUMBERS},
+                 "refixes": None if d["refixes"] is None else len(d["refixes"])} for d in rows]
+    for n in range(len(projects), -1, -1):
+        out = {"since": digest["since"], "across": across, "projects": projects[:n]}
+        if n < len(projects):
+            out["left_out"] = f"{len(projects) - n} cheaper projects"
+        text = json.dumps(out, separators=(",", ":"))
+        if len(text) <= most:
+            return text
+    return json.dumps({"since": digest["since"], "across": across}, separators=(",", ":"))[:most]
 
 
 def letter(i):
