@@ -299,6 +299,22 @@ week's runs of both sets: the pool's hidden tests or judge yeses up past the noi
 it means the loop is learning its training seeds, so it sends one push and stops experiment planning (the planner and
 periodic sessions are told to write no `Kind: experiment` ticket) until `windvane experiments resume`.
 
+**The endless loop.** `windvane run --replan forever` (or `replan = "forever"` in the config) plans whenever the
+queue runs dry, with no count to reach: only the deadline, a stop or the usage caps end the run. When nothing merged
+since the last plan (it wrote nothing, or its tickets all failed), the next one waits an hour; tickets that turn up
+meanwhile are picked up as usual. In a project with `bench/`, the planner's prompt also gets where the projects on
+this machine hurt (`stats --projects --json` over 30 days, numbers only: each project by letter, the costliest
+first, with no paths, ticket ids or reasons, since ticket titles reach the merge commits) and the newest bench runs,
+and ranks its ideas by what that says costs projects most. In any run, when the last `plateau` experiments (8) were
+all rejected, experiment planning stops with one push holding the week's trend, and the run goes on with other
+tickets; a kept experiment, a changed goal, a new seed or `windvane experiments resume` starts it again (only the
+rejections after that count). Once a week, at the usage window's reset, an endless run pushes the week's trend:
+the frozen seeds' hidden tests, judge and tokens per merged ticket, then this project's weighted tokens per merged
+ticket, the experiments run, kept and rejected, and the bench budget used, each a before → after
+(`windvane stats --bench --trend` prints the week so far). A question a ticket asks follows the usual rules
+(below): quiet times and `answer_wait` build the recommendation, so nothing in the loop waits for the desk but the
+budget's question and held protected changes.
+
 ## Questions and quiet times
 
 Workers make engineering calls themselves and say why in the pull request. **Product calls** (what users see or
@@ -352,6 +368,7 @@ On this machine only, under `~/.local/state/windvane/<name>/`:
 | `runs/` | each session's full stream, which `windvane watch` reads |
 | `ledger.jsonl` | tokens, turns and minutes per session, which `windvane stats` reads |
 | `bg/experiment-<id>.log` | an experiment ticket's bench, as `windvane await experiment-<id>` follows it |
+| `experiments-stopped.json`, `plateau.json`, `trend.json` | why experiment planning is stopped (the overfit alarm, a plateau) and when a plateau's stop ends itself; the verdict count a resume starts the next plateau's count from; when the next weekly trend push is due |
 | `bench.jsonl` | `windvane bench`'s results, one record per seed per run (the seed runs themselves live under `~/.local/state/windvane/_bench/`) |
 | `critic.jsonl`, `critic/<ID>/` | the critic's verdicts, and each ticket's evidence pack |
 | `quiet.txt` | quiet times |

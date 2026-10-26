@@ -12,18 +12,24 @@ Main moving on during the bench: the head is compared with the newest main a ben
 (`bench.training`), never the holdout's.
 
 `stop` halts experiment planning (the overfit alarm, `periodic.Periodic.overfit_watch`): the planner and the periodic
-sessions are told to write no experiment until `windvane experiments resume`.
+sessions are told to write no experiment until `windvane experiments resume`. A plateau stops it too
+(`plateau_watch`): `plateau` rejections in a row mean the ideas stopped paying, so the bench's share of the week goes
+unspent until something changes what an experiment could find: a kept one, a new goal, a new seed, or a resume.
+An endless run (`run --replan forever`) also pushes the week's `stats.trend` once a week, at the usage window's reset
+(`trend_watch`), so whether the loop works shows without a look at the desk.
 """
+import math
+import time
 from datetime import datetime, timedelta
 
-from . import bench, budget, jobs, net, phone, privacy
+from . import bench, budget, jobs, net, phone, privacy, stats
 from .config import DIR
 from .held import land
 from .periodic import bench_command, bench_runs
 from .phone import whole
 from .planner import EXPERIMENTS, branch_name
 from .questions import quiet_now
-from .util import append_jsonl, git, gout, hhmm, load_json, now, push, save_json
+from .util import append_jsonl, git, gout, hhmm, load_json, now, push, read_jsonl, save_json
 from .worktree import clean_detach
 
 POLL = 30  # seconds between looks at a running bench job
@@ -148,6 +154,60 @@ class Experiments:
         self.log(f"{tid}: {budget.MARK} holds its next bench run ({why}); it waits, not failed: the week resets "
                  f"{b.ends()}, or `windvane experiments allow +10`{held}")
         return False
+
+    def plateau_watch(self):
+        """Between tickets: the last `plateau` experiments all rejected (since experiments last started again) stop
+        experiment planning with one push holding the week's trend; the run goes on with other tickets. A plateau's
+        stop ends by itself on a kept experiment, a changed goal or a new seed. Read only when the ledger, main or
+        the goal moved."""
+        p, goal = self.p, self.goal()
+        try:
+            key = ((p.state / "ledger.jsonl").stat().st_mtime, gout(p.main_root(), "rev-parse", p.upstream), goal)
+        except OSError:
+            return
+        if key == self.plateau_read:
+            return
+        self.plateau_read = key
+        verdicts, st = decisions(p), load_json(stopped_file(p), {})
+        if st.get("kind") == PLATEAU:
+            why = restart_why(p, st, verdicts, goal)
+            if why:
+                resume(p)
+                self.log(f"experiments: planned again after the plateau: {why}")
+            return
+        n = int(p.cfg["experiments"]["plateau"])
+        last = verdicts[load_json(plateau_file(p), {}).get("from", 0):][-n:]
+        if st or len(last) < n or "kept" in last:  # stopped already (the overfit alarm): that stop stands
+            return
+        stop(p, f"the last {n} experiments were all rejected (a plateau); a kept experiment, a new goal or seed, "
+             "or `windvane experiments resume` starts them again", kind=PLATEAU, goal=goal, seeds=seed_names(p),
+             verdicts=len(verdicts))
+        self.log(f"plateau: the last {n} experiments were all rejected; experiment planning stopped, other tickets "
+                 "go on")
+        push("Experiments plateaued", phone.cut(
+            f"The last {n} experiments were all rejected, so no more are planned until one is kept, the goal or a seed "
+            "changes, or `windvane experiments resume`. Other tickets go on. This week: "
+            + "; ".join(stats.trend(p)), phone.MOST, log=self.log), 3, "chart_with_downwards_trend")
+
+    def trend_watch(self):
+        """An endless run's weekly push: once the usage window's week has reset, the week that ended in
+        `stats.trend`'s lines. The first look only notes when the week resets; a run that wasn't going at a reset
+        pushes at its first pass after it, for the last week that ended."""
+        if self.a.replan != math.inf:
+            return
+        p, f = self.p, self.p.state / "trend.json"
+        b = budget.Budget(p.cfg["experiments"])
+        due, t = load_json(f, {}).get("next"), time.time()
+        if due and t < due:
+            return
+        end = due
+        while end and end + budget.WEEK <= t:
+            end += budget.WEEK
+        save_json(f, {"next": b.reset if b.reset and b.reset > t else (end or t) + budget.WEEK})
+        if end:
+            push("Weekly trend", phone.cut("\n".join(stats.trend(p, end)), phone.MOST, log=self.log), 3,
+                 "chart_with_upwards_trend")
+            self.log(f"weekly trend pushed for the week to {datetime.fromtimestamp(end):%a %H:%M}")
 
     def budget_holds(self, who, which, runs):
         """(why, budget): why the experiment budget holds the next `runs` bench runs of this size ("" when they may
@@ -316,15 +376,51 @@ def stopped(p):
     return load_json(stopped_file(p), {}).get("why", "")
 
 
-def stop(p, why):
-    save_json(stopped_file(p), {"why": why, "at": f"{now():%Y-%m-%d %H:%M}"})
+def stop(p, why, **more):
+    """Stop experiment planning; `more` (a plateau's kind, goal, seeds and verdict count) tells when it ends itself."""
+    save_json(stopped_file(p), {"why": why, "at": f"{now():%Y-%m-%d %H:%M}", **more})
 
 
 def resume(p):
-    """Start experiment planning again; whether it was stopped."""
+    """Start experiment planning again; whether it was stopped. The verdicts so far no longer count towards a
+    plateau, or the next look would stop it again at once."""
     was = bool(stopped(p))
     stopped_file(p).unlink(missing_ok=True)
+    save_json(plateau_file(p), {"from": len(decisions(p))})
     return was
+
+
+PLATEAU = "plateau"  # a stop's kind when it came of `plateau` rejections in a row
+
+
+def plateau_file(p):
+    return p.state / "plateau.json"
+
+
+def decisions(p):
+    """The bench's verdicts on experiments, oldest first ("kept" or "rejected"), from the ledger."""
+    out = []
+    for r in read_jsonl(p.state / "ledger.jsonl"):
+        if r.get("event") == "experiment" and r.get("verdict") == "kept":
+            out.append("kept")
+        elif r.get("event") == "outcome" and r.get("outcome") == "rejected":
+            out.append("rejected")
+    return out
+
+
+def seed_names(p):
+    """The seeds on main, both sets (`pool/<name>` for the training pool's): a new one may find what the old didn't."""
+    return [*bench.planned(p, p.upstream, "full"), *(f"pool/{n}" for n in bench.planned(p, p.upstream, "full", True))]
+
+
+def restart_why(p, st, verdicts, goal):
+    """Why a plateau's stop `st` is over ("" while it isn't): an experiment kept since, the goal changed, a new seed."""
+    if "kept" in verdicts[st.get("verdicts", 0):]:
+        return "an experiment was kept"
+    if goal != st.get("goal", goal):
+        return "the goal changed"
+    new = sorted(set(seed_names(p)) - set(st.get("seeds", [])))
+    return f"a new seed ({', '.join(new)})" if new else ""
 
 
 def job_name(tid):

@@ -34,6 +34,7 @@ matching keys for one run.
 | `teardown_minutes` | `5` | The longest `teardown` may run, in minutes (any number above 0). One still running then is killed, its child processes too, and logged as timed out. |
 | `isolate` | `true` | Work in the autopilot's own worktrees. `false` runs sessions in your checkout instead, for projects whose builds can't be duplicated; it also limits the run to one ticket at a time. |
 | `goal` | `""` | What `windvane plan` and `windvane run --replan` aim at when no goal is given. |
+| `replan` | `0` | How many times `windvane run` plans new tickets when the queue runs dry, when `--replan` isn't given; `"forever"`: every time ([the endless loop](concepts.md#the-critic-and-calibration)). |
 | `author` | git's identity | `"Name <email>"` for every commit windvane makes: the driver's (merges, planned tickets) and its workers'. With `forge = "github"`, `windvane doctor` warns unless the email is a `users.noreply.github.com` one, since every pushed commit shows it. |
 | `overview_extra` | `""` | A shell command, run in the checkout, whose output `windvane overview` (and so the phone's `overview`) adds below its own lines: the project's own milestones. First 15 lines, 30 s at most; a failure shows as one line. |
 | `shared_notes` | `[]` | Notes files every ticket appends its findings to (e.g. `["NOTES.md"]`; paths in the repo, globs like `docs/*.md`, or a directory ending in `/`). They don't count when deciding which tickets may run side by side, whether on a Touches line or among the files a running branch changed. When a merge (a ticket's, or a desk PR's) conflicts only in these and `[[append_only]]` files, and in these files every conflict hunk only adds lines on both sides, the driver resolves it without a session: main's text, then the branch's added sections in order (a section starts at a Markdown heading, or is the added text itself). It's named in the merge commit, the log and the PR (`NOTES.md: kept main's, appended 2 sections`). A hunk that changes or deletes an existing line, on either side, or a conflict in any other file, goes back to the worker as before. Workers are told to add a new section and not rewrite existing text. |
@@ -156,13 +157,14 @@ what every project's benches spent.
 |---|---|---|
 | `week_below` | `75` | A bench starts only while the weekly usage is below this. |
 | `week_share` | `30` | The most of a week benches may use: one starts only while this week's bench spend plus its estimate (the mean of the last three runs of its size) stays within it, plus what you allowed for this week. |
+| `plateau` | `8` | Experiment planning stops (in every run, with one push) once this many experiments in a row were rejected, until one is kept, the goal or a seed changes, or `windvane experiments resume`. |
 
 A bench that doesn't fit isn't started: an experiment ticket waits, set aside but not failed, and the run goes on
 with other tickets; `windvane status` says so on one line. At the share, the run asks once a week per cap on the
 phone (`+10%`, `+20%`, or wait for the reset; no answer in `answer_wait`: wait). `windvane experiments` prints this
 week's spend, the cap, what you allowed and when the week resets; `windvane experiments allow +10` allows 10 points
-more, this week only. The week is the usage window's own, ending at its seven-day reset. Both keys are protected with
-the bench.
+more, this week only. The week is the usage window's own, ending at its seven-day reset. All three keys are protected
+with the bench.
 
 ## [[periodic]]
 

@@ -20,7 +20,7 @@ from . import (bench, budget, doctor, driver, experiment, heavy, install, jobs, 
                publiccheck, questions, requests, schedule, scratch, util, watch)
 from . import held as held_mod
 from . import periodic as periodic_mod
-from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
+from .config import DIR, HOME, Project, TokenError, exe, find, replan, slots, toplevel
 from .config import periodic as periodic_entries
 from .queue import Queue
 from .runner import LIVE, ROLE, Usage, inherited_stop, plain_error, scope_github
@@ -879,8 +879,9 @@ def parser():
     s.add_argument("--ticket-hours", type=float, help="max hours for one worker run (default 3)")
     s.add_argument("--min-slot", type=float, help="don't start a ticket with fewer minutes left (default 30)")
     s.add_argument("--answer-wait", type=float, help="minutes a phone question waits before the recommendation")
-    s.add_argument("--replan", type=int, default=0, metavar="N",
-                   help="when the queue runs dry, plan new tickets (goal + critic notes), up to N times")
+    s.add_argument("--replan", metavar="N",
+                   help='when the queue runs dry, plan new tickets (goal + critic notes), up to N times, or '
+                   '"forever" (default from config: 0)')
     s.add_argument("--goal", help="the goal for --replan (default: config's goal)")
     s = sub.add_parser("preflight", help="the questions the next tickets will need, to answer now")
     s.add_argument("--for", dest="for_", default="4h", help="how long the run will be (default 4h)")
@@ -974,6 +975,8 @@ def parser():
                    "wrong where, and each measure's spread")
     s.add_argument("--json", action="store_true", help="with --projects: the same as JSON")
     s.add_argument("--bench", action="store_true", help="the recorded `windvane bench` runs, one line each")
+    s.add_argument("--trend", action="store_true", help="with --bench: this week's before → after (frozen seeds, "
+                   "tokens per merged ticket, experiments, bench budget)")
     s = sub.add_parser("bench", help="build the bench/ seed projects with the real pipeline and score them on "
                        "tests no session sees")
     s.add_argument("what", nargs="*", metavar="compare A B", help="compare two windvane refs or earlier run ids, "
@@ -1047,6 +1050,8 @@ def main(argv=None):
         return projects_stats(a)
     if a.cmd == "stats" and a.json:
         sys.exit("stats: --json goes with --projects")
+    if a.cmd == "stats" and a.trend and not a.bench:
+        sys.exit("stats: --trend goes with --bench")
     p = find()
     phone.use(p)
     try:
@@ -1058,6 +1063,7 @@ def main(argv=None):
         for k in ("cap", "week_cap", "ticket_hours", "min_slot", "answer_wait"):
             if getattr(a, k) is None:
                 setattr(a, k, p.ap[k])
+        a.replan = replan(p.cfg["replan"]) if a.replan is None else replan(a.replan, "--replan ")
     if a.cmd == "bg":
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
         for flag, given in (("--mem", a.mem is not None), ("--keep", a.keep), ("--expect", a.expect is not None),

@@ -3,6 +3,7 @@ Each `push(` call in driver.py, held.py, planner.py and experiment.py is driven 
 300-character error or reason; a new call with no case here fails the coverage test, so it gets one."""
 import ast
 import json
+import math
 import signal
 import subprocess
 import sys
@@ -21,7 +22,7 @@ from windvane import driver, experiment, net, planner, questions, scratch  # noq
 from windvane import held as held_mod  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
-from windvane.util import now  # noqa: E402
+from windvane.util import append_jsonl, now  # noqa: E402
 from windvane.worktree import REFUSALS, ensure_worktree  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_set_aside import args  # noqa: E402
@@ -334,6 +335,23 @@ def experiment_rejected(p, patch, s):
     return {"Rejected": ("The bench found it no better than main: API Error", "Not merged; branch t-001-x kept.")}
 
 
+def plateaued(p, patch, s):
+    p.state.mkdir(parents=True, exist_ok=True)
+    for _ in range(8):
+        append_jsonl(p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-001", "outcome": "rejected"})
+    pilot(p).plateau_watch()
+    return {"Experiments plateaued": ("The last 8 experiments were all rejected", "Other tickets go on")}
+
+
+def weekly_trend(p, patch, s):
+    p.state.mkdir(parents=True, exist_ok=True)
+    (p.state / "trend.json").write_text(json.dumps({"next": time.time() - 60}))
+    pl = pilot(p)
+    pl.a.replan = math.inf
+    pl.trend_watch()
+    return {"Weekly trend": ("frozen seeds:",)}
+
+
 def tmp_full(p, patch, s):
     patch(scratch, "fullness", lambda path=None: (93.4, 20))
     pilot(p).clean_tmp()
@@ -355,7 +373,7 @@ def scale_warned(p, patch, s):
 SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, not_stashed, merged, failed, no_answer,
          quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, crashed_stopped,
          held, secret_aside, push_refused, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned,
-         plan_dropped, experiment_rejected, tmp_full, protected_aside, kept_protected,
+         plan_dropped, experiment_rejected, plateaued, weekly_trend, tmp_full, protected_aside, kept_protected,
          not_taken_up, scale_warned]
 
 

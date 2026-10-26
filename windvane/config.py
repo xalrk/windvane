@@ -6,6 +6,7 @@ ledger, critic verdicts, check passes, background jobs, quiet times, and the aut
 """
 import copy
 import fnmatch
+import math
 import os
 import re
 import subprocess
@@ -41,6 +42,7 @@ DEFAULTS = {
     "teardown_minutes": 5,  # a teardown still running then is killed, its children too
     "isolate": True,  # work in the autopilot's own worktrees; false: in the checkout itself (huge builds)
     "goal": "",  # what `windvane plan` aims at when given no goal
+    "replan": 0,  # `run --replan`'s default: plans when the queue runs dry, at most this many, or "forever"
     "author": "",  # "Name <email>" for the driver's own commits; default: git's
     "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
     "heavy_mem": None,  # GB free this project's heavy jobs and heavy check wait for (unset: machine.toml's min_free_gb)
@@ -81,7 +83,8 @@ DEFAULTS = {
                   "experiment_repeat": 2, "experiment_saving": 10, "experiment_minutes": 60},
     # the bench's share of the account's week (machine-wide, percent points of the weekly limit): benches start only
     # under `week_below` weekly usage, and while this week's bench spend plus the next run stays within `week_share`
-    "experiments": {"week_below": 75, "week_share": 30},
+    # `plateau`: experiment planning stops once this many experiments in a row were rejected
+    "experiments": {"week_below": 75, "week_share": 30, "plateau": 8},
     "permissions": {},  # <role>_allow / <role>_deny: rules added to that role's sessions (none by default)
     "env": {"keep": []},  # names of credential-like variables sessions still get (runner.scrub drops the rest)
     "github": {"token_file": ""},  # a token for this repo alone: sessions and the driver use it as GH_TOKEN
@@ -246,6 +249,24 @@ def setup_minutes(v, where="", key="setup_minutes"):
     return v
 
 
+def replan(v, where="replan = "):
+    """A `replan` (or `--replan`): a count of plans, 0 or more, or "forever" (math.inf), as `Pilot` counts them."""
+    if v == "forever":
+        return math.inf
+    if isinstance(v, str) and v.isdigit():
+        v = int(v)
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        raise SystemExit(f"windvane: {where}{v!r}: use a number of plans (0 or more) or \"forever\"")
+    return v
+
+
+def plateau(v):
+    """`[experiments] plateau`: rejected experiments in a row, 1 or more."""
+    if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+        raise SystemExit(f"windvane: [experiments] plateau = {v!r} in config.toml: use a whole number, 1 or more")
+    return v
+
+
 def heavy_mem(v):
     """A `heavy_mem`: unset, or a number of GB, 0 or more."""
     if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0):
@@ -391,7 +412,7 @@ def github_token(p):
 # What a benchmark's numbers rest on, protected by default when the project has `bench/`: the seeds and their hidden
 # tests, the judge's rules, the scoring, and the config keys that set protection and the experiments' budget.
 PROTECTED = ("bench/", "prompts/JUDGE.md", "windvane/bench_score.py", f"{DIR}/config.toml:experiment_*",
-             f"{DIR}/config.toml:week_below", f"{DIR}/config.toml:week_share")
+             f"{DIR}/config.toml:week_below", f"{DIR}/config.toml:week_share", f"{DIR}/config.toml:plateau")
 # The training seeds: protected with the rest of bench/, but the seed round's own branches may write them.
 POOL, SEED_BRANCH = "bench/pool", "seed-"
 # Always protected while anything is: a branch that could edit this key could unprotect the rest.
@@ -499,6 +520,8 @@ class Project:
         setup_minutes(c["setup_minutes"])
         setup_minutes(c["teardown_minutes"], key="teardown_minutes")
         heavy_mem(c["heavy_mem"])
+        replan(c["replan"])
+        plateau(c["experiments"]["plateau"])
         heavy_keep_hours(c["heavy_keep_hours"])
         heavy_reuses(c["heavy_reuses"])
         actions_budget(c)
