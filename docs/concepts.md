@@ -331,10 +331,9 @@ last 20 rejected needs a `Different because:` line, or the driver drops it from 
 each seed, and a second rejection closes it. `windvane experiments` shows each kind's share, kept rate and last kept
 experiment.
 
-**The scout.** Every other source of ideas looks inward. A `builtin = "scout"` [[periodic]] entry looks out: every
-`scout_every` tickets finished and once in each exploration round, it is shown what changed in the installed Claude
-Code and which models are new to the ledger, reads the changelog, the docs and write-ups on other agent loops, and
-writes at most 3 `scout` experiments, each naming its `Source:`. A model new to the ledger also makes the next plan's
+**The scout.** Every other source of ideas looks inward. A `builtin = "scout"` [[periodic]] entry looks out: it is
+shown what changed in the installed Claude Code and which models are new to the ledger, reads the changelog, the docs
+and write-ups on other agent loops, and writes at most 3 `scout` experiments, each naming its `Source:`. A model new to the ledger also makes the next plan's
 experiments one `ablation` round: rules written for an older model are the first thing to test.
 
 A question a ticket asks follows the usual rules

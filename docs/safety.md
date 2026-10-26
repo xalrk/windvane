@@ -255,13 +255,11 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
 - **Fork PRs.** `gh pr list --head <branch>` matches a branch of that name in any fork. Every lookup windvane makes
   (a ticket's PR, a plan's, a held branch's) asks whether the PR comes from another repository and drops it, with
   one log line, so an outsider's PR named after a ticket's branch never reaches a worker or the reviewer.
-- **Web pages.** Only the scout (a `builtin = "scout"` [[periodic]] entry) among windvane's sessions reads the web,
-  in `dontAsk` mode with no shell: it may read its own `ci/` tree, write `.windvane/` there, search, and fetch from
-  Claude Code's and Anthropic's docs, GitHub and arXiv (its entry's `allow` adds hosts, each one a place a fetch
-  could carry the tree's text to); anything else is refused unasked. Only its new tickets may land, and the driver
-  drops one, with a log line, that names a web address (`https://…`, `www.…`, `host.com/…`) outside its `Source:`
-  line, a fetch (`curl`, `wget`, `git clone`) or an install command (`pip install x`, `npx x` and the like): a
-  pattern check, so the rest still pass the experiment gate, the protected yardstick and review.
+- **Web pages.** Only the scout reads the web, in `dontAsk` mode with no shell: it may read its own `ci/` tree, write
+  `.windvane/` there, search, and fetch from a short list of hosts (each host its entry's `allow` adds is one a fetch
+  could carry the tree's text to). The driver lands only its new tickets, dropping with a log line one that names a
+  web address outside its `Source:` line, a fetch (`curl`, `wget`, `git clone`) or an install command (`pip install
+  x`, `npx x`): a pattern check, so the rest still pass the experiment gate and review.
 - **Credentials.** A session gets your environment without the variables named like credentials (`*TOKEN*`,
   `*SECRET*`, `*PASSWORD*`, `*_KEY`, `AWS_*`), except what Claude Code and `gh` log in with and what
   [`[env] keep`](configuration.md#env) names.
