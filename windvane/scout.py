@@ -25,9 +25,15 @@ from .util import load_json, read_jsonl, save_json
 MOST = 3  # tickets a scout round may land
 TOOLS = ["Read", "Glob", "Grep", "Write", "Edit", "WebFetch", "WebSearch"]  # no Bash: nothing it read gets run
 WEB = ["WebFetch", "WebSearch"]
+# The hosts it may fetch from: a fetch's URL could carry what it read in the tree, so only to hosts whose logs a page's
+# author can't read; searches go to the search provider. The entry's own `allow` adds more (`WebFetch(domain:x.org)`).
+SITES = ("code.claude.com", "docs.claude.com", "docs.anthropic.com", "www.anthropic.com", "github.com",
+         "raw.githubusercontent.com", "arxiv.org")
 # In `dontAsk` mode only these run, the rest refused unasked: it reads its own tree (Glob and Grep go by the Read rule),
-# writes only `.windvane/` there, and reads the web. Nothing outside the tree can end up in a ticket, or be changed.
-ALLOW = ["Read(./**)", "Edit(./.windvane/**)", "Write(./.windvane/**)", *WEB]
+# writes only `.windvane/` there, searches the web and fetches from SITES. Nothing outside the tree can end up in a
+# ticket, or be changed.
+ALLOW = ["Read(./**)", "Edit(./.windvane/**)", "Write(./.windvane/**)", "WebSearch",
+         *(f"WebFetch(domain:{d})" for d in SITES)]
 MODE = "dontAsk"
 HELP_LINES = 150  # a first scout's `claude --help`, cut: later ones get only the diff
 DIFF_LINES = 120

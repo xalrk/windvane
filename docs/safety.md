@@ -255,13 +255,13 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
 - **Fork PRs.** `gh pr list --head <branch>` matches a branch of that name in any fork. Every lookup windvane makes
   (a ticket's PR, a plan's, a held branch's) asks whether the PR comes from another repository and drops it, with
   one log line, so an outsider's PR named after a ticket's branch never reaches a worker or the reviewer.
-- **Web pages.** Only the scout (a `builtin = "scout"` [[periodic]] entry) among windvane's sessions gets WebFetch
-  and WebSearch, and it runs in `dontAsk` mode with no shell and three kinds of allow rule: read its own `ci/` tree,
-  write `.windvane/` there, read the web; anything else is refused without asking. Of what it writes only its new
-  tickets may land, and the driver drops one, with a log line, that names a web address (`https://…`, `www.…`,
-  `host.com/…`) anywhere but its `Source:` line, a fetch (`curl`, `wget`, `git clone`) or an install command (`pip
-  install x`, `npm install x`, `npx x` and the like): a pattern check, so the rest still go through the experiment
-  gate, the protected yardstick and review like any planned ticket.
+- **Web pages.** Only the scout (a `builtin = "scout"` [[periodic]] entry) among windvane's sessions reads the web,
+  in `dontAsk` mode with no shell: it may read its own `ci/` tree, write `.windvane/` there, search, and fetch from
+  Claude Code's and Anthropic's docs, GitHub and arXiv (its entry's `allow` adds hosts, each one a place a fetch
+  could carry the tree's text to); anything else is refused unasked. Only its new tickets may land, and the driver
+  drops one, with a log line, that names a web address (`https://…`, `www.…`, `host.com/…`) outside its `Source:`
+  line, a fetch (`curl`, `wget`, `git clone`) or an install command (`pip install x`, `npx x` and the like): a
+  pattern check, so the rest still pass the experiment gate, the protected yardstick and review.
 - **Credentials.** A session gets your environment without the variables named like credentials (`*TOKEN*`,
   `*SECRET*`, `*PASSWORD*`, `*_KEY`, `AWS_*`), except what Claude Code and `gh` log in with and what
   [`[env] keep`](configuration.md#env) names.

@@ -20,7 +20,7 @@ from windvane.util import append_jsonl, now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_pipeline import args  # noqa: E402
 
-SCOUT = '[[periodic]]\nname = "scout"\nbuiltin = "scout"\nminutes = 30\n'
+SCOUT = '[[periodic]]\nname = "scout"\nbuiltin = "scout"\nminutes = 30\nallow = ["WebFetch(domain:example.org)"]\n'
 GOOD = ("# {id}: Try the new hook for the check\nKind: experiment · Idea: scout · Mechanism: worker check\n"
         "Source: https://example.com/changelog#2.1\nDepends on: nothing.\nTouches: prompts/WORKER.md.\n\n"
         "Done when the bench says so.\n")
@@ -114,8 +114,11 @@ class Scout(unittest.TestCase):
         self.assertNotIn("Bash", tools)  # no shell: nothing it read can be run
         settings = json.loads(call["flags"][call["flags"].index("--settings") + 1])
         # in dontAsk mode nothing else runs: no write past .windvane/, no read outside its tree
-        self.assertEqual(settings["permissions"]["allow"],
-                         ["Read(./**)", "Edit(./.windvane/**)", "Write(./.windvane/**)", "WebFetch", "WebSearch"])
+        allow = settings["permissions"]["allow"]
+        self.assertEqual(allow[:4], ["Read(./**)", "Edit(./.windvane/**)", "Write(./.windvane/**)", "WebSearch"])
+        self.assertIn("WebFetch(domain:code.claude.com)", allow)
+        self.assertIn("WebFetch(domain:example.org)", allow)  # the entry's own `allow` adds a host
+        self.assertNotIn("WebFetch", allow)  # fetches only from the listed hosts: a URL could carry the tree's text
         self.assertEqual(call["flags"][call["flags"].index("--permission-mode") + 1], "dontAsk")
         for role in runner.TOOLS:
             flags = runner.lean_flags(self.p, role)
