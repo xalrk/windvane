@@ -6,6 +6,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -139,6 +140,59 @@ class AwaitQueued(unittest.TestCase):
         self.assertRegex(out[2], r"^now: this job \(pid \d+, queued at \d\d:\d\d\) is next in line \(waiting for 8 GB, "
                                  r"2.4 free; letting smaller jobs by\); work ahead unknown \(never timed\)$")
         self.assertEqual(len(out), 3, out)  # the log's wait line is covered by the live one
+
+    def live(self, cwd=None):
+        p = subprocess.Popen(["sleep", "60"], cwd=cwd)
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        return p.pid
+
+    def test_a_job_short_of_memory_names_who_holds_it_now(self):
+        """T-296: the holders read live, each with how long it has run, this project's unreused helper marked; the
+        log's `largest:` list, as old as the wait, stays dropped."""
+        proj = Path(os.environ["XDG_STATE_HOME"]).parent / "proj"
+        proj.mkdir()
+        heavy.lock_path().write_text(json.dumps({"pid": self.live(), "since": time.time(), "cmd": "make", "cwd": "x/y"}))
+        emu, build, other = self.live(proj), self.live(), self.live()
+        with open(self.log, "a") as f:
+            f.write("heavy: waiting: only 2.4 GB free (want 8); largest: pid 7 gone 9.0 GB in o/p\n")
+        with mock.patch.dict(os.environ, {heavy.JOB_ENV: str(self.base)}):
+            entry = heavy.join_queue(8)
+        self.addCleanup(heavy.leave_queue, entry)
+        now = time.time()
+        ages = {emu: now - 3 * 3600 - 600, build: now - 120, other: None}
+        procs = [(emu, "qemu-system-x86", 3.4, "emu/slot-1"), (build, "cc1plus", 1.5, "o/p"), (other, "java", 1.2, None)]
+        with mock.patch.object(heavy, "holders", lambda n=3: procs), \
+                mock.patch.object(heavy, "started_at", ages.get), \
+                mock.patch.object(jobs, "reuse", lambda p: ([], [str(proj)])):
+            out = self.await_()
+        self.assertRegex(out[2], r"^now: this job .* is next in line \(waiting for 8 GB, 2.4 free; letting smaller jobs")
+        self.assertEqual(out[3:], [
+            f"  holds memory: pid {emu} qemu-system-x86 3.4 GB in emu/slot-1, running 3 h 10 min (this project's)",
+            f"  holds memory: pid {build} cc1plus 1.5 GB in o/p, running 2 min",
+            f"  holds memory: pid {other} java 1.2 GB (folder unreadable)"])
+
+    def test_a_job_waiting_behind_others_lists_no_holders(self):
+        """The head is short of memory and lets it by: the look is for this job's own wait, so none is made."""
+        heavy.lock_path().write_text(json.dumps({"pid": self.live(), "since": time.time(), "cmd": "make", "cwd": "x/y"}))
+        with mock.patch.dict(os.environ, {heavy.JOB_ENV: str(self.base.parent / "big")}):
+            head = heavy.join_queue(8)
+        self.addCleanup(heavy.leave_queue, head)
+        time.sleep(0.001)
+        with mock.patch.dict(os.environ, {heavy.JOB_ENV: str(self.base)}):
+            entry = heavy.join_queue(1)
+        self.addCleanup(heavy.leave_queue, entry)
+        looked = []
+        with mock.patch.object(heavy, "holders", lambda n=3: looked.append(n) or [(1, "init", 9.0, None)]):
+            out = self.await_()
+        self.assertRegex(out[2], r"^now: this job .* is next in line; work ahead unknown")
+        self.assertEqual((len(out), looked), (3, []), out)
+
+    def test_a_kept_hint_drops_its_old_list(self):
+        self.log.write_text("heavy: waiting: only 2 GB free (want 8); largest: pid 7 emu 3.0 GB in a/b; emu (3.0 GB) "
+                            f"{heavy.OWN} \"emu\" to heavy_reuses in .windvane/config.toml\n")
+        self.assertEqual(jobs.said(self.log, 3, covered=True), [
+            f"heavy: waiting: only 2 GB free (want 8); emu (3.0 GB) {heavy.OWN} "
+            "\"emu\" to heavy_reuses in .windvane/config.toml"])
 
     def test_a_bg_job_tells_its_wait_which_job_it_is(self):
         """`bg` names the job's files to its command, which a heavy wait writes into its queue entry."""

@@ -220,6 +220,51 @@ class LiveStanding(unittest.TestCase):
         with mock.patch.object(heavy, "helpers_gb", lambda r: 6.0):
             self.assertIn(") is next in line; work ahead unknown", heavy.standing("/st/bg/T-1/eval", reuse)[1])
 
+    def test_a_measurement_waiting_on_load_names_who_uses_the_cpu(self):
+        """T-296: `await` reads the CPU's users live, as `status` does, each with how long it has run."""
+        holder = self.proc()
+        self.hold(holder.pid)
+        with mock.patch.dict(os.environ, {heavy.JOB_ENV: "/st/bg/T-1/bench"}):
+            entry = heavy.join_queue(0, load=1)
+        self.addCleanup(heavy.leave_queue, entry)
+        cpu = ["pid 412 qemu-system-x86 310% in emu/slot-1, running 3 h", "pid 9 cc1plus 95% in o/p, running 2 min"]
+        with mock.patch.object(heavy, "load_avg", lambda: 9.0), \
+                mock.patch.object(heavy, "busiest", lambda ages=False: cpu if ages else []):
+            now = heavy.standing("/st/bg/T-1/bench")
+        self.assertIn(") is next in line (waiting for load ≤ 1, now 9", now[1])
+        self.assertEqual(now[2:], [f"  uses CPU: {c}" for c in cpu])
+
+    def test_a_holder_line_says_how_long_it_has_run(self):
+        p = self.proc()
+        with mock.patch.object(heavy, "started_at", lambda pid: time.time() - 95 * 60):
+            self.assertEqual(heavy.largest(big=[(p.pid, "emu", 3.4, "a/b")], ages=True),
+                             [f"pid {p.pid} emu 3.4 GB in a/b, running 1 h 35 min"])
+        self.assertEqual(heavy.largest(big=[(p.pid, "emu", 3.4, None)]), [f"pid {p.pid} emu 3.4 GB (folder unreadable)"])
+
+    def test_an_interpreter_is_named_by_its_script_not_its_name(self):
+        """A retro's advice to add "python3" to heavy_reuses would count every Python process as free memory."""
+        lines = ["python3\0-u\0/x/tools/serve.py\0--port\0" "8000", "python3\0-m\0http.server\0",
+                 "python3\0-c\0print(1)\0", "node\0", "java\0-cp\0x\0org.gradle.GradleDaemon\0",
+                 "python3\0-W\0ignore\0-X\0dev\0serve.py\0", "node\0-e\0require(\"./srv\").start()\0",
+                 "bash\0./tools/emu\0", "node\0-r\0ts-node/register\0app.ts\0", "python3\0x/\"odd\".py\0",
+                 "node\0-r\0./preload.js\0server.js\0", "node\0--require\0dotenv/config.js\0server.js\0",
+                 "ruby\0-r\0./lib.rb\0app.rb\0", "python3\0-I\0serve.py\0", "php\0-r\0echo 1;\0"]
+        proc = self.d / "proc"
+        for pid, line in enumerate(lines, 1):
+            (proc / str(pid)).mkdir(parents=True)
+            (proc / str(pid) / "cmdline").write_bytes(line.encode())
+            (proc / str(pid) / "cwd").symlink_to(self.d)
+        (self.d / "tools").mkdir()
+        (self.d / "tools" / "emu").write_text("")
+        names = ["python3", "python3.12", "python3", "node", "java", "python3", "node", "bash", "node", "python3",
+                 "node", "node", "ruby", "python3", "php"]
+        with mock.patch.object(util, "PROC", proc):
+            self.assertEqual([heavy.reuse_word(pid, n) for pid, n in enumerate(names, 1)],
+                             ["serve.py", "http.server", None, None, "GradleDaemon", "serve.py", None, "emu",
+                              "app.ts", None, "server.js", "server.js", "app.rb", "serve.py", None])
+            self.assertEqual([heavy.reuse_word(99, n) for n in ("qemu-system-x86", "python3", "c++")],
+                             ["qemu-system-x86", None, None])  # a name that's no safe pattern gets no advice
+
     def test_a_paused_waiter_says_paused_once(self):
         holder = self.proc()
         self.hold(holder.pid)

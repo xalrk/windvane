@@ -146,7 +146,7 @@ class Measure(Fixture):
         self.assertEqual(times[4102], 0)
 
     def test_it_gives_up_at_its_deadline_naming_the_load(self):
-        self.in_process(busiest=lambda: [])
+        self.in_process(busiest=lambda **_: [])
         t0 = time.time()
         code, lines = self.run_here(wait_s=1.5)
         self.assertEqual(code, heavy.TIMED_OUT)
@@ -161,7 +161,7 @@ class Measure(Fixture):
         self.assertEqual(self.ran(), ["build"])
         self.assertIsNone(head.poll())
         self.assertEqual(len(self.waiters()), 1)  # still the head, still in line
-        self.in_process(busiest=lambda: ["pid 4101 qemu-system-x86 310% in emu/slot-1"])
+        self.in_process(busiest=lambda **_: ["pid 4101 qemu-system-x86 310% in emu/slot-1"])
         lines = heavy.status()
         self.assertEqual(lines[0], "free")
         self.assertRegex(lines[1], rf"^waiting: pid {head.pid}, since \d\d:\d\d, measuring "
@@ -189,14 +189,14 @@ class Measure(Fixture):
         self.machine("measure_load = 10\n")
         self.assertEqual(self.run_here()[0], 0)  # 9.5 is quiet enough for this machine
         self.machine("measure_load = 9\n")
-        self.in_process(busiest=lambda: [])
+        self.in_process(busiest=lambda **_: [])
         code, lines = self.run_here()
         self.assertEqual(code, heavy.TIMED_OUT)
         self.assertEqual(lines[-1], f"{heavy.GAVE_UP}: load 9.5 (want ≤ 9)")
 
     def test_a_measure_load_that_is_not_a_number_falls_back_to_the_default_and_says_so(self):
         self.machine('measure_load = "4"\n')
-        self.in_process(busiest=lambda: [], default_load=lambda: 2)
+        self.in_process(busiest=lambda **_: [], default_load=lambda: 2)
         code, lines = self.run_here()
         self.assertEqual(code, heavy.TIMED_OUT)
         self.assertEqual(lines[0], heavy.BAD_LIMIT.format(2))

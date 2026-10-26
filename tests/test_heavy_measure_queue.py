@@ -36,7 +36,7 @@ class HoldTheLine(Fixture):
         time.sleep(0.5)
         self.assertEqual(self.ran(), ["early"])
         self.assertEqual(self.said("late").count(held), 1, "said once, not as the load drifts")
-        self.in_process(busiest=lambda: [])
+        self.in_process(busiest=lambda **_: [])
         self.assertRegex(heavy.status()[1], rf"^waiting: pid {timing.pid}, since \d\d:\d\d, measuring "
                                             r"\(waiting for load ≤ 4, now 9\.5; holding the line\)")
         self.load(3)
@@ -102,7 +102,7 @@ class HoldTheLine(Fixture):
                 self.assertEqual(self.ran(), ["first", "second"])
 
     def test_the_waiting_line_says_where_measure_load_is_set_and_the_line_to_add(self):
-        self.in_process(busiest=lambda: [])
+        self.in_process(busiest=lambda **_: [])
         line = self.run_here()[1][0]
         self.assertIn(str(self.d / "cfg/windvane/machine.toml"), line)
         self.assertIn("measure_load = <n>", line)

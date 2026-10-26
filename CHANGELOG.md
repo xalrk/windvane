@@ -155,6 +155,12 @@ release on the same day adds a number (`2026.10.9.1`).
   that the token's user may read the reply topic, and a refused test names the one `ntfy access` line still to run.
 
 ### Changed
+- `windvane await` on a heavy job that waits for memory or a quiet CPU names who holds it now, as
+  `heavy --status` does, each process with how long it has run (`running 3 h 10 min`) and this project's own helpers
+  marked, instead of only how much is free; the log's list from when the wait began is left out. A waiting job's
+  advice to add a helper to `heavy_reuses` names an interpreter by its script or `-m` module (`serve.py`), not
+  `python3`, past the common options that take a value (`-W ignore`, `-r ./preload.js`), and gives none for inline
+  code (`-c`, `-e`) or a name that isn't a safe pattern.
 - The heavy queue lets a short job go before a long one: a job that usually runs 5 minutes or less goes ahead of a
   waiting one at least three times as long, so a 1-minute check no longer waits behind a 25-minute render. The long
   job is passed over 15 minutes in all at most (or its own run time, if less); jobs with no recorded time or `--expect` keep arrival order,
