@@ -162,7 +162,11 @@ def records(cd):
     """EXPERIMENTS.md's records, oldest first: {"id", "title", "date", "kind", "mechanism", "files", "numbers",
     "why"}; a record from before kinds and mechanisms were written has "" for them."""
     f = Path(cd) / EXPERIMENTS
-    text = f.read_text() if f.is_file() else ""
+    return records_of(f.read_text() if f.is_file() else "")
+
+
+def records_of(text):
+    """`records` of an EXPERIMENTS.md text."""
     out = []
     for block in text.split("\n### ")[1:]:
         lines = block.strip().splitlines()
