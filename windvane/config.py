@@ -83,8 +83,10 @@ DEFAULTS = {
                   "experiment_repeat": 2, "experiment_saving": 10, "experiment_minutes": 60},
     # the bench's share of the account's week (machine-wide, percent points of the weekly limit): benches start only
     # under `week_below` weekly usage, and while this week's bench spend plus the next run stays within `week_share`
-    # `plateau`: experiment planning stops once this many experiments in a row were rejected
-    "experiments": {"week_below": 75, "week_share": 30, "plateau": 8},
+    # `plateau`: rejected experiments in a row that start an exploration round, and stop planning if it fails too;
+    # `mix`: each kind of idea's share of a planning round's experiments (mix.py), none under `floor`
+    "experiments": {"week_below": 75, "week_share": 30, "plateau": 8,
+                    "mix": {"fix": 0.4, "bold": 0.25, "ablation": 0.2, "revisit": 0.15}, "floor": 0.1},
     "permissions": {},  # <role>_allow / <role>_deny: rules added to that role's sessions (none by default)
     "env": {"keep": []},  # names of credential-like variables sessions still get (runner.scrub drops the rest)
     "github": {"token_file": ""},  # a token for this repo alone: sessions and the driver use it as GH_TOKEN
@@ -267,6 +269,22 @@ def plateau(v):
     return v
 
 
+def mix(c):
+    """`[experiments] mix` and `floor`: shares of the known kinds (numbers, 0 or more, not all 0), a floor from 0 to
+    under 1 over the kinds."""
+    from .mix import KINDS
+    m, floor = c["mix"], c["floor"]
+    if not isinstance(m, dict) or set(m) - set(KINDS) or not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 for v in m.values()) \
+            or not any(m.values()):
+        raise SystemExit(f"windvane: [experiments] mix = {m!r} in config.toml: use shares of {', '.join(KINDS)}, "
+                         "e.g. mix = { fix = 0.4, bold = 0.25, ablation = 0.2, revisit = 0.15 }")
+    if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not 0 <= floor * len(KINDS) < 1:
+        raise SystemExit(f"windvane: [experiments] floor = {floor!r} in config.toml: use a share from 0 to under "
+                         f"{1 / len(KINDS):g}")
+    return m
+
+
 def heavy_mem(v):
     """A `heavy_mem`: unset, or a number of GB, 0 or more."""
     if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0):
@@ -412,7 +430,8 @@ def github_token(p):
 # What a benchmark's numbers rest on, protected by default when the project has `bench/`: the seeds and their hidden
 # tests, the judge's rules, the scoring, and the config keys that set protection and the experiments' budget.
 PROTECTED = ("bench/", "prompts/JUDGE.md", "windvane/bench_score.py", f"{DIR}/config.toml:experiment_*",
-             f"{DIR}/config.toml:week_below", f"{DIR}/config.toml:week_share", f"{DIR}/config.toml:plateau")
+             f"{DIR}/config.toml:week_below", f"{DIR}/config.toml:week_share", f"{DIR}/config.toml:plateau",
+             f"{DIR}/config.toml:mix", f"{DIR}/config.toml:floor")
 # The training seeds: protected with the rest of bench/, but the seed round's own branches may write them.
 POOL, SEED_BRANCH = "bench/pool", "seed-"
 # Always protected while anything is: a branch that could edit this key could unprotect the rest.
@@ -522,6 +541,7 @@ class Project:
         heavy_mem(c["heavy_mem"])
         replan(c["replan"])
         plateau(c["experiments"]["plateau"])
+        mix(c["experiments"])
         heavy_keep_hours(c["heavy_keep_hours"])
         heavy_reuses(c["heavy_reuses"])
         actions_budget(c)

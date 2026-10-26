@@ -16,8 +16,8 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import (bench, budget, doctor, driver, experiment, heavy, install, jobs, net, phone, planner, preflight, privacy,
-               publiccheck, questions, requests, schedule, scratch, util, watch)
+from . import (bench, budget, doctor, driver, experiment, heavy, install, jobs, mix, net, phone, planner, preflight,
+               privacy, publiccheck, questions, requests, schedule, scratch, util, watch)
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, replan, slots, toplevel
@@ -705,12 +705,13 @@ def cmd_new(a, p):
 
 
 def cmd_experiments(a, p):
-    """This week's experiment budget, or more of it for this week (`allow +10`)."""
+    """This week's experiment budget and the mix of ideas, or more of the budget for this week (`allow +10`)."""
     b = budget.Budget(p.cfg["experiments"])
     if not a.what:
         why = experiment.stopped(p)
+        q = Queue(p)
         return print("\n".join(b.lines() + [f"experiments stopped: {why}; `windvane experiments resume` plans them "
-                                             "again"] * bool(why)))
+                                             "again"] * bool(why) + mix.report(p, q.ideas, q.titles)))
     if a.what == ["resume"]:
         return print("experiments: planned again" if experiment.resume(p) else "experiments: weren't stopped")
     try:
@@ -994,7 +995,8 @@ def parser():
                    "holdout's (bench/)")
     s.add_argument("--repeat", type=int, default=1, help="with compare: N runs a side, so a difference shows past "
                    "the noise (default 1)")
-    s = sub.add_parser("experiments", help="this week's bench spend against the experiment budget")
+    s = sub.add_parser("experiments", help="this week's bench spend against the experiment budget, and the mix of "
+                       "ideas")
     s.add_argument("what", nargs="*", metavar="allow +N | resume", help="let benches use N%% more of this week's "
                    "limit; resume: plan experiments again after the overfit alarm stopped them")
     sub.add_parser("mode", help="how a design question is handled right now")

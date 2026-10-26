@@ -339,7 +339,11 @@ def plateaued(p, patch, s):
     p.state.mkdir(parents=True, exist_ok=True)
     for _ in range(8):
         append_jsonl(p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-001", "outcome": "rejected"})
-    pilot(p).plateau_watch()
+    pl = pilot(p)
+    pl.plateau_watch()  # an exploration round first
+    planner.explored(p, ["T-002"])
+    append_jsonl(p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-002", "outcome": "rejected"})
+    pl.plateau_watch()
     return {"Experiments plateaued": ("The last 8 experiments were all rejected", "Other tickets go on")}
 
 
