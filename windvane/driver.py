@@ -16,6 +16,7 @@ resets. A detached run's driver is itself restarted after a crash (`supervise`).
 import fcntl
 import hashlib
 import json
+import math
 import os
 import signal
 import sys
@@ -55,7 +56,7 @@ RESULT_RE = re.compile(r"RESULT: (READY|PARTIAL|BLOCKED|FAILED) (\S+)[ \t]*(.*)"
 REVIEW_RE = re.compile(r"REVIEW: (APPROVE|CHANGES) (\S+)[ \t]*(.*)")
 CARRIED = ("periodic_at", "groups_seen", "held", "skip", "aside", "fixes", "stopped", "merged", "failed", "partials", "reviews", "bounces", "scores", "plans", "fail_streak", "peak",
            "conflicts", "spent", "update_said", "desk_merged", "suspect", "ticket_crashes", "oks", "crashes", "opened", "heavy_waits",
-           "stuck_pushed", "retried", "reverted")  # the run's own memory, handed to the driver a restart starts
+           "stuck_pushed", "retried", "reverted", "replan_wait")  # the run's own memory, handed to the driver a restart starts
 # Each kind of send-back spends its own budget: (who sent it back, config table, key, send-backs allowed over the key
 # and why). The critic gives its last verdict after `revisions` itself; the spare one covers a READY without a pack.
 BUDGETS = {"review": ("a missing PR", "autopilot", "review_rounds", 0, ""),
@@ -77,6 +78,7 @@ DROPPED_MOST = 20  # dropped late answers state.json keeps for `windvane status`
 SPLIT = "Split it into smaller tickets (`windvane new`), then mark it `done:` in QUEUE.md"  # a too-big ticket's fix
 RETRY = "RETRY"  # in the state dir: the failed tickets `windvane retry` puts back in the running autopilot's queue
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
+REPLAN_WAIT = 60  # minutes an endless run (`--replan forever`) waits to plan again when nothing merged since its last
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
@@ -434,6 +436,8 @@ class Pilot(Desk, Periodic, Experiments):
         self.stopped = []  # tickets whose worker the deadline cut off: not set aside, the next run resumes them
         self.partials, self.reviews, self.scores, self.bounces = {}, {}, {}, {}  # bounces: ticket -> {kind: n}
         self.fail_streak, self.plans, self.was_quiet, self.idle = 0, 0, False, False
+        self.replan_wait = None  # an endless run's last plan: {"until": epoch, "merged": merges then} (replan_due)
+        self.plateau_read = None  # what plateau_watch last read: the ledger, main and the goal unchanged, it skips
         self.digest_tried = 0.0  # when a push last tried the phone's missed provisional answers (see quiet_check)
         self.crashes, self.halt, self.unfinished = 0, None, set()  # sessions dead in a row; why the run must stop
         # Sessions dead per ticket: ticket -> [crashes, self.oks at its first], and the sessions that ended well, so a
@@ -493,6 +497,9 @@ class Pilot(Desk, Periodic, Experiments):
         # bench rounds: main's head each was last looked at for (and whether it was due), and the merge count a busy
         # checkout put its regression ticket off to
         self.bench_seen, self.bench_wait = {}, {}
+        self.overfit_read = None  # bench.jsonl's mtime when `overfit_watch` last looked
+        self.seed_seen = {}  # a seed entry -> ((main's head, the ledger's mtime), whether it was due then)
+        self.seed_tried = set()  # the seed entries whose round ran this run (each tries once a run)
         self.asks_left = []  # the rounds asked for that the run ended before: in the final summary
         self.requests_tried = set()  # windvane requests a [[periodic]] round was given this run: never twice
         self.desk_init(s.get("desk", {}))  # the user's labelled PRs, merged between tickets (desk.py)
@@ -591,6 +598,16 @@ class Pilot(Desk, Periodic, Experiments):
                 return "stop now"
             return "time" if now() >= min(limit, self.end()) else over_caps(self.usage, self.a.cap, self.a.week_cap)
         return stop_if
+
+    def replan_due(self):
+        """Whether an endless run may plan again: a ticket merged since its last plan, or REPLAN_WAIT minutes went by.
+        A plan that wrote nothing, or whose tickets all failed, would only be paid for again on the same tree."""
+        w = self.replan_wait
+        return not w or len(self.merged) > w["merged"] or time.time() >= w["until"]
+
+    def goal(self):
+        """What `--replan`'s plans aim at: `--goal`, else the config's."""
+        return self.a.goal or self.p.cfg["goal"]
 
     def claude(self, role, label, prompt, system, cwd, limit, allow=(), deny=(), ticket="", env=None, session=None,
                resume=None):
@@ -2285,6 +2302,9 @@ class Pilot(Desk, Periodic, Experiments):
             tid, *rest = q.pick(avoid, tickets(self.questions))
             if tid is None:
                 return None, rest[0], None, None
+            if q.kinds.get(tid) == "experiment" and not self.pool_fits(tid):  # before any worker is paid for
+                avoid.add(tid)
+                continue
             own = next((i for i, o in [*self.owner.items(), *held.items()] if o == tid), None)
             slot = own if own is not None else next((i for i in free if self.owner[i] is None and i not in held), None)
             if slot is not None and slot in free:
@@ -2505,6 +2525,9 @@ class Pilot(Desk, Periodic, Experiments):
                 if not self.wait_for_reset():
                     return
                 continue
+            self.overfit_watch()
+            self.plateau_watch()
+            self.trend_watch()
             due = self.periodic_due()
             if due and self.running and due.get("bench") != "start":  # a quiet tree: the running ones finish first
                 self.idle_note([f"{due['name']} is due: waiting for {', '.join(sorted(self.running))} to finish"])
@@ -2558,11 +2581,14 @@ class Pilot(Desk, Periodic, Experiments):
                         self.idle = True
                     self.nap(now() + timedelta(minutes=1), answers=True)
                     continue
-                if self.a.replan and self.plans < self.a.replan:
+                endless = self.a.replan == math.inf
+                if self.a.replan and self.plans < self.a.replan and (not endless or self.replan_due()):
                     self.plans += 1
+                    if endless:
+                        self.replan_wait = {"until": time.time() + REPLAN_WAIT * 60, "merged": len(self.merged)}
                     with self.critical():  # its session dies at its next poll on a signal; the merge finishes
-                        n = plan(p, self.a.goal or p.cfg["goal"], True, self.usage,
-                                 self.stopper(now() + timedelta(minutes=40)), merge=True, merged=self.merged)
+                        n = plan(p, self.goal(), True, self.usage, self.stopper(now() + timedelta(minutes=40)),
+                                 merge=True, merged=self.merged, endless=endless)
                     if n:
                         continue
                 if self.checking:  # a merge held by its checks: tried again when its wait is up
@@ -2574,6 +2600,11 @@ class Pilot(Desk, Periodic, Experiments):
                     self.pause(60)
                     continue
                 if self.bench_unread():  # it ended during this pass: read it, and land its ticket, before the end
+                    continue
+                if endless:  # only the deadline, a stop or the caps end it; a ticket merged meanwhile is picked up
+                    until = datetime.fromtimestamp(self.replan_wait["until"])
+                    self.idle_note([f"nothing merged since the last plan: planning again at {hhmm(until)}"])
+                    self.nap(min(until, now() + timedelta(minutes=1)))
                     continue
                 self.stop_reason = kind
                 return

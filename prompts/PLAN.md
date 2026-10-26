@@ -30,8 +30,11 @@ by a fresh session that has only the ticket and the repo. You write work for cap
    `Touches:` lets tickets whose lists don't overlap run side by side: name every path the work may change, and split
    work so tickets touch different files. Name test files, never `tests/` (it overlaps every ticket): new tests go in a
    file of their own (`tests/test_<topic>.py`) unless the ticket changes existing ones. `Related:` keeps tickets on one
-   feature apart even when their files differ. Changes to what AI sessions are told or do get `Kind: experiment` in a
-   project with `bench/`. Never replan a rejected idea unchanged.
+   feature apart even when their files differ. In a project with `bench/`, a change to what AI sessions are told or
+   do gets `Kind: experiment · Idea: <kind> · Mechanism: <what it changes>`, kinds in your prompt's mix: `fix` (a
+   cause the numbers show), `bold` (a session added, merged or dropped, steps reordered, what one is shown),
+   `ablation` (a rule, session, check or wait taken out), `revisit` (a rejected idea whose context changed), `scout`.
+   Reuse a rejected group's mechanism name; a repeat needs `Different because: <what changed>`.
 5. Append the new ids, most valuable first, as `- <ID> <title>` bullets to `.windvane/QUEUE.md` with a shell `>>`,
    unread.
 

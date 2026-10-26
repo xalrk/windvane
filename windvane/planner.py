@@ -1,6 +1,7 @@
 """The plan run: a planner session writes tickets for a goal (and the critic's follow-ups) on a branch the driver
 commits, then pushes or lands it."""
 import fcntl
+import json
 import os
 import re
 import tempfile
@@ -10,6 +11,7 @@ from pathlib import Path
 from . import actions, critic, login, net, privacy, requests
 from .config import DIR
 from .held import OWN_BRANCHES, author_ident, free_name, is_local, land, local_push, n_tickets, push_branch
+from .mix import mix_part
 from .phone import whole
 from .queue import Queue, folder_ids, id_after, mend_queue, ref_ids
 from .runner import NO_REQUEST, plain_error, rules, run_claude
@@ -104,10 +106,11 @@ class PlanBusy(Exception):
 
 
 def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max_new=6, busy_raises=False,
-         merged=()):
+         merged=(), endless=False):
     """A planner run writes tickets for `goal` (and the critic's follow-ups) on a branch the driver commits;
     `merge` merges it at once. Returns how many tickets it merged (with `merge`) or wrote; while another plan runs,
-    0 (or PlanBusy with `busy_raises`). `merged`, the run's merged tickets, stay in full in its ticket listing."""
+    0 (or PlanBusy with `busy_raises`). `merged`, the run's merged tickets, stay in full in its ticket listing;
+    `endless` (`run --replan forever`) adds `endless_parts`."""
     p.state.mkdir(parents=True, exist_ok=True)
     with open(p.state / "plan.lock", "w") as lock:
         try:
@@ -118,22 +121,96 @@ def plan(p, goal, use_followups=True, usage=None, stop_if=None, merge=False, max
                 raise PlanBusy("another plan is running")
             return 0
         try:
-            return _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged)
+            return _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged, endless)
         finally:  # pushed or given up: its ids are on a branch now, or free
             release_ids(p, "plan")
 
 
 EXPERIMENTS = f"{DIR}/EXPERIMENTS.md"  # the experiments the bench rejected (experiment.py), one record each
-EXPERIMENTS_SHOWN = 6000  # characters of it a planner or periodic prompt gets: the newest records
+
+
+def stopped_part(p):
+    """The prompt's line when experiment planning is stopped (the overfit alarm), or ""."""
+    from .experiment import stopped
+    why = stopped(p)
+    return why and (f"## Experiments are stopped\n{why}. Write no `Kind: experiment` ticket: the user resumes them "
+                    "with `windvane experiments resume`.")
 
 
 def rejected_part(cd):
-    """The prompt's section on the experiments the bench rejected, from `cd`'s EXPERIMENTS.md, or "" when none was."""
-    f = Path(cd) / EXPERIMENTS
-    text = f.read_text().strip() if f.is_file() else ""
-    if len(text) > EXPERIMENTS_SHOWN:  # whole records only
-        text = "(older records left out)\n### " + text[-EXPERIMENTS_SHOWN:].split("\n### ", 1)[-1]
-    return text and f"## Experiments the bench rejected ({EXPERIMENTS})\n{text}"
+    """The prompt's section on the experiments the bench rejected, one line each by mechanism (`mix.grouped_part`),
+    or "" when none was."""
+    from .mix import grouped_part
+    return grouped_part(cd)
+
+
+def vet_plan(p, cd, q, order_ids):
+    """Drop the new experiment tickets the round's mix or the novelty rule doesn't keep (`mix.vet`): their files go
+    and their queue bullets with them. Returns (the ids dropped, the new experiments kept)."""
+    from .mix import is_experiment, vet
+    tick = cd / p.tickets_rel
+    new = {}
+    for path in changed_paths(cd):
+        f = cd / path
+        if path.startswith(p.tickets_rel + "/") and path.endswith(".md") and f.is_file() and \
+                git(cd, "cat-file", "-e", f"HEAD:{path}").returncode:
+            new[p.norm(f.stem)] = f.read_text(errors="replace")
+    new.pop("", None)
+    drop = vet(p, cd, new, order_ids(), q, lambda m: log(p, m))
+    for tid in drop:
+        (tick / f"{tid}.md").unlink(missing_ok=True)
+    qf = cd / p.queue_rel
+    if drop and qf.is_file():
+        gone = re.compile(rf"^\s*-\s*(?:\*\*)?(?:{'|'.join(map(re.escape, drop))})\b.*\n?", re.M | re.I)
+        qf.write_text(gone.sub("", qf.read_text()))
+    return drop, [t for t, text in new.items() if t not in drop and is_experiment(text)]
+
+
+DIGEST_SHOWN = 8000  # characters of the cross-project digest an endless plan's prompt gets
+BENCH_SHOWN = 6  # the newest bench runs it gets
+NUMBERS = ("tickets", "tokens", "critic", "checks", "check_quick", "calibration_lines")  # a digest's numeric parts
+
+
+def endless_parts(p):
+    """An endless plan's sections, in a project with `bench/` (one whose work is how projects get built): where the
+    projects on this machine hurt, so it ranks ideas by what costs them most (`numbers_only`), and the newest bench
+    runs."""
+    from .stats import bench_lines, projects_digest, projects_since
+    if not (Path(p.root) / "bench").is_dir():
+        return []
+    runs = bench_lines(p, BENCH_SHOWN)
+    return [f"## Where projects hurt (`windvane stats --projects --json`, last 30 days, numbers only, projects by "
+            "letter, costliest first)\nRank ideas by what this says costs projects most (tokens, failures, "
+            "send-backs, check time), and say which measure a ticket should move.\n"
+            + numbers_only(projects_digest(projects_since(None))),
+            "## The newest bench runs (`windvane stats --bench`)\n" + "\n".join(runs) if runs else ""]
+
+
+def numbers_only(digest, most=DIGEST_SHOWN):
+    """`stats --projects --json`'s digest as compact JSON within `most` characters: `across` (the spread, what to
+    rank by) first, then each project's numbers, the costliest (weighted tokens) first, whole projects left out from
+    the cheapest end to fit. No free text (failure and park reasons, ticket ids), no paths and no names, only letters:
+    a ticket title reaches the merge commits."""
+    rows = sorted(digest["projects"], key=lambda d: -(d["tokens"]["weighted"] or 0))
+    label = {d["name"]: f"project {letter(i)}" for i, d in enumerate(rows)}
+    names = lambda ns: [label.get(n, "project ?") for n in ns]
+    across = [{**m, "low_projects": names(m["low_projects"]), "high_projects": names(m["high_projects"])}
+              for m in digest["across"]]
+    projects = [{"name": label[d["name"]], **{k: d[k] for k in NUMBERS},
+                 "refixes": None if d["refixes"] is None else len(d["refixes"])} for d in rows]
+    for n in range(len(projects), -1, -1):
+        out = {"since": digest["since"], "across": across, "projects": projects[:n]}
+        if n < len(projects):
+            out["left_out"] = f"{len(projects) - n} cheaper projects"
+        text = json.dumps(out, separators=(",", ":"))
+        if len(text) <= most:
+            return text
+    return json.dumps({"since": digest["since"], "across": across}, separators=(",", ":"))[:most]
+
+
+def letter(i):
+    """A, B, ... Z, then AA, AB: a project's name in an endless plan's prompt."""
+    return (letter(i // 26 - 1) if i >= 26 else "") + chr(65 + i % 26)
 
 
 def branch_name(p, cd, kind):
@@ -313,7 +390,7 @@ def unmerged(p, n, where):
     return 0
 
 
-def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=()):
+def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=(), endless=False):
     cd = p.plan_dir
     net.git(p.main_root(), "fetch", "-q", "--prune", p.remote)
     ensure_worktree(p, cd, setup=False)
@@ -333,7 +410,9 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=()):
         "## The critic's follow-up notes since the last plan (ticket, point)\n"
         + "\n".join(f"- ({t}) {b}" for t, b in notes[:60]) if notes else "",
         f"## Existing tickets (id, status, title)\n{q.listing(compact=True, keep=merged) or '(none yet)'}",
+        *(endless_parts(p) if endless else []),
         rejected_part(cd),
+        stopped_part(p) or mix_part(p, cd, max_new, q),
         f"## Ids for new tickets, in order (at most {max_new})\n{', '.join(ids)}",
     ]))
     log(p, f"plan run ({len(notes)} critic notes)")
@@ -380,7 +459,12 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=()):
         clean_detach(p, cd, p.upstream)
         log(p, f"plan: wrote outside .windvane/ ({outside[0]}); discarded")
         return 0
-    n = int(m.group(1) or 0)
+    drop, tried = vet_plan(p, cd, q, lambda: queue_ids(p, cd))
+    n = max(0, int(m.group(1) or 0) - len(drop))
+    if drop and not changed_paths(cd):
+        clean_detach(p, cd, p.upstream)
+        log(p, "plan: every new ticket was dropped; nothing written")
+        return 0
     branch = branch_name(p, cd, "plan")
     git(cd, "add", "-A", ".windvane")
     title = actions.tag(p, f"Plan: {n_tickets(n)} ({m.group(3)[:60]})", cd)
@@ -411,6 +495,24 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=()):
             log(p, f"plan: {n_tickets(n)} on {pr or branch}")
         else:
             log(p, f"plan: {n_tickets(n)} pushed to {branch}")
+    explored(p, tried)
     push(f"planned {n_tickets(n)}", whole("", m.group(3) or "See the queue.", log=lambda m: log(p, m)), 3, "memo")
     clean_detach(p, cd, p.upstream)
     return n
+
+
+def queue_ids(p, cd):
+    """The ticket ids in `cd`'s QUEUE.md bullets, in order: the planner lists its new ones most valuable first."""
+    f = cd / p.queue_rel
+    text = f.read_text() if f.is_file() else ""
+    return [p.norm(x) for x in re.findall(rf"^\s*-\s*(?:\*\*)?({p.id_re})", text, re.M | re.I)]
+
+
+def explored(p, ids):
+    """A plateau's exploration round, once its plan is out: its experiments are the round `plateau_watch` waits on.
+    A plan that wrote none (a desk plan, one of other tickets) leaves the round waiting for one that explores."""
+    f = p.state / "plateau.json"
+    st = load_json(f, {})
+    if ids and st.get("explore") and st["explore"].get("ids") is None:
+        save_json(f, {**st, "explore": {**st["explore"], "ids": sorted(ids)}})
+        log(p, f"plateau: the exploration round planned {', '.join(sorted(ids))}")

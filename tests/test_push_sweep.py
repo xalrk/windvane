@@ -24,7 +24,8 @@ FIX = ("Split the ticket into one ticket for the driver and one for its prompts,
 NO_TEXT = {"dollar_budget", "paused", "started_and_stopped:windvane started", "killed", "tmp_full", "held_for_good",
            "secret_aside", "kept_secret", "push_refused",  # a secret's push: a kind and a place, never text
            "not_taken_up", "protected_aside", "kept_protected",  # protected paths and the commands to land by hand
-           "scale_warned"}  # a scale's id and path
+           "scale_warned",  # a scale's id and path
+           "plateaued", "weekly_trend"}  # the week's trend: counts and measures
 
 
 def limit_fix(p, patch, s):

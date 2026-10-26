@@ -13,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windvane import bench, driver, experiment, jobs, planner  # noqa: E402
+from windvane import bench, driver, experiment, jobs, mix, planner  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
 from windvane.stats import ticket_outcomes  # noqa: E402
@@ -256,23 +256,20 @@ class Planner(unittest.TestCase):
         planner.plan(Project(s.root), "make it better")
         calls = [json.loads(x) for x in (s.tmp / "calls.jsonl").read_text().splitlines()]
         prompt = next(c["prompt"] for c in calls if c["system"].startswith("# windvane planner run"))
-        self.assertIn("## Experiments the bench rejected (.windvane/EXPERIMENTS.md)\n# Experiments the bench rejected",
-                      prompt)
-        self.assertIn("### T-005: a shorter worker prompt", prompt)
-        self.assertIn("- Files: prompts/WORKER.md", prompt)
-        self.assertIn("`Kind: experiment`", (REPO / "prompts/PLAN.md").read_text())
+        self.assertIn("## Experiments the bench rejected (.windvane/EXPERIMENTS.md), by the mechanism each changed, "
+                      "newest first\n(mechanism not recorded):\n- T-005 (kind not recorded, ", prompt)
+        self.assertIn("a shorter worker prompt · prompts/WORKER.md · hidden tests down", prompt)
+        self.assertIn("`Kind: experiment · Idea: <kind> · Mechanism:", (REPO / "prompts/PLAN.md").read_text())
 
-    def test_a_long_record_shows_its_newest_entries_whole(self):
+    def test_a_long_record_shows_its_newest_lines_one_each(self):
         s = Sandbox()
         self.addCleanup(s.close)
-        entries = "".join(f"\n### T-{i:03}: idea {i}\n- Idea: idea {i}\n" + "- Files: x\n" * 40 for i in range(30))
+        entries = "".join(f"\n### T-{i:03}: idea {i}\n- Idea: idea {i}\n" + "- Files: x\n" * 40 for i in range(300))
         s.write(".windvane/EXPERIMENTS.md", experiment.HEADER + entries)
         part = planner.rejected_part(s.root)
-        self.assertLessEqual(len(part), planner.EXPERIMENTS_SHOWN + 200)
-        self.assertIn("(older records left out)\n### T-", part)
-        self.assertTrue(part.rstrip().endswith("- Files: x"))
-        self.assertIn("### T-029: idea 29", part)
-        self.assertNotIn("### T-000", part)
+        self.assertLessEqual(len(part), mix.SHOWN + 200)
+        self.assertIn("older left out)\n(mechanism not recorded):\n- T-299 (kind not recorded): idea 299 · x", part)
+        self.assertNotIn("T-000", part)
         self.assertEqual(planner.rejected_part(s.tmp), "")  # none rejected: no section
 
 

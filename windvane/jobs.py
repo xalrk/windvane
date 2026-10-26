@@ -52,6 +52,7 @@ WATCH_S = 2  # seconds between a kept job's looks at its end time
 AWAIT_S = 570  # how long `await` blocks: under one tool call's 10 minutes
 AWAIT_POLL = 3  # seconds between its looks at a job still running
 SESSION_CHECK = "check"  # the bg job a session's heavy check runs as
+CHANGED, CHECK_BY = "WINDVANE_CHANGED", "WINDVANE_CHECK_BY"  # what a check command is told: the change, who runs it
 SESSION_CRITIC = "critic"  # the bg job a session's `windvane critic` runs as
 CRITIC_LINES = 400  # of a critique's log `windvane critic` prints: the whole critique, which ends on its CRITIC STEP
 # A heavy wait's own lines (`heavy.take`) that `await`'s live state covers, and the hints that keep one shown anyway.
@@ -130,13 +131,14 @@ def ledger(p, ticket, row, event="check"):
                                                 "role": os.environ.get(ROLE) or "driver", **row})
 
 
-def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=False):
+def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=False, by="driver"):
     """Run the project's check at the top level of `cwd`'s checkout (`top`). Returns (passed, summary line, log
     path); passed is None when a heavy check never ran: its wait for the machine timed out, which says nothing about the tree, so callers try it again.
     `stop_at` (a datetime): when a heavy check stops waiting for the machine, or earlier if the run's deadline is
     moved meanwhile (the driver's); a session's check has its own stop in the environment already. `mem` (GB): the
     free memory a heavy check waits for, this once, instead of `heavy_mem`. `announce`: say the log first (in a
-    bg job, for `await` to read its wait from)."""
+    bg job, for `await` to read its wait from). `by`: "worker" for `windvane check` (whoever fixes what fails, so
+    `check_quick` runs first and a failure there ends it in a minute), "driver" for the gate (`check` alone)."""
     cmd = p.cfg["check"]
     if not cmd:
         return True, "CHECK PASSED (no check configured)", None
@@ -152,7 +154,8 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=Fal
     log = logs / log_name()
     if announce:
         print(f"{CHECK_LOG}{log}", flush=True)
-    code, mins, waited = run_logged(p, ticket, cmd, cwd, log, stop_at, mem)
+    quick = p.cfg.get("check_quick") if by == "worker" else ""
+    code, mins, waited, quick_failed = run_logged(p, ticket, cmd, cwd, log, stop_at, mem, quick, by)
     if waited:
         what, stopped = waited
         if stopped:
@@ -163,7 +166,7 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=Fal
             passes.mkdir(parents=True, exist_ok=True)
             (passes / key).write_text(f"{now():%Y-%m-%d %H:%M} ({gout(cwd, 'rev-parse', '--short', 'HEAD')})")
         return True, f"CHECK PASSED in {mins:.1f} min" + ("" if key else unrecorded(cwd)), log
-    return False, f"CHECK FAILED (exit {code}) in {mins:.1f} min; log {log}", log
+    return False, f"CHECK FAILED ({'quick pass, ' if quick_failed else ''}exit {code}) in {mins:.1f} min; log {log}", log
 
 
 def unrecorded(cwd):
@@ -181,7 +184,7 @@ def log_name():
     return f"{now():%Y%m%d-%H%M%S}-{os.getpid()}-{next(_LOGS)}.log"
 
 
-def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None):
+def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="driver"):
     """Run the check into `log`, with a ledger row on each side, so a check that's cut off still counts: a
     `check-start` row first (all a SIGKILL or a killed driver leaves; `stats` calls it cut off), then the end row
     with the same `start`, written on the way out even for an exception or Ctrl-C (`finished: false`, the minutes
@@ -190,20 +193,31 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None):
     from one cut off; the start row is written only once it's locked, or `stats` could catch it unlocked and call a
     check that just started cut off. A heartbeat touches the log while the check runs, so a kill is timed within
     `HEARTBEAT` even when the check went quiet. Returns (exit code, minutes, what a heavy check waited for and never
-    got, or None): such a row says `not_run`, and `stats` doesn't count it a failure. A heavy check's end row also
-    says how many of its seconds went to waiting for the machine (`waited_s`: all of them when it never ran)."""
+    got, or None, and whether `quick` failed): such a row says `not_run`, and `stats` doesn't count it a failure. A
+    heavy check's end row also says how many of its seconds went to waiting for the machine (`waited_s`: all of them
+    when it never ran). `quick` (`check_quick`) runs first into the same log, never queued for the machine: it's
+    meant to take a minute; its failure is the check's, and its minutes are in the row's (`quick_minutes` too)."""
     start = time.time()
     code = waited = None
+    quick_failed, quick_mins = False, None
     t = ticket or os.environ.get(TICKET)  # a ticket's check gets its scratch dir as TMPDIR, as its sessions do
     # it runs code and tests a session wrote: no tmux pane (util.without_tmux), as for sessions
     env = {**util.without_tmux(os.environ), **({"TMPDIR": str(scratch.session_dir(p, t))} if t else {})}
+    changed = log.with_suffix(".changed")
     try:
         with log.open("w") as f:
             fcntl.flock(f, fcntl.LOCK_EX)  # blocking: `running` may hold a momentary shared probe
+            env.update({CHANGED: str(write_changed(p, cwd, changed)), CHECK_BY: by})  # locked: no prune takes it
             ledger(p, ticket, {"start": round(start, 3), "log": log.name}, event="check-start")
             beat = heartbeat(log)
             try:
-                if p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
+                if quick:
+                    code = subprocess.run(quick, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
+                                          env=env).returncode
+                    quick_failed, quick_mins = code != 0, (time.time() - start) / 60
+                if quick_failed:
+                    pass  # it says what `check` would, sooner
+                elif p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
                     mem = p.cfg.get("heavy_mem") if mem is None else mem  # unset: machine.toml's min_free_gb
                     code = subprocess.run([sys.executable, "-c", "import json, sys; from windvane.heavy import run; "
                                            "sys.exit(run(sys.argv[1], cwd=sys.argv[2], "
@@ -222,17 +236,30 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None):
                                           env=env).returncode
             finally:
                 beat.set()
-        if p.cfg["heavy_check"] and code == heavy.TIMED_OUT:
+        if p.cfg["heavy_check"] and code == heavy.TIMED_OUT and not quick_failed:
             waited = heavy.gave_up(log)
         for hint in heavy.hints_in(log) if p.cfg["heavy_check"] else []:
             util.log(p, f"heavy check: {hint}")
     finally:
         mins = (time.time() - start) / 60
-        wait_s = round(mins * 60) if waited else heavy.waited(log) if p.cfg["heavy_check"] else 0
+        wait_s = round(mins * 60) if waited else heavy.waited(log) if p.cfg["heavy_check"] and not quick_failed else 0
         ledger(p, ticket, {"minutes": round(mins, 2), "passed": code == 0, "reused": False, "start": round(start, 3),
                            **({} if code is not None else {"finished": False}), **({"not_run": True} if waited else {}),
-                           **({"waited_s": wait_s} if wait_s else {})})
-    return code, mins, waited
+                           **({"waited_s": wait_s} if wait_s else {}),
+                           **({"quick_minutes": round(quick_mins, 2)} if quick_mins is not None else {})})
+        changed.unlink(missing_ok=True)
+    return code, mins, waited, quick_failed
+
+
+def write_changed(p, cwd, path):
+    """Write `path`, beside the check's log, with the paths the branch changes (`git diff --name-only
+    <upstream>...HEAD`, one per line, unquoted) for `WINDVANE_CHANGED`: a file, not the list itself, so a long
+    change can't overflow the environment. Empty when the upstream isn't known here. Deleted once the check ends; a
+    killed check's goes at the next check's prune, as soon as its log is no longer locked."""
+    up = getattr(p, "upstream", None)
+    out = gout(cwd, "-c", "core.quotepath=off", "diff", "--name-only", f"{up}...HEAD") or "" if up else ""
+    path.write_text(out + "\n" if out else "")
+    return path
 
 
 def heavy_waits(p, since, ticket=None):
@@ -341,7 +368,7 @@ def prune(p, logs, clock=time.time):
     or delete stays, and anything else wrong skips the prune. One prune at a time (another slot's check may start
     alongside): two would both close the same killed check, counting its minutes twice."""
     try:
-        with logs.with_name("prune.lock").open("w") as lock:  # beside the logs: `checks/` holds only logs
+        with logs.with_name("prune.lock").open("w") as lock:  # beside the logs: `checks/` holds only checks' files
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:  # another check is pruning right now
@@ -354,6 +381,12 @@ def prune(p, logs, clock=time.time):
 def prune_logs(p, logs, t):
     """`prune`'s work, under its lock."""
     passed, killed = outcomes(p)
+    for f in logs.glob("*.changed"):  # a killed check's change list; a running one holds its log's lock
+        try:
+            if not f.with_suffix(".log").exists() or not locked(f.with_suffix(".log")):
+                f.unlink()
+        except OSError:
+            pass
     files = sorted(logs.glob("*.log"))  # names sort by start time
     keep = set([f for f in files if f.name not in passed][-KEEP_FAILED:])
     for f in files:
@@ -838,7 +871,7 @@ def session_check(p, cwd, mem=None, lines=60):
     cwd = top(cwd)  # the job runs where the gate does
     key = tree_key(p, cwd)
     if not p.cfg["check"] or key and (p.state / "passes" / key).exists():  # nothing to wait for, piped or not
-        ok, summary, log = check(p, cwd)  # a pass pruned since the look above runs the check here, and may fail
+        ok, summary, log = check(p, cwd, by="worker")  # a pass pruned since the look above runs the check here, and may fail
         if ok is False and log:
             print(tail(log, lines))
         print(summary)

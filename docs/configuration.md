@@ -26,22 +26,57 @@ matching keys for one run.
 | `forge` | `"github"` | `github`: workers open pull requests with `gh` and the driver merges them. `git`: no pull requests; the driver merges the ticket branch and pushes `main` itself. |
 | `actions_minutes` | `0` | Your GitHub Actions minutes a month (e.g. `2000`); `0` turns counting off. When set, windvane counts the month's billed minutes from your private and internal repos' run history (public ones run free on GitHub's standard runners; a larger runner on a public repo isn't counted), `windvane ci` keeps a private repo's workflows under `actions_cap` (a public one's start without a cap, and a public project's commits never carry the cap's `[skip ci]`), and `status` and `overview` show the count. The token `gh` uses needs the Actions permission: read to count, read and write for `windvane ci` to start a workflow (`gh auth login`'s token has both). Each run reads the repo's visibility afresh as it starts. See [A ticket's way through](concepts.md#a-tickets-way-through). |
 | `actions_cap` | `0.9` | The share of `actions_minutes` windvane never passes. At or over it, the driver adds `[skip ci]` to its commits and pushes to your phone once that month. |
-| `check` | `""` | The project's test command, run by `windvane check` in the worker's worktree and by the driver on every pushed head and merged tree, e.g. `"pytest -q"` or `"npm test"`. Empty means no check. |
+| `check` | `""` | The project's test command, run by `windvane check` in the worker's worktree and by the driver on every pushed head and merged tree, e.g. `"pytest -q"` or `"npm test"`. Empty means no check. It gets [`WINDVANE_CHANGED` and `WINDVANE_CHECK_BY`](#the-checks-environment). |
+| `check_quick` | `""` | A first, quick pass `windvane check` runs before `check` (in a session or at your desk), in the same place and environment: a small, telling part of the suite, such as the tests the change touches ([examples](#the-checks-environment)). If it fails the check ends there, `CHECK FAILED (quick pass, exit N) in 0.8 min`, with its log's tail and no pass recorded; if it passes, `check` runs next as one job. The driver's gate and the merged-tree check run `check` alone, so the quick pass never decides a merge. It isn't queued for the machine under `heavy_check`: keep it light. Empty means none. `windvane doctor` and `stats --projects` suggest it for a project whose checks average over 10 minutes a ticket. |
 | `setup` | `""` | A command run once in each fresh autopilot worktree before it is used, e.g. `"npm ci"`, with no input. If it fails, the run stops with its output. |
 | `setup_minutes` | `20` | The longest `setup` may run, in minutes (any number above 0, e.g. `0.5`). One still running then (a hung `npm ci`) is killed, its child processes too, and fails as above: `setup ... timed out after 20 min in work: <its last line>; raise setup_minutes in config.toml or fix the setup`. A `windvane stop` or the run's deadline ends it sooner, and the run ends as stopped, not failed. |
 | `teardown` | `""` | A command run once when a run ends, whatever ended it (the queue, the deadline, `windvane stop` or `stop --now`, a cap, a failed `setup`, a crash that isn't restarted, a SIGTERM or SIGHUP such as a closed terminal or tmux session, a detached driver the system kills), with no input, in the autopilot's `ci` worktree (the checkout with `isolate` off). It stops the helpers the project's tools start on purpose outside the sessions, which no session kill reaches, e.g. a shared Android emulator and its adb server: `teardown = "adb -s emulator-5554 emu kill; adb kill-server; ./gradlew --stop"`. It runs after the "stopped" push, so it can't hold that up; a failure or a timeout is logged with its last line and pushed with the command to run by hand, and the next run's "started" push names it once, as its helpers may still be up. A run killed outright (SIGKILL) is torn down at the next run's start, before its setup. A driver that crashes and is restarted keeps them; each `--daily` window tears down at its end. After it, what still runs in the worktrees (with `isolate` off: in the checkout, started during the run, on no terminal) is logged and named in one push, never killed; a killed driver's end isn't checked, as its sessions may still be at work. |
 | `teardown_minutes` | `5` | The longest `teardown` may run, in minutes (any number above 0). One still running then is killed, its child processes too, and logged as timed out. |
 | `isolate` | `true` | Work in the autopilot's own worktrees. `false` runs sessions in your checkout instead, for projects whose builds can't be duplicated; it also limits the run to one ticket at a time. |
 | `goal` | `""` | What `windvane plan` and `windvane run --replan` aim at when no goal is given. |
+| `replan` | `0` | How many times `windvane run` plans new tickets when the queue runs dry, when `--replan` isn't given; `"forever"`: every time ([the endless loop](concepts.md#the-critic-and-calibration)). |
 | `author` | git's identity | `"Name <email>"` for every commit windvane makes: the driver's (merges, planned tickets) and its workers'. With `forge = "github"`, `windvane doctor` warns unless the email is a `users.noreply.github.com` one, since every pushed commit shows it. |
 | `overview_extra` | `""` | A shell command, run in the checkout, whose output `windvane overview` (and so the phone's `overview`) adds below its own lines: the project's own milestones. First 15 lines, 30 s at most; a failure shows as one line. |
 | `shared_notes` | `[]` | Notes files every ticket appends its findings to (e.g. `["NOTES.md"]`; paths in the repo, globs like `docs/*.md`, or a directory ending in `/`). They don't count when deciding which tickets may run side by side, whether on a Touches line or among the files a running branch changed. When a merge (a ticket's, or a desk PR's) conflicts only in these and `[[append_only]]` files, and in these files every conflict hunk only adds lines on both sides, the driver resolves it without a session: main's text, then the branch's added sections in order (a section starts at a Markdown heading, or is the added text itself). It's named in the merge commit, the log and the PR (`NOTES.md: kept main's, appended 2 sections`). A hunk that changes or deletes an existing line, on either side, or a conflict in any other file, goes back to the worker as before. Workers are told to add a new section and not rewrite existing text. |
 | `scan_allow` | `[]` | Leak kinds that `windvane answer`, the sessions' pre-push hook and the checks before windvane pushes or merges let through: `"token"`, `"private-key"`, `"ntfy-url"`, `"ntfy-topic"`, `"private-term"`, `"email"`, `"secret-file"`. Only for a repository that stays private, e.g. `["private-term"]` when its tickets name your other projects ([what `.windvane/` holds](safety.md#what-windvane-holds)). A project's own name needs no allow: it is no private word in its own repository. |
-| `protected` | see right | Path prefixes no ticket, plan or periodic branch may change (`"bench/"`, `"prompts/JUDGE.md"`); an entry `"<file>:<key>"` protects only that TOML file's keys of that name, in any table, with `*` globs (`".windvane/config.toml:experiment_*"`). A branch that changes one is held for you instead of merged ([why](safety.md#the-yardstick-is-protected)). Unset: when the project has `bench/`, that, `prompts/JUDGE.md`, `windvane/bench_score.py` and the config's `experiment_*`, `week_below` and `week_share` keys; otherwise nothing. Whenever it protects anything, the config's own `protected` key is protected too. `[]` turns it off. |
+| `protected` | see right | Path prefixes no ticket, plan or periodic branch may change (`"bench/"`, `"prompts/JUDGE.md"`); an entry `"<file>:<key>"` protects only that TOML file's keys of that name, in any table, with `*` globs (`".windvane/config.toml:experiment_*"`). A branch that changes one is held for you instead of merged ([why](safety.md#the-yardstick-is-protected)). Unset: when the project has `bench/`, that, `prompts/JUDGE.md`, `windvane/bench_score.py` and the config's `experiment_*`, `week_below`, `week_share`, `plateau`, `mix` and `floor` keys; otherwise nothing. Whenever it protects anything, the config's own `protected` key is protected too. `[]` turns it off. |
 | `heavy_check` | `false` | The check itself is machine-heavy (a game engine, a render): run it under `windvane heavy`, one at a time on this machine. A check that waited in vain for the machine is not run, not failed. |
 | `heavy_mem` | unset | GB of free memory this project's heavy jobs (`windvane heavy`, `bg --heavy`) and its `heavy_check` wait for; unset: `machine.toml`'s `min_free_gb`. A job's own `--mem` (`check --mem` for the check) overrides it. A job that needs less can go by one at the head of the line that waits for more. |
 | `heavy_keep_hours` | `0` | Hours a kept heavy job (`bg --heavy --keep`) may go on past the run's stop; `0`: the stop kills it, and the next run resumes its ticket. A job still running then is ended when that time comes, or by `windvane stop`; the next run keeps its ticket's worktree and resumes the ticket when it ends. |
 | `heavy_reuses` | `[]` | Process-name patterns (as `busy`; for a JVM, a word of its command line such as `GradleDaemon`, or `KotlinCompileDaemon` for the Kotlin daemon it starts) of long-lived helpers this project's heavy jobs reuse, e.g. `["qemu-system", "GradleDaemon", "KotlinCompileDaemon"]`. Their resident memory counts as available to its heavy jobs and heavy check, when the process works for this project: the nearest process up its tree that works in a checkout (itself, or the shell that launched it) is in one of this project's checkouts or its state dir. A daemon that detached and works in no checkout (a Gradle daemon in `~/.gradle/daemon/<version>`) counts by the dir it was started from (`PWD` in its environment: where `./gradlew` ran). Linux only. A heavy job waiting on memory that such a helper of this project holds, with no pattern here naming it, says so once in its waiting line and suggests the word to add, its name or for a JVM its main class's last part such as `GradleDaemon` (the heavy check logs it to the project log too). |
+
+### The check's environment
+
+`check` and `check_quick` run with two variables, so a project's own command or script can order or pick its tests
+by the change:
+
+- `WINDVANE_CHANGED`: the path of a file listing the paths the branch changes (`git diff --name-only
+  <remote>/<main>...HEAD`, unquoted), one per line; empty when the upstream isn't known. A file, so a long list
+  can't overflow the environment. It's deleted when the check ends (a killed check's, at the next check's start).
+- `WINDVANE_CHECK_BY`: `worker` for `windvane check` (a session's, or yours), `driver` for the gate.
+
+A quick pass pays when it runs a small part of the suite: the tests the change touches, or the ones that failed
+last time. One over the whole suite, such as `npm test -- --bail`, runs it twice on every passing check (the quick
+pass, then `check`). To stop the whole suite at its first failure, have `check` do it for the worker alone, as the
+last examples below do. Each quick pass here runs nothing when it has nothing to pick:
+
+```toml
+# pytest, the changed test files that still exist
+check_quick = 'f=$(grep -x "tests/.*\.py" "$WINDVANE_CHANGED" | xargs -r ls 2>/dev/null); [ -z "$f" ] || pytest -x -q $f'
+# pytest, only the tests that failed in the last run here (exit 5: none did)
+check_quick = 'pytest -x -q --lf --lfnf=none || [ $? = 5 ]'
+# Jest, the tests related to the changed files
+check_quick = "npx jest --bail --passWithNoTests --changedSince=origin/main"
+# Go, the changed packages that still exist
+check_quick = 'p=$(grep "\.go$" "$WINDVANE_CHANGED" | xargs -rn1 dirname | sort -u | xargs -r ls -d 2>/dev/null | sed "s|^|./|"); [ -z "$p" ] || go test -failfast $p'
+# Cargo, the changed crates (when each crate's folder under crates/ is named as its package)
+check_quick = 'c=$(grep -o "^crates/[^/]*" "$WINDVANE_CHANGED" | sort -u | sed "s|crates/|-p |"); [ -z "$c" ] || cargo test $c'
+
+# no quick pass: the whole suite stops at the first failure for the worker, and runs in full for the gate
+check = 'pytest -q $([ "$WINDVANE_CHECK_BY" = worker ] && echo -x)'
+check = 'npm test -- $([ "$WINDVANE_CHECK_BY" = worker ] && echo --bail)'
+check = 'go test $([ "$WINDVANE_CHECK_BY" = worker ] && echo -failfast) ./...'
+```
 
 ## [models]
 
@@ -122,13 +157,16 @@ what every project's benches spent.
 |---|---|---|
 | `week_below` | `75` | A bench starts only while the weekly usage is below this. |
 | `week_share` | `30` | The most of a week benches may use: one starts only while this week's bench spend plus its estimate (the mean of the last three runs of its size) stays within it, plus what you allowed for this week. |
+| `plateau` | `8` | Once this many experiments in a row were rejected, the next plan is one exploration round (only `bold`, `ablation` and `scout` ideas); if none of its experiments is kept (each rejected, failed, parked or dropped), experiment planning stops (in every run, with one push) until one is kept, the goal or a seed changes, or `windvane experiments resume`. |
+| `mix` | `{ fix = 0.4, bold = 0.25, ablation = 0.2, revisit = 0.15 }` | Each kind of idea's share of a planning round's experiments ([the mix](concepts.md#the-critic-and-calibration)). The shares move toward the kinds the bench keeps (each kind's kept rate over its last 10); `scout` ideas come on top. Protected with the bench. |
+| `floor` | `0.1` | No kind's share goes below this, however rarely it's kept, so none dies out. Protected with the bench. |
 
 A bench that doesn't fit isn't started: an experiment ticket waits, set aside but not failed, and the run goes on
 with other tickets; `windvane status` says so on one line. At the share, the run asks once a week per cap on the
 phone (`+10%`, `+20%`, or wait for the reset; no answer in `answer_wait`: wait). `windvane experiments` prints this
 week's spend, the cap, what you allowed and when the week resets; `windvane experiments allow +10` allows 10 points
-more, this week only. The week is the usage window's own, ending at its seven-day reset. Both keys are protected with
-the bench.
+more, this week only. The week is the usage window's own, ending at its seven-day reset. All three keys are protected
+with the bench.
 
 ## [[periodic]]
 
@@ -146,9 +184,10 @@ the [README](../README.md#periodic-sessions) for an example.
 | `setup` | `""` | A shell command run first on current `main` (a build), with no input. A failure skips this round and is logged; so does a setup still running at `setup_minutes`, when the session would no longer fit before the deadline, or at any `windvane stop`. |
 | `setup_minutes` | `60` | The longest `setup` may run, in minutes (any number above 0, e.g. `0.5`). |
 | `prompt` | required | The project's rules file for the session, a path in the repo. Not with `builtin`; optional with `requests`. |
-| `builtin` | `""` | One of windvane's own sessions instead of a `prompt`: `"project-critic"` runs `windvane critic --project` (its points an open ticket covers become that ticket's notes; a `then` triage gets the rest); `"bench"` benchmarks windvane itself in the background after changes to `after_touch` paths (below). |
+| `builtin` | `""` | One of windvane's own sessions instead of a `prompt`: `"project-critic"` runs `windvane critic --project` (its points an open ticket covers become that ticket's notes; a `then` triage gets the rest); `"bench"` benchmarks windvane itself in the background after changes to `after_touch` paths (below); `"seed"` writes new training seeds for `bench/pool/` ([the training pool](concepts.md#the-critic-and-calibration)). |
 | `dims`, `parallel` | all, `4` | With `builtin = "project-critic"`: the dimensions to judge (`["works", "clear"]`) and how many sessions at once. |
 | `after_touch` | `[]` | With `builtin = "bench"`: path prefixes (`["prompts/", "windvane/driver.py"]`). The entry is due once a change touching one of them (a ticket's merge, or a commit pushed to `main`) has landed since the last recorded bench run on `main`'s history, or, with nothing recorded yet, at once, to record a baseline. Without it, a bench entry runs only when asked for. |
+| `pool_size`, `seed_every` | `4`, `5` | With `builtin = "seed"`: how many seeds the training pool keeps (the newest), and after how many kept experiments a new one is written; a pool short of `pool_size` gets one at each gap between tickets until it's full (a refused seed is tried again the next run, three times per commit of `main`), and experiments wait for it to fill. |
 | `bench_cost_up` | `25` | With `builtin = "bench"`: how many percent more weighted tokens per merged ticket count as a regression, when neither hidden tests nor judge yeses went up. |
 | `then` | `""` | Another `[[periodic]]` entry run right after, given this one's final text and the files it names. |
 | `allow`, `deny` | `[]` | This session's own permission rules, after `[permissions]`' `periodic_allow` / `periodic_deny`; see [`[permissions]`](#permissions). |

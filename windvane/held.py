@@ -8,7 +8,7 @@ import time
 from urllib.parse import quote
 
 from . import actions, net, privacy
-from .config import DIR, author, protected_changes
+from .config import DIR, SEED_BRANCH, author, pool_writes, protected_changes
 from .doctor import dispatched_checks
 from .phone import cut, whole
 from .util import git, gout, load_json, locked, log, push, save_json
@@ -19,7 +19,7 @@ from .worktree import clean_detach, ensure_worktree
 # tickets change a provisional answer), a rejected experiment's record. Until one merges its ticket ids are taken
 # (`planner.pending_ids` counts only these), so a new kind of branch that can carry tickets goes here too, or its ids
 # are handed out again.
-OWN_BRANCHES = ("plan-", "periodic-", "answers-", "experiment-", "revert-")
+OWN_BRANCHES = ("plan-", "periodic-", "answers-", "experiment-", SEED_BRANCH, "revert-")
 
 
 def own_branch(branch):
@@ -225,8 +225,8 @@ def land(p, cd, branch, title, body, commit=True, tries=2, close=False, fresh=Fa
     if commit:
         git(cd, *author_ident(p), "commit", "-q", "-m", title, "-m", body[:12000])  # a periodic reply's 80 lines
     found = privacy.outgoing(cd, p.upstream, "HEAD", DIR, privacy.guarded(p), own)
-    paths = not found and protected_changes(cd, gout(cd, "merge-base", p.upstream, "HEAD") or p.upstream, "HEAD",
-                                            p.protected)
+    paths = not found and pool_writes(branch, protected_changes(
+        cd, gout(cd, "merge-base", p.upstream, "HEAD") or p.upstream, "HEAD", p.protected))
     if found or paths:
         ok, where = False, (kept_secret if found else kept_protected)(p, cd, branch, title, found or paths)
     else:

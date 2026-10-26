@@ -16,11 +16,11 @@ from pathlib import Path
 
 from . import actions
 from . import critic as critic_mod
-from . import (bench, budget, doctor, driver, heavy, install, jobs, net, phone, planner, preflight, privacy, publiccheck,
-               questions, requests, schedule, scratch, util, watch)
+from . import (bench, budget, doctor, driver, experiment, heavy, install, jobs, mix, net, phone, planner, preflight,
+               privacy, publiccheck, questions, requests, schedule, scratch, util, watch)
 from . import held as held_mod
 from . import periodic as periodic_mod
-from .config import DIR, HOME, Project, TokenError, exe, find, slots, toplevel
+from .config import DIR, HOME, Project, TokenError, exe, find, replan, slots, toplevel
 from .config import periodic as periodic_entries
 from .queue import Queue
 from .runner import LIVE, ROLE, Usage, inherited_stop, plain_error, scope_github
@@ -581,7 +581,7 @@ def cmd_check(a, p):
     in_job = bool(os.environ.get(jobs.IN_JOB))
     if os.environ.get(heavy.STOP_AT) and not in_job:  # a session: past one tool call, its check goes on
         sys.exit(jobs.session_check(p, os.getcwd(), mem, a.lines))
-    ok, summary, log = jobs.check(p, os.getcwd(), mem=mem, announce=in_job)
+    ok, summary, log = jobs.check(p, os.getcwd(), mem=mem, announce=in_job, by="worker")
     if ok is False and log:
         print(jobs.tail(log, a.lines))
     print(summary)
@@ -705,10 +705,15 @@ def cmd_new(a, p):
 
 
 def cmd_experiments(a, p):
-    """This week's experiment budget, or more of it for this week (`allow +10`)."""
+    """This week's experiment budget and the mix of ideas, or more of the budget for this week (`allow +10`)."""
     b = budget.Budget(p.cfg["experiments"])
     if not a.what:
-        return print("\n".join(b.lines()))
+        why = experiment.stopped(p)
+        q = Queue(p)
+        return print("\n".join(b.lines() + [f"experiments stopped: {why}; `windvane experiments resume` plans them "
+                                             "again"] * bool(why) + mix.report(p, q.ideas, q.titles)))
+    if a.what == ["resume"]:
+        return print("experiments: planned again" if experiment.resume(p) else "experiments: weren't stopped")
     try:
         more = float(a.what[1].lstrip("+")) if a.what[0] == "allow" and len(a.what) == 2 else 0
     except ValueError:
@@ -875,8 +880,9 @@ def parser():
     s.add_argument("--ticket-hours", type=float, help="max hours for one worker run (default 3)")
     s.add_argument("--min-slot", type=float, help="don't start a ticket with fewer minutes left (default 30)")
     s.add_argument("--answer-wait", type=float, help="minutes a phone question waits before the recommendation")
-    s.add_argument("--replan", type=int, default=0, metavar="N",
-                   help="when the queue runs dry, plan new tickets (goal + critic notes), up to N times")
+    s.add_argument("--replan", metavar="N",
+                   help='when the queue runs dry, plan new tickets (goal + critic notes), up to N times, or '
+                   '"forever" (default from config: 0)')
     s.add_argument("--goal", help="the goal for --replan (default: config's goal)")
     s = sub.add_parser("preflight", help="the questions the next tickets will need, to answer now")
     s.add_argument("--for", dest="for_", default="4h", help="how long the run will be (default 4h)")
@@ -970,6 +976,8 @@ def parser():
                    "wrong where, and each measure's spread")
     s.add_argument("--json", action="store_true", help="with --projects: the same as JSON")
     s.add_argument("--bench", action="store_true", help="the recorded `windvane bench` runs, one line each")
+    s.add_argument("--trend", action="store_true", help="with --bench: this week's before → after (frozen seeds, "
+                   "tokens per merged ticket, experiments, bench budget)")
     s = sub.add_parser("bench", help="build the bench/ seed projects with the real pipeline and score them on "
                        "tests no session sees")
     s.add_argument("what", nargs="*", metavar="compare A B", help="compare two windvane refs or earlier run ids, "
@@ -983,10 +991,14 @@ def parser():
     s.add_argument("--week-cap", type=float, help="the seed runs' weekly cap %% (default: this project's)")
     s.add_argument("--dry-run", action="store_true", help="print the plan and what earlier runs that size cost")
     s.add_argument("--last", action="store_true", help="print the latest run's results again")
+    s.add_argument("--pool", action="store_true", help="the training pool's seeds (bench/pool/), not the frozen "
+                   "holdout's (bench/)")
     s.add_argument("--repeat", type=int, default=1, help="with compare: N runs a side, so a difference shows past "
                    "the noise (default 1)")
-    s = sub.add_parser("experiments", help="this week's bench spend against the experiment budget")
-    s.add_argument("what", nargs="*", metavar="allow +N", help="let benches use N%% more of this week's limit")
+    s = sub.add_parser("experiments", help="this week's bench spend against the experiment budget, and the mix of "
+                       "ideas")
+    s.add_argument("what", nargs="*", metavar="allow +N | resume", help="let benches use N%% more of this week's "
+                   "limit; resume: plan experiments again after the overfit alarm stopped them")
     sub.add_parser("mode", help="how a design question is handled right now")
     sub.add_parser("quiet", help="show the quiet times (yours for every project, and this project's)")
     s = sub.add_parser("watch", help="follow the running sessions live (costs no tokens)")
@@ -1040,6 +1052,8 @@ def main(argv=None):
         return projects_stats(a)
     if a.cmd == "stats" and a.json:
         sys.exit("stats: --json goes with --projects")
+    if a.cmd == "stats" and a.trend and not a.bench:
+        sys.exit("stats: --trend goes with --bench")
     p = find()
     phone.use(p)
     try:
@@ -1051,6 +1065,7 @@ def main(argv=None):
         for k in ("cap", "week_cap", "ticket_hours", "min_slot", "answer_wait"):
             if getattr(a, k) is None:
                 setattr(a, k, p.ap[k])
+        a.replan = replan(p.cfg["replan"]) if a.replan is None else replan(a.replan, "--replan ")
     if a.cmd == "bg":
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
         for flag, given in (("--mem", a.mem is not None), ("--keep", a.keep), ("--expect", a.expect is not None),

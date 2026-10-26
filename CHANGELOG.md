@@ -14,6 +14,41 @@ release on the same day adds a number (`2026.10.9.1`).
   reverted tickets back in the queue after it, and send one push. The run goes on on the last good code and redoes
   the reverted tickets once the fix merges, even ones it merged itself. A second bad update in a row stops the run
   instead.
+- `windvane run --replan forever` (or `replan = "forever"` in the config): an autopilot that keeps improving the
+  project with no input. It plans whenever the queue runs dry, with no count to reach; with nothing merged since
+  the last plan, the next waits an hour. In a project with `bench/`, the planner also gets where the projects on
+  the machine hurt (`stats --projects --json`, numbers only, each project by letter) and the newest bench runs, and
+  ranks its ideas by what costs projects most. Once a week, at the usage window's reset, one push gives the week's
+  trend.
+- A plateau stop for experiments, in every run: when the last `plateau` (8) experiments were all rejected, the next
+  plan that writes experiments is one exploration round of only `bold`, `ablation` and `scout` ideas; if that round is all rejected too,
+  experiment planning stops with one push and the run goes on with other tickets, until an experiment is kept, the
+  goal or a seed changes, or `windvane experiments resume`.
+- A mix of ideas for experiments, so the loop doesn't drift into small tweaks of the same few things: each
+  experiment ticket names its kind (`Idea: fix`, `bold`, `ablation`, `revisit` or `scout`), and each plan's
+  experiments follow `[experiments] mix` (fix 40%, bold 25%, ablation 20%, revisit 15%, scout on top), moved toward
+  the kinds the bench keeps but never under `floor` (10%). The planner sees the rejected experiments one line each,
+  grouped by the mechanism they changed, and a repeat of one of the last 20 needs a `Different because:` line or is
+  dropped from the plan. A rejected bold experiment gets one revision, its worker shown which hidden tests and judge
+  checks moved on each seed. `windvane experiments` shows each kind's share, kept rate and last kept experiment.
+- `windvane stats --bench --trend`: this week against the last in four lines, each a before → after: the frozen
+  seeds' hidden tests, judge and tokens per merged ticket, this project's weighted tokens per merged ticket, the
+  experiments run, kept and rejected, and the bench budget used.
+- A training pool for the benchmark, so experiments aren't kept for helping three projects and nothing else. A
+  `[[periodic]]` entry with `builtin = "seed"` writes a new seed project into `bench/pool/` while the pool is short of
+  `pool_size` (4) and after every `seed_every` (5) kept experiments; it joins only when its hidden tests fail on the
+  bare seed and pass on the session's reference solution, which is never committed, and the oldest leaves past
+  `pool_size`. Only that round's own branch may write `bench/pool/`. With it, experiments and the bench round run on
+  the pool (`windvane bench --pool`), an experiment waits for a full pool rather than merging unmeasured, and
+  `bench/`'s seeds are a frozen holdout run by hand. A refused seed is tried again the next run, at most three times per commit of `main`. When a holdout run shows
+  the pool's numbers up and the holdout's down past the noise in the same week, one push says so and experiment
+  planning stops until `windvane experiments resume`.
+- `check_quick` in the config: a first pass `windvane check` runs before `check`, such as the tests the change
+  touches. A failure there ends the check in a minute, `CHECK FAILED (quick pass, exit N)`, with no
+  pass recorded, instead of a full check's length; its pass goes on to `check`. The driver's gate runs `check`
+  alone, so the quick pass never decides a merge. Both commands get `WINDVANE_CHANGED` (a file listing the
+  branch's changed paths) and `WINDVANE_CHECK_BY` (`worker` or `driver`), to pick or order tests by the change.
+  `windvane doctor` and `stats --projects` suggest it for a project whose checks average over 10 minutes a ticket.
 - An experiment budget (`[experiments]` in the config): a bench, an experiment's or the periodic one, starts only
   while the weekly usage is below `week_below` (75%) and this week's bench spend plus the run's estimate stays
   within `week_share` (30 points of the weekly limit), plus what you allowed this week. A bench that doesn't fit

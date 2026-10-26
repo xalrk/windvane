@@ -99,7 +99,9 @@ the order), and **open** otherwise. `windvane queue` shows all three.
    count as changes, so a pass recorded inside the sandbox is reused outside it. Neither do the mount points made
    for them, which a check outside the sandbox sees as empty dotfiles while a sandboxed command is alive.
    `windvane check` runs at the
-   worktree's top level, as the driver's gate does, from whatever directory it's called in.
+   worktree's top level, as the driver's gate does, from whatever directory it's called in. With `check_quick` set
+   it runs that first, and a failure there ends it in a minute instead of a full check's length; the gate runs
+   `check` alone, so the quick pass never decides a merge.
    The check is the gate, on your machine, so hosted CI isn't needed: a workflow on `push` or `pull_request` runs
    twice per ticket (its PR, its merge) and can use up a month's Actions minutes in days. Test other versions in the
    check (windvane's own, `tools/check_pythons.sh`, runs the suite on the oldest Python installed and imports every
@@ -278,6 +280,59 @@ results are missing. The approved head is saved until its bench ends: a bench ru
 deadline (checked before the critic, too) sets the ticket aside, and the next run, or this one after a restart, goes
 straight to the bench with no worker, critic or review paid for again, reusing every run recorded meanwhile.
 
+**The training pool and the holdout.** Kept or dropped against the same few seeds for weeks, experiments would learn
+those projects rather than how to build projects. A `[[periodic]]` entry with `builtin = "seed"` keeps them moving:
+while `bench/pool/` on `main` holds fewer than `pool_size` seeds (4), and after every `seed_every` experiments the
+bench kept (5), a session (`prompts/SEED.md`) writes one new seed of a kind neither the pool nor `bench/` has, in the
+same format, with a reference solution. The driver runs its hidden tests with the bench's own scorer in scratch
+copies: the seed joins only if every ticket's tests fail on the bare seed and pass on the reference, which is never
+committed; anything else the session changed is dropped. It lands on the driver's own `seed-` branch, the only one
+allowed to write `bench/pool/` (a ticket or plan branch that does is held like any protected change), as
+`bench/pool/<NNN>-<kind>/`, and the oldest seed past `pool_size` leaves. One push says which joined, or why it was
+refused. A round is tried once a run and at most three times per commit of `main`, counted across restarts: the
+third refusal's push says so, and `windvane periodic seed` asks for another; a seed that joined moves `main`, so the
+next starts at the next gap until the pool is full. With a seed round configured, the experiments' bench and the
+bench round run on the pool (`windvane bench --pool`), and an experiment is set aside for the run before its worker
+starts, never merged unmeasured, while the pool holds fewer than `pool_size` seeds; `bench/`'s own seeds become a
+frozen holdout that only `windvane bench` by hand (and a weekly trend) runs. Each time a new holdout run is recorded, the driver reads the
+week's runs of both sets: the pool's hidden tests or judge yeses up past the noise rule while the holdout's fell past
+it means the loop is learning its training seeds, so it sends one push and stops experiment planning (the planner and
+periodic sessions are told to write no `Kind: experiment` ticket) until `windvane experiments resume`.
+
+**The endless loop.** `windvane run --replan forever` (or `replan = "forever"` in the config) plans whenever the
+queue runs dry, with no count to reach: only the deadline, a stop or the usage caps end the run. When nothing merged
+since the last plan (it wrote nothing, or its tickets all failed), the next one waits an hour; tickets that turn up
+meanwhile are picked up as usual. In a project with `bench/`, the planner's prompt also gets where the projects on
+this machine hurt (`stats --projects --json` over 30 days, numbers only: each project by letter, the costliest
+first, with no paths, ticket ids or reasons, since ticket titles reach the merge commits) and the newest bench runs,
+and ranks its ideas by what that says costs projects most. In any run, when the last `plateau` experiments (8) were
+all rejected, the next plan that writes experiments is one exploration round: only `bold`, `ablation` and `scout` ideas. If none of that
+round's experiments is kept (each rejected, failed, parked or dropped; one still on an unmerged plan
+branch counts as open), experiment planning stops with one push holding the week's trend, and the run
+goes on with other tickets; a kept experiment, a changed goal, a new seed or `windvane experiments resume` starts it
+again (only the rejections after that count). Once a week, at the usage window's reset, an endless run pushes the week's trend:
+the frozen seeds' hidden tests, judge and tokens per merged ticket, then this project's weighted tokens per merged
+ticket, the experiments run, kept and rejected, and the bench budget used, each a before → after
+(`windvane stats --bench --trend` prints the week so far).
+
+**The mix.** A loop that keeps only what wins drifts toward small, safe tweaks of the same few things, so every
+experiment ticket says what kind of idea it is (`Idea:` in its header): `fix` (a cause the numbers or a bench
+failure show), `bold` (a structural change: a session added, merged or dropped, the steps reordered, what a session
+is shown, another way to check work), `ablation` (a rule, session, check or wait taken out, to see whether projects
+miss it), `revisit` (a rejected idea whose context changed) or `scout` (an idea from outside). Each plan's
+experiments follow `[experiments] mix`: the planner is told how many of each kind to write (a kind a small round
+left out gets the next round's slot), and the driver drops the experiments of a kind past the larger of its share of those
+the plan wrote, rounded up, and the count the mix gives it for that many after recent rounds (a plan written to the
+counts it was told keeps them all), so one kind can't crowd out the rest. The shares move toward the kinds the bench keeps (each kind's kept rate over its last 10),
+never below `floor`, and `scout` ideas come on top. The planner sees the rejected experiments one line each, grouped by
+the mechanism each changed (`Mechanism:` in the header); a new one changing the same mechanism and files as one of the
+last 20 rejected needs a `Different because:` line, or the driver drops it from the plan with a log line. A rejected
+`bold` experiment gets one revision before it's closed: its worker gets which hidden tests and judge checks moved on
+each seed, and a second rejection closes it. `windvane experiments` shows each kind's share, kept rate and last kept
+experiment. A question a ticket asks follows the usual rules
+(below): quiet times and `answer_wait` build the recommendation, so nothing in the loop waits for the desk but the
+budget's question and held protected changes.
+
 ## Questions and quiet times
 
 Workers make engineering calls themselves and say why in the pull request. **Product calls** (what users see or
@@ -331,6 +386,7 @@ On this machine only, under `~/.local/state/windvane/<name>/`:
 | `runs/` | each session's full stream, which `windvane watch` reads |
 | `ledger.jsonl` | tokens, turns and minutes per session, which `windvane stats` reads |
 | `bg/experiment-<id>.log` | an experiment ticket's bench, as `windvane await experiment-<id>` follows it |
+| `experiments-stopped.json`, `plateau.json`, `trend.json` | why experiment planning is stopped (the overfit alarm, a plateau) and when a plateau's stop ends itself; the verdict count a resume starts the next plateau's count from, and a plateau's exploration round (its experiments); when the next weekly trend push is due |
 | `bench.jsonl` | `windvane bench`'s results, one record per seed per run (the seed runs themselves live under `~/.local/state/windvane/_bench/`) |
 | `critic.jsonl`, `critic/<ID>/` | the critic's verdicts, and each ticket's evidence pack |
 | `quiet.txt` | quiet times |

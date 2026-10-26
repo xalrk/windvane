@@ -57,7 +57,7 @@ class Bench(unittest.TestCase):
         before = self.checkout()
         os.environ.update(FAKE_ENV=str(self.s.tmp / "env.jsonl"), GH_TOKEN="from-the-desk")
         out = self.bench("--hours", "1")
-        self.assertEqual(out.splitlines()[0], "bench: full (no weekly usage reading yet)")
+        self.assertEqual(out.splitlines()[0], "bench: full (no weekly usage reading yet), the holdout")
         recs = [json.loads(x) for x in (self.state / "bench.jsonl").read_text().splitlines()]
         self.assertEqual(len(recs), 1)
         r = recs[0]
@@ -99,15 +99,15 @@ class Bench(unittest.TestCase):
     def test_weekly_usage_picks_the_size(self):
         self.reading(80)
         out = self.bench("--dry-run").splitlines()
-        self.assertEqual(out[0], "bench: small (weekly usage 80% > 75%)")
+        self.assertEqual(out[0], "bench: small (weekly usage 80% > 75%), the holdout")
         self.assertIn("  tiny: T-001", out)
         self.assertIn("earlier small runs: none yet, so no cost to go by", out)
         self.reading(50)
-        self.assertEqual(self.bench("--dry-run").splitlines()[0], "bench: full (weekly usage 50% ≤ 75%)")
-        self.assertEqual(self.bench("--dry-run", "--small").splitlines()[0], "bench: small (--small)")
+        self.assertEqual(self.bench("--dry-run").splitlines()[0], "bench: full (weekly usage 50% ≤ 75%), the holdout")
+        self.assertEqual(self.bench("--dry-run", "--small").splitlines()[0], "bench: small (--small), the holdout")
         (self.s.tmp / "config/windvane").mkdir(parents=True)
         (self.s.tmp / "config/windvane/machine.toml").write_text("bench_week_small = 40\n")
-        self.assertEqual(self.bench("--dry-run").splitlines()[0], "bench: small (weekly usage 50% > 40%)")
+        self.assertEqual(self.bench("--dry-run").splitlines()[0], "bench: small (weekly usage 50% > 40%), the holdout")
         self.assertFalse(list((self.s.tmp / "state/windvane/_bench").glob("*/*")))  # a dry run leaves nothing behind
         self.assertFalse(self.tools.exists())
 
