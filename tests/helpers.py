@@ -45,9 +45,8 @@ if gone and "--append-system-prompt" in args:  # a session (the usage probe has 
     print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "num_turns": 0,
                       "result": "Failed to authenticate: OAuth session expired and could not be refreshed"}))
     sys.exit(1)
-if args in (["--version"], ["--help"]):  # FAKE_VERSION, FAKE_HELP: what the installed CLI says of itself
-    print(os.environ.get("FAKE_" + args[0][2:].upper(), {"--version": "2.0.0 (Claude Code)",
-                                                         "--help": "Usage: claude [options]"}[args[0]]))
+if args in (["--version"], ["--help"]) and os.environ.get("FAKE_" + args[0][2:].upper()):
+    print(os.environ["FAKE_" + args[0][2:].upper()])  # FAKE_VERSION, FAKE_HELP: what the CLI says of itself
     sys.exit(0)
 prompt = args[args.index("-p") + 1]
 system = args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else ""

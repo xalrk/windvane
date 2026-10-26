@@ -156,6 +156,7 @@ class Scout(unittest.TestCase):
         self.assertEqual(b.spent, row[0]["spent"])
         self.assertIn("(0 runs, 1 scout)", b.lines()[0])
         out = io.StringIO()
+        self.addCleanup(os.chdir, os.getcwd())  # `-C` moves into the sandbox, which goes at the end
         with redirect_stdout(out):
             cli.main(["-C", str(self.s.root), "stats", "--periodic"])
         self.assertIn("scout: no scores\n  cost: 1 session,", out.getvalue())
