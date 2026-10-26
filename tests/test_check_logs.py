@@ -64,7 +64,8 @@ class SilentHang(Check):
         os.kill(child, signal.SIGKILL)
         os.waitpid(child, 0)
         real = time.time() - self.starts()[0]["start"]
-        self.assertEqual((self.logs / self.starts()[0]["log"]).stat().st_size, 0)  # it printed nothing
+        said = (self.logs / self.starts()[0]["log"]).read_text()
+        self.assertRegex(said, r"^heavy: load \S+ at start\n$")  # it printed nothing: only the load at its start
         ran, _, live, _, _ = stats.check_runs(self.p, read_jsonl(self.ledger))
         self.assertEqual((len(ran), ran[0]["finished"], live), (1, False, 0))
         self.assertGreater(real, hang)

@@ -168,7 +168,19 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=Fal
             passes.mkdir(parents=True, exist_ok=True)
             (passes / key).write_text(f"{now():%Y-%m-%d %H:%M} ({gout(cwd, 'rev-parse', '--short', 'HEAD')})")
         return True, f"CHECK PASSED in {mins:.1f} min" + ("" if key else unrecorded(cwd)), log
-    return False, f"CHECK FAILED ({'quick pass, ' if quick_failed else ''}exit {code}) in {mins:.1f} min; log {log}", log
+    return False, (f"CHECK FAILED ({'quick pass, ' if quick_failed else ''}exit {code}) in {mins:.1f} min"
+                   f"{busy_note(log)}; log {log}"), log
+
+
+def busy_note(log):
+    """What a failed check's summary says when the machine was busier than a measurement may start at (`heavy`'s
+    `measure_load`) at some point of its run: timing tests fail on a contended CPU, and the summary is what the
+    worker, the fix session and the driver read. "" under the limit, or with no load said."""
+    top, limit = heavy.peak(log), heavy.measure_limit()
+    if top is None or top <= limit:
+        return ""
+    return (f", load peaked {heavy.loadf(top)} (quiet is ≤ {limit:.10g}): timing failures may be load; rerun them "
+            "on the upstream at the same load to tell")
 
 
 def unrecorded(cwd):
@@ -207,7 +219,7 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
     env = {**util.without_tmux(os.environ), **({"TMPDIR": str(scratch.session_dir(p, t))} if t else {})}
     changed = log.with_suffix(".changed")
     try:
-        with log.open("w") as f:
+        with log.open("w+") as f:  # readable too: `heavy.fresh_line` reads its last byte
             fcntl.flock(f, fcntl.LOCK_EX)  # blocking: `running` may hold a momentary shared probe
             env.update({CHANGED: str(write_changed(p, cwd, changed)), CHECK_BY: by})  # locked: no prune takes it
             ledger(p, ticket, {"start": round(start, 3), "log": log.name}, event="check-start")
@@ -224,18 +236,20 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
                     code = subprocess.run([sys.executable, "-c", "import json, sys; from windvane.heavy import run; "
                                            "sys.exit(run(sys.argv[1], cwd=sys.argv[2], "
                                            "mem=float(sys.argv[3]) if sys.argv[3] else None, "
-                                           "reuse=json.loads(sys.argv[4])))",
+                                           "reuse=json.loads(sys.argv[4]), measure=sys.argv[5] == '1'))",
                                            cmd, str(cwd), "" if mem is None else str(mem),
-                                           json.dumps(heavy.reuse_of(p))], cwd=cwd,
+                                           json.dumps(heavy.reuse_of(p)),
+                                           "1" if p.cfg.get("check_measure") else "0"], cwd=cwd,
                                           stdout=f, stderr=subprocess.STDOUT,
                                           env={**env, "PYTHONPATH": str(Path(__file__).parents[1]),
                                                heavy.STOP_ENV: str(p.state / "STOP"),  # a stop ends the wait
                                                **({heavy.STOP_AT: str(stop_at.timestamp()),
                                                    heavy.DEADLINE_ENV: str(p.state / "DEADLINE")} if stop_at else {})}
                                           ).returncode
-                else:
-                    code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
-                                          env=env).returncode
+                else:  # its load lines as a heavy job's, so a timing failure on a busy machine shows as one
+                    with heavy.watch_load(lambda m: (f.write(m + "\n"), f.flush()), f.fileno()):
+                        code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
+                                              env=env).returncode
             finally:
                 beat.set()
         if p.cfg["heavy_check"] and code == heavy.TIMED_OUT and not quick_failed:

@@ -156,7 +156,8 @@ class SessionHeavyCheck(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("boom", out)
         self.assertEqual(out.count("log "), 1, out)  # the summary names the log; the job's own log line isn't shown
-        self.assertRegex(out.splitlines()[-1], r"^CHECK FAILED \(exit 3\) in [\d.]+ min; log ")
+        self.assertRegex(out.splitlines()[-1],  # a busy machine adds its load
+                         r"^CHECK FAILED \(exit 3\) in [\d.]+ min(, load peaked .+ to tell)?; log ")
         self.assertEqual([r["passed"] for r in self.checks()], [False])
 
     def test_a_workers_own_check_job_runs_the_check_in_it(self):

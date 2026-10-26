@@ -77,10 +77,11 @@ class SameSecond(Base):
         self.assertFalse(passed)
         self.assertEqual(seen[:2], [True, False])  # the first still holds its lock; the killed one is cut off
         self.assertRegex(seen[2][0], r"^checks: 1 run, .*, 1 cut off, 1 still running$")
-        self.assertEqual(log.read_text(), "first\nfirst failed\n")
+        own = [ln for ln in log.read_text().splitlines() if not ln.startswith("heavy: load ")]
+        self.assertEqual(own, ["first", "first failed"])
         second = self.p.state / "checks" / self.starts()[1]["log"]
         self.assertNotEqual(second, log)
-        self.assertEqual(second.read_text(), "second\n")
+        self.assertRegex(second.read_text(), r"^heavy: load \S+ at start\nsecond\n$")
 
 
     def test_a_momentary_shared_probe_only_delays_the_checks_lock(self):

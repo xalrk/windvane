@@ -7,6 +7,10 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `check_measure = true` (with `heavy_check`) runs a check that holds timing tests as a `--measure` heavy job, so it
+  waits for a quiet CPU. Every check's log now says the load at its start, end and peak, and a failed check whose
+  load peaked over `measure_load` says so in its summary: `CHECK FAILED (exit 1) in 12.0 min, load peaked 34.12
+  (quiet is ≤ 4): timing failures may be load; …`. The worker prompt names `--measure` for timing runs.
 - A run on windvane itself undoes a merged change that breaks its own driver. After a self-update the new code is on
   trial until a ticket merges on it, or for an hour; two crashes, or every ticket failing at the same step with the
   same error (a driver error, or a check's same error lines), revert the merges that changed the driver's code on
