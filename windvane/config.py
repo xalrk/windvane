@@ -167,7 +167,8 @@ def permissions(table, entries):
 
 
 LANDS = ("near", "next", "end", "hold", "ask")  # where a [[periodic]] chain's new tickets go in the queue
-BUILTINS = ("project-critic", "bench", "seed", "scout")  # [[periodic]] sessions windvane brings, so a project needs no prompt of its own
+# [[periodic]] sessions windvane brings, so a project needs no prompt of its own
+BUILTINS = ("project-critic", "bench", "seed", "scout")
 BENCH_MINUTES = 300  # a bench entry's default `minutes`: its whole time, both sides of a compare and their judges
 
 

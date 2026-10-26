@@ -553,7 +553,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         session["id"] = final.get("session_id") or sid
     append_jsonl(p.state / "ledger.jsonl", {
         "role": role, "label": label, "ticket": ticket, "model": model, "effort": effort,
-        **({"model_id": model_id} if model_id else {}), "minutes": round((time.time() - started) / 60, 1), **spent(final, seen),
+        **({"model_id": model_id} if model_id else {}), "minutes": round((time.time() - started) / 60, 1),
+        **spent(final, seen),
         "base": first_turn(seen), "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error,
         "result": result_word(result), "reason": result_reason(result), "exit": code, "stream": raw.name})
     actions.refresh(p)  # the next worker start reads a fresh total from the cache, never waits on a count

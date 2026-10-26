@@ -7,8 +7,8 @@ gets what changed in the installed Claude Code (`claude --help` and `--version` 
 in the state dir's `scout.json`) and the model ids new to the ledger; it alone has the web tools, and it has no shell.
 
 Web text is untrusted: the scout's new tickets are all that may land (`vet` drops its notes on other tickets too), at
-most MOST (the ids it's given), each an `Idea: scout` naming its `Source:`. One with a URL anywhere but that line, or naming a package to
-install, is dropped with a log line; the rest still pass the experiment gate like any plan's.
+most MOST (the ids it's given), each an `Idea: scout` naming its `Source:`. One with a URL anywhere but that line, or
+naming a package to install, is dropped with a log line; the rest still pass the experiment gate like any plan's.
 
 A model id the ledger hasn't shown before also queues one ablation round (`models_watch`): the next plan that writes
 experiments writes only `ablation` ones, since rules written for an older model are the first thing to test.
@@ -65,7 +65,8 @@ def cli_part(st, version, help_text):
     diff = list(difflib.unified_diff(st["help"].splitlines(), help_text.splitlines(), "last scout", "now",
                                      lineterm="", n=1))[2:]
     cut = f"\n({len(diff) - DIFF_LINES} more lines)" if len(diff) > DIFF_LINES else ""
-    return (f"## Claude Code since the last scout ({st.get('version') or '?'} → {version})\n```diff\n"
+    was = st.get("version") or "?"
+    return (f"## Claude Code since the last scout ({version if was == version else f'{was} → {version}'})\n```diff\n"
             + ("\n".join(diff[:DIFF_LINES]) or "(only the version changed)") + f"\n```{cut}")
 
 

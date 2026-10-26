@@ -172,8 +172,10 @@ def mix_part(p, cd, n, q):
         return ""
     got = plan_counts(p, cd, n, q)
     lead = ("## This round explores (a plateau: the last experiments were all rejected)\nOnly `bold`, `ablation` "
-            "and `scout` experiments this round" if exploring(p) else f"## {round_lead(p).capitalize()}: rules written for "
-            "an older model are the first to test\nOnly `ablation` experiments this round" if round_lead(p) else "## This round's experiment mix\nWrite this round's experiments")
+            "and `scout` experiments this round" if exploring(p)
+            else f"## {round_lead(p).capitalize()}: rules written for an older model are the first to test\nOnly "
+            "`ablation` experiments this round" if round_lead(p)
+            else "## This round's experiment mix\nWrite this round's experiments")
     return (f"{lead} in this mix: " + ", ".join(f"{k} {c}" for k, c in got.items() if c) + "; `scout` ideas from "
             "outside come on top. Writing fewer, keep to the mix: a kind's experiments past its part of the ones you "
             "write are dropped from the plan.")

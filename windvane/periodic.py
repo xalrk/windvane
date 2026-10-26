@@ -310,7 +310,7 @@ class Periodic:
             rejected_part(cd),  # so an idea the bench turned down isn't ticketed again unchanged
             stopped_part(p),
             f"## Ids for new tickets, in order (at most {len(ids)})\n{', '.join(ids)}",
-            f"Time limit: {hhmm(limit)}; check with `date`.",
+            f"Time limit: {hhmm(limit)}" + ("." if scouting else "; check with `date`."),  # the scout has no shell
             reqs and requests.prompt_part(reqs),
         ]))
         said = f", {len(notes)} critic note{'s' * (len(notes) != 1)}" if triage else ""

@@ -613,7 +613,8 @@ class Pilot(Desk, Periodic, Experiments):
         self.tl.started = time.time()  # a login wait reruns at once a session started before the login came back
         text, killed, error = run_claude(self.p, role, label, prompt, system, cwd, allow, deny, self.usage,
                                          self.stopper(limit), ticket,
-                                         (min(limit, self.end()), self.a.cap, self.a.week_cap), env, resume, session, tools)
+                                         (min(limit, self.end()), self.a.cap, self.a.week_cap), env, resume, session,
+                                         tools)
         if killed:
             self.log(f"  stopped {label}: {killed} ({self.usage.text()})")
         elif not error:

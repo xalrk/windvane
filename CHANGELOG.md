@@ -13,6 +13,13 @@ release on the same day adds a number (`2026.10.9.1`).
   the machine hurt (`stats --projects --json`, numbers only, each project by letter) and the newest bench runs, and
   ranks its ideas by what costs projects most. Once a week, at the usage window's reset, one push gives the week's
   trend.
+- A scout for ideas from outside (`builtin = "scout"` in a [[periodic]] entry): every `scout_every` (15) tickets
+  finished on `main` and once in each plateau's exploration round, a session is shown what changed in `claude --help`
+  and `--version` since the last scout and the model ids new to the ledger, reads Claude Code's changelog and docs and
+  write-ups on other agent loops, and writes at most 3 `Idea: scout` experiment tickets, each naming its source. It
+  alone gets the web tools, and no shell; a ticket of its naming a URL to fetch or a package to install is dropped.
+  A model new to the ledger also makes the next plan's experiments one `ablation` round. Its spend counts in the
+  experiment budget, and `windvane stats --periodic` shows each entry's sessions and cost.
 - A plateau stop for experiments, in every run: when the last `plateau` (8) experiments were all rejected, the next
   plan that writes experiments is one exploration round of only `bold`, `ablation` and `scout` ideas; if that round is all rejected too,
   experiment planning stops with one push and the run goes on with other tickets, until an experiment is kept, the
