@@ -45,7 +45,7 @@ from .jobs import check, tail, waited
 from .questions import (answered, desk_answers, drop_answers, give_answer, keys, mode, note, parts, phone_answer,
                         provisional, qkey, quiet_note, quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on,
                         with_ids)
-from .queue import Queue, branch_depends
+from .queue import OPEN_Q, Queue, branch_depends
 from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
 from .util import (PARTIAL_LOG, append_jsonl, git, gout, hhmm, last_match, load_json, log, log_paths, now, push,
                    read_jsonl, save_json, shell_path)
@@ -403,6 +403,7 @@ class Pilot(Desk, Periodic, Experiments):
         # saved, so a killed driver's next run still sees a second refusal as the second
         self.refused = s.get("refused", {})
         self.questions = s.get("questions", {})  # question id (questions.keys) -> a question for the user
+        self.answer_waits = s.get("answer_waits", {})  # ticket -> the tickets whose open question its run waits on
         # question id -> [what was built for it ("A (5 tries)"), when]: a late answer's push names it, after a restart
         # too, for as long as a late answer is still told (phone.LATE_FOR)
         self.settled_as = s.get("settled_as", {})
@@ -526,6 +527,7 @@ class Pilot(Desk, Periodic, Experiments):
                 self.settled_as = self.settled_kept()
                 self.dropped = unshown(self.p, self.dropped)
                 save_json(self.state_file, {"feedback": dict(self.feedback), "questions": dict(self.questions),
+                                        "answer_waits": dict(self.answer_waits),
                                         "approved": dict(self.approved), "desk": dict(self.desk),
                                         "secrets": dict(self.secrets), "landing": dict(self.landing),
                                         "benching": dict(self.benching),
@@ -1930,8 +1932,13 @@ class Pilot(Desk, Periodic, Experiments):
         self.fetch()
         text = gout(p.main_root(), "show", f"{p.remote}/{branch}:{p.questions_rel}") if branch else ""
         found = [x for x in map(parts, sections(text, tid)) if len(x[0]) >= 2]
-        self.skip.add(tid)
         self.fail_streak = 0
+        on = [] if found else self.open_elsewhere(tid, branch, gist)
+        if on:  # asked once, under its own ticket: this one waits on that answer
+            self.answer_waits[tid] = on
+            self.log(f"{tid}: waits on {' and '.join(d + OPEN_Q for d in on)}")
+            return self.save()
+        self.skip.add(tid)
         if not found:
             return self.fail(tid, f"BLOCKED, but no question with options under ## Open on {branch}: {gist}")
         for key, (opts, rec, must_wait, q) in zip(keys(tid, len(found)), found):
@@ -1939,6 +1946,31 @@ class Pilot(Desk, Periodic, Experiments):
                                    "branch": branch, "asked": None}
             self.log(f"{key}: question for the user: {q or gist}")
         self.save()  # the loop's next pass sends them (state.json keeps them unsent across a restart)
+
+    def open_elsewhere(self, tid, branch, gist):
+        """The other tickets with a question still waiting for the user that a BLOCKED run without one of its own
+        points at: the id its gist starts with (`T-004: <its question>`), or one its branch's `Depends on:` names
+        (`T-004`, `T-004's answer`)."""
+        p, q = self.p, Queue(self.p)  # fetched by `ask`
+        m = re.match(rf"\W*({p.id_re})", gist or "", re.I)
+        named = [p.norm(m.group(1))] if m else []
+        if branch and tid in q.files:
+            named += branch_depends(p.main_root(), f"{p.remote}/{branch}", q.files[tid], p)
+        blocked = tickets(waiting_on(self.questions))
+        return [d for d in dict.fromkeys(named) if d and d != tid and q.open_answer(d, blocked)]
+
+    def wait_answers(self, q):
+        """Hand the queue the tickets waiting on another's open question, once the BLOCKED run said so (its branch's
+        header may not), and forget each wait once it's over: that ticket merged, or no ticket it names is still
+        unmerged or asking."""
+        blocked = tickets(self.questions)
+        for t, ids in list(self.answer_waits.items()):
+            if q.is_done(t) or t not in q.files:
+                del self.answer_waits[t]
+            elif not any(not q.is_done(d) or q.open_answer(d, blocked) for d in ids):
+                del self.answer_waits[t]
+                self.log(f"{t}: {' and '.join(ids)} answered; back in the queue")
+        q.wait_on_answers(self.answer_waits)
 
     def send_unsent(self):
         """Send every stored question not yet sent: held through a quiet time, or left by an earlier run."""
@@ -2549,6 +2581,7 @@ class Pilot(Desk, Periodic, Experiments):
             self.take_retries()
             self.fetch()
             self.queue = Queue(p)
+            self.wait_answers(self.queue)
             busy = bool(self.running)  # a slot that ends during the pick still had its ticket held back: pick again
             tid, kind, branches, slot = self.pick(free)
             late = tid is not None and tid not in self.checking and self.no_worker_time()  # a merge needs no worker
@@ -2593,6 +2626,15 @@ class Pilot(Desk, Periodic, Experiments):
                                  merge=True, merged=self.merged, endless=endless)
                     if n:
                         continue
+                q, blocked = self.queue, tickets(self.questions)
+                asking = [f"{x} (for {t})" for t in q.order if t not in self.skip and q.status(t, blocked) == "waiting"
+                          for x in q.waits_on(t, blocked) if x.endswith(OPEN_Q)]
+                if asking:  # after a replan's chance: `windvane answer` on a merged ticket lands on main
+                    if not self.idle:
+                        self.log(f"waiting for answers on {', '.join(asking)}")
+                        self.idle = True
+                    self.nap(now() + timedelta(minutes=1), answers=True)
+                    continue
                 if self.checking:  # a merge held by its checks: tried again when its wait is up
                     self.idle_note(self.waits)
                     self.pause()

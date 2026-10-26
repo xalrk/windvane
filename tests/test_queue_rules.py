@@ -141,6 +141,43 @@ class QueueRules(unittest.TestCase):
                        .replace("\n## Answered\n", "\n"))
         self.assertEqual(q.status("T-002"), "todo")  # moved out of ## Open: answered
 
+    def test_waiting_on_an_answer_holds_while_the_merged_ticket_s_question_is_open(self):
+        self.s.ticket("T-003", "T-002's answer")
+        self.s.ticket("T-004", "the answer to `T-002`")
+        q = self.queue("- done: T-002 (merged)\n", OPEN_QUESTION)
+        self.assertEqual(q.answers, {"T-003": ["T-002"], "T-004": ["T-002"]})
+        self.assertEqual(q.status("T-002"), "done")
+        self.assertEqual([q.status(t) for t in ("T-003", "T-004")], ["waiting", "waiting"])
+        self.assertEqual(q.waits_on("T-003"), ["T-002's open question"])
+        self.assertEqual(q.outside["T-003"], [])  # an id: not an outside item
+        self.assertEqual(q.pick(skip={"T-001"}), ("T-005", "todo", []))
+        q = self.queue("- done: T-002 (merged)\n", OPEN_QUESTION.replace("### T-002:", "### T-002.q2:"))
+        self.assertEqual(q.status("T-003"), "waiting")  # one of several: still keyed to T-002
+        q = self.queue("- done: T-002 (merged)\n", "# Q\n\n## Open\n\n## Answered\n" + OPEN_QUESTION.split("## Open\n")[1])
+        self.assertEqual([q.status(t) for t in ("T-003", "T-004")], ["todo", "todo"])  # answered: runnable
+
+    def test_waiting_on_an_answer_also_waits_for_the_ticket_itself(self):
+        self.s.ticket("T-003", "T-002's answer")
+        q = self.queue()
+        self.assertEqual(q.waits_on("T-003"), ["T-002"])  # not merged yet, no question: a plain dependency
+        self.assertEqual(q.waits_on("T-003", blocked={"T-002"}), ["T-002"])
+        self.assertEqual(q.waiting_for("T-002"), ["T-003"])
+        q = self.queue("- done: T-002 (merged)\n")
+        self.assertEqual(q.status("T-003"), "todo")
+        self.assertEqual(q.waits_on("T-003", blocked={"T-002"}), ["T-002's open question"])  # held by the run
+
+    def test_a_branch_may_add_the_answer_it_waits_on(self):
+        self.s.ticket("T-003")
+        self.queue("- done: T-002 (merged)\n", OPEN_QUESTION)
+        self.s.git("switch", "-q", "-c", "t-003-x")
+        self.s.ticket("T-003", "T-002's answer")
+        self.s.publish("waits")
+        self.s.git("push", "-q", "origin", "t-003-x")
+        self.s.git("switch", "-q", "main")
+        q = Queue(Project(self.s.root))
+        self.assertEqual(q.status("T-003"), "waiting")
+        self.assertIn("(waiting on: T-002's open question)", q.listing())
+
 
 class LastWaits(unittest.TestCase):
     """A last ticket starts only when nothing else could: a free slot beside a ticket that only waits for a running

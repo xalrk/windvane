@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from windvane import cli, driver, phone, questions  # noqa: E402
 from windvane.config import Project  # noqa: E402
 from windvane.queue import Queue  # noqa: E402
-from windvane.util import now  # noqa: E402
+from windvane.util import now, read_jsonl  # noqa: E402
 from windvane.worktree import ensure_worktree  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_pipeline import args  # noqa: E402
@@ -211,6 +211,111 @@ class ManyQuestions(unittest.TestCase):
         self.assertEqual(len(prompts), 2)
         self.assertIn("didn't answer your question \"Red or blue?\"", prompts[1])
         self.assertIn("\"Big or small?\": option B (small)", prompts[1])
+
+
+KEEP = "### T-001: Keep the new layout?\nAsked after it merged.\n- **A**: keep\n- **B**: revert\nRecommendation: A, because.\n"
+
+
+class WaitsOnAnother(unittest.TestCase):
+    """T-302: a ticket that needs a merged ticket's open question answered waits on it, and a BLOCKED run pointing at
+    that question waits too, instead of failing for want of a question of its own."""
+    def setUp(self):
+        self.s = Sandbox()
+        self.addCleanup(self.s.close)
+        self.s.ticket("T-001")
+        self.s.write(".windvane/QUEUE.md", "# Queue\n- done: T-001 (merged)\n")
+        self.s.write(".windvane/QUESTIONS.md", f"# Q\n\n## Open\n{KEEP}\n## Provisional\n\n## Answered\n")
+        self.p = Project(self.s.root)
+        self.pushes = []
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(driver, "push", lambda t, m="", *a, **k: self.pushes.append((t, m))))
+        self.addCleanup(os.environ.pop, "FAKE_WAITS_ON", None)
+
+    def answer_on_main(self):
+        """`windvane answer T-001 A` as preflight files it: the block moves to ## Answered on main."""
+        self.s.write(".windvane/QUESTIONS.md", f"# Q\n\n## Open\n\n## Provisional\n\n## Answered\n{KEEP}Answer: A\n")
+        self.s.publish("Answers at the desk: T-001")
+
+    def run_answering(self):
+        """A run whose first idle nap answers T-001's question: (the pilot, workers started before the answer)."""
+        pl = driver.Pilot(self.p, args(answer_wait=60))
+        before = []
+
+        def nap(until, answers=False):
+            if not before:
+                before.append(len(self.workers()))
+                self.answer_on_main()
+        pl.nap = nap
+        pl.run(now() + timedelta(hours=1))
+        return pl, before
+
+    def workers(self):
+        log = self.s.tmp / "calls.jsonl"
+        calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        return [c["prompt"] for c in calls if "worker" in c["system"]]
+
+    def ledger(self):
+        return [r for r in read_jsonl(self.p.state / "ledger.jsonl") if r.get("event") == "outcome"]
+
+    def test_a_ticket_on_a_merged_ticket_s_answer_waits_then_starts_in_the_same_run(self):
+        self.s.ticket("T-002", "T-001's answer")
+        self.s.publish()
+        self.assertRegex(self.cli_queue(), r"T-002 +waiting .*\(waiting on: T-001's open question\)")
+        pl, before = self.run_answering()
+        self.assertEqual(before, [0])  # never started while the question was open
+        self.assertEqual(pl.merged, ["T-002"])
+        self.assertIn("waiting for answers on T-001's open question (for T-002)",
+                      (self.p.state / "autopilot.log").read_text())
+
+    def test_a_blocked_run_on_another_ticket_s_question_waits_and_is_released_by_its_answer(self):
+        self.s.ticket("T-002")
+        self.s.publish()
+        os.environ["FAKE_WAITS_ON"] = "T-001"
+        pl, before = self.run_answering()
+        log = (self.p.state / "autopilot.log").read_text()
+        self.assertIn("T-002: waits on T-001's open question", log)
+        self.assertIn("T-002: T-001 answered; back in the queue", log)
+        self.assertNotIn("FAILED", log)
+        self.assertEqual(before, [1])
+        self.assertEqual((pl.merged, pl.failed, pl.fail_streak), (["T-002"], [], 0))
+        self.assertEqual(len(self.workers()), 2)
+        self.assertNotIn("failed", [r["outcome"] for r in self.ledger()])
+        self.assertFalse([t for t, _ in self.pushes if t.startswith("Failed")], self.pushes)
+        self.assertEqual(pl.answer_waits, {})
+
+    def test_the_branch_s_depends_on_line_names_the_question_s_ticket(self):
+        self.s.ticket("T-002")
+        self.s.publish()
+        self.s.git("switch", "-q", "-c", "t-002-x")
+        self.s.ticket("T-002", "T-001's answer")
+        self.s.git("commit", "-qam", "waits")
+        self.s.git("push", "-q", "origin", "t-002-x")
+        self.s.git("switch", "-q", "main")
+        ensure_worktree(self.p, self.p.work_dir, setup=False)
+        pl = driver.Pilot(self.p, args())
+        pl.queue = Queue(self.p)
+        pl.ask("T-002", "t-002-x", "Waiting on the layout verdict.")
+        self.assertEqual((pl.answer_waits, pl.failed), ({"T-002": ["T-001"]}, []))
+        self.assertNotIn("T-002", pl.skip)
+
+    def test_blocked_with_no_question_anywhere_still_fails(self):
+        self.s.write(".windvane/QUESTIONS.md", "# Q\n\n## Open\n\n## Provisional\n\n## Answered\n")
+        self.s.ticket("T-002")
+        self.s.publish()
+        ensure_worktree(self.p, self.p.work_dir, setup=False)
+        pl = driver.Pilot(self.p, args())
+        pl.queue = Queue(self.p)
+        pl.ask("T-002", "", "T-001: Keep the new layout?")
+        self.assertEqual((pl.answer_waits, pl.failed), ({}, ["T-002"]))
+        self.assertIn("T-002: FAILED: BLOCKED, but no question", (self.p.state / "autopilot.log").read_text())
+        self.assertEqual([r["outcome"] for r in self.ledger()], ["failed"])
+
+    def cli_queue(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cli.main(["-C", str(self.s.root), "queue"])
+        return out.getvalue()
 
 
 if __name__ == "__main__":

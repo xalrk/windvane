@@ -22,6 +22,10 @@ Retry with exponential backoff, at most 5 tries. Don't change the upload API.
 
 - **Depends on:** tickets that must be merged first. A ticket waits until all of them are. Anything else named here
   (`the user`, `M9`, free text) makes it wait too, until a `- done: M9 (why)` line in `QUEUE.md` names it.
+  `T-004's answer` (or `the answer to T-004`) waits for T-004 and then for as long as a question keyed to it (`T-004`,
+  `T-004.q1`) is under `## Open` on main: a verdict asked after T-004 merged. A worker that finds its ticket needs such
+  an answer adds the item on its branch and ends BLOCKED; so does one whose BLOCKED line starts with that ticket's id.
+  Either way the run doesn't count it as failed: it waits for the answer and takes the ticket up as soon as it comes.
   `windvane queue` shows what each waiting ticket waits on, and a hint for each wait that only you can end: the
   `- done:` line to add for an item that isn't a ticket, the `- parked:` line to remove for a parked dependency, or
   that the dependency was set aside this run. To release one ticket waiting on `the user`, edit its `Depends on:`

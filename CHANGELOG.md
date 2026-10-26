@@ -153,6 +153,11 @@ release on the same day adds a number (`2026.10.9.1`).
   filled in, and `windvane phone rotate` adds the lines that take the old topics back. Those old topics stay in
   `phone.toml`, and every setup prints their lines again until `windvane phone setup --revoked`. Setup also checks
   that the token's user may read the reply topic, and a refused test names the one `ntfy access` line still to run.
+- A ticket can wait for another ticket's open question: `Depends on: T-004's answer` (or `the answer to T-004`),
+  on main or the ticket's branch, holds it while a question keyed to T-004 is under `## Open`, even after T-004
+  merged. `windvane queue` shows `waiting on: T-004's open question` with the `windvane answer` that releases it. A
+  worker that ends BLOCKED on a question already open under another ticket now waits for that answer instead of
+  failing, and the run takes it up again once the answer comes.
 
 ### Changed
 - `windvane await` on a heavy job that waits for memory or a quiet CPU names who holds it now, as

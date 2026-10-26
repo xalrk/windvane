@@ -16,7 +16,7 @@ by a fresh session that has only the ticket and the repo. You write work for cap
 4. Write each new ticket to `.windvane/tickets/<ID>.md` with the ids your prompt gives, in this shape:
    ```
    # <ID>: <title, imperative>
-   Depends on: <ids, or nothing>.
+   Depends on: <ids (`<ID>'s answer` to wait for its open question too), or nothing>.
    Touches: <the files or directories it will change, comma-separated>.
    Related: <ids of open tickets changing the same feature through other files, or drop the line>.
 

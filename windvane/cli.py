@@ -296,7 +296,9 @@ def idle_retry(p, tid):
     """What the next run does with `tid`, for a retry with none going. It reads main as the run will, fetched first
     (a failed fetch leaves the last one), and starts only a ticket there that isn't merged, parked or waiting."""
     net.call(["git", "fetch", "-q", p.remote], p.main_root(), FETCH_S, {**os.environ, "GIT_TERMINAL_PROMPT": "0"})
-    q, qs = Queue(p), load_json(p.state / "state.json", {}).get("questions", {})
+    st = load_json(p.state / "state.json", {})
+    q, qs = Queue(p), st.get("questions", {})
+    q.wait_on_answers(st.get("answer_waits", {}))
     if not q.known(tid):
         local = (p.root / p.tickets_rel / f"{tid}.md").exists()
         sys.exit(f"{tid} isn't a ticket on {p.upstream}" + ("; commit and push its file" if local else ""))
@@ -307,7 +309,7 @@ def idle_retry(p, tid):
     blocked, run = questions.tickets(qs), {"questions": qs}  # a finished run's failures start afresh in the next
     if why := q.release(tid, blocked, run):
         return f"the next `windvane run` doesn't take {tid} up yet: {why}"
-    if on := q.waits_on(tid):  # one that's parked, asked or not a ticket isn't done by itself: say what lets it go
+    if on := q.waits_on(tid, blocked):  # one that's parked, asked or not a ticket isn't done by itself: say what lets it go
         if held := [h for d in on if (h := q.hint(d, [tid], blocked, q.asks(run), run))]:
             return f"the next `windvane run` doesn't take {tid} up yet: {'; '.join(held)}"
         return f"{tid} waits on {', '.join(on)}: the next `windvane run` takes it up once they're done"
@@ -523,6 +525,7 @@ def cmd_queue(a, p):
     git(p.main_root(), "fetch", "-q", p.remote)
     st = load_json(p.state / "state.json", {})
     q = Queue(p)
+    q.wait_on_answers(st.get("answer_waits", {}))  # a BLOCKED run that pointed at another ticket's question
     for w in q.warnings():
         print(f"warning: {w}")
     run = st if running(p) else {"questions": st.get("questions", {})}  # a finished run's set-asides and failures
