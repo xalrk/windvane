@@ -156,6 +156,16 @@ class Summary(Fixture):
                                   r"timing failures may be load; rerun them on the upstream at the same load to tell; "
                                   rf"log {log}$")
 
+    def test_output_without_a_last_newline_still_gets_its_end_line_and_the_note(self):
+        self.p.cfg["check"] = "printf '3 failed'; exit 1"
+        ok, summary, log = self.check()
+        self.assertIn("load peaked 14.65", summary)
+        self.assertEqual(log.read_text(), "heavy: load 14.65 at start\n3 failed\nheavy: load 14.65 at end, 14.65 peak\n")
+        self.p.cfg.update(heavy_check=True)
+        ok, summary, log = self.check()
+        self.assertIn("load peaked 14.65", summary)
+        self.assertTrue(log.read_text().endswith("\n3 failed\nheavy: load 14.65 at end, 14.65 peak\n"))
+
     def test_a_heavy_checks_failure_over_the_limit_says_it_too(self):
         self.p.cfg.update(heavy_check=True, check="exit 3")
         ok, summary, _ = self.check()

@@ -219,7 +219,7 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
     env = {**util.without_tmux(os.environ), **({"TMPDIR": str(scratch.session_dir(p, t))} if t else {})}
     changed = log.with_suffix(".changed")
     try:
-        with log.open("w") as f:
+        with log.open("w+") as f:  # readable too: `heavy.fresh_line` reads its last byte
             fcntl.flock(f, fcntl.LOCK_EX)  # blocking: `running` may hold a momentary shared probe
             env.update({CHANGED: str(write_changed(p, cwd, changed)), CHECK_BY: by})  # locked: no prune takes it
             ledger(p, ticket, {"start": round(start, 3), "log": log.name}, event="check-start")
@@ -247,7 +247,7 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
                                                    heavy.DEADLINE_ENV: str(p.state / "DEADLINE")} if stop_at else {})}
                                           ).returncode
                 else:  # its load lines as a heavy job's, so a timing failure on a busy machine shows as one
-                    with heavy.watch_load(lambda m: (f.write(m + "\n"), f.flush())):
+                    with heavy.watch_load(lambda m: (f.write(m + "\n"), f.flush()), f.fileno()):
                         code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
                                               env=env).returncode
             finally:

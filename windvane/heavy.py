@@ -1215,7 +1215,11 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None, measure=F
             if (s := round(time.time() - t0)) >= 1:
                 say(WAITED.format(s))
             t1 = time.time()
-            with watch_load(say):
+            try:
+                err = sys.stderr.fileno()
+            except (AttributeError, OSError, ValueError):  # not a file (a test's capture)
+                err = None
+            with watch_load(say, err):
                 code = subprocess.run(cmd, cwd=cwd, env=env, shell=isinstance(cmd, str)).returncode
             record(key, (time.time() - t1) / 60)  # still holding the lock: the next job's estimate counts it
             return code
@@ -1227,11 +1231,23 @@ def run(cmd, wait_s=None, cwd=None, mem=None, reuse=None, expect=None, measure=F
         os.close(lock)  # frees the lock
 
 
+def fresh_line(fd):
+    """End the line on `fd` if it is a file, open for reading too, whose last byte isn't a newline (a terminal, a pipe
+    or a write-only file: left alone)."""
+    try:
+        size = os.fstat(fd).st_size
+        if size and os.pread(fd, 1, size - 1) != b"\n":
+            os.write(fd, b"\n")
+    except OSError:
+        pass
+
+
 @contextmanager
-def watch_load(say):
+def watch_load(say, out=None):
     """Say the load at the start of the job run in its block, then at its end with the peak (sampled every LOAD_EVERY
     seconds by a thread here, not in the command). The start is said before the job runs, so it comes before the
-    job's own output; a block cut off by an exception says no end."""
+    job's own output; a block cut off by an exception says no end. `out`: the fd the job's output goes to, so the end
+    starts a line of its own after output that didn't end one, and `peak` finds it."""
     start = load_avg()
     peak, done = [start], threading.Event()
     say(LOAD_START.format("unknown" if start is None else loadf(start)))
@@ -1249,6 +1265,8 @@ def watch_load(say):
         done.set()
         sampler.join()
     if (end := load_avg()) is not None:
+        if out is not None:
+            fresh_line(out)
         say(LOAD_END.format(loadf(end), loadf(end if peak[0] is None else max(peak[0], end))))
 
 
