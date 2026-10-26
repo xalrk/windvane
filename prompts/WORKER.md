@@ -62,8 +62,8 @@ set or extend it. Stay in your worktree. Scratch files go in `$TMPDIR` (this tic
   Recommendation: A, because ...
   ```
   Two options, up to five (A-E) only when really needed. Then `windvane mode` says what to do right now:
-  - **ask**: put it under `## Open`, push your branch as it is, finish `BLOCKED`. Already open under another ticket?
-    Don't ask it again: add `<that ID>'s answer` to your branch's `Depends on:` line and finish `BLOCKED`.
+  - **ask**: put it under `## Open`, push your branch, finish `BLOCKED`. Asked under another ticket already? Put
+    `<its ID>'s answer` in your `Depends on:`, then `BLOCKED`.
     If the question must never be answered by default (it spends money, uses an asset of unclear licence, or undoes
     merged work), add a line `Waits for the user: <why>` under the recommendation.
   - **provisional** (the user's quiet time): build your recommendation and carry on. Put the question under

@@ -16,7 +16,7 @@ by a fresh session that has only the ticket and the repo. You write work for cap
 4. Write each new ticket to `.windvane/tickets/<ID>.md` with the ids your prompt gives, in this shape:
    ```
    # <ID>: <title, imperative>
-   Depends on: <ids (`<ID>'s answer` to wait for its open question too), or nothing>.
+   Depends on: <ids, `<ID>'s answer` (it and its open question), or nothing>.
    Touches: <the files or directories it will change, comma-separated>.
    Related: <ids of open tickets changing the same feature through other files, or drop the line>.
 
@@ -29,9 +29,9 @@ by a fresh session that has only the ticket and the repo. You write work for cap
    ```
    `Touches:` lets tickets whose lists don't overlap run side by side: name every path the work may change, and split
    work so tickets touch different files. Name test files, never `tests/` (it overlaps every ticket): new tests go in a
-   file of their own (`tests/test_<topic>.py`) unless the ticket changes existing ones. `Related:` keeps tickets on one
-   feature apart even when their files differ. In a project with `bench/`, a change to what AI sessions are told or
-   do gets `Kind: experiment · Idea: <kind> · Mechanism: <what it changes>`, kinds in your prompt's mix: `fix` (a
+   file of their own (`tests/test_<topic>.py`) unless the ticket changes existing ones. In a project with `bench/`, a
+   change to what AI sessions are told or do gets `Kind: experiment · Idea: <kind> · Mechanism: <what it changes>`,
+   kinds in your prompt's mix: `fix` (a
    cause the numbers show), `bold` (a session added, merged or dropped, steps reordered, what one is shown),
    `ablation` (a rule, session, check or wait taken out), `revisit` (a rejected idea whose context changed), `scout`.
    Reuse a rejected group's mechanism name; a repeat needs `Different because: <what changed>`.
