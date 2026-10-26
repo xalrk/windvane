@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 from .phone import cut
-from .questions import blocks, part, ticket_of, waiting_on
+from .questions import blocks, options, part, ticket_of, waiting_on
 from .util import git, gout, log_has, log_paths, shell_path
 
 ANSWERED = "it's answered"  # (a quote can't go in an f-string's braces before Python 3.12)
@@ -211,11 +211,12 @@ class Queue:
         self.parked = set(self.parked_lines)
         self.done_words = {" ".join(m.split()).strip(" .`*").lower()
                            for m in re.findall(r"^\s*-\s*done:\s*([^(\n]+)", qmd, re.M | re.I)}
-        self.asked, self.asked_ids = {}, {}
-        for t, question, _ in blocks(part(show(p.questions_rel), "Open")):
+        self.asked, self.asked_ids, self.asked_opts = {}, {}, {}
+        for t, question, body in blocks(part(show(p.questions_rel), "Open")):
             tid = p.norm(re.sub(r"\.q\d+$", "", t, flags=re.I))  # one of several: `T-003.q2`
             if tid in self.files:
                 self.asked.setdefault(tid, question)
+                self.asked_opts.setdefault(tid, options(body))
                 self.asked_ids.setdefault(tid, []).append(t)
         self.done.discard(None)
         self.wip, fresh = {}, set()
@@ -309,6 +310,10 @@ class Queue:
                     if x.endswith(OPEN_Q):
                         out.setdefault(x[:-len(OPEN_Q)], []).append(t)
         return out
+
+    def offer(self, tid):
+        """The options of `tid`'s first open question on main, as `A: keep, B: revert`: the letter needs them."""
+        return ", ".join(f"{k}: {v}" for k, v in sorted(self.asked_opts.get(tid, {}).items()))
 
     def to_run(self, skip=(), blocked=()):
         """The tickets not marked last that could still start (wip or todo, not in `skip`): while one is left, every
