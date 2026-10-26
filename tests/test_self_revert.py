@@ -65,6 +65,17 @@ class Trial(unittest.TestCase):
         selfupdate.put_on_trial(self.p.state, self.good, self.new, 0)
         self.checkout = self.users_checkout()
 
+    def pilot(self):
+        pilot = driver.Pilot(self.p, args(parallel=1))
+        pilot.home, pilot.argv, self.calls = self.home, ["run", "--for", "6h", "--detach"], []
+        pilot.loaded = self.s.git("rev-parse", "HEAD", cwd=self.home)  # as a driver started on the install reads it
+
+        def execv(path, argv):
+            self.calls.append(argv)
+            raise Restarted()
+        pilot.execv = execv
+        return pilot
+
     def users_checkout(self):
         s = self.s
         return (s.git("rev-parse", "--abbrev-ref", "HEAD"), s.git("rev-parse", "HEAD"), s.git("status", "--porcelain"),
@@ -129,6 +140,33 @@ class Crashes(Trial):
         self.assertIn("The run goes on without it.", msg)
         self.assertFalse((self.p.state / selfupdate.TRIAL).exists())
         self.assertTrue((self.p.state / selfupdate.REVERTED).exists())  # until a ticket merges
+
+    def test_a_ticket_this_run_merged_then_crashed_on_is_redone_in_it_once_reverted(self):
+        self.update("broken\n")  # merged by this run, which then restarted on it: T-010 is in what it carries
+        self.addCleanup(os.environ.pop, "WINDVANE_RESTARTED", None)
+        (self.p.state / "restart.json").write_text(json.dumps({"merged": ["T-010"]}))
+        selfupdate.put_on_trial(self.p.state, self.good, self.new, 1)
+        self.supervise()
+        self.assert_reverted("crashed the driver twice on trial (it exited with code 1 before its run began)")
+        os.environ["WINDVANE_RESTARTED"] = "1"  # as `supervise` starts the driver on the good code
+        again = self.pilot()
+        seen = []
+        orig = again.pick
+
+        def pick(*a, **k):
+            seen.append((list(again.merged), list(again.reverted), again.summary()))
+            return orig(*a, **k)
+        again.pick = pick
+        with redirect_stdout(io.StringIO()):
+            again.run(now() + timedelta(hours=2))
+        merged, reverted, summary = seen[0]
+        self.assertEqual((merged, reverted), ([], ["T-010"]))  # not merged any more: back in the queue
+        self.assertIn("Reverted (back in the queue): do T-010 (T-010).", summary)
+        self.assertEqual(sorted(again.merged), ["T-001", "T-002", "T-010", "T-011"])
+        self.assertLess(again.merged.index("T-011"), again.merged.index("T-010"))  # redone after its fix
+        self.assertEqual(again.reverted, [])
+        self.assertNotIn("Reverted", again.summary())
+        self.assertEqual(self.users_checkout(), self.checkout)
 
     def test_a_second_bad_update_in_a_row_stops_the_run(self):
         self.update("broken\n")
@@ -231,17 +269,6 @@ class Crashes(Trial):
 
 class Tickets(Trial):
     """New code that fails every ticket at the check the same way: the driver reverts it itself."""
-
-    def pilot(self):
-        pilot = driver.Pilot(self.p, args(parallel=1))
-        pilot.home, pilot.argv, self.calls = self.home, ["run", "--for", "6h", "--detach"], []
-        pilot.loaded = self.s.git("rev-parse", "HEAD", cwd=self.home)  # as a driver started on the install reads it
-
-        def execv(path, argv):
-            self.calls.append(argv)
-            raise Restarted()
-        pilot.execv = execv
-        return pilot
 
     def broken_check(self):
         """The check fails while the install's driver is broken: the driver's code is what fails it here."""

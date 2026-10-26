@@ -2803,10 +2803,7 @@ class Pilot(Desk, Periodic, Experiments):
         if stop:
             self.halt = stop
             return False
-        back = load_json(self.p.state / selfupdate.REVERTED, {}).get("tickets", [])
-        if back:  # merged earlier in this run, maybe: not any more, so the picker takes them up again after the fix
-            self.merged = [x for x in self.merged if x not in back]
-            self.reverted += [x for x in back if x not in self.reverted]
+        self.take_back()
         failed = [x for x in t["seen"] if x in self.failed]
         if failed:  # theirs was the update's failure: they go again on the good code
             with open(self.p.state / RETRY, "a") as f:
@@ -2816,6 +2813,20 @@ class Pilot(Desk, Periodic, Experiments):
         if self.behind:
             self.restart()
         return False
+
+    def take_back(self, this_run=True):
+        """The tickets the last revert took off main, merged earlier in this run maybe: not any more, so the picker
+        takes them up again after the fix and the summary lists them as reverted. Done once per revert (`taken` in
+        reverted.json), by whichever driver goes on after it: this one after a bad check (`trial_check`), the
+        restarted one after two crashes (`carry_over`); a new run's merges never had them."""
+        f = self.p.state / selfupdate.REVERTED
+        r = load_json(f, {})
+        if not r.get("tickets") or r.get("taken"):
+            return
+        if this_run:
+            self.merged = [x for x in self.merged if x not in r["tickets"]]
+            self.reverted += [x for x in r["tickets"] if x not in self.reverted]
+        save_json(f, {**r, "taken": True})
 
     def hand_over(self):
         """Leaves the run's memory for the driver that replaces this one (`carry_over`)."""
@@ -2837,6 +2848,7 @@ class Pilot(Desk, Periodic, Experiments):
                 if k in CARRIED:
                     setattr(self, k, set(v) if k == "skip" else v)
         f.unlink(missing_ok=True)
+        self.take_back(bool(restarted))
 
     def take_lock(self):
         """One driver per project; `locked` reads this lock to tell the phone a run is on."""
