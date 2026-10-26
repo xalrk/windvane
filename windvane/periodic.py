@@ -682,11 +682,11 @@ class Periodic:
         may write `bench/pool/`), the oldest past `pool_size` dropped. One push either way."""
         from .worktree import clean_detach
         p, cd, name = self.p, self.p.ci_dir, e["name"]
-        if cd == p.work_dir and any(self.owner.values()) or not self.keep_changes(f"the {name} round"):
+        busy = cd == p.work_dir and any(self.owner.values()) or not self.keep_changes(f"the {name} round")
+        if busy:
             self.log(f"{name}: skipped: the checkout is busy")
-            self.seed_seen[name] = (self.seed_seen.get(name, (None,))[0], False)  # due again once main or the ledger moves
-            return
-        if not self.periodic_fits(e):
+        if busy or not self.periodic_fits(e):  # due again once main or the ledger moves, not on the very next pass
+            self.seed_seen[name] = (self.seed_seen.get(name, (None,))[0], False)
             return
         if e.get("asked"):
             self.asked_taken(e)

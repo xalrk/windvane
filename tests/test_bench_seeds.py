@@ -174,6 +174,19 @@ class SeedRound(Base):
         self.assertIn("ledger is in the pool or the holdout already", self.pushes[0][1])
         self.assertEqual(self.main_files("bench/pool"), [])
 
+    def test_a_round_that_doesnt_fit_before_the_deadline_waits_for_main_to_move(self):
+        self.make()
+        pilot = self.pilot()
+        pilot.deadline = now() + timedelta(minutes=10)
+        self.round(pilot, "todo")
+        self.assertIsNone(pilot.periodic_due())  # the pick goes on: no round again on the next pass
+        self.assertEqual(self.log().count("seed: skipped: 30 min don't fit before the deadline"), 1)
+        self.assertEqual((self.main_files("bench/pool"), self.ledger(), self.pushes), ([], [], []))
+        pilot.deadline = now() + timedelta(hours=3)
+        self.s.write("docs/x.md", "a merge\n")
+        self.s.publish("Merge T-009: something")
+        self.assertEqual(pilot.periodic_due()["name"], "seed")  # nothing was tried: due again once main moves
+
     def test_config(self):
         e = entries([{"name": "s", "builtin": "seed"}])["s"]
         self.assertEqual((e["seed_every"], e["pool_size"]), (5, 4))
