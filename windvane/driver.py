@@ -1989,7 +1989,7 @@ class Pilot(Desk, Periodic, Experiments):
                 self.answer_told.append(d)
                 key = q.asked_ids[d][0]
                 push(f"Waiting on you: {self.name(d)}", f"{', '.join(ts)} wait{'s' * (len(ts) == 1)} on its open "
-                     + whole("question: ", q.asked[d], "", log=self.log) + f"\n{q.offer(d)}"
+                     + whole("question: ", q.asked[d], "", log=self.log) + f"\n{q.offer(d)}" * bool(q.offer(d))
                      + f"\nTo answer: windvane answer {key} <letter>", 3, "question")
 
     def send_unsent(self):

@@ -149,6 +149,8 @@ class QueueRules(unittest.TestCase):
         self.assertEqual(q.status("T-002"), "done")
         self.assertEqual([q.status(t) for t in ("T-003", "T-004")], ["waiting", "waiting"])
         self.assertEqual(q.waits_on("T-003"), ["T-002's open question"])
+        self.assertEqual(q.offer("T-002"), "A: blue, B: green")
+        self.assertEqual(q.offer("T-003"), "")  # none open: nothing to offer
         self.assertEqual(q.outside["T-003"], [])  # an id: not an outside item
         self.assertEqual(q.pick(skip={"T-001"}), ("T-005", "todo", []))
         q = self.queue("- done: T-002 (merged)\n", OPEN_QUESTION.replace("### T-002:", "### T-002.q2:"))
