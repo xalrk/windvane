@@ -162,7 +162,7 @@ def permissions(table, entries):
 
 
 LANDS = ("near", "next", "end", "hold", "ask")  # where a [[periodic]] chain's new tickets go in the queue
-BUILTINS = ("project-critic", "bench")  # [[periodic]] sessions windvane brings, so a project needs no prompt of its own
+BUILTINS = ("project-critic", "bench", "seed")  # [[periodic]] sessions windvane brings, so a project needs no prompt of its own
 BENCH_MINUTES = 300  # a bench entry's default `minutes`: its whole time, both sides of a compare and their judges
 
 
@@ -173,7 +173,9 @@ def periodic(entries):
     or only as another entry's `then` when none is set. `builtin` names one of windvane's own sessions instead of a `prompt`
     (`project-critic`: the critic on the whole project, its `dims` and `parallel` as `windvane critic --project`'s;
     `bench`: `windvane bench` in the background once tickets touching `after_touch` paths have merged, `minutes` its
-    whole time, a regression past `bench_cost_up` % more tokens per merged ticket, or worse quality, ticketed).
+    whole time, a regression past `bench_cost_up` % more tokens per merged ticket, or worse quality, ticketed;
+    `seed`: a new training seed for `bench/pool/` after every `seed_every` kept experiments, the pool keeping the newest
+    `pool_size`).
     Mistakes stop the run at once rather than at the Nth merge."""
     out = {}
     for i, e in enumerate(entries if isinstance(entries, list) else [entries]):
@@ -214,6 +216,13 @@ def periodic(entries):
                 or not all(isinstance(t, str) and t for t in touch)):
             raise SystemExit(f"windvane: [[periodic]] {name}: after_touch = {e.get('after_touch')!r}: a list of path "
                              "prefixes, for builtin = \"bench\" only")
+        pool = {}
+        for key, d in (("seed_every", 5), ("pool_size", 4)):
+            v = e.get(key, d)
+            if key in e and builtin != "seed" or isinstance(v, bool) or not isinstance(v, int) or v < 1:
+                raise SystemExit(f"windvane: [[periodic]] {name}: {key} = {v!r}: a whole number, 1 or more, for "
+                                 "builtin = \"seed\" only")
+            pool[key] = v
         cost_up = e.get("bench_cost_up", 25)
         if isinstance(cost_up, bool) or not isinstance(cost_up, (int, float)) or cost_up < 0:
             raise SystemExit(f"windvane: [[periodic]] {name}: bench_cost_up = {cost_up!r}: a percent, 0 or more")
@@ -221,7 +230,7 @@ def periodic(entries):
                      "setup": e.get("setup", ""), "setup_minutes": setup_m,
                      "prompt": e.get("prompt", ""), "then": e.get("then", ""), "builtin": builtin,
                      "dims": dims, "parallel": max(1, par), "requests": reqs,
-                     "after_touch": touch, "bench_cost_up": cost_up,
+                     "after_touch": touch, "bench_cost_up": cost_up, **pool,
                      "allow": e.get("allow", []), "deny": e.get("deny", [])}
     for e in out.values():
         if e["then"] and e["then"] not in out:
@@ -383,6 +392,8 @@ def github_token(p):
 # tests, the judge's rules, the scoring, and the config keys that set protection and the experiments' budget.
 PROTECTED = ("bench/", "prompts/JUDGE.md", "windvane/bench_score.py", f"{DIR}/config.toml:experiment_*",
              f"{DIR}/config.toml:week_below", f"{DIR}/config.toml:week_share")
+# The training seeds: protected with the rest of bench/, but the seed round's own branches may write them.
+POOL, SEED_BRANCH = "bench/pool", "seed-"
 # Always protected while anything is: a branch that could edit this key could unprotect the rest.
 SELF = f"{DIR}/config.toml:protected"
 
@@ -395,6 +406,13 @@ def protected(v, root):
         raise SystemExit(f"windvane: protected = {v!r} in config.toml: use a list of path prefixes, e.g. "
                          f'protected = ["bench/", "{DIR}/config.toml:experiment_*"]')
     return list(dict.fromkeys(v + [SELF])) if v else []
+
+
+def pool_writes(branch, paths):
+    """`paths` without the pool's own when `branch` is the seed round's: no other branch writes the training seeds."""
+    if not branch.startswith(SEED_BRANCH):
+        return paths
+    return [x for x in paths if not (x == POOL or x.startswith(POOL + "/"))]
 
 
 def toml_keys(text):

@@ -24,16 +24,23 @@ tickets touching its `after_touch` paths have merged since the last recorded ben
 compare <that run's commit> <main>` as a background job (the first time, a baseline: `bench --ref <main>`), and the
 run goes on with tickets meanwhile. When the job ends, a regression past the noise rule (`bench.regression`) is
 written up as one ticket and one push; anything else is one log line. It never reverts anything.
+
+An entry with `builtin = "seed"` writes one new training seed for `bench/pool/` (pool.py, `prompts/SEED.md`) while
+the pool on main is short of its `pool_size`, and after every `seed_every` experiments the bench kept: it lands only
+when its hidden tests fail on the bare seed and pass on the session's reference solution, which is never committed.
+Between tickets, a newly recorded holdout run is read against the week's pool runs (`overfit_watch`).
 """
 import difflib
 import os
 import re
+import shutil
+import tempfile
 import tomllib
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import bench, budget, critic, jobs, phone, requests
-from .config import DIR, exe, periodic as periodic_entries, permissions
+from . import bench, budget, critic, jobs, phone, pool, requests
+from .config import DIR, POOL, exe, periodic as periodic_entries, permissions
 from .questions import quiet_now
 from .queue import Queue, mend_queue, title as title_of
 from .runner import NO_REQUEST, plain_error
@@ -41,6 +48,7 @@ from .util import (append_jsonl, edit_json, git, gout, hhmm, last_match, load_js
                    save_json)
 
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
+SEED_RE = re.compile(r"SEED:[ \t]*(.*)")
 SCORE_RE = re.compile(r"\bscore=(-?\d+(?:\.\d+)?)\b")
 PERIODIC_LINE = "`PERIODIC: <one-line summary of what you found and the tickets you wrote>`"
 REASK_TIME = timedelta(minutes=3)  # a re-ask for the end line, past a session that ended at its limit
@@ -70,6 +78,10 @@ class Periodic:
                 due = self.bench_due(e)
                 if due:
                     return dict(e, bench=due)
+                continue
+            if e["builtin"] == "seed":
+                if self.seed_due(e):
+                    return e
                 continue
             if e["every"] and len(self.merged) - self.periodic_at.get(e["name"], 0) >= e["every"]:
                 return e
@@ -153,6 +165,8 @@ class Periodic:
         from .worktree import clean_detach
         if e["builtin"] == "bench":
             return self.bench_land(e) if e.get("bench") == "land" else self.bench_start(e)
+        if e["builtin"] == "seed":
+            return self.seed_round(e)
         p, cd, done, prev = self.p, self.p.ci_dir, set(), None
         entries = self.asked_chain if e.get("asked") else p.periodic
         if cd == p.work_dir and any(self.owner.values()):
@@ -220,7 +234,7 @@ class Periodic:
         started (no time, a failed setup, no prompt), or None when it didn't finish. `finished`: the groups that made
         it due, {group: its tickets}, named in its prompt; `entries`: the chain's (main's for an asked round). An
         asked round's ask is taken once its session starts or is skipped for good (`asked_taken`)."""
-        from .planner import end_reask, files, keep_dropped, pick_ids, reapply, rejected_part
+        from .planner import end_reask, files, keep_dropped, pick_ids, reapply, rejected_part, stopped_part
         from .runner import rules
         name, p = e["name"], self.p
         entries = entries or p.periodic
@@ -269,6 +283,7 @@ class Periodic:
             triage and "## Existing tickets (id, status, title)\n"
             + (Queue(p).listing(compact=True, keep=self.merged) or "(none yet)"),
             rejected_part(cd),  # so an idea the bench turned down isn't ticketed again unchanged
+            stopped_part(p),
             f"## Ids for new tickets, in order (at most 6)\n{', '.join(ids)}",
             f"Time limit: {hhmm(limit)}; check with `date`.",
             reqs and requests.prompt_part(reqs),
@@ -515,8 +530,8 @@ class Periodic:
         if st.get("verdict") == "regression":
             return "land" if len(self.merged) > self.bench_wait.get(name, -1) else None
         head = gout(p.main_root(), "rev-parse", p.upstream)
-        if not (e["after_touch"] and head):
-            return None
+        if not (e["after_touch"] and head) or bench.training(p) and not bench.planned(p, head, "full", True):
+            return None  # an empty pool: nothing to bench until the seed round fills it
         if self.bench_seen.get(name, ("",))[0] != head:
             base = last_benched(p, head)
             since = newer(p, base, st.get("head") if st.get("verdict") == "failed" else None, head)
@@ -642,6 +657,154 @@ class Periodic:
         where = "queued" if landed else f"on {held[tid]}, not merged" if tid in held else "not landed"
         push(f"{name}: regression", phone.cut(f"{'; '.join(st['why'])} after {after_list(st)}. {tid} written "
                                                     f"({where}); nothing was reverted.", log=self.log), 4, "warning")
+
+    def seed_due(self, e):
+        """A seed entry's turn: the pool on main short of `pool_size`, or `seed_every` experiments kept since a seed
+        last joined. Tried once a run, and at most SEED_TRIES times per head of main (`seed_file`, kept across restarts
+        and runs): one that joined moves main, so the next starts at once while the pool is short. Read again only
+        when main or the ledger moved: it's asked on every pass between tickets."""
+        p = self.p
+        ledger = p.state / "ledger.jsonl"
+        head = gout(p.main_root(), "rev-parse", p.upstream)
+        st = load_json(seed_file(p, e["name"]), {})
+        if st.get("head") == head and (st.get("tries", 0) >= SEED_TRIES or e["name"] in self.seed_tried):
+            return False
+        key = self.seed_key(head)
+        if self.seed_seen.get(e["name"], (None,))[0] != key:
+            have = len(bench.planned(p, p.upstream, "full", True))
+            self.seed_seen[e["name"]] = (key, have < e["pool_size"]
+                                         or pool.kept_since_seed(ledger) >= e["seed_every"])
+        return self.seed_seen[e["name"]][1]
+
+    def seed_key(self, head=None):
+        """What `seed_due`'s answer rests on: the head of main and when the ledger last changed."""
+        ledger = self.p.state / "ledger.jsonl"
+        return (head or gout(self.p.main_root(), "rev-parse", self.p.upstream),
+                ledger.stat().st_mtime if ledger.exists() else 0)
+
+    def seed_round(self, e):
+        """One seed for the training pool: a session writes it in the ci tree on current main, the bench's scorer
+        checks it in scratch copies, and only a seed that passes lands, alone, on a `seed-` branch (the only kind that
+        may write `bench/pool/`), the oldest past `pool_size` dropped. One push either way."""
+        from .worktree import clean_detach
+        p, cd, name = self.p, self.p.ci_dir, e["name"]
+        busy = cd == p.work_dir and any(self.owner.values()) or not self.keep_changes(f"the {name} round")
+        if busy:
+            self.log(f"{name}: skipped: the checkout is busy")
+            self.periodic_busy(e)  # an asked round waits for the next merge
+        if busy or not self.periodic_fits(e):  # due again once main or the ledger moves, not on the very next pass
+            self.seed_seen[name] = (self.seed_key(), False)
+            return
+        if e.get("asked"):
+            self.asked_taken(e)
+        self.fetch()
+        clean_detach(p, cd, p.upstream)
+        head, st = gout(cd, "rev-parse", "HEAD"), load_json(seed_file(p, name), {})
+        tries = st.get("tries", 0) + 1 if st.get("head") == head else 1
+        save_json(seed_file(p, name), {"head": head, "tries": tries})  # before any session is paid for: a kill counts
+        self.seed_tried.add(name)
+        self.seed_last = "" if tries < SEED_TRIES else (
+            f" That was try {tries} at {p.main} {head[:7]}: no more until {p.main} moves on, or `windvane periodic "
+            f"seed`." + (f" Meanwhile experiments wait: {bench.pool_short(p)}." if bench.pool_short(p) else ""))
+        try:
+            with tempfile.TemporaryDirectory(prefix="windvane-seed-") as keep:
+                new, said = self.seed_session(e, cd, Path(keep))
+                if new:
+                    clean_detach(p, cd, p.upstream)  # nothing else the session changed lands
+                    self.seed_land(e, cd, new, said)
+        finally:
+            clean_detach(p, cd, p.upstream)
+
+    def seed_session(self, e, cd, keep):
+        """The seed session, then its seed checked (`pool.check`): (a copy of it in `keep`, its SEED line) when it may
+        join, else (None, "") (refused: one push and a `seed` event in the ledger)."""
+        from .runner import rules
+        p, name = self.p, e["name"]
+        limit = now() + timedelta(minutes=e["minutes"])
+        prompt = "\n\n".join([
+            f"Seed session on {p.upstream} at {gout(cd, 'rev-parse', '--short', 'HEAD')}. Today is {now():%Y-%m-%d}. "
+            "Follow the seed rules in your system prompt and end with the SEED line.",
+            f"## Kinds taken (the pool's and the holdout's)\n{', '.join(pool.taken(cd)) or '(none)'}",
+            f"## Where it goes\n`{POOL}/new-<kind>/`, with `seed/`, `hidden/` and `reference/`; the bench's own seeds "
+            "in `bench/` show the format.",
+            f"Time limit: {hhmm(limit)}; check with `date`."])
+        self.log(f"{name}: seed session ({e['minutes']} min)")
+        deny = ["Bash(git commit *)", "Bash(git push *)", "Bash(git switch *)", "Bash(git checkout *)",
+                "Bash(git reset *)", "Bash(gh *)", NO_REQUEST] + ([] if p.ap["subagents"] else ["Agent"])
+        text, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}", prompt, rules(p, "SEED.md"), cd,
+                                          limit, [], deny)
+        if killed or error:
+            self.log(f"{name}: no seed ({killed or plain_error(error)})")
+            if killed != "stop now":
+                self.periodic_failed(name, f"the seed session {'was cut off' if killed else 'failed'}: "
+                                     f"{killed or phone.cut(plain_error(error), log=self.log)}.{self.seed_last}")
+            return None, ""
+        new, why = pool.staged(cd)
+        why = why or pool.check(new)
+        said = last_match(SEED_RE, text)
+        if why:
+            append_jsonl(p.state / "ledger.jsonl", {"event": "seed", "verdict": "refused", "why": why[:300]})
+            self.log(f"{name}: seed refused: {why}")
+            push("Bench seed refused", phone.cut(f"The new seed didn't join the bench pool: {why}.", log=self.log)
+                 + self.seed_last, 3, "warning")
+            return None, ""
+        self.log(f"{name}: seed {new.name} checked: its hidden tests fail on the bare seed and pass on its reference"
+                 + (f"; SEED: {said.group(1)}" if said else ""))
+        shutil.copytree(new, keep / new.name, ignore=pool.no_reference(new))
+        return keep / new.name, said.group(1).strip() if said else ""
+
+    def seed_land(self, e, cd, new, said):
+        """Put the checked seed in the pool on main (`pool.admit`) through the driver's own `seed-` branch; `said`, the
+        session's SEED line, goes in the commit and the push."""
+        from .held import land
+        from .planner import branch_name
+        p, name = self.p, e["name"]
+        joined, dropped = pool.admit(cd, new, e["pool_size"])
+        git(cd, "add", "-A", POOL)
+        title = f"Seed: {joined} joins the bench pool" + (f", {', '.join(dropped)} leaves" if dropped else "")
+        body = (f"Written by the [[periodic]] session {name}: its hidden tests fail on the bare seed and pass on the "
+                f"session's reference solution (not committed). The pool keeps the newest {e['pool_size']}."
+                + (f"\n\nSEED: {said}" if said else ""))
+        with self.critical():
+            landed = land(p, cd, branch_name(p, cd, "seed"), title, body, fresh=True)
+        ok, where = landed
+        self.log(f"{title}: {'on ' + p.upstream if ok else 'waits on ' + where}")
+        if ok:
+            append_jsonl(p.state / "ledger.jsonl", {"event": "seed", "verdict": "joined", "seed": joined,
+                                                    "dropped": dropped})
+        what = f" {said}." if said else ""
+        push("Bench seed added" if ok else "Bench seed not landed", phone.cut(
+            f"{title}.{what}" if ok else f"{title}: it waits on {where}.{what}", log=self.log), 3,
+            "seedling" if ok else "warning")
+
+    def overfit_watch(self):
+        """Between tickets: once a newer holdout run is recorded (by hand, or the weekly trend), read the week's pool
+        runs against the holdout's (`bench.overfit`). The pool up and the holdout down past the noise stops experiment
+        planning (`experiment.stop`) with one push. Each holdout run is read once."""
+        from .experiment import stop, stopped
+        p, f = self.p, bench.results(self.p)
+        try:
+            stamp = f.stat().st_mtime
+        except OSError:
+            return
+        if self.overfit_read == stamp:
+            return
+        self.overfit_read = stamp
+        newest = max((str(rs[0].get("run")) for rs in bench.runs_of(p).values()
+                      if bench.set_of(rs[0]) == "holdout"), default="")
+        if newest <= load_json(p.state / "overfit.json", {}).get("run", ""):
+            return
+        save_json(p.state / "overfit.json", {"run": newest})
+        alarmed, pool_line, hold_line = bench.overfit(p)
+        self.log(f"overfit check after the holdout run {newest}: {pool_line}; {hold_line}")
+        if not alarmed or stopped(p):
+            return
+        stop(p, f"the training pool rose while the frozen holdout fell this week ({pool_line}; {hold_line})")
+        self.log("overfit: experiment planning stopped until `windvane experiments resume`")
+        push("Experiments stopped: overfit", phone.cut(
+            f"This week's bench runs: {pool_line}; {hold_line}. The loop is learning its training seeds, not how to "
+            "build projects: no experiment is planned until `windvane experiments resume`.", log=self.log), 4,
+            "warning")
 
     def bench_waits(self):
         """The idle lines of a run whose queue is done while a bench round runs: it waits for the verdict (and a
@@ -841,28 +1004,40 @@ def bench_file(p, name):
     return p.state / f"bench-{name}.json"
 
 
+SEED_TRIES = 3  # a seed round's tries at one head of main (one a run), before it waits for main to move on
+
+
+def seed_file(p, name):
+    """A seed entry's tries: the head of main they were at, and how many."""
+    return p.state / f"seed-{name}.json"
+
+
 def bench_job(p, name):
     """The background job a bench entry starts: `windvane await periodic-<name>` follows it from the desk."""
     return p.state / "bg" / f"periodic-{name}"
 
 
 def bench_command(p, args):
-    """The command a bench round runs: this windvane's `bench`, on the project's own checkout."""
-    return [*exe(), "-C", str(p.main_root()), "bench", *args]
+    """The command a bench round or an experiment runs: this windvane's `bench`, on the project's own checkout, on the
+    training pool when the project has one (`bench.training`)."""
+    return [*exe(), "-C", str(p.main_root()), "bench", *args, *["--pool"] * bench.training(p)]
 
 
 def bench_runs(p, sha, size, after=""):
-    """The recorded bench runs of `sha` at `size` a compare would reuse (its seeds, no judge failed), from run id
-    `after` on."""
-    want = bench.planned(p, sha, size)
+    """The recorded bench runs of `sha` at `size` a compare would reuse (its seeds, of the set the automatic benches
+    use, no judge failed), from run id `after` on."""
+    pool = bench.training(p)
+    want = bench.planned(p, sha, size, pool)
     return [rs for rs in bench.runs_of(p).values() if rs[0].get("sha") == sha and rs[0].get("size") == size
-            and str(rs[0].get("run")) >= after and sorted(r["seed"] for r in rs) == want
-            and not any(map(bench.judge_failed, rs))]
+            and bench.set_of(rs[0]) == ("pool" if pool else "holdout") and str(rs[0].get("run")) >= after
+            and sorted(r["seed"] for r in rs) == want and not any(map(bench.judge_failed, rs))]
 
 
 def last_benched(p, head):
-    """The newest commit in `head`'s history with a recorded bench run (the windvane last benchmarked), or None."""
-    shas = {r.get("sha") for r in read_jsonl(bench.results(p))} - {None}
+    """The newest commit in `head`'s history with a recorded bench run of the automatic benches' set (the windvane
+    last benchmarked), or None."""
+    want = "pool" if bench.training(p) else "holdout"
+    shas = {r.get("sha") for r in read_jsonl(bench.results(p)) if bench.set_of(r) == want} - {None}
     for sha in gout(p.main_root(), "rev-list", head).split() if shas else ():
         if sha in shas:
             return sha

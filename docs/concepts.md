@@ -280,6 +280,25 @@ results are missing. The approved head is saved until its bench ends: a bench ru
 deadline (checked before the critic, too) sets the ticket aside, and the next run, or this one after a restart, goes
 straight to the bench with no worker, critic or review paid for again, reusing every run recorded meanwhile.
 
+**The training pool and the holdout.** Kept or dropped against the same few seeds for weeks, experiments would learn
+those projects rather than how to build projects. A `[[periodic]]` entry with `builtin = "seed"` keeps them moving:
+while `bench/pool/` on `main` holds fewer than `pool_size` seeds (4), and after every `seed_every` experiments the
+bench kept (5), a session (`prompts/SEED.md`) writes one new seed of a kind neither the pool nor `bench/` has, in the
+same format, with a reference solution. The driver runs its hidden tests with the bench's own scorer in scratch
+copies: the seed joins only if every ticket's tests fail on the bare seed and pass on the reference, which is never
+committed; anything else the session changed is dropped. It lands on the driver's own `seed-` branch, the only one
+allowed to write `bench/pool/` (a ticket or plan branch that does is held like any protected change), as
+`bench/pool/<NNN>-<kind>/`, and the oldest seed past `pool_size` leaves. One push says which joined, or why it was
+refused. A round is tried once a run and at most three times per commit of `main`, counted across restarts: the
+third refusal's push says so, and `windvane periodic seed` asks for another; a seed that joined moves `main`, so the
+next starts at the next gap until the pool is full. With a seed round configured, the experiments' bench and the
+bench round run on the pool (`windvane bench --pool`), and an experiment is set aside for the run before its worker
+starts, never merged unmeasured, while the pool holds fewer than `pool_size` seeds; `bench/`'s own seeds become a
+frozen holdout that only `windvane bench` by hand (and a weekly trend) runs. Each time a new holdout run is recorded, the driver reads the
+week's runs of both sets: the pool's hidden tests or judge yeses up past the noise rule while the holdout's fell past
+it means the loop is learning its training seeds, so it sends one push and stops experiment planning (the planner and
+periodic sessions are told to write no `Kind: experiment` ticket) until `windvane experiments resume`.
+
 ## Questions and quiet times
 
 Workers make engineering calls themselves and say why in the pull request. **Product calls** (what users see or

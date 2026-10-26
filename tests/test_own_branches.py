@@ -73,8 +73,9 @@ class BranchName(unittest.TestCase):
             planner.branch_name(None, None, "hotfix")
 
     def test_every_site_names_its_branch_with_a_listed_kind(self):
-        """A plan, a periodic chain, the desk answers and a rejected experiment, each run for real: a new kind of
+        """A plan, a periodic chain, the desk answers, a rejected experiment and a seed, each run for real: a new kind of
         branch named any other way than `branch_name` (missing from `OWN_BRANCHES`) would hand its ids out again."""
+        import test_bench_seeds
         import test_experiments
         import test_periodic  # the module, not its class: a class imported here would run all its tests again
         s = sandbox(self, "T-001")
@@ -90,6 +91,10 @@ class BranchName(unittest.TestCase):
             e.make()
             self.addCleanup(e.doCleanups)
             e.run_pilot([test_experiments.MAIN])  # no better than main: rejected, its record landed
+            r = test_bench_seeds.SeedRound()
+            r.make()
+            self.addCleanup(r.doCleanups)
+            r.round(r.pilot(), "todo")  # a seed that passes: it joins the pool
         # `windvane answer` ran in its own process: its branch is read off the remote
         names += [line.split("refs/heads/")[1] for line in s.git("ls-remote", "--heads", "origin").splitlines()]
         names = set(names) - {"main"}

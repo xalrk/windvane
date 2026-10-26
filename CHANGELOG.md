@@ -7,6 +7,15 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- A training pool for the benchmark, so experiments aren't kept for helping three projects and nothing else. A
+  `[[periodic]]` entry with `builtin = "seed"` writes a new seed project into `bench/pool/` while the pool is short of
+  `pool_size` (4) and after every `seed_every` (5) kept experiments; it joins only when its hidden tests fail on the
+  bare seed and pass on the session's reference solution, which is never committed, and the oldest leaves past
+  `pool_size`. Only that round's own branch may write `bench/pool/`. With it, experiments and the bench round run on
+  the pool (`windvane bench --pool`), an experiment waits for a full pool rather than merging unmeasured, and
+  `bench/`'s seeds are a frozen holdout run by hand. A refused seed is tried again the next run, at most three times per commit of `main`. When a holdout run shows
+  the pool's numbers up and the holdout's down past the noise in the same week, one push says so and experiment
+  planning stops until `windvane experiments resume`.
 - `check_quick` in the config: a first pass `windvane check` runs before `check`, such as the tests the change
   touches. A failure there ends the check in a minute, `CHECK FAILED (quick pass, exit N)`, with no
   pass recorded, instead of a full check's length; its pass goes on to `check`. The driver's gate runs `check`
