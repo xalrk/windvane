@@ -102,12 +102,16 @@ class Mix(Base):
         self.verdicts("fix", 8, 10)
         self.verdicts("bold", 0, 10)
         out = mix.report(self.p, {}, {"T-fi7": "trim the critic's notes"})
-        self.assertIn("  bold         10%  kept 0/10   -", out)
-        self.assertIn("  fix          57%  kept 8/10   T-fi7 trim the critic's notes", out)
-        self.assertIn("  scout     on top  kept -      -", out)
+        self.assertIn("  kind       share  kept   last kept", out)
+        self.assertIn("  bold         10%  0/10   -", out)
+        self.assertIn("  fix          57%  8/10   T-fi7 trim the critic's notes", out)
+        self.assertIn("  scout     on top  -      -", out)
+        (self.s.root / ".windvane/EXPERIMENTS.md").unlink()
+        self.assertIn("  revisit       0%  -      - (no rejected experiment to revisit yet)",
+                      mix.report(self.p, {}, {}))
         with mock.patch("sys.stdout") as stdout:
             cli.cmd_experiments(mock.Mock(what=[]), self.p)
-        self.assertIn("experiment mix: share this round", "".join(c.args[0] for c in stdout.write.call_args_list))
+        self.assertIn("experiment mix (kept: of each kind's last 10", "".join(c.args[0] for c in stdout.write.call_args_list))
 
     def test_the_config_refuses_an_unknown_kind_or_a_floor_too_high(self):
         from windvane import config

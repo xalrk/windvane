@@ -260,17 +260,20 @@ def vet(p, cd, new, order, n, ideas, log):
 
 
 def report(p, ideas, titles):
-    """`windvane experiments`' lines on the mix: each kind's share this round, its kept rate over its last RECENT
-    and its last kept experiment."""
+    """`windvane experiments`' lines on the mix: each kind's share of the next plan, its kept rate over its last
+    RECENT and its last kept experiment."""
     cfg, rows = p.cfg["experiments"], decided(p, ideas)
-    rate = rates(rows)
-    share = shares(cfg["mix"], float(cfg["floor"]), rate, round_kinds(p, p.root))
-    out = ["experiment mix" + (" (an exploration round after a plateau)" if exploring(p) else "")
-           + f": share this round, kept over each kind's last {RECENT}, last kept"]
+    rate, kinds = rates(rows), round_kinds(p, p.root)
+    share = shares(cfg["mix"], float(cfg["floor"]), rate, kinds)
+    out = ["experiment mix" + (": an exploration round after a plateau (bold, ablation and scout only)" if exploring(p)
+                               else "") + f" (kept: of each kind's last {RECENT} the bench decided)",
+           f"  {'kind':<9} {'share':>6}  {'kept':<5}  last kept"]
     for k in IDEAS:
         kept = [t for t, kind, v in rows if kind == k and v == "kept"]
         last = f"{kept[-1]} {titles.get(kept[-1], '')}".strip() if kept else "-"
         cut = "on top" if k == SCOUT else f"{share[k]:.0%}" if k in share else "0%"
+        why = " (no rejected experiment to revisit yet)" if k == "revisit" and k not in share and not exploring(p) \
+            else ""
         n = rate[k]
-        out.append(f"  {k:<9} {cut:>6}  kept {f'{n[0]}/{n[1]}' if n[1] else '-':<5}  {last}")
+        out.append(f"  {k:<9} {cut:>6}  {f'{n[0]}/{n[1]}' if n[1] else '-':<5}  {last}{why}")
     return out
