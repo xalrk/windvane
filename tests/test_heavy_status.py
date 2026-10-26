@@ -243,18 +243,24 @@ class LiveStanding(unittest.TestCase):
 
     def test_an_interpreter_is_named_by_its_script_not_its_name(self):
         """A retro's advice to add "python3" to heavy_reuses would count every Python process as free memory."""
-        lines = {1: "python3\0-u\0/x/tools/serve.py\0--port\0" "8000", 2: "python3\0-m\0http.server\0",
-                 3: "python3\0-c\0print(1)\0", 4: "node\0", 5: "java\0-cp\0x\0org.gradle.GradleDaemon\0"}
+        lines = ["python3\0-u\0/x/tools/serve.py\0--port\0" "8000", "python3\0-m\0http.server\0",
+                 "python3\0-c\0print(1)\0", "node\0", "java\0-cp\0x\0org.gradle.GradleDaemon\0",
+                 "python3\0-W\0ignore\0-X\0dev\0serve.py\0", "node\0-e\0require(\"./srv\").start()\0",
+                 "bash\0./tools/emu\0", "node\0-r\0ts-node/register\0app.ts\0", "python3\0x/\"odd\".py\0"]
         proc = self.d / "proc"
-        for pid, line in lines.items():
+        for pid, line in enumerate(lines, 1):
             (proc / str(pid)).mkdir(parents=True)
             (proc / str(pid) / "cmdline").write_bytes(line.encode())
+            (proc / str(pid) / "cwd").symlink_to(self.d)
+        (self.d / "tools").mkdir()
+        (self.d / "tools" / "emu").write_text("")
+        names = ["python3", "python3.12", "python3", "node", "java", "python3", "node", "bash", "node", "python3"]
         with mock.patch.object(util, "PROC", proc):
-            self.assertEqual([heavy.reuse_word(1, "python3"), heavy.reuse_word(2, "python3.12"),
-                              heavy.reuse_word(3, "python3"), heavy.reuse_word(4, "node"),
-                              heavy.reuse_word(5, "java"), heavy.reuse_word(6, "qemu-system-x86"),
-                              heavy.reuse_word(6, "python3")],
-                             ["serve.py", "http.server", None, None, "GradleDaemon", "qemu-system-x86", None])
+            self.assertEqual([heavy.reuse_word(pid, n) for pid, n in enumerate(names, 1)],
+                             ["serve.py", "http.server", None, None, "GradleDaemon", "serve.py", None, "emu",
+                              "app.ts", None])
+            self.assertEqual([heavy.reuse_word(99, n) for n in ("qemu-system-x86", "python3", "c++")],
+                             ["qemu-system-x86", None, None])  # a name that's no safe pattern gets no advice
 
     def test_a_paused_waiter_says_paused_once(self):
         holder = self.proc()

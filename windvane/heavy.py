@@ -255,30 +255,42 @@ def reuse_hint(proc):
 
 MAIN_CLASS = re.compile(r"(?:[A-Za-z_][\w$]*\.)+([A-Z][\w$]*)")
 INTERPRETER = re.compile(r"(python|node|ruby|perl|php|bash|dash|zsh|fish|sh)[\d.]*")
+SCRIPT = re.compile(r".*\.(py|js|mjs|cjs|ts|rb|pl|php|sh)")
+WORD = re.compile(r"[\w.-]+")  # a word safe to give as a pattern: it can't break the regex or the TOML string
+INLINE = {"-c", "-e", "--eval", "-p", "--print", "-E"}  # the code is on the command line: no file names it
 
 
 def reuse_word(pid, name):
-    """The word to put in `heavy_reuses` for process `pid` named `name`: its name, but for a JVM the last part of its
-    main class (`GradleDaemon`, `KotlinCompileDaemon`), since every JVM is named `java` and "java" would count each of
-    the project's JVMs as a helper. For an interpreter (`python3`, `node`) the script's file name or `-m` module,
-    for the same reason, and None when it runs neither (`-c`, a prompt): no word names it alone."""
+    """The word to put in `heavy_reuses` for process `pid` named `name`, or None when no safe word names it alone:
+    its name, but for a JVM the last part of its main class (`GradleDaemon`, `KotlinCompileDaemon`), since every JVM
+    is named `java` and "java" would count each of the project's JVMs as a helper. For an interpreter (`python3`,
+    `node`) the same holds: its `-m` module or script's file name, the first word that ends like a script or is a
+    file in its working directory, so an option's value (`-W ignore`, `-r ts-node/register`) isn't taken for it, and
+    None for code given inline (`-c`, `-e`)."""
     jvm = name == "java"
     if not jvm and not INTERPRETER.fullmatch(name):
-        return name
+        return name if WORD.fullmatch(name) else None
     try:
-        words = os.fsdecode((util.PROC / str(pid) / "cmdline").read_bytes()).split("\0")
+        words = os.fsdecode((util.PROC / str(pid) / "cmdline").read_bytes()).split("\0")[1:]
     except OSError:
         return name if jvm else None
     if jvm:
-        return next((m.group(1) for w in words[1:] if (m := MAIN_CLASS.fullmatch(w))), name)
-    for i, w in enumerate(words[1:], 1):
-        if w == "-m" and i + 1 < len(words):
-            return words[i + 1] or None
-        if w and not w.startswith("-"):
-            return Path(w).name
-        if w == "-c":
+        return next((m.group(1) for w in words if (m := MAIN_CLASS.fullmatch(w))), name)
+    for i, w in enumerate(words):
+        if w in INLINE:
             return None
+        if w == "-m":
+            return words[i + 1] if i + 1 < len(words) and WORD.fullmatch(words[i + 1]) else None
+        if not w.startswith("-") and (SCRIPT.fullmatch(w) or is_file(pid, w)):
+            return Path(w).name if WORD.fullmatch(Path(w).name) else None
     return None
+
+
+def is_file(pid, path):
+    try:
+        return (util.PROC / str(pid) / "cwd" / path).is_file()
+    except OSError:
+        return False
 
 
 def hints_in(log, head=65536):
