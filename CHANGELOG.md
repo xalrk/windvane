@@ -12,8 +12,8 @@ release on the same day adds a number (`2026.10.9.1`).
   same error (a driver error, or a check's same error lines), revert the merges that changed the driver's code on
   `main` (a revert commit through the usual PR or push, never a force push), write a ticket with the error, put the
   reverted tickets back in the queue after it, and send one push. The run goes on on the last good code and redoes
-  the reverted tickets once the fix merges, even ones it merged itself. A second bad update in a row stops the run
-  instead.
+  the reverted tickets once the fix merges, even ones it merged itself. Reverting the revert, by hand or with
+  GitHub's Revert button, merges them again. A second bad update in a row stops the run instead.
 - `windvane run --replan forever` (or `replan = "forever"` in the config): an autopilot that keeps improving the
   project with no input. It plans whenever the queue runs dry, with no count to reach; with nothing merged since
   the last plan, the next waits an hour. In a project with `bench/`, the planner also gets where the projects on

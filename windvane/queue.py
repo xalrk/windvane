@@ -89,28 +89,62 @@ def merged_branches(subjects, bp):
     return re.findall(rf"{start}({bp}-\d+[a-z]?)-[\w.-]", subjects, re.I)
 
 
+LOG = "%H%x1f%P%x1f%s%x1f%b%x1e"  # the `git log --format` `landed` reads: each commit's sha, parents, subject and body
+
+
 def landed(log, bp):
-    """The ticket ids merged on a ref, from its `git log --format=%p%x1f%s`, newest first: a merge names one
+    """The ticket ids merged on a ref, from its `git log --topo-order --format=LOG`, newest first: a merge names one
     (`merged_branches`), unless a newer revert names it too: the driver's own (`Revert T-012, T-013: ...`, from
     `selfupdate.revert_update`) or git's (`Revert "Merge T-012: ... (branch t-012-x)"`); a revert of either merges it
-    again (git ≥2.43 writes a revert of `Revert "X"` as `Reapply "X"`). A reverted ticket is back in the queue until it merges again."""
-    done, undone = set(), set()
-    for line in log.splitlines():
-        parents, _, subject = line.partition("\x1f")
+    again (git ≥2.43 writes a revert of `Revert "X"` as `Reapply "X"`). A revert whose subject names no ticket, such as
+    GitHub's Revert of a PR (`Revert "Merge pull request #5 from owner/revert-3"`), flips what the commits it reverts
+    did, by its body's `This reverts commit <sha>`. A reverted ticket is back in the queue until it merges again."""
+    commits = [(r.lstrip("\n").split("\x1f", 3) + ["", ""])[:4]  # a stripped log ends short of its empty fields
+               for r in log.split("\x1e") if r.strip()]
+    graph = {c[0]: c[1].split() for c in commits}
+    done, undone, flipped = set(), set(), set()
+    for sha, parents, subject, body in commits:
+        depth = 0
         if len(parents.split()) > 1:
-            done |= {t.lower() for t in merged_branches(subject, bp)} - undone
+            ids = merged_branches(subject, bp)
         elif subject.startswith(("Revert ", "Reapply ")):  # each revert of a revert merges it again
             prefix = re.match(r'(?:Revert "|Reapply ")*', subject).group()  # git's: a `Reapply "` is two levels
             depth = prefix.count('Revert "') + 2 * prefix.count('Reapply "')
             if m := re.match(rf"Revert ((?:{bp}-\d+[a-z]?(?:, )?)+):", subject[len(prefix):], re.I):
-                ids, depth = {t.lower() for t in re.findall(rf"{bp}-\d+[a-z]?", m.group(1), re.I)}, depth + 1
+                ids, depth = re.findall(rf"{bp}-\d+[a-z]?", m.group(1), re.I), depth + 1
             else:
-                ids = {t.lower() for t in merged_branches(subject, bp)}
-            if depth % 2:
-                undone |= ids - done
-            else:
-                done |= ids - undone
+                ids = merged_branches(subject, bp)
+            if not ids and (m := re.search(r"This reverts commit ([0-9a-f]{7,40})", body)):
+                if sha not in flipped:  # a revert that is itself reverted undoes nothing
+                    flipped ^= reverted_by(m.group(1), graph)
+                continue
+        else:
+            continue
+        ids = {t.lower() for t in ids}
+        if (depth + (sha in flipped)) % 2:
+            undone |= ids - done
+        else:
+            done |= ids - undone
     return sorted(done)
+
+
+def reverted_by(sha, graph):
+    """The commits a revert of `sha` undoes: that commit, and for a merge every commit it brought in (reachable from
+    its second parent, not its first)."""
+    sha = next((c for c in graph if c.startswith(sha)), sha)
+    parents = graph.get(sha, [])
+    if len(parents) < 2:
+        return {sha}
+
+    def reach(start):
+        seen, todo = set(), [start]
+        while todo:
+            c = todo.pop()
+            if c not in seen:
+                seen.add(c)
+                todo += graph.get(c, [])
+        return seen
+    return {sha} | (reach(parents[1]) - reach(parents[0]))
 
 
 def title(text, tid):
@@ -151,7 +185,7 @@ class Queue:
         self.ideas = {t: idea(heads[t]) for t in self.files}
 
         bp = re.escape(p.prefix.lower())
-        self.done = {p.norm(m) for m in landed(gout(cwd, "log", "--topo-order", ref, "--format=%p%x1f%s"), bp)}
+        self.done = {p.norm(m) for m in landed(gout(cwd, "log", "--topo-order", ref, f"--format={LOG}"), bp)}
         self.done |= {p.norm(m) for m in re.findall(rf"^\s*-\s*done:\s*({p.id_re})", qmd, re.M | re.I)}
         self.rejected = {p.norm(m) for m in re.findall(rf"^\s*-\s*rejected:\s*({p.id_re})", qmd, re.M | re.I)}
         self.done |= self.rejected  # never picked again; its branch stays, unmerged

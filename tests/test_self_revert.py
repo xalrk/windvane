@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from windvane import driver, selfupdate  # noqa: E402
 from windvane.config import Project  # noqa: E402
-from windvane.queue import Queue, landed  # noqa: E402
+from windvane.queue import LOG, Queue, landed  # noqa: E402
 from windvane.util import now  # noqa: E402
 from helpers import Sandbox  # noqa: E402
 from test_parallel import args  # noqa: E402
@@ -439,7 +439,7 @@ class Tickets(Trial):
 
 class Parts(unittest.TestCase):
     def test_a_revert_puts_its_tickets_back_until_they_merge_again(self):
-        log = lambda *lines: "\n".join(lines)
+        log = lambda *lines: "\n".join(f"c{i}\x1f{line}\x1f\x1e" for i, line in enumerate(lines))  # no bodies
         merge, plain = "a b\x1f", "a\x1f"
         self.assertEqual(landed(log(merge + "Merge T-002: x (branch t-002-x)", merge + "Merge T-001: x (branch t-001-x)"),
                                 "t"), ["t-001", "t-002"])
@@ -456,14 +456,14 @@ class Parts(unittest.TestCase):
         self.assertEqual(landed(log(plain + 'Revert "Revert T-001: windvane abc crashed"',
                                     plain + "Revert T-001: windvane abc crashed",
                                     merge + "Merge T-001: x (branch t-001-x)"), "t"), ["t-001"])  # the user undid ours
-        self.assertEqual(landed(plain + "Merge T-001: squashed by hand (branch t-001-x)", "t"), [])  # not a merge
+        self.assertEqual(landed(log(plain + "Merge T-001: squashed by hand (branch t-001-x)"), "t"), [])  # not a merge
 
     def test_reverts_git_itself_writes_are_read_level_by_level(self):
         """git's own subjects for a revert of a revert (`Reapply "..."` since 2.43, `Revert "Reapply "...""` after),
         from real `git revert`s: each one flips whether the ticket is merged."""
         s = Sandbox()
         self.addCleanup(s.close)
-        read = lambda: landed(s.git("log", "--topo-order", "--format=%p%x1f%s"), "t")
+        read = lambda: landed(s.git("log", "--topo-order", f"--format={LOG}"), "t")
         s.git("switch", "-q", "-c", "t-001-x")
         s.write("x", "x\n")
         s.git("add", "x")
@@ -480,6 +480,32 @@ class Parts(unittest.TestCase):
         for want in ([], ["t-001"], [], ["t-001"]):
             self.assertEqual(read(), want, s.git("log", "-1", "--format=%s"))
             s.git("revert", "--no-edit", "HEAD")
+
+    def test_githubs_revert_of_a_revert_pr_merges_its_tickets_again(self):
+        """The driver's revert landed as a PR, then GitHub's Revert button on that PR, and on the PR that made: a
+        merge of a branch whose one commit is `Revert "Merge pull request ..."`, naming no ticket."""
+        s = Sandbox()
+        self.addCleanup(s.close)
+        read = lambda: landed(s.git("log", "--topo-order", f"--format={LOG}"), "t")
+
+        def pr(branch, n, *change):
+            s.git("switch", "-q", "-c", branch)
+            change[0](*change[1:])
+            s.git("switch", "-q", "main")
+            s.git("merge", "-q", "--no-ff", "-m", f"Merge pull request #{n} from owner/{branch}", branch)
+            return s.git("rev-parse", "HEAD")
+
+        def commit(text, subject):
+            s.write("x", text)
+            s.git("add", "x")
+            s.git("commit", "-qm", subject)
+        pr("t-001-x", 1, commit, "x\n", "x")
+        self.assertEqual(read(), ["t-001"])
+        merge = pr("revert-1", 2, commit, "", "Revert T-001: windvane abc crashed")
+        self.assertEqual(read(), [])
+        for n, want in ((3, ["t-001"]), (4, []), (5, ["t-001"])):
+            merge = pr(f"revert-{n - 1}-x", n, s.git, "revert", "--no-edit", "-m", "1", merge)
+            self.assertEqual(read(), want, s.git("log", "-1", "--format=%s", "HEAD^2"))
 
     def test_signature_reads_two_tickets_failing_alike_the_same(self):
         id_re = r"T-\d+[a-z]?"

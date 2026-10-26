@@ -48,7 +48,8 @@ the run redoes them after the fix, even ones it merged itself; its summary lists
 (a first crash on trial isn't pushed of its own), the install fast-forwards to the revert, and the run goes on on
 the good code, retrying the tickets the bad code failed. A second bad update without a ticket merged in between, or
 a revert that can't land, stops the run with one push instead, which names the commits to revert by hand and the
-`git pull` that takes the fix up in the install.
+`git pull` that takes the fix up in the install. Reverting the revert, with `git revert` or GitHub's Revert button,
+merges its tickets again.
 
 ## What sessions may and may not do
 
