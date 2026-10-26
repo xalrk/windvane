@@ -157,7 +157,7 @@ what every project's benches spent.
 |---|---|---|
 | `week_below` | `75` | A bench starts only while the weekly usage is below this. |
 | `week_share` | `30` | The most of a week benches may use: one starts only while this week's bench spend plus its estimate (the mean of the last three runs of its size) stays within it, plus what you allowed for this week. |
-| `plateau` | `8` | Once this many experiments in a row were rejected, the next plan is one exploration round (only `bold`, `ablation` and `scout` ideas); if all of its experiments are rejected too, experiment planning stops (in every run, with one push) until one is kept, the goal or a seed changes, or `windvane experiments resume`. |
+| `plateau` | `8` | Once this many experiments in a row were rejected, the next plan is one exploration round (only `bold`, `ablation` and `scout` ideas); if none of its experiments is kept (each rejected, failed, parked or dropped), experiment planning stops (in every run, with one push) until one is kept, the goal or a seed changes, or `windvane experiments resume`. |
 | `mix` | `{ fix = 0.4, bold = 0.25, ablation = 0.2, revisit = 0.15 }` | Each kind of idea's share of a planning round's experiments ([the mix](concepts.md#the-critic-and-calibration)). The shares move toward the kinds the bench keeps (each kind's kept rate over its last 10); `scout` ideas come on top. Protected with the bench. |
 | `floor` | `0.1` | No kind's share goes below this, however rarely it's kept, so none dies out. Protected with the bench. |
 

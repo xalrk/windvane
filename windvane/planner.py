@@ -144,7 +144,7 @@ def rejected_part(cd):
     return grouped_part(cd)
 
 
-def vet_plan(p, cd, q, n_ids, order_ids):
+def vet_plan(p, cd, q, order_ids):
     """Drop the new experiment tickets the round's mix or the novelty rule doesn't keep (`mix.vet`): their files go
     and their queue bullets with them. Returns (the ids dropped, the new experiments kept)."""
     from .mix import is_experiment, vet
@@ -156,7 +156,7 @@ def vet_plan(p, cd, q, n_ids, order_ids):
                 git(cd, "cat-file", "-e", f"HEAD:{path}").returncode:
             new[p.norm(f.stem)] = f.read_text(errors="replace")
     new.pop("", None)
-    drop = vet(p, cd, new, order_ids(), n_ids, q.ideas, lambda m: log(p, m))
+    drop = vet(p, cd, new, order_ids(), q, lambda m: log(p, m))
     for tid in drop:
         (tick / f"{tid}.md").unlink(missing_ok=True)
     qf = cd / p.queue_rel
@@ -412,7 +412,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=(), end
         f"## Existing tickets (id, status, title)\n{q.listing(compact=True, keep=merged) or '(none yet)'}",
         *(endless_parts(p) if endless else []),
         rejected_part(cd),
-        stopped_part(p) or mix_part(p, cd, max_new, q.ideas),
+        stopped_part(p) or mix_part(p, cd, max_new, q),
         f"## Ids for new tickets, in order (at most {max_new})\n{', '.join(ids)}",
     ]))
     log(p, f"plan run ({len(notes)} critic notes)")
@@ -459,7 +459,7 @@ def _plan(p, goal, use_followups, usage, stop_if, merge, max_new, merged=(), end
         clean_detach(p, cd, p.upstream)
         log(p, f"plan: wrote outside .windvane/ ({outside[0]}); discarded")
         return 0
-    drop, tried = vet_plan(p, cd, q, max_new, lambda: queue_ids(p, cd))
+    drop, tried = vet_plan(p, cd, q, lambda: queue_ids(p, cd))
     n = max(0, int(m.group(1) or 0) - len(drop))
     if drop and not changed_paths(cd):
         clean_detach(p, cd, p.upstream)

@@ -75,15 +75,18 @@ class Mix(Base):
         fix = [(f"T-00{i}", "fix", f"thing {i}", f"windvane/f{i}.py", "") for i in range(2, 8)]
         prompt, on_main, log = self.plan(fix + [("T-008", "bold", "steps", "windvane/driver.py", ""),
                                                 ("T-009", "scout", "outside", "windvane/x.py", "")])
-        self.assertIn("## This round's experiment mix\nOf the experiments you write this round, at most: fix 4, "
-                      "bold 3, ablation 2, revisit 1; `scout` ideas from outside come on top.", prompt)
-        self.assertEqual(on_main & {f"T-00{i}" for i in range(1, 10)},
-                         {"T-001", "T-002", "T-003", "T-004", "T-005", "T-008", "T-009"})  # the first four fixes
-        for tid in ("T-006", "T-007"):
-            self.assertIn(f"plan: dropped {tid} (fix): this round's mix has no more room for fix experiments", log)
+        self.assertIn("## This round's experiment mix\nWrite this round's experiments in this mix: fix 4, bold 3, "
+                      "ablation 2, revisit 1; `scout` ideas from outside come on top. Writing fewer, keep the mix",
+                      prompt)
+        # seven experiments besides the scout: fix's share of them, rounded up, is three: the first three in order
+        self.assertEqual(on_main & {f"T-00{i}" for i in range(1, 10)}, {"T-001", "T-002", "T-003", "T-004", "T-008",
+                                                                        "T-009"})
+        for tid in ("T-005", "T-006", "T-007"):
+            self.assertIn(f"plan: dropped {tid} (fix): past fix's share of this round's experiments (fix 3, bold 2, "
+                          "ablation 2, revisit 2)", log)
         queue = self.s.git("show", "origin/main:.windvane/QUEUE.md")
         self.assertNotIn("T-006", queue)
-        self.assertIn("- T-005 idea T-005", queue)
+        self.assertIn("- T-004 idea T-004", queue)
 
     def test_a_kind_rarely_kept_keeps_its_floor(self):
         self.make()
@@ -94,7 +97,14 @@ class Mix(Base):
         self.assertGreaterEqual(share["bold"], 0.1)
         self.assertGreater(share["fix"], 0.4)  # moved toward the kind that's kept
         self.assertAlmostEqual(sum(share.values()), 1)
-        self.assertGreaterEqual(mix.plan_counts(self.p, self.p.root, 6, {})["bold"], 1)
+        share = mix.round_shares(self.p, self.p.root, {})
+        self.assertGreaterEqual(mix.allot(share, 6)["bold"], 1)
+        # small rounds: the recent experiments left bold out, so the next one-slot round is bold's
+        q = mock.Mock(files=[f"T-1{i:02}" for i in range(12)], kinds={f"T-1{i:02}": "experiment" for i in range(12)},
+                      ideas={f"T-1{i:02}": "fix" if i < 9 else "ablation" if i < 11 else "revisit" for i in range(12)})
+        self.assertEqual(mix.planned(q), {"fix": 9, "ablation": 2, "revisit": 1})
+        self.assertEqual(mix.plan_counts(self.p, self.p.root, 1, q), {"fix": 0, "bold": 1, "ablation": 0,
+                                                                       "revisit": 0})
         self.assertEqual(mix.shares({"fix": 1, "bold": 0}, 0.1, {}, ("fix", "bold")), {"fix": 0.9, "bold": 0.1})
 
     def test_windvane_experiments_shows_each_kinds_share_kept_rate_and_last_kept(self):
@@ -105,13 +115,13 @@ class Mix(Base):
         self.assertIn("  kind       share  kept   last kept", out)
         self.assertIn("  bold         10%  0/10   -", out)
         self.assertIn("  fix          57%  8/10   T-fi7 trim the critic's notes", out)
-        self.assertIn("  scout     on top  -      -", out)
+        self.assertNotIn("scout ", "\n".join(out[1:]))  # no row while no scout idea was decided
         (self.s.root / ".windvane/EXPERIMENTS.md").unlink()
         self.assertIn("  revisit       0%  -      - (no rejected experiment to revisit yet)",
                       mix.report(self.p, {}, {}))
         with mock.patch("sys.stdout") as stdout:
             cli.cmd_experiments(mock.Mock(what=[]), self.p)
-        self.assertIn("experiment mix (kept: of each kind's last 10", "".join(c.args[0] for c in stdout.write.call_args_list))
+        self.assertIn("experiment mix (kept: of each kind's last 10 the bench decided; scout ideas come on top)", "".join(c.args[0] for c in stdout.write.call_args_list))
 
     def test_the_config_refuses_an_unknown_kind_or_a_floor_too_high(self):
         from windvane import config
@@ -136,7 +146,7 @@ class Novelty(Base):
         self.assertNotIn("T-002", on_main)
         self.assertIn("plan: dropped T-002: it changes the same mechanism (worker prompt) and files as T-050, which "
                       "the bench rejected, with no `Different because:` line", log)
-        self.assertTrue({"T-003", "T-004"} <= on_main)
+        self.assertTrue({"T-003", "T-004"} <= on_main)  # a revisit and a fix of two: each within its share
 
     def test_only_the_last_20_rejected_count(self):
         old = "".join(RECORD.replace("T-050", f"T-{i:03}").replace("worker prompt", f"m{i}") for i in range(100, 120))
@@ -200,18 +210,29 @@ class Plateau(Base):
                                           ("T-003", "bold", "b", "windvane/b.py", ""),
                                           ("T-004", "ablation", "c", "windvane/c.py", "")])
         self.assertIn("## This round explores (a plateau: the last experiments were all rejected)\nOnly `bold`, "
-                      "`ablation` and `scout` experiments this round, at most: bold 6, ablation 4;", prompt)
-        self.assertIn("plan: dropped T-002 (fix): this round's mix has no more room for fix", log)
+                      "`ablation` and `scout` experiments this round in this mix: bold 6, ablation 4;", prompt)
+        self.assertIn("plan: dropped T-002 (fix): this round explores, with no fix experiments", log)
         self.assertEqual(mix.exploring(self.p)["ids"], ["T-003", "T-004"])
         append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-003", "outcome": "rejected"})
         with mock.patch.object(experiment, "push") as push:
             pilot.plateau_watch()
         self.assertEqual((push.call_count, experiment.stopped(self.p)), (0, ""))
-        append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-004", "outcome": "rejected"})
-        with mock.patch.object(experiment, "push") as push:
+        append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-004", "outcome": "failed"})
+        with mock.patch.object(experiment, "push") as push:  # failed before its bench: it closes the round too
             pilot.plateau_watch()
         self.assertEqual(push.call_count, 1)
         self.assertIn("exploration round after them were all rejected", experiment.stopped(self.p))
+
+    def test_a_round_experiment_parked_retried_or_gone_is_told_apart(self):
+        self.make()
+        self.s.write(".windvane/tickets/T-003.md", "# T-003: x\nDepends on: nothing.\n")
+        self.s.write(".windvane/tickets/T-004.md", "# T-004: y\nDepends on: nothing.\n")
+        self.s.write(".windvane/QUEUE.md", "- parked: T-004 (no room)\n")
+        self.s.publish()
+        append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-003", "outcome": "failed"})
+        append_jsonl(self.p.state / "ledger.jsonl", {"event": "outcome", "ticket": "T-003", "outcome": "retried"})
+        self.assertEqual(experiment.fates(self.p, ["T-003", "T-004", "T-777"]),
+                         {"T-003": None, "T-004": "closed", "T-777": "closed"})
 
     def test_a_kept_experiment_during_exploration_goes_back_to_the_mix(self):
         self.make()

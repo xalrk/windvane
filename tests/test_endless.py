@@ -217,6 +217,9 @@ class Plateau(Base):
         self.assertEqual(self.watch(pilot), [])  # first, one exploration round
         self.assertEqual(experiment.stopped(self.p), "")
         self.assertEqual(mix_mod.exploring(self.p), {"at": 9, "ids": None})
+        for tid in ("T-090", "T-091"):  # open tickets: the round waits for each to be decided
+            self.s.write(f".windvane/tickets/{tid}.md", f"# {tid}: explore\nDepends on: nothing.\n")
+        self.s.publish()
         planner.explored(self.p, ["T-090", "T-091"])
         self.verdicts("rejected", ticket="T-090")
         self.assertEqual(self.watch(pilot), [])  # T-091 not decided yet

@@ -195,15 +195,17 @@ class Experiments:
                  "scout ideas only) comes before experiment planning stops")
 
     def explore_watch(self, pf, explore, verdicts, n, goal):
-        """The exploration round's end: a kept experiment since it began goes back to the usual mix; all of its own
-        experiments rejected stops experiment planning."""
+        """The exploration round's end: a kept experiment since it began goes back to the usual mix; each of its own
+        experiments closed unkept (rejected, failed, parked, done or gone) stops experiment planning."""
         p = self.p
         if "kept" in verdicts[explore["at"]:]:
             save_json(plateau_file(p), {k: v for k, v in pf.items() if k != "explore"})
             return self.log("plateau: an experiment was kept during the exploration round; the usual mix again")
         ids = explore.get("ids")
-        got = {t: v for t, v in by_ticket(p).items() if t in (ids or ())}
-        if ids is None or len(got) < len(ids) or "kept" in got.values():
+        if ids is None:
+            return
+        got = fates(p, ids)
+        if "kept" in got.values() or None in got.values():  # a kept one: seen above once the ledger has it
             return
         stop(p, f"the last {n} experiments and the exploration round after them were all rejected (a plateau); a "
              "kept experiment, a new goal or seed, or `windvane experiments resume` starts them again", kind=PLATEAU,
@@ -394,14 +396,14 @@ class Experiments:
         """A bold experiment's first rejection: not closed but sent back to its worker once, with which hidden tests
         and judge checks moved on each seed, to fix what broke; its next head is critiqued, checked, reviewed and
         benched again, and a second rejection closes it. None: nothing to merge."""
-        append_jsonl(self.p.state / "ledger.jsonl", {"event": "experiment", "ticket": tid, "verdict": "revise",
-                                                     "idea": "bold"})
         self.feedback[tid] = (
             f"The bench rejected your head {sha[:12]} ({why}: {numbers}). A bold experiment gets one revision: find "
             "what broke from what moved below (main → your head), fix it, keep the idea, and finish READY again; a "
             "second rejection closes it.\n" + "\n".join(seed_diff(both)))
         self.approved.pop(tid, None)
-        self.settled(tid)
+        self.settled(tid)  # the feedback saved first: a restart before the ledger row revises it again, never skips it
+        append_jsonl(self.p.state / "ledger.jsonl", {"event": "experiment", "ticket": tid, "verdict": "revise",
+                                                     "idea": "bold"})
         self.log(f"{tid}: bold experiment rejected by the bench ({why}): {numbers}; back to its worker for its one "
                  "revision")
         return None
@@ -442,15 +444,22 @@ def seed_diff(both):
     return out or ["- no hidden test or judge check changed on a seed counted on both sides: the totals moved"]
 
 
-def by_ticket(p):
-    """{ticket: its last verdict ("kept" or "rejected")}, from the ledger."""
-    out = {}
+def fates(p, ids):
+    """{ticket: "kept", "closed" (rejected, failed, parked, done without a kept verdict, or no longer a ticket), or
+    None while it's open}: so an exploration round's experiment that never reaches the bench still ends it."""
+    from .queue import Queue
+    last = {}
     for r in read_jsonl(p.state / "ledger.jsonl"):
+        t = r.get("ticket")
         if r.get("event") == "experiment" and r.get("verdict") == "kept":
-            out[r.get("ticket")] = "kept"
-        elif r.get("event") == "outcome" and r.get("outcome") == "rejected":
-            out[r.get("ticket")] = "rejected"
-    return out
+            last[t] = "kept"
+        elif r.get("event") == "outcome" and r.get("outcome") in ("rejected", "failed"):
+            last[t] = "closed"
+        elif r.get("event") == "outcome" and r.get("outcome") == "retried":  # a failed ticket worked again
+            last.pop(t, None)
+    q = Queue(p)
+    return {t: last.get(t) or ("closed" if t not in q.files or q.status(t) in ("done", "parked") else None)
+            for t in ids}
 
 
 def todo(p, base, sha, which, repeat):

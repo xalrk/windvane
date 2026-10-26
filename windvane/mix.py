@@ -13,6 +13,7 @@ Novelty: the planner sees EXPERIMENTS.md as one line per record, grouped by the 
 (`Mechanism:` in the ticket's header), and a new experiment changing the same mechanism and files as one rejected in
 the last NOVELTY records needs a `Different because:` line, or `vet` drops it from the plan.
 """
+import math
 import re
 from pathlib import Path
 
@@ -26,6 +27,7 @@ IDEAS = KINDS + (SCOUT,)
 EXPLORE = ("bold", "ablation", SCOUT)  # the only kinds an exploration round plans
 RECENT = 10  # a kind's kept rate is over its last this many decided experiments
 NOVELTY = 20  # a repeat is checked against this many newest rejected records
+PLANNED = 20  # the newest experiment tickets whose kinds the next round's slots make up for
 EXPERIMENTS = f"{DIR}/EXPERIMENTS.md"
 SHOWN = 4000  # characters of the grouped records a planner prompt gets: the newest lines
 UNNAMED = "(mechanism not recorded)"
@@ -106,23 +108,28 @@ def shares(mix, floor, rate, kinds=KINDS):
         low |= more
 
 
-def counts(share, n):
-    """`n` experiment slots apportioned by `share`: every kind at least one when there are slots enough, the rest
-    by the largest remainder."""
-    if not share or n <= 0:
-        return {k: 0 for k in share}
-    out = {k: 1 if n >= len(share) else 0 for k in share}
-    left = n - sum(out.values())
-    want = {k: max(0.0, s * n - out[k]) for k, s in share.items()}
-    for k in share:
-        add = min(left, int(want[k]))
-        out[k] += add
-        left -= add
-    for k in sorted(share, key=lambda k: -(want[k] - int(want[k]))):
-        if left <= 0:
-            break
+def allot(share, n, have=None):
+    """`n` experiment slots shared out by `share`, one at a time to the kind furthest below its share of the
+    experiments planned so far (`have`, {kind: count} of the recent ones, then these slots): proportional in a big
+    round, and over a few small rounds each kind still gets its turn, so a kind at the floor isn't rounded away."""
+    have = dict(have or {})
+    out = {k: 0 for k in share}
+    for _ in range(max(0, n)):
+        total = sum(have.get(k, 0) + out[k] for k in share) + 1
+        k = max(share, key=lambda k: (share[k] * total - have.get(k, 0) - out[k], share[k]))
         out[k] += 1
-        left -= 1
+    return out
+
+
+def planned(q, most=PLANNED):
+    """{kind: count} of the newest `most` experiment tickets in the queue (scouts aside): what the mix has given so
+    far, so the next round makes up for a kind a small round left out."""
+    num = lambda t: int(re.search(r"\d+", t).group())  # noqa: E731
+    ids = sorted((t for t in q.files if q.kinds.get(t) == "experiment" and q.ideas.get(t) != SCOUT), key=num)
+    out = {}
+    for t in ids[-most:]:
+        k = q.ideas.get(t) or "fix"
+        out[k] = out.get(k, 0) + 1
     return out
 
 
@@ -139,23 +146,28 @@ def round_kinds(p, cd):
     return [k for k in kinds if k in EXPLORE] if exploring(p) else kinds
 
 
-def plan_counts(p, cd, n, ideas):
-    """{kind: experiments this round may write} for `n` slots."""
+def round_shares(p, cd, ideas):
+    """{kind: share} for this round."""
     cfg = p.cfg["experiments"]
-    kinds = round_kinds(p, cd)
-    return counts(shares(cfg["mix"], float(cfg["floor"]), rates(decided(p, ideas)), kinds), n)
+    return shares(cfg["mix"], float(cfg["floor"]), rates(decided(p, ideas)), round_kinds(p, cd))
 
 
-def mix_part(p, cd, n, ideas):
+def plan_counts(p, cd, n, q):
+    """{kind: experiments} for a round of `n`, after what the queue's recent experiments gave each kind."""
+    return allot(round_shares(p, cd, q.ideas), n, planned(q))
+
+
+def mix_part(p, cd, n, q):
     """The planner prompt's section on this round's mix, for a project with `bench/`."""
     if not (Path(p.root) / "bench").is_dir():
         return ""
-    got = plan_counts(p, cd, n, ideas)
+    got = plan_counts(p, cd, n, q)
     lead = ("## This round explores (a plateau: the last experiments were all rejected)\nOnly `bold`, `ablation` "
-            "and `scout` experiments this round" if exploring(p) else "## This round's experiment mix\nOf the "
-            "experiments you write this round")
-    return (f"{lead}, at most: " + ", ".join(f"{k} {c}" for k, c in got.items()) + "; `scout` ideas from outside "
-            "come on top. An experiment past its kind's count is dropped from the plan.")
+            "and `scout` experiments this round" if exploring(p) else "## This round's experiment mix\nWrite this "
+            "round's experiments")
+    return (f"{lead} in this mix: " + ", ".join(f"{k} {c}" for k, c in got.items() if c) + "; `scout` ideas from "
+            "outside come on top. Writing fewer, keep the mix: no kind keeps more than its share of the experiments "
+            "you write (rounded up), and the rest are dropped from the plan.")
 
 
 def records(cd):
@@ -231,16 +243,17 @@ def repeats(head, text, recs):
     return None
 
 
-def vet(p, cd, new, order, n, ideas, log):
-    """Drop from a plan the experiments it may not keep: a repeat (`repeats`), then each kind's past its round's
-    count, keeping the first in queue order (the most valuable). `new`: {id: ticket text}. Returns the ids
-    dropped, each with a log line; their files are removed and their queue bullets go with them."""
-    room, recs, drop = plan_counts(p, cd, n, ideas), records(cd), []
+def vet(p, cd, new, order, q, log):
+    """Drop from a plan the experiments it may not keep: a repeat (`repeats`), then each kind's past its share of
+    the experiments the plan wrote, rounded up (scouts aside), keeping the first in queue order (the most valuable):
+    a planner can't make up ideas of a kind, but one kind can't crowd out the rest.
+    `new`: {id: ticket text}; `q`: the queue on main. Returns the ids dropped, each with a log line."""
+    recs, drop, kinds = records(cd), [], {}
     for tid in sorted(new, key=lambda t: order.index(t) if t in order else len(order)):
         text = new[tid]
-        head = "\n".join(text.splitlines()[:8])
         if not is_experiment(text):
             continue
+        head = "\n".join(text.splitlines()[:8])
         kind = idea(head)
         if not kind:
             kind = "fix"
@@ -249,12 +262,20 @@ def vet(p, cd, new, order, n, ideas, log):
         if r:
             log(f"plan: dropped {tid}: it changes the same mechanism ({r['mechanism'] or UNNAMED}) and files as "
                 f"{r['id']}, which the bench rejected, with no `Different because:` line")
-        elif kind != SCOUT and room.get(kind, 0) <= 0:
-            log(f"plan: dropped {tid} ({kind}): this round's mix has no more room for {kind} experiments "
-                f"({', '.join(f'{k} {c}' for k, c in room.items())})")
+            drop.append(tid)
         else:
-            room[kind] = room.get(kind, 0) - (kind != SCOUT)
+            kinds[tid] = kind
+    share, n = round_shares(p, cd, q.ideas), sum(k != SCOUT for k in kinds.values())
+    room = {k: math.ceil(v * n - 1e-9) for k, v in share.items()}
+    said = ", ".join(f"{k} {c}" for k, c in room.items())
+    for tid, kind in kinds.items():
+        if kind == SCOUT:
             continue
+        if room.get(kind, 0) > 0:
+            room[kind] -= 1
+            continue
+        log(f"plan: dropped {tid} ({kind}): past {kind}'s share of this round's experiments ({said})"
+            if kind in share else f"plan: dropped {tid} ({kind}): this round explores, with no {kind} experiments")
         drop.append(tid)
     return drop
 
@@ -266,9 +287,10 @@ def report(p, ideas, titles):
     rate, kinds = rates(rows), round_kinds(p, p.root)
     share = shares(cfg["mix"], float(cfg["floor"]), rate, kinds)
     out = ["experiment mix" + (": an exploration round after a plateau (bold, ablation and scout only)" if exploring(p)
-                               else "") + f" (kept: of each kind's last {RECENT} the bench decided)",
+                               else "") + f" (kept: of each kind's last {RECENT} the bench decided; scout ideas come "
+           "on top)",
            f"  {'kind':<9} {'share':>6}  {'kept':<5}  last kept"]
-    for k in IDEAS:
+    for k in (*KINDS, SCOUT) if rate[SCOUT][1] else KINDS:
         kept = [t for t, kind, v in rows if kind == k and v == "kept"]
         last = f"{kept[-1]} {titles.get(kept[-1], '')}".strip() if kept else "-"
         cut = "on top" if k == SCOUT else f"{share[k]:.0%}" if k in share else "0%"

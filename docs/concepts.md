@@ -306,8 +306,8 @@ meanwhile are picked up as usual. In a project with `bench/`, the planner's prom
 this machine hurt (`stats --projects --json` over 30 days, numbers only: each project by letter, the costliest
 first, with no paths, ticket ids or reasons, since ticket titles reach the merge commits) and the newest bench runs,
 and ranks its ideas by what that says costs projects most. In any run, when the last `plateau` experiments (8) were
-all rejected, the next plan is one exploration round: only `bold`, `ablation` and `scout` ideas. If all of that
-round's experiments are rejected too, experiment planning stops with one push holding the week's trend, and the run
+all rejected, the next plan is one exploration round: only `bold`, `ablation` and `scout` ideas. If none of that
+round's experiments is kept (each rejected, failed, parked or dropped), experiment planning stops with one push holding the week's trend, and the run
 goes on with other tickets; a kept experiment, a changed goal, a new seed or `windvane experiments resume` starts it
 again (only the rejections after that count). Once a week, at the usage window's reset, an endless run pushes the week's trend:
 the frozen seeds' hidden tests, judge and tokens per merged ticket, then this project's weighted tokens per merged
@@ -319,8 +319,9 @@ experiment ticket says what kind of idea it is (`Idea:` in its header): `fix` (a
 failure show), `bold` (a structural change: a session added, merged or dropped, the steps reordered, what a session
 is shown, another way to check work), `ablation` (a rule, session, check or wait taken out, to see whether projects
 miss it), `revisit` (a rejected idea whose context changed) or `scout` (an idea from outside). Each plan's
-experiments follow `[experiments] mix`: the planner is told how many of each kind it may write, and the driver drops
-any past its kind's count. The shares move toward the kinds the bench keeps (each kind's kept rate over its last 10),
+experiments follow `[experiments] mix`: the planner is told how many of each kind to write (a kind a small round
+left out gets the next round's slot), and the driver drops the experiments of a kind past its share of those the
+plan wrote, rounded up, so one kind can't crowd out the rest. The shares move toward the kinds the bench keeps (each kind's kept rate over its last 10),
 never below `floor`, and `scout` ideas come on top. The planner sees the rejected experiments one line each, grouped by
 the mechanism each changed (`Mechanism:` in the header); a new one changing the same mechanism and files as one of the
 last 20 rejected needs a `Different because:` line, or the driver drops it from the plan with a log line. A rejected
