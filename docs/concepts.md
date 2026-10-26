@@ -321,8 +321,9 @@ failure show), `bold` (a structural change: a session added, merged or dropped, 
 is shown, another way to check work), `ablation` (a rule, session, check or wait taken out, to see whether projects
 miss it), `revisit` (a rejected idea whose context changed) or `scout` (an idea from outside). Each plan's
 experiments follow `[experiments] mix`: the planner is told how many of each kind to write (a kind a small round
-left out gets the next round's slot), and the driver drops the experiments of a kind past its share of those the
-plan wrote, rounded up, or past the count it was told, whichever is more, so one kind can't crowd out the rest. The shares move toward the kinds the bench keeps (each kind's kept rate over its last 10),
+left out gets the next round's slot), and the driver drops the experiments of a kind past the larger of its share of those
+the plan wrote, rounded up, and the count the mix gives it for that many after recent rounds (a plan written to the
+counts it was told keeps them all), so one kind can't crowd out the rest. The shares move toward the kinds the bench keeps (each kind's kept rate over its last 10),
 never below `floor`, and `scout` ideas come on top. The planner sees the rejected experiments one line each, grouped by
 the mechanism each changed (`Mechanism:` in the header); a new one changing the same mechanism and files as one of the
 last 20 rejected needs a `Different because:` line, or the driver drops it from the plan with a log line. A rejected
