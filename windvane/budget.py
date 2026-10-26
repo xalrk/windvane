@@ -9,7 +9,8 @@ The account is the machine's, not a project's, so all of it is machine-wide, und
 caps already asked about. A bench's spend is the weekly reading's rise across its span times its share of the
 weighted tokens every windvane ledger on the machine logged in that span: work by hand at the same time isn't in any
 ledger, so it counts as the bench's, which errs on the safe side. The week is the usage window's own: it ends at the
-seven-day reset the usage reply gives (`week_reset` in a project's usage.json).
+seven-day reset the usage reply gives (`week_reset` in a project's usage.json). The scout's sessions read the web for
+experiment ideas: each gets a spend row too (`record_session`, size `scout`), counted the same way.
 """
 import json
 import time
@@ -79,15 +80,15 @@ def stamp(r):
         return None
 
 
-def tokens(files, start, end):
-    """Weighted tokens of the session rows these ledgers logged between `start` and `end` (epoch seconds; rows carry
-    minutes, so the span starts at its minute)."""
+def tokens(files, start, end, role=None):
+    """Weighted tokens of the session rows (of `role` only, with one) these ledgers logged between `start` and `end`
+    (epoch seconds; rows carry minutes, so the span starts at its minute)."""
     start -= start % 60
     total = 0.0
     for f in files:
         for r in read_jsonl(f):
             t = stamp(r)
-            if not r.get("event") and t is not None and start <= t <= end:
+            if not r.get("event") and t is not None and start <= t <= end and role in (None, r.get("role")):
                 total += weighted(r)
     return total
 
@@ -127,6 +128,22 @@ def record(base, started, before, which):
            "week_before": before.get("week"), "week_after": after.get("week"),
            "reset": current_reset(after.get("reset") or before.get("reset"), ended), "rise": up,
            "bench": round(mine), "all": round(every), "spent": attribute(up, mine, every)}
+    append_jsonl(spend_file(), row)
+    return row
+
+
+def record_session(run, ledger, role, started, before):
+    """A spend row for a session that isn't a bench run but is experiment work (the scout), from `started` until
+    now: the weekly reading's rise times the share of every ledger's tokens that `role`'s rows in `ledger` logged."""
+    ended = time.time()
+    after = reading()
+    mine = tokens([ledger], started, ended, role)
+    every = tokens(root().rglob("ledger.jsonl"), started, ended)
+    up = rise(before, after)
+    row = {"run": run, "size": "scout", "started": round(started), "ended": round(ended),
+           "week_before": before.get("week"), "week_after": after.get("week"),
+           "reset": current_reset(after.get("reset") or before.get("reset"), ended), "rise": up,
+           "bench": round(mine), "all": round(every), "spent": attribute(up, mine, max(every, mine))}
     append_jsonl(spend_file(), row)
     return row
 
@@ -201,8 +218,10 @@ class Budget:
         """`windvane experiments`: this week's spend, the cap, what's allowed and when the week resets."""
         extra = f" (share {self.share:g}% + {self.allowed:g}% you allowed this week)" if self.allowed else ""
         week = "?" if self.week is None else f"{self.week:g}%"
-        out = [f"experiments: {self.spent:g}% of this week spent on benches ({len(self.rows)} "
-               f"run{'s' * (len(self.rows) != 1)}), cap {self.cap:g}%{extra}",
+        scouts = sum(x.get("size") == "scout" for x in self.rows)
+        n = len(self.rows) - scouts
+        out = [f"experiments: {self.spent:g}% of this week spent on benches ({n} run{'s' * (n != 1)}"
+               + (f", {scouts} scout{'s' * (scouts != 1)}" if scouts else "") + f"), cap {self.cap:g}%{extra}",
                f"weekly usage {week}; benches start below {self.below:g}%; the week resets {self.ends()}"]
         sizes = {x.get("size") for x in runs() if not x.get("open")}
         est = [f"{w} {estimate(w):g}%" if w in sizes else f"{w} ? (none recorded)" for w in ("small", "full")]

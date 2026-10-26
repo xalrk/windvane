@@ -330,12 +330,15 @@ CLI_FLAGS = ("--effort", "--setting-sources", "--strict-mcp-config", "--mcp-conf
              "--disable-slash-commands", "--append-system-prompt")
 
 
-def lean_flags(p, role):
+def lean_flags(p, role, tools=None):
     """The command-line flags that keep a session's base context small: no MCP servers (none but the empty config),
     and for windvane's own roles only the tools their rules use and no skills. The user's hooks stay out through
-    `--setting-sources project,local`. Subagents, when the config turns them on, come with the Agent tool."""
+    `--setting-sources project,local`. Subagents, when the config turns them on, come with the Agent tool. `tools`,
+    a builtin [[periodic]] session's own set (the scout's), comes as it is: no Agent, whose subagents would get them."""
     flags = ["--strict-mcp-config", "--mcp-config", NO_MCP]
-    if role in TOOLS:
+    if tools:
+        flags += ["--tools", ",".join(tools), "--disable-slash-commands"]
+    elif role in TOOLS:
         tools = TOOLS[role] + (["Agent"] if p.ap.get("subagents") and "Edit" in TOOLS[role] else [])
         flags += ["--tools", ",".join(tools), "--disable-slash-commands"]
     return flags
@@ -450,13 +453,14 @@ def ending(final, code, noise):
 
 
 def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=None, stop_if=None, ticket="",
-               limits=None, extra_env=None, resume=None, session=None):
+               limits=None, extra_env=None, resume=None, session=None, tools=None, mode=None):
     """Run one headless session to its end. `resume` continues an earlier session by its id, so a follow-up turn
     reads that context from the cache instead of paying for it fresh; `session`, a dict, gets this one's id. `stop_if()` returns a reason to kill it (deadline, usage cap);
     `limits` (kill time, 5-hour cap, weekly cap) passes the same rule on to sessions started inside this one.
     Returns (final text, why it was stopped or None, why it failed or None): a failure is the session's own
     (API error, crash), never the ticket's, so callers can retry it; a session out of its own turns or budget comes
-    back stopped ("max turns")."""
+    back stopped ("max turns"). `tools`: the session's built-in tools, for a role not in TOOLS (`lean_flags`);
+    `mode`: its permission mode, when not `auto` (`dontAsk`: only its allow rules run)."""
     outside_sandbox("a session")
     if p.perm_problems:  # the run and `windvane periodic` stop before this; a desk `plan` or `critic` stops here
         raise SystemExit(f"windvane: bad permission rules in config.toml: {'; '.join(p.perm_problems)}")
@@ -467,9 +471,9 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     effort = p.models.get(f"{role}_effort", p.models.get(f"{base}_effort", "high"))
     raw = p.state / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}-{label}.jsonl"
     raw.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["claude", "-p", prompt, "--model", model, "--effort", effort, "--permission-mode", "auto",
+    cmd = ["claude", "-p", prompt, "--model", model, "--effort", effort, "--permission-mode", mode or "auto",
            "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local",
-           *lean_flags(p, role), "--settings", settings_json(allow, deny), "--append-system-prompt", system,
+           *lean_flags(p, role, tools), "--settings", settings_json(allow, deny), "--append-system-prompt", system,
            *(["--resume", resume] if resume else [])]
     started, parent = time.time(), os.environ.get(NEST)
     extra = {NEST: raw.stem, TICKET: ticket, ROLE: role, "TMPDIR": str(scratch.session_dir(p, ticket or label)),
@@ -490,7 +494,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         mark.write_text(stamp(proc.pid) or "")
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
-    result, killed, final, noise, seen, sid = "", None, {}, [], {}, None
+    result, killed, final, noise, seen, sid, model_id = "", None, {}, [], {}, None, None
     try:
         with raw.open("w") as out:
             while True:
@@ -506,7 +510,9 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
                         noise = (noise + [line.strip()])[-5:] if line.strip() else noise
                         continue
                     sid = ev.get("session_id") or sid  # a killed session has no result event, but can be resumed
-                    if ev.get("type") == "rate_limit_event" and usage:
+                    if ev.get("type") == "system" and ev.get("subtype") == "init":
+                        model_id = ev.get("model") or model_id  # the full id the alias ran as: the scout's new models
+                    elif ev.get("type") == "rate_limit_event" and usage:
                         usage.update(ev.get("rate_limit_info", {}))
                     elif ev.get("type") == "assistant":
                         msg = ev.get("message") or {}
@@ -548,7 +554,8 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
         session["id"] = final.get("session_id") or sid
     append_jsonl(p.state / "ledger.jsonl", {
         "role": role, "label": label, "ticket": ticket, "model": model, "effort": effort,
-        "minutes": round((time.time() - started) / 60, 1), **spent(final, seen),
+        **({"model_id": model_id} if model_id else {}), "minutes": round((time.time() - started) / 60, 1),
+        **spent(final, seen),
         "base": first_turn(seen), "usd": final.get("total_cost_usd"), "killed": killed, "end": end, "error": error,
         "result": result_word(result), "reason": result_reason(result), "exit": code, "stream": raw.name})
     actions.refresh(p)  # the next worker start reads a fresh total from the cache, never waits on a count

@@ -477,19 +477,31 @@ def stats_per_merged(agg, outcome):
 
 
 def periodic_stats(rows, days):
-    """The trend of each [[periodic]] entry's `score=<n>`: the last dozen, oldest first, and its last summary."""
-    by = {}
+    """Each [[periodic]] entry's trend of `score=<n>` (the last dozen, oldest first, and its last summary) and its
+    sessions' cost: an entry with no score (the scout) shows what it spends."""
+    by, cost = {}, {}
     for r in rows:
+        name = (r.get("role") or "").split(":", 1)[-1]
         if r.get("event") == "score":
-            by.setdefault(r["role"].split(":", 1)[-1], []).append(r)
-    if not by:
+            by.setdefault(name, []).append(r)
+        elif not r.get("event") and (r.get("role") or "").startswith("periodic:"):
+            c = cost.setdefault(name, [0, 0.0])
+            c[0], c[1] = c[0] + 1, c[1] + weighted(r)
+    if not by and not cost:
         print(f"no periodic scores in {days:g} days (a session's PERIODIC line may carry score=<n>)")
         return
-    for name, rs in by.items():
-        s = [r["score"] for r in rs]
-        trend = f"{s[-1] - s[0]:+g} since {rs[0]['at']}" if len(s) > 1 else f"first, {rs[0]['at']}"
-        print(f"{name}: {' → '.join(f'{x:g}' for x in s[-12:])}  ({len(s)} run{'s' * (len(s) != 1)}, {trend})")
-        print(f"  last: {rs[-1].get('summary', '')[:110]}")
+    for name in dict.fromkeys([*by, *cost]):
+        rs = by.get(name)
+        if rs:
+            s = [r["score"] for r in rs]
+            trend = f"{s[-1] - s[0]:+g} since {rs[0]['at']}" if len(s) > 1 else f"first, {rs[0]['at']}"
+            print(f"{name}: {' → '.join(f'{x:g}' for x in s[-12:])}  ({len(s)} run{'s' * (len(s) != 1)}, {trend})")
+            print(f"  last: {rs[-1].get('summary', '')[:110]}")
+        else:
+            print(f"{name}: no scores")
+        if name in cost:
+            n, w = cost[name]
+            print(f"  cost: {n} session{'s' * (n != 1)}, {k(w)} weighted tokens")
 
 
 def critic_stats(a, p):

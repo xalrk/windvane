@@ -38,7 +38,7 @@ class UserFacing(unittest.TestCase):
 # Each prompt's size in bytes when it was capped (T-295): every session re-reads its prompt on every turn, so new
 # text replaces old. Bytes, not lines, so a longer line can't dodge the cap. A prompt that shrinks lowers its cap here.
 CAPS = {"CRITIC.md": 3824, "CRITIC-numeric.md": 2164, "CRITIC-project.md": 842, "FIX.md": 987, "JUDGE.md": 844,
-        "PERIODIC.md": 1089, "PLAN.md": 3122, "PREFLIGHT.md": 1299, "REVIEW.md": 2149, "SEED.md": 1991, "TRIAGE-REQUESTS.md": 1499, "WORKER.md": 7890}
+        "PERIODIC.md": 1089, "PLAN.md": 3122, "PREFLIGHT.md": 1299, "REVIEW.md": 2149, "SCOUT.md": 1108, "SEED.md": 1991, "TRIAGE-REQUESTS.md": 1499, "WORKER.md": 7890}
 
 
 def over_cap(sizes):

@@ -63,6 +63,7 @@ per role:
 | **Reviewer** | read files, run commands such as `git diff`, `git log`, `git show` | edit or write files, commit, push, switch branches, reset, merge, comment on or close pull requests |
 | **Planner** | write ticket files in its own worktree | commit, push, switch branches, spawn agents: the driver commits its tickets and opens the pull request (or merges, with `--merge`) |
 | **Periodic** | run commands and edit files on a detached `ci/` tree between tickets | commit, push, switch branches, reset, use `gh`, spawn agents: the driver keeps only new tickets, lines added at the end of open tickets and added `QUEUE.md` lines, lands them, and discards the rest |
+| **Scout** | read its detached `ci/` tree and the web, write `.windvane/` there | run any command, read or write anything else, commit, push: the driver lands only its new tickets that pass its checks |
 | **Preflight** | read the next tickets (in your checkout, read-only) | run any command, edit or write files, fetch from the web |
 
 **The critic's copy.** The ticket critic never runs in the worker's worktree: each critique makes a detached worktree
@@ -270,6 +271,12 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
 - **Fork PRs.** `gh pr list --head <branch>` matches a branch of that name in any fork. Every lookup windvane makes
   (a ticket's PR, a plan's, a held branch's) asks whether the PR comes from another repository and drops it, with
   one log line, so an outsider's PR named after a ticket's branch never reaches a worker or the reviewer.
+- **Web pages.** Only the scout reads the web, in `dontAsk` mode with no shell: it may read its own `ci/` tree, write
+  `.windvane/` there, search, and fetch from a short list of hosts (a fetch could carry the tree's text to any host
+  on it: a little through GitHub's traffic stats, more through each host its entry's `allow` adds). The driver lands
+  only its new tickets, dropping with a log line one that names a web address outside its `Source:` line, a fetch
+  (`curl`, `wget`, `git clone`) or an install command (`pip install x`, `npx x`): a pattern check, so the rest still
+  pass the experiment gate and review.
 - **Credentials.** A session gets your environment without the variables named like credentials (`*TOKEN*`,
   `*SECRET*`, `*PASSWORD*`, `*_KEY`, `AWS_*`), except what Claude Code and `gh` log in with and what
   [`[env] keep`](configuration.md#env) names.

@@ -499,6 +499,7 @@ class Pilot(Desk, Periodic, Experiments):
         self.bench_seen, self.bench_wait = {}, {}
         self.overfit_read = None  # bench.jsonl's mtime when `overfit_watch` last looked
         self.seed_seen = {}  # a seed entry -> ((main's head, the ledger's mtime), whether it was due then)
+        self.scout_read = None  # the ledger's mtime when the scout's model watch last read it
         self.seed_tried = set()  # the seed entries whose round ran this run (each tries once a run)
         self.asks_left = []  # the rounds asked for that the run ended before: in the final summary
         self.requests_tried = set()  # windvane requests a [[periodic]] round was given this run: never twice
@@ -610,12 +611,13 @@ class Pilot(Desk, Periodic, Experiments):
         return self.a.goal or self.p.cfg["goal"]
 
     def claude(self, role, label, prompt, system, cwd, limit, allow=(), deny=(), ticket="", env=None, session=None,
-               resume=None):
+               resume=None, tools=None, mode=None):
         login.gate()
         self.tl.started = time.time()  # a login wait reruns at once a session started before the login came back
         text, killed, error = run_claude(self.p, role, label, prompt, system, cwd, allow, deny, self.usage,
                                          self.stopper(limit), ticket,
-                                         (min(limit, self.end()), self.a.cap, self.a.week_cap), env, resume, session)
+                                         (min(limit, self.end()), self.a.cap, self.a.week_cap), env, resume, session,
+                                         tools, mode)
         if killed:
             self.log(f"  stopped {label}: {killed} ({self.usage.text()})")
         elif not error:
