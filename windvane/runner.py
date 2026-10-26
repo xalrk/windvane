@@ -453,13 +453,14 @@ def ending(final, code, noise):
 
 
 def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=None, stop_if=None, ticket="",
-               limits=None, extra_env=None, resume=None, session=None, tools=None):
+               limits=None, extra_env=None, resume=None, session=None, tools=None, mode=None):
     """Run one headless session to its end. `resume` continues an earlier session by its id, so a follow-up turn
     reads that context from the cache instead of paying for it fresh; `session`, a dict, gets this one's id. `stop_if()` returns a reason to kill it (deadline, usage cap);
     `limits` (kill time, 5-hour cap, weekly cap) passes the same rule on to sessions started inside this one.
     Returns (final text, why it was stopped or None, why it failed or None): a failure is the session's own
     (API error, crash), never the ticket's, so callers can retry it; a session out of its own turns or budget comes
-    back stopped ("max turns"). `tools`: the session's built-in tools, for a role not in TOOLS (`lean_flags`)."""
+    back stopped ("max turns"). `tools`: the session's built-in tools, for a role not in TOOLS (`lean_flags`);
+    `mode`: its permission mode, when not `auto` (`dontAsk`: only its allow rules run)."""
     outside_sandbox("a session")
     if p.perm_problems:  # the run and `windvane periodic` stop before this; a desk `plan` or `critic` stops here
         raise SystemExit(f"windvane: bad permission rules in config.toml: {'; '.join(p.perm_problems)}")
@@ -470,7 +471,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     effort = p.models.get(f"{role}_effort", p.models.get(f"{base}_effort", "high"))
     raw = p.state / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}-{label}.jsonl"
     raw.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["claude", "-p", prompt, "--model", model, "--effort", effort, "--permission-mode", "auto",
+    cmd = ["claude", "-p", prompt, "--model", model, "--effort", effort, "--permission-mode", mode or "auto",
            "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local",
            *lean_flags(p, role, tools), "--settings", settings_json(allow, deny), "--append-system-prompt", system,
            *(["--resume", resume] if resume else [])]

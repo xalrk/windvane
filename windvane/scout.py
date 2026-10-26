@@ -25,14 +25,21 @@ from .util import load_json, read_jsonl, save_json
 MOST = 3  # tickets a scout round may land
 TOOLS = ["Read", "Glob", "Grep", "Write", "Edit", "WebFetch", "WebSearch"]  # no Bash: nothing it read gets run
 WEB = ["WebFetch", "WebSearch"]
+# In `dontAsk` mode only these run, the rest refused unasked: it reads its own tree (Glob and Grep go by the Read rule),
+# writes only `.windvane/` there, and reads the web. Nothing outside the tree can end up in a ticket, or be changed.
+ALLOW = ["Read(./**)", "Edit(./.windvane/**)", "Write(./.windvane/**)", *WEB]
+MODE = "dontAsk"
 HELP_LINES = 150  # a first scout's `claude --help`, cut: later ones get only the diff
 DIFF_LINES = 120
-URL = re.compile(r"https?://\S+|\bwww\.\S+", re.I)
+# A web address: a scheme, `www.`, or a host on a common top-level domain (file names like `check.sh` aren't hosts)
+URL = re.compile(r"[a-z][a-z+.-]*://[^\s`'\"<>()]+|\bwww\.[^\s`'\"<>()]+|(?<![\w./-])(?:[a-z0-9-]+\.)+(?:com|org|net|"
+                 r"io|dev|ai|co|app|xyz|me|info|gg|ly|cloud|tech|biz|us|uk|de|fr|jp|cn|ru)\b(?:/[^\s`'\"<>()]*)?", re.I)
+FETCH = re.compile(r"\b(?:curl|wget|Invoke-WebRequest|iwr|git\s+clone)\b", re.I)
+# An install command naming what it installs (prose about dependencies isn't one)
 INSTALL = re.compile(
-    r"\b(?:pip3?|pipx|uv|uvx|poetry|npm|pnpm|yarn|bun|cargo|gem|go|brew|apt(?:-get)?|dnf|yum|conda|winget)\s+"
-    r"(?:install|add|get|i)\b|\b(?:npx|uvx|pipx\s+run)\s+[\w@]"
-    r"|\binstall(?:ing)?\s+(?:the\s+|a\s+)?[\w.@/-]+\s+(?:package|library|module|crate|gem|plugin)\b"
-    r"|\badd\s+(?:a\s+|the\s+)?(?:new\s+)?(?:dependency|package)\b", re.I)
+    r"\b(?:pip3?|pipx|uv(?:\s+pip)?|poetry|npm|pnpm|yarn|bun|cargo|gem|brew|apt(?:-get)?|dnf|yum|conda|winget)\s+"
+    r"(?:install|add)\s+(?:-\S+\s+)*[\w@.:/=<>-]*\w|\bgo\s+(?:get|install)\s+\S*[./]\S+|\b(?:npx|uvx)\s+[\w@][\w@./-]*",
+    re.I)
 
 
 def state_file(p):
@@ -157,13 +164,11 @@ def refused(text):
         return "it isn't an `Idea: scout` ticket"
     if not header_line(head, "Source").strip():
         return "it names no `Source:`"
-    m = URL.search(re.sub(r"(?im)\bSource:.*$", "", text))
-    if m:
-        return f"it names a URL to fetch ({m.group(0)[:60]})"
     m = INSTALL.search(text)
     if m:
         return f"it names a package to install ({' '.join(m.group(0).split())[:60]})"
-    return ""
+    m = URL.search(re.sub(r"(?im)\bSource:.*$", "", text)) or FETCH.search(text)
+    return f"it names a URL to fetch ({m.group(0)[:60]})" if m else ""
 
 
 def vet(p, kept, name, log):

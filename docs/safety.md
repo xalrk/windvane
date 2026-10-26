@@ -47,7 +47,7 @@ per role:
 | **Reviewer** | read files, run commands such as `git diff`, `git log`, `git show` | edit or write files, commit, push, switch branches, reset, merge, comment on or close pull requests |
 | **Planner** | write ticket files in its own worktree | commit, push, switch branches, spawn agents: the driver commits its tickets and opens the pull request (or merges, with `--merge`) |
 | **Periodic** | run commands and edit files on a detached `ci/` tree between tickets | commit, push, switch branches, reset, use `gh`, spawn agents: the driver keeps only new tickets, lines added at the end of open tickets and added `QUEUE.md` lines, lands them, and discards the rest |
-| **Scout** | read the repo, WebFetch and WebSearch, write ticket files on a detached `ci/` tree | run any command, commit, push: the driver lands only its new tickets that pass its checks, and discards the rest |
+| **Scout** | read its detached `ci/` tree and the web, write `.windvane/` there | run any command, read or write anything else, commit, push: the driver lands only its new tickets that pass its checks |
 | **Preflight** | read the next tickets (in your checkout, read-only) | run any command, edit or write files, fetch from the web |
 
 **The critic's copy.** The ticket critic never runs in the worker's worktree: each critique makes a detached worktree
@@ -255,11 +255,13 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
 - **Fork PRs.** `gh pr list --head <branch>` matches a branch of that name in any fork. Every lookup windvane makes
   (a ticket's PR, a plan's, a held branch's) asks whether the PR comes from another repository and drops it, with
   one log line, so an outsider's PR named after a ticket's branch never reaches a worker or the reviewer.
-- **Web pages.** Only the scout (a `builtin = "scout"` [[periodic]] entry) gets WebFetch and WebSearch among
-  windvane's own sessions, and it gets no shell, so nothing it reads is run; of what it writes, only its new tickets
-  may land. The driver drops one that names a URL anywhere but its `Source:` line or a package to install, with a log
-  line, and the rest pass the experiment gate, the protected yardstick and the project's rules like any planned
-  ticket.
+- **Web pages.** Only the scout (a `builtin = "scout"` [[periodic]] entry) among windvane's sessions gets WebFetch
+  and WebSearch, and it runs in `dontAsk` mode with no shell and three kinds of allow rule: read its own `ci/` tree,
+  write `.windvane/` there, read the web; anything else is refused without asking. Of what it writes only its new
+  tickets may land, and the driver drops one, with a log line, that names a web address (`https://…`, `www.…`,
+  `host.com/…`) anywhere but its `Source:` line, a fetch (`curl`, `wget`, `git clone`) or an install command (`pip
+  install x`, `npm install x`, `npx x` and the like): a pattern check, so the rest still go through the experiment
+  gate, the protected yardstick and review like any planned ticket.
 - **Credentials.** A session gets your environment without the variables named like credentials (`*TOKEN*`,
   `*SECRET*`, `*PASSWORD*`, `*_KEY`, `AWS_*`), except what Claude Code and `gh` log in with and what
   [`[env] keep`](configuration.md#env) names.

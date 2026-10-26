@@ -608,13 +608,13 @@ class Pilot(Desk, Periodic, Experiments):
         return self.a.goal or self.p.cfg["goal"]
 
     def claude(self, role, label, prompt, system, cwd, limit, allow=(), deny=(), ticket="", env=None, session=None,
-               resume=None, tools=None):
+               resume=None, tools=None, mode=None):
         login.gate()
         self.tl.started = time.time()  # a login wait reruns at once a session started before the login came back
         text, killed, error = run_claude(self.p, role, label, prompt, system, cwd, allow, deny, self.usage,
                                          self.stopper(limit), ticket,
                                          (min(limit, self.end()), self.a.cap, self.a.week_cap), env, resume, session,
-                                         tools)
+                                         tools, mode)
         if killed:
             self.log(f"  stopped {label}: {killed} ({self.usage.text()})")
         elif not error:

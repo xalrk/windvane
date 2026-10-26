@@ -323,14 +323,17 @@ class Periodic:
         system = rules(p, "PERIODIC.md") + "\n" + own_rules
         session, before, started = {}, budget.reading() if scouting else {}, time.time()
         text, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}", prompt, system, cd, limit,
-                                          scout.WEB if scouting else ["Bash(windvane *)"], deny, session=session,
-                                          tools=scout.TOOLS if scouting else None)
+                                          scout.ALLOW if scouting else ["Bash(windvane *)"], deny, session=session,
+                                          tools=scout.TOOLS if scouting else None,
+                                          mode=scout.MODE if scouting else None)
         m, said = last_match(PERIODIC_RE, text), text
         if not (killed or error or m) and session.get("id"):  # ended well but without its line: asked once, tree as is
             more = " (your `REQUEST:` lines first)" if reqs else ""
             asked = end_reask(PERIODIC_LINE, more)  # cut off or failed, it's said as such below
             again, killed, error = self.claude(f"periodic:{name}", f"periodic-{name}-reask", asked, system, cd,
-                                               max(limit, now() + REASK_TIME), deny=critic.DENY, resume=session["id"])
+                                               max(limit, now() + REASK_TIME), deny=critic.DENY, resume=session["id"],
+                                               tools=scout.TOOLS if scouting else None,
+                                               mode=scout.MODE if scouting else None)
             m = last_match(PERIODIC_RE, again)
             if m:  # the reply stays the first one's; a verdict the re-ask repeats wins over its first one
                 said = f"{again}\n{text}"
