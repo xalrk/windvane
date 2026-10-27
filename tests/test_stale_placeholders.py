@@ -2,6 +2,7 @@
 clears its own places at a run's start and between tickets, and one a live sandbox mounts over is never touched."""
 import contextlib
 import io
+import os
 import subprocess
 import sys
 import unittest
@@ -41,9 +42,10 @@ class StalePlaceholders(unittest.TestCase):
         self.addCleanup(self.s.close)
         self.proc = self.s.tmp / "proc"
         mountinfo(self.proc)
-        patch = mock.patch.object(jobs, "PROC", str(self.proc))
-        patch.start()
-        self.addCleanup(patch.stop)
+        for patch in (mock.patch.object(jobs, "PROC", str(self.proc)), mock.patch.dict(os.environ)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        os.environ.pop("SANDBOX_RUNTIME", None)  # these tests' own commands may run in one
         self.p = Project(self.s.root)
         self.lock = self.s.root / ".git/config.lock"
 
@@ -128,10 +130,28 @@ class StalePlaceholders(unittest.TestCase):
         self.assertFalse(self.lock.exists())
         self.assertIn("removed 1 stale sandbox placeholder from the repo's git dir", out.getvalue())
 
+    def test_inside_a_sandbox_nothing_goes_as_it_cant_see_the_others(self):
+        leave(self.lock)
+        os.environ["SANDBOX_RUNTIME"] = "1"
+        self.assertIn("can't be told from live ones inside the Bash sandbox", self.warnings()[0])
+        self.assertIn("left the empty read-only files", self.doctor(clean=True))
+        self.assertTrue(self.lock.exists())
+
+    def test_only_locks_count_in_the_git_dir(self):
+        leave(self.s.root / ".git/description2")
+        self.assertEqual(self.warnings(), [])
+
     def test_mount_points_are_unescaped(self):
         mountinfo(self.proc, "/a\\040b/.mcp.json")
         self.assertEqual(jobs.mount_points(self.proc), {"/", "/a b/.mcp.json"})
-        self.assertEqual(jobs.mount_points(self.s.tmp / "none"), set())
+        self.assertIsNone(jobs.mount_points(self.s.tmp / "none"))
+
+    def test_an_unreadable_proc_tells_none_stale(self):
+        leave(self.lock)
+        with mock.patch.object(jobs, "PROC", str(self.s.tmp / "none")):
+            self.assertEqual(self.warnings(), [])
+            self.assertEqual(jobs.remove_placeholders([self.lock]), [])
+        self.assertTrue(self.lock.exists())
 
 
 if __name__ == "__main__":

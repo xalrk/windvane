@@ -307,8 +307,9 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
   `.git/config.lock`, a `.mcp.json`, files under `.claude/`) by binding a read-only file over it, and leaves the
   empty, read-only file it made for that on disk when the command is killed. A stale `.git/config.lock` makes
   every git config write fail in every worktree (`git push -u`, a tracking branch). Between tickets the driver
-  removes the ones in the repo's git dir, its own worktrees and the state dir, never one a running sandbox still
-  holds; the ones in your checkout `windvane doctor` names and only `windvane doctor --clean` removes.
+  removes the ones in the repo's git dir (its locks), its own worktrees and the state dir, never one a running
+  sandbox still holds; the ones in your checkout `windvane doctor` names and only `windvane doctor --clean`
+  removes. Inside the sandbox, which hides the other sandboxes, it removes none.
 
 What a session can still read: any other file your user can (your home directory included), and the web. Run
 windvane on a machine or account that holds only what its projects need.

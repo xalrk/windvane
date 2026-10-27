@@ -25,7 +25,7 @@ from pathlib import Path
 from . import heavy, scratch, util
 from .config import exe
 from .heavy import JOB_ENV, STOP_AT
-from .runner import GRACE, IN_JOB, NEST, ROLE, TICKET, outside_sandbox, signal_group
+from .runner import GRACE, IN_JOB, IN_SANDBOX, NEST, ROLE, TICKET, outside_sandbox, signal_group
 from .util import append_jsonl, gout, now, read_jsonl
 
 _LOGS = itertools.count(1)  # a check log's number in this process
@@ -100,12 +100,13 @@ PROC = "/proc"  # where the mount tables are read
 
 def mount_points(proc=None):
     """Every path a live process has as a mount point, each mount namespace's table read once. A sandboxed command's
-    namespace lists the paths it binds over, its placeholders among them. Linux only: elsewhere an empty set."""
+    namespace lists the paths it binds over, its placeholders among them. None when `/proc` can't be read: then no
+    placeholder can be told stale."""
     proc, seen, out = Path(proc or PROC), set(), set()
     try:
         pids = [d for d in os.listdir(proc) if d.isdigit()]
     except OSError:
-        return out
+        return None
     for pid in pids:
         try:
             ns = os.readlink(proc / pid / "ns/mnt")
@@ -139,7 +140,7 @@ def stale_placeholder(path, rel, held):
 
 def guarded(top, git_dir=False):
     """(path, its path as the sandbox guards it) for what a sandbox may make a placeholder of in `top`: a git dir's
-    top-level files (as `.git/<name>`), else a tree's top-level dot entries and what's directly in its `.claude/`."""
+    top-level locks (as `.git/<name>`), else a tree's top-level dot entries and what's directly in its `.claude/`."""
     top = Path(top)
 
     def names(d):
@@ -147,8 +148,8 @@ def guarded(top, git_dir=False):
             return sorted(os.listdir(d))
         except OSError:  # missing, or a placeholder file itself
             return []
-    if git_dir:
-        return [(top / n, f".git/{n}") for n in names(top)]
+    if git_dir:  # git's locks only: every other file there git made itself, not a sandbox
+        return [(top / n, f".git/{n}") for n in names(top) if n.endswith(".lock")]
     return ([(top / n, n) for n in names(top) if n.startswith(".")]
             + [(top / ".claude" / n, f".claude/{n}") for n in names(top / ".claude")])
 
@@ -175,6 +176,8 @@ def stale_placeholders(p, held=None):
         if not sys.platform.startswith("linux"):
             return []
         held = mount_points()
+    if held is None:
+        return []
     out = []
     for what, base, dirs, ours in placeholder_places(p):
         found = [path for d, git_dir in dirs for path, rel in guarded(d, git_dir) if stale_placeholder(path, rel, held)]
@@ -189,9 +192,20 @@ def shown(base, paths, most=3):
     return ", ".join(names[:most]) + (f" and {len(names) - most} more" if len(names) > most else "")
 
 
+def blind():
+    """Why stale placeholders can't be told from live ones here, or "": inside a sandbox `/proc` shows only its own
+    processes, so another session's live guard would look stale."""
+    return "inside the Bash sandbox, which hides the other sandboxes" if os.environ.get(IN_SANDBOX) else ""
+
+
 def remove_placeholders(paths):
-    """The ones of `paths` removed, each checked again first: a sandbox that started meanwhile may hold it now."""
+    """The ones of `paths` removed, each checked again first: a sandbox that started meanwhile may hold it now.
+    None inside a sandbox (`blind`)."""
+    if blind():
+        return []
     held, gone = mount_points() if sys.platform.startswith("linux") else set(), []
+    if held is None:
+        return []
     for f in paths:
         if stale_placeholder(f, ".", held):
             with contextlib.suppress(OSError):

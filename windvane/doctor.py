@@ -481,8 +481,12 @@ def stale_placeholders(p):
 def placeholder_warnings(p=None):
     """The empty read-only files a killed sandboxed command left, per place: a stale `.git/config.lock` fails every
     git config write (`git push -u`, a tracking branch); the others litter `git status` or the state dir."""
+    places = stale_placeholders(p)
+    if places and jobs.blind():
+        return [("warn", f"empty read-only files a killed sandboxed command may have left can't be told from live ones "
+                 f"{jobs.blind()}", "run `windvane doctor` on its own (no pipe or redirect), outside the sandbox")]
     out = []
-    for what, base, found, _ in stale_placeholders(p):
+    for what, base, found, _ in places:
         n = len(found)
         out.append(("warn", f"{n} empty read-only file{'s' * (n > 1)} a killed sandboxed command left in {what} "
                     f"({jobs.shown(base, found)})", "windvane doctor --clean"))
@@ -494,6 +498,10 @@ def clean_placeholders(p, dry_run):
     sandbox took up meanwhile stays (remove_placeholders checks again)."""
     places = stale_placeholders(p)
     if not places:
+        return
+    if jobs.blind():
+        print(f"left the empty read-only files a killed sandboxed command may have left: {jobs.blind()}; run "
+              "`windvane doctor --clean` on its own, outside it")
         return
     for what, base, found, _ in places:
         gone = found if dry_run else jobs.remove_placeholders(found)
