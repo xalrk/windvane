@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -148,6 +149,9 @@ class Requests(unittest.TestCase):
         self.assertIn(f"Edit(/{requests.inbox()}/**)", rules)
         self.assertIn(f"Edit(/{home.resolve()}/**)", other)  # any other project: the whole home
         self.assertEqual(in_home, [r for r in rules if str(requests.inbox()) in r])  # in the home: only the inbox
+        shutil.rmtree(git / "hooks")  # a path not there gets no rule: the sandbox would leave a placeholder file there
+        with unittest.mock.patch.object(requests, "HOME", home.resolve()):
+            self.assertFalse([r for r in requests.worker_deny(SimpleNamespace(work_dir=slot)) if "/.git/hooks" in r])
 
     def test_a_request_inside_the_bash_sandbox_says_to_run_it_on_its_own(self):
         self.make()
