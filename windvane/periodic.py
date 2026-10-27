@@ -72,16 +72,19 @@ class Periodic:
         """An entry asked for with `windvane periodic <name>` (`asked_due`), else the first [[periodic]] entry whose
         `every` merges have passed since it last ran this run (restarts carry the count), or with a group finished
         since then, or with requests in the inbox no round this run was given (one that failed waits for the next
-        run, never loops), or None."""
+        run, never loops), or None. A bench round isn't due while another bench holds the machine: it starts on a
+        later pass once that one ends, its hours sized and its fit before the deadline reckoned then."""
         e = self.asked_due()
         if e:
-            if e["builtin"] == "bench":  # a regression's ticket first: a new round would overwrite its verdict
-                return dict(e, bench="land" if self.bench_due(e) == "land" else "start")
-            return e
+            if e["builtin"] != "bench":
+                return e
+            due = "land" if self.bench_due(e) == "land" else "start"  # a regression's ticket first: a new round
+            if due == "land" or self.bench_held(e["name"]) is None:  # would overwrite its verdict
+                return dict(e, bench=due)
         for e in self.p.periodic.values():
             if e["builtin"] == "bench":
                 due = self.bench_due(e)
-                if due:
+                if due == "land" or due and self.bench_held(e["name"]) is None:  # another bench: a later pass
                     return dict(e, bench=due)
                 continue
             if e["builtin"] == "seed":

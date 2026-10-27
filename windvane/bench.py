@@ -62,6 +62,7 @@ SMALL_SEEDS, SMALL_TICKETS = 2, 3
 DENIED = ("bench", "tests/fixtures/bench")
 JUDGE_MINUTES = 30  # a judge still going after this is stopped: the checks it hasn't answered count as no
 LOCK = "bench.lock"  # in the state root, so one for every project on the machine
+WAIT_HINT = "windvane bench --status to check; windvane stop or Ctrl-C ends it"  # a background bench can't be Ctrl-C'd
 
 
 def state_root():
@@ -572,7 +573,7 @@ def take_lock(p):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             if (h := holder()) is not None:
-                print(f"bench: waiting for {describe(h)} (Ctrl-C or a stop ends the wait, nothing run)", flush=True)
+                print(f"bench: waiting for {describe(h)} ({WAIT_HINT})", flush=True)
             fcntl.flock(fd, fcntl.LOCK_EX)
     except BaseException:
         os.close(fd)

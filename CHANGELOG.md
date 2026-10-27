@@ -271,6 +271,10 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A periodic bench round waits for another bench before it starts, rather than starting a job that blocks in the
+  bench lock: the run logs the wait once, starts the round on a later pass once the machine is free, and sizes it and
+  checks its fit before the deadline then. The wait line names the commands that end it (`windvane bench --status`
+  to check; `windvane stop` or Ctrl-C), since a background bench can't be Ctrl-C'd.
 - The empty read-only files a killed sandboxed command leaves no longer break git silently. A stale
   `.git/config.lock` made every `git push -u` and tracking branch fail with `could not lock config file`; the driver
   now removes these in the repo's git dir, its worktrees and the state dir at a run's start and between tickets (never

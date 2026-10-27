@@ -333,16 +333,25 @@ class Experiments:
         """Wait while another bench holds the machine's (one runs at a time), so this one's fit before the deadline
         is reckoned from when it can start. True once free; None once a stop or the deadline ends the wait, which
         isn't a failure: the next run benches it."""
-        said = False
-        while (h := bench.holder()) is not None:
+        while (h := self.bench_held(tid)) is not None:
             if self.stopping_now() or (self.p.state / "STOP").exists() or now() >= self.end():
+                self.bench_said.discard(tid)
                 return self.log(f"{tid}: the run ended while its bench waited for {bench.describe(h)}; the next run "
                                 "benches it")
-            if not said:
-                self.log(f"{tid}: bench: waiting for {bench.describe(h)}")
-                said = True
             self.nap(now() + timedelta(seconds=POLL))
         return True
+
+    def bench_held(self, who):
+        """The bench holding the machine's lock, if another does: `who`'s wait for it is logged once, until it's
+        free. An experiment's bench and a periodic round both ask before they start, rather than leave `windvane
+        bench` to block in its lock, a wait their deadline wouldn't count."""
+        h = bench.holder()
+        if h is None:
+            self.bench_said.discard(who)
+        elif who not in self.bench_said:
+            self.bench_said.add(who)
+            self.log(f"{who}: bench: waiting for {bench.describe(h)} ({bench.WAIT_HINT})")
+        return h
 
     def bench_ended(self, tid, job):
         """Wait for the bench job to end: True, or None once a stop or the deadline has ended it."""
