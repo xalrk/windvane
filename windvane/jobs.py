@@ -87,7 +87,117 @@ def placeholder(path, rel=""):
         st = os.lstat(path)
     except OSError:
         return False
-    return stat.S_ISCHR(st.st_mode) or (stat.S_ISREG(st.st_mode) and not st.st_size and rel.startswith("."))
+    return stat.S_ISCHR(st.st_mode) or mount_file(st, rel)
+
+
+def mount_file(st, rel):
+    """Whether a file (its lstat) could be the empty mount point the sandbox makes on the host for a guarded path."""
+    return stat.S_ISREG(st.st_mode) and not st.st_size and rel.startswith(".")
+
+
+PROC = "/proc"  # where the mount tables are read
+
+
+def mount_points(proc=None):
+    """Every path a live process has as a mount point, each mount namespace's table read once. A sandboxed command's
+    namespace lists the paths it binds over, its placeholders among them. Linux only: elsewhere an empty set."""
+    proc, seen, out = Path(proc or PROC), set(), set()
+    try:
+        pids = [d for d in os.listdir(proc) if d.isdigit()]
+    except OSError:
+        return out
+    for pid in pids:
+        try:
+            ns = os.readlink(proc / pid / "ns/mnt")
+        except OSError:
+            ns = pid
+        if ns in seen:
+            continue
+        seen.add(ns)
+        try:
+            table = (proc / pid / "mountinfo").read_text(errors="replace")
+        except OSError:  # gone, or another user's
+            continue
+        for line in table.splitlines():
+            fields = line.split(" ")
+            if len(fields) > 4:  # the mount point, its blanks and backslashes escaped in octal
+                out.add(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4]))
+    return out
+
+
+def stale_placeholder(path, rel, held):
+    """Whether `path` is a placeholder a killed sandboxed command left: the empty mount point (`mount_file`) with no
+    write bit, which no live process (`held`, from `mount_points`) mounts over. Git's own leftover lock after a
+    crash is writable, so it never counts. One still held must stay: removing it drops that command's guard."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return (mount_file(st, rel) and not st.st_mode & 0o222
+            and str(path) not in held and os.path.realpath(path) not in held)
+
+
+def guarded(top, git_dir=False):
+    """(path, its path as the sandbox guards it) for what a sandbox may make a placeholder of in `top`: a git dir's
+    top-level files (as `.git/<name>`), else a tree's top-level dot entries and what's directly in its `.claude/`."""
+    top = Path(top)
+
+    def names(d):
+        try:
+            return sorted(os.listdir(d))
+        except OSError:  # missing, or a placeholder file itself
+            return []
+    if git_dir:
+        return [(top / n, f".git/{n}") for n in names(top)]
+    return ([(top / n, n) for n in names(top) if n.startswith(".")]
+            + [(top / ".claude" / n, f".claude/{n}") for n in names(top / ".claude")])
+
+
+def placeholder_places(p):
+    """(what, base, [(dir, is a git dir)], ours) per place a stale placeholder is looked for: the repo's git dir,
+    which every worktree shares; the user's checkout, never `ours` (the driver leaves it to `doctor --clean`); and
+    windvane's state: the state root, the project's state dir and each dir in it (its worktrees, `trials/`)."""
+    root = p.main_root()
+    common = gout(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    out = [("the repo's git dir", Path(common).parent, [(Path(common), True)], True)] if common else []
+    out.append(("the checkout", root, [(root, False)], False))
+    if p.state.is_dir():
+        kids = sorted(d for d in p.state.iterdir() if d.is_dir() and not d.is_symlink() and d.name != "tmp")
+        out.append(("windvane's state dir", p.state.parent,
+                    [(p.state.parent, False), (p.state, False)] + [(d, False) for d in kids], True))
+    return out
+
+
+def stale_placeholders(p, held=None):
+    """(what, base, [stale placeholder paths]) per place of `placeholder_places` with any, and whether it's ours.
+    Nothing off Linux: no sandbox there makes them."""
+    if held is None:
+        if not sys.platform.startswith("linux"):
+            return []
+        held = mount_points()
+    out = []
+    for what, base, dirs, ours in placeholder_places(p):
+        found = [path for d, git_dir in dirs for path, rel in guarded(d, git_dir) if stale_placeholder(path, rel, held)]
+        if found:
+            out.append((what, base, found, ours))
+    return out
+
+
+def shown(base, paths, most=3):
+    """A few of `paths`, relative to `base`, and how many more."""
+    names = [os.path.relpath(f, base) for f in paths]
+    return ", ".join(names[:most]) + (f" and {len(names) - most} more" if len(names) > most else "")
+
+
+def remove_placeholders(paths):
+    """The ones of `paths` removed, each checked again first: a sandbox that started meanwhile may hold it now."""
+    held, gone = mount_points() if sys.platform.startswith("linux") else set(), []
+    for f in paths:
+        if stale_placeholder(f, ".", held):
+            with contextlib.suppress(OSError):
+                os.unlink(f)
+                gone.append(f)
+    return gone
 
 
 def top(cwd):
