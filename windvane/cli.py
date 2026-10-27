@@ -418,6 +418,8 @@ def cmd_status(a, p):
         print(f"asked: periodic {name}, at the next gap")
     for line in periodic_mod.bench_status(p):
         print(line)
+    if bench.holder() is not None:
+        print(bench.status_line())
     held = [t for t, why in st.get("aside", {}).items() if why.startswith(budget.MARK)] if on else []
     if held:
         print(budget.Budget(p.cfg["experiments"]).waiting(held))
@@ -1085,6 +1087,8 @@ def parser():
     s.add_argument("--week-cap", type=float, help="the seed runs' weekly cap %% (default: this project's)")
     s.add_argument("--dry-run", action="store_true", help="print the plan and what earlier runs that size cost")
     s.add_argument("--last", action="store_true", help="print the latest run's results again")
+    s.add_argument("--status", action="store_true", help="the bench running on this machine, if any (one runs at a "
+                   "time; the others wait)")
     s.add_argument("--pool", action="store_true", help="the training pool's seeds (bench/pool/), not the frozen "
                    "holdout's (bench/)")
     s.add_argument("--repeat", type=int, default=1, help="with compare: N runs a side, so a difference shows past "

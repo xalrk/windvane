@@ -315,7 +315,7 @@ class Experiments:
         for i, (side, at) in enumerate(runs, 1):
             if self.stopping_now() or (p.state / "STOP").exists():
                 return self.log(f"{tid}: the run stops before the experiment's bench ended; the next run benches it")
-            if not self.bench_fits(tid, at):
+            if not self.bench_free(tid) or not self.bench_fits(tid, at):
                 return None
             args = ["--ref", at, f"--{which}", "--hours", f"{hours:.3g}", "--cap", f"{self.a.cap:g}", "--week-cap",
                     f"{self.a.week_cap:g}"]
@@ -327,6 +327,21 @@ class Experiments:
                      f"{self.run_minutes(at, which)} min")
             if not self.bench_ended(tid, job):
                 return None
+        return True
+
+    def bench_free(self, tid):
+        """Wait while another bench holds the machine's (one runs at a time), so this one's fit before the deadline
+        is reckoned from when it can start. True once free; None once a stop or the deadline ends the wait, which
+        isn't a failure: the next run benches it."""
+        said = False
+        while (h := bench.holder()) is not None:
+            if self.stopping_now() or (self.p.state / "STOP").exists() or now() >= self.end():
+                return self.log(f"{tid}: the run ended while its bench waited for {bench.describe(h)}; the next run "
+                                "benches it")
+            if not said:
+                self.log(f"{tid}: bench: waiting for {bench.describe(h)}")
+                said = True
+            self.nap(now() + timedelta(seconds=POLL))
         return True
 
     def bench_ended(self, tid, job):

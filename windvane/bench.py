@@ -23,8 +23,12 @@ against each other: the pool rising while the holdout falls is the loop learning
 `bench compare A B` sets two windvane refs (or earlier runs) side by side, running only what isn't recorded yet.
 `experiment_verdict` reads one such pair as an experiment ticket's keep or reject (experiment.py).
 How a seed is scored and how two sides are compared live in `bench_score.py`, a protected path.
+
+One bench runs at a time on a machine, whichever project or caller started it (`take_lock`): two side by side would
+need twice the memory and slow each other, so neither's minutes would mean anything.
 """
 import copy
+import fcntl
 import itertools
 import json
 import os
@@ -43,10 +47,10 @@ from .bench_score import (NOISE, QUALITY, answers, compare_table, counted, headl
                           judge_failed, judged, measure, num, outcomes, past_noise, regression, runs_n, score,
                           summary, tally, yeses)
 from .config import PERM_ROLES, POOL, Project, user_dir
-from .heavy import machine
+from .heavy import JOB_ENV, machine
 from .runner import rules as session_rules, run_claude
 from .stats import k, ticket_outcomes, weighted
-from .util import append_jsonl, gout, read_jsonl
+from .util import append_jsonl, gout, hhmm, read_jsonl
 
 NO_PHONE = "WINDVANE_NO_PHONE"  # "1": phone.py has no ntfy settings, so a seed run's pushes and questions go nowhere
 BLOCKED = ("notify", "notify-ask", "gh")  # kept off a seed run's PATH: no phone, no GitHub
@@ -57,6 +61,7 @@ SMALL_SEEDS, SMALL_TICKETS = 2, 3
 # reference solutions the suite checks them with.
 DENIED = ("bench", "tests/fixtures/bench")
 JUDGE_MINUTES = 30  # a judge still going after this is stopped: the checks it hasn't answered count as no
+LOCK = "bench.lock"  # in the state root, so one for every project on the machine
 
 
 def state_root():
@@ -508,20 +513,117 @@ def end_all(procs, wait=300):
             signal.signal(s, h)
 
 
+def lock_file():
+    return state_root() / LOCK
+
+
+def holder():
+    """The bench holding the machine's bench lock ({"project", "what", "pid", "since"}; {} in the instant before it
+    writes them), or None. The lock is a flock, so it is free the moment its process is gone, whatever the file says."""
+    f = lock_file()
+    try:
+        fd = os.open(f, os.O_RDONLY)
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            return None
+        except OSError:
+            pass
+        try:
+            return json.loads(f.read_text() or "{}")
+        except (OSError, ValueError):
+            return {}
+    finally:
+        os.close(fd)
+
+
+def started_by():
+    """What this bench is for, from the background job running it: an experiment's ticket, a periodic round, or
+    "" (by hand)."""
+    job = Path(os.environ.get(JOB_ENV, "")).name
+    if job.startswith("experiment-"):
+        return job.removeprefix("experiment-")
+    return f"{job.removeprefix('periodic-')} round" if job.startswith("periodic-") else ""
+
+
+def describe(h):
+    """A lock holder for people: "windvane T-321's bench, running since 01:40", "windvane weekly round's bench"."""
+    what = " ".join(x for x in (h.get("project") or "another project", h.get("what")) if x)
+    since = h.get("since")
+    return f"{what}'s bench" + (f", running since {hhmm(datetime.fromtimestamp(since))}" if since else "")
+
+
+def status_line():
+    h = holder()
+    return f"bench: {describe(h)} (pid {h.get('pid', '?')})" if h is not None else "bench: none running on this machine"
+
+
+def take_lock(p):
+    """Wait for the machine's bench lock and take it: the open file, held until it is closed or this process ends.
+    A wait says so once; a signal during it (Stopped, KeyboardInterrupt) leaves the holder's file as it was."""
+    f = lock_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(f, os.O_CREAT | os.O_RDWR, 0o600)  # not truncated on open: the holder's line is in it
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            if (h := holder()) is not None:
+                print(f"bench: waiting for {describe(h)}", flush=True)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+    except BaseException:
+        os.close(fd)
+        raise
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, json.dumps({"project": p.name, "what": started_by(), "pid": os.getpid(),
+                              "since": time.time()}).encode(), 0)
+    return fd
+
+
+def drop_lock(fd):
+    os.ftruncate(fd, 0)
+    os.close(fd)
+
+
+def locked(p, a, go):
+    """`go()` holding the machine's bench lock (a dry run runs no seed, so it needs none). A stop while waiting ends
+    the wait as a stop before any seed ran: nothing ran, so nothing failed."""
+    if a.dry_run:
+        return go()
+    old = {s: signal.signal(s, stopped) for s in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        fd = take_lock(p)
+    except (KeyboardInterrupt, Stopped) as e:
+        print(f"bench: stopped ({str(e) or 'SIGINT'}) while waiting for the machine's bench: nothing ran",
+              file=sys.stderr)
+        return 130
+    finally:
+        for s, h in old.items():
+            signal.signal(s, h)
+    try:
+        return go()
+    finally:
+        drop_lock(fd)
+
+
 def main(a, p):
+    if getattr(a, "status", False):
+        return print(status_line())
     if a.repeat != 1 and not a.what:
         raise SystemExit("bench: --repeat goes with `windvane bench compare <A> <B>`")
     if a.what:
         if a.what[0] != "compare" or len(a.what) != 3:
             raise SystemExit("bench: the only subcommand is `windvane bench compare <A> <B>`")
-        return compare(a, p, *a.what[1:])
+        return locked(p, a, lambda: compare(a, p, *a.what[1:]))
     if a.last:
         runs = runs_of(p)
         return print(table(list(runs.values())[-1]) if runs else "bench: no results yet (windvane bench runs one)")
     before = week_now()
     which, why = size(a.full, a.small, before, week_limit())
     print(f"bench: {which} ({why}), {'the training pool' if a.pool else 'the holdout'}", flush=True)
-    return one(p, a, a.ref, which, before)[0]
+    return locked(p, a, lambda: one(p, a, a.ref, which, before)[0])
 
 
 def week_limit():
