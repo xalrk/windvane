@@ -23,7 +23,7 @@ from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, replan, slots, toplevel
 from .config import periodic as periodic_entries
 from .queue import Queue
-from .runner import LIVE, ROLE, Usage, inherited_stop, plain_error, scope_github
+from .runner import LIVE, ROLE, Usage, inherited_stop, outside_sandbox, plain_error, scope_github
 from .stats import cmd_stats, projects_stats, shared_line  # cmd_stats: main runs `stats` by its name
 from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 
@@ -441,8 +441,9 @@ def cmd_request(a):
     if a.status:
         print("\n".join(requests.status_lines()))
         return
+    outside_sandbox("filing or answering a request")  # the inbox is read-only there, on purpose
     if a.answer:
-        code, line = requests.answer(a.answer, a.title or "")
+        code, line = request_step(requests.answer, a.answer, a.title or "")
         print(line)
         if code:
             sys.exit(code)
@@ -455,10 +456,18 @@ def cmd_request(a):
         body = sys.stdin.read() if a.body == "-" else Path(a.body).read_text(errors="replace") if a.body else ""
     except OSError as err:
         sys.exit(f"windvane request: can't read the body: {err.strerror}")
-    code, line = requests.file(a.title, body)
+    code, line = request_step(requests.file, a.title, body)
     print(line)
     if code:
         sys.exit(code)
+
+
+def request_step(step, *args):
+    """(exit code, line) of a request's filing or answer, an inbox it can't write said in one line, not a traceback."""
+    try:
+        return step(*args)
+    except OSError as err:
+        return 1, f"windvane request: can't write the inbox: {err.filename or requests.inbox()}: {err.strerror or err}"
 
 
 def cmd_overview(a, p):
