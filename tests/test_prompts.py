@@ -38,7 +38,7 @@ class UserFacing(unittest.TestCase):
 # Each prompt's size in bytes when it was capped (T-295): every session re-reads its prompt on every turn, so new
 # text replaces old. Bytes, not lines, so a longer line can't dodge the cap. A prompt that shrinks lowers its cap here.
 CAPS = {"CRITIC.md": 3824, "CRITIC-numeric.md": 2164, "CRITIC-project.md": 842, "FIX.md": 987, "JUDGE.md": 844,
-        "PERIODIC.md": 1089, "PLAN.md": 3090, "PREFLIGHT.md": 1299, "REVIEW.md": 2157, "SCOUT.md": 1108, "SEED.md": 1991, "TRIAGE-REQUESTS.md": 1499, "WORKER.md": 7880}
+        "PERIODIC.md": 1089, "PLAN.md": 3090, "PREFLIGHT.md": 1299, "REVIEW.md": 2148, "SCOUT.md": 1108, "SEED.md": 1991, "TRIAGE-REQUESTS.md": 1499, "WORKER.md": 7880}
 
 
 def over_cap(sizes):
@@ -100,7 +100,7 @@ class WhoJudgesWhat(unittest.TestCase):
                       "makes, errors the ticket names)", review)
         self.assertIn("security (injection, secrets, unsafe shell) or data loss on any input", review)
         self.assertIn("data loss on any input. Other freak input (thousand-digit numbers, undecodable bytes, its own "
-                      "files hand-edited or nested deep, odd env or locale, closed std streams) is a nit unless the "
+                      "files hand-edited or nested deep, odd env/locale, closed stdio) is a nit unless the "
                       "ticket or docs name it", review)
         self.assertIn("list nits under `Nits:` and approve", review)
 
