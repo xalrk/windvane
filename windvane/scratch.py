@@ -128,10 +128,13 @@ def base(p):
     return r / TMP_DIR / p.name if r else p.state / "tmp"
 
 
-def ours(p):
-    """Whether the cleaner may empty `p`'s `base`: the state dir's, or one under `tmp_root` that windvane made (its
-    MARK file says so)."""
-    return tmp_root(p) is None or (base(p) / MARK).is_file()
+def bases(p):
+    """The dirs `p`'s ticket TMPDIRs may be in, that the cleaner may empty: `base`, when it's the state dir's or
+    windvane made it under `tmp_root` (its MARK file says so), and the state dir's too once `tmp_root` is set, which
+    still holds what tickets left there before."""
+    if tmp_root(p) is None:
+        return [base(p)]
+    return [b for b in (base(p), p.state / "tmp") if b == p.state / "tmp" or (b / MARK).is_file()]
 
 
 def tmp_root_problem(p):
@@ -170,7 +173,8 @@ def session_dir(p, key):
 
 def drop(p, key):
     """A ticket's leftovers once it ends: its sessions' TMPDIR and its `windvane bg` jobs (jobs.job_base)."""
-    shutil.rmtree(base(p) / key, ignore_errors=True)
+    for b in {base(p), p.state / "tmp"}:  # a TMPDIR made before tmp_root was set, or since it was unset
+        shutil.rmtree(b / key, ignore_errors=True)
     shutil.rmtree(p.state / "bg" / key, ignore_errors=True)
 
 
@@ -248,8 +252,9 @@ def candidates(p=None, running=()):
         out = [d for d in root().iterdir() if d.name.startswith(PREFIX)]
     except OSError:
         out = []
-    if p is not None and base(p).is_dir() and ours(p):
-        out += [d for d in base(p).iterdir() if d.name not in running]
+    for b in bases(p) if p is not None else ():
+        if b.is_dir():
+            out += [d for d in b.iterdir() if d.name not in running]
     return out
 
 

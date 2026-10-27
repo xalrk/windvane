@@ -510,7 +510,7 @@ def clean_placeholders(p, dry_run):
 
 def clean_tmp(p, dry_run):
     scope = tmp_scope(p)
-    where = f"{scratch.root()}" + (f" and {scratch.base(p)}" if scope[0] else "")
+    where = " and ".join(map(str, [scratch.root(), *(scratch.bases(p) if scope[0] else [])]))
     if not dry_run:
         dirs, n = scratch.clean(*scope)
         print(f"removed {dirs} leftover windvane temp dir{'s' * (dirs != 1)} ({n} files) from {where}")

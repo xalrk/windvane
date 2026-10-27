@@ -62,6 +62,17 @@ class TmpRoot(unittest.TestCase):
         self.assertEqual(scratch.clean(p)[0], 1)
         self.assertFalse(old.exists())
 
+    def test_what_tickets_left_in_the_state_dir_before_tmp_root_was_set_is_still_dropped_and_cleaned(self):
+        p = Project(self.s.root)
+        before, dropped = scratch.session_dir(p, "T-001"), scratch.session_dir(p, "T-002")
+        os.utime(before, (0, 0))
+        self.machine(f'tmp_root = "{self.root}"\n')
+        scratch.drop(p, "T-002")
+        self.assertFalse(dropped.exists())
+        self.assertIn(before, scratch.candidates(p))
+        self.assertEqual(scratch.clean(p)[0], 1)
+        self.assertFalse(before.exists())
+
     def test_the_project_overrides_the_machine(self):
         self.machine(f'tmp_root = "{self.s.tmp / "elsewhere"}"\n')
         self.s.write(".windvane/config.toml", f'tmp_root = "{self.root}"\n'
