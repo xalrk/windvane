@@ -5,11 +5,13 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
 import unittest.mock
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -114,6 +116,58 @@ class Requests(unittest.TestCase):
         for d in (requests.inbox(), HOME):
             for tool in ("Edit", "Write"):
                 self.assertIn(f"{tool}(/{d}/**)", settings["deny"])
+
+    def test_a_worker_on_a_worktree_of_windvanes_checkout_may_write_its_git_dir(self):
+        """A slot worktree outside the checkout keeps its index and HEAD in `<home>/.git/worktrees/<slot>/`, and the
+        sandbox turns Edit denials into write denials: those, the objects and the refs stay writable, the
+        checkout's working files and its own index and HEAD don't."""
+        self.make()
+        home, slot = self.s.tmp / "home", self.s.tmp / "state" / "work"
+        home.mkdir()
+        (home / "windvane").mkdir()
+        (home / "README.md").write_text("hi\n")
+        for argv in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a"],
+                     ["worktree", "add", "-q", "--detach", str(slot)]):
+            subprocess.run(["git", "-C", str(home), *argv], check=True, capture_output=True)
+        git = home.resolve() / ".git"
+        with unittest.mock.patch.object(requests, "HOME", home.resolve()):
+            rules = requests.worker_deny(SimpleNamespace(work_dir=slot))
+            other = requests.worker_deny(self.p)
+            in_home = requests.worker_deny(SimpleNamespace(work_dir=home / "windvane"))
+
+        def covers(path):
+            """Whether a rule denies Edit of `path`, as the rules' `//abs` and `//abs/**` forms read."""
+            return any(path == r[6:-1] or path.startswith(r[6:-4] + "/") and r.endswith("/**)")
+                       for r in rules if r.startswith("Edit(//"))
+        for path in (home.resolve() / "README.md", home.resolve() / "windvane" / "x.py", git / "index", git / "HEAD",
+                     git / "config", git / "hooks" / "pre-commit"):
+            self.assertTrue(covers(str(path)), path)
+        for path in (git / "worktrees" / "work" / "index", git / "worktrees" / "work" / "HEAD", git / "objects" / "ab",
+                     git / "refs" / "heads" / "b", git / "packed-refs"):
+            self.assertFalse(covers(str(path)), path)
+        self.assertNotIn(f"Edit(/{home.resolve()}/**)", rules)
+        self.assertIn(f"Edit(/{requests.inbox()}/**)", rules)
+        self.assertIn(f"Edit(/{home.resolve()}/**)", other)  # any other project: the whole home
+        self.assertEqual(in_home, [r for r in rules if str(requests.inbox()) in r])  # in the home: only the inbox
+        shutil.rmtree(git / "hooks")  # a path not there gets no rule: the sandbox would leave a placeholder file there
+        with unittest.mock.patch.object(requests, "HOME", home.resolve()):
+            self.assertFalse([r for r in requests.worker_deny(SimpleNamespace(work_dir=slot)) if "/.git/hooks" in r])
+
+    def test_a_request_inside_the_bash_sandbox_says_to_run_it_on_its_own(self):
+        self.make()
+        code, out = self.file("A request", **{runner.IN_SANDBOX: "1"})
+        self.assertNotEqual(code, 0)
+        self.assertIn("run the `windvane` command on its own", out)
+        self.assertNotIn("Traceback", out)
+        self.assertEqual(self.inbox(), {})
+
+    def test_an_inbox_it_cannot_write_is_one_line(self):
+        self.make()
+        err = PermissionError(13, "Permission denied", "/inbox/.lock")
+        with unittest.mock.patch.object(requests, "locked", unittest.mock.Mock(side_effect=err)):
+            code, out = self.file("A request")
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip(), "windvane request: can't write the inbox: /inbox/.lock: Permission denied")
 
     def triage(self, bodies):
         """Four tickets' queue, an inbox of `bodies` (filed from this project), and the triage entry run once."""

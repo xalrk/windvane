@@ -100,8 +100,8 @@ class FullPush(unittest.TestCase):
                 with mock.patch.object(scratch, "fullness", return_value=f):
                     self.pilot.clean_tmp()
         self.assertEqual([a[0] for a in sent], ["Temp dir nearly full"] * 2)
-        self.assertIn("is 93% full of inodes and 20% of space after cleaning: the rest isn't windvane's. See what "
-                      "fills it: du --inodes -s ", sent[0][1])
+        self.assertRegex(sent[0][1], r"is 93% full of inodes and 20% of space \([\d,]+ MB free\) after cleaning: .*"
+                                     r"the rest isn't windvane's\. See what fills it: du --inodes -s ")
         self.assertIn("is 10% full of inodes and 91% of space", sent[1][1])
         (Path(os.environ["TMPDIR"]) / "tmpyoung001").mkdir()  # a leak under a day old: counted, not blamed on others
         with mock.patch.object(driver, "push", side_effect=lambda *a: sent.append(a)), \

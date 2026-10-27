@@ -47,6 +47,7 @@ DEFAULTS = {
     "heavy_check": False,  # the check is machine-heavy (an engine, a render): run it under `windvane heavy`
     "check_measure": False,  # with heavy_check: the check measures timing, so it waits for a quiet CPU (--measure)
     "heavy_mem": None,  # GB free this project's heavy jobs and heavy check wait for (unset: machine.toml's min_free_gb)
+    "tmp_root": "",  # where the tickets' TMPDIRs go (<tmp_root>/<project>/<ticket>); unset: machine.toml's, else the state dir
     "heavy_keep_hours": 0,  # how long a kept job (`bg --heavy --keep`) may run on past the run's stop (0: killed then)
     "heavy_reuses": [],  # process-name regexes of helpers its heavy jobs reuse (an emulator): their memory counts free
     "overview_extra": "",  # a command whose output `windvane overview` adds (the project's own milestones)
@@ -168,6 +169,7 @@ def permissions(table, entries):
 
 
 LANDS = ("near", "next", "end", "hold", "ask")  # where a [[periodic]] chain's new tickets go in the queue
+LAND = "near"  # where they go when no entry in the chain sets `land`
 # [[periodic]] sessions windvane brings, so a project needs no prompt of its own
 BUILTINS = ("project-critic", "bench", "seed", "scout")
 BENCH_MINUTES = 300  # a bench entry's default `minutes`: its whole time, both sides of a compare and their judges

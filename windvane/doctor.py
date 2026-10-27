@@ -12,7 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import actions, critic, heavy, install, phone, runner, scratch, selfupdate, statedir, util
+from . import actions, critic, heavy, install, jobs, phone, runner, scratch, selfupdate, statedir, util
 from .config import CHECKOUT, DIR, HOME, TOKEN_FIX, Project, author, github_token, user_dir
 from .util import gout, load_json
 
@@ -297,7 +297,7 @@ def checks(p=None):
     settings = install.claude_dir() / "settings.json"
     add(install.has_keyword_hook(settings, any_copy=True), False, f"the mention hook in {settings}",
         "windvane install")
-    return out + moved_warnings(p) + tmp_warnings(p) + state_warnings(p)
+    return out + moved_warnings(p) + tmp_warnings(p) + state_warnings(p) + placeholder_warnings(p)
 
 
 # What WSL's Windows PATH (appended to Linux's) can shadow: a Windows build runs in the wrong world, blind to Linux
@@ -431,16 +431,15 @@ def tmp_scope(p):
 
 
 def tmp_warnings(p=None):
-    """The temp dir nearly full (a full tmpfs stops every command), and windvane's leftovers in it, biggest first."""
-    out, tmp = [], scratch.root()
-    try:
-        inodes, space = scratch.fullness(tmp)
-    except OSError:
-        inodes = space = 0
-    if max(inodes, space) > scratch.FULL:
-        out.append(("warn", f"the temp dir {tmp} is {inodes:.0f}% full of inodes and {space:.0f}% of space: when "
-                    "either is full, no command runs", "remove what fills it; windvane doctor --clean removes "
-                    "windvane's own leftovers"))
+    """A bad `tmp_root` (no session could start), the temp dir or the tickets' TMPDIRs' disk nearly full (a full tmpfs
+    stops every command, a full disk fails checks), and windvane's leftovers in them, biggest first."""
+    out, (scope, _) = [], tmp_scope(p)
+    if scope is not None and (why := scratch.tmp_root_problem(scope)):
+        return [("need", why, "windvane run refuses to start until it's fixed")]
+    for full in scratch.nearly_full(scope):
+        out.append(("warn", scratch.full_line(*full) + ": when it's full, commands and checks fail",
+                    "remove what fills it; windvane doctor --clean removes windvane's own leftovers"
+                    + (f"; or {scratch.way_out(full[1])}" if scratch.way_out(full[1]) else "")))
     left = scratch.leftovers(*tmp_scope(p))
     if left:
         files = lambda n: f"{n} file{'s' * (n != 1)}"
@@ -468,9 +467,50 @@ def state_warnings(p=None):
 BIG = 100 * 2 ** 20  # reclaimable state worth a warning
 
 
+def stale_placeholders(p):
+    """jobs.stale_placeholders for a project, or none: outside one, or when a dir vanished as it looked."""
+    if p is None or not getattr(p, "exists", False) or not getattr(p, "state", None):
+        return []
+    try:
+        return jobs.stale_placeholders(p)
+    except OSError:
+        return []
+
+
+def placeholder_warnings(p=None):
+    """The empty read-only files a killed sandboxed command left, per place: a stale `.git/config.lock` fails every
+    git config write (`git push -u`, a tracking branch); the others litter `git status` or the state dir."""
+    places = stale_placeholders(p)
+    if places and jobs.blind():
+        return [("warn", f"empty read-only files a killed sandboxed command may have left can't be told from live ones "
+                 f"{jobs.blind()}", "run `windvane doctor` on its own (no pipe or redirect), outside the sandbox")]
+    out = []
+    for what, base, found, _ in places:
+        n = len(found)
+        out.append(("warn", f"{n} empty read-only file{'s' * (n > 1)} a killed sandboxed command left in {what} "
+                    f"({jobs.shown(base, found)})", "windvane doctor --clean"))
+    return out
+
+
+def clean_placeholders(p, dry_run):
+    """Every stale placeholder `placeholder_warnings` names, the user's checkout's too: they asked for it. One a
+    sandbox took up meanwhile stays (remove_placeholders checks again)."""
+    places = stale_placeholders(p)
+    if not places:
+        return
+    if jobs.blind():
+        print(f"left the empty read-only files a killed sandboxed command may have left: {jobs.blind()}; run "
+              "`windvane doctor --clean` on its own, outside it")
+        return
+    for what, base, found, _ in places:
+        gone = found if dry_run else jobs.remove_placeholders(found)
+        print(f"{'would remove' if dry_run else 'removed'} {len(gone)} stale sandbox placeholder"
+              f"{'s' * (len(gone) != 1)} from {what}: {jobs.shown(base, gone, most=len(gone))}")
+
+
 def clean_tmp(p, dry_run):
     scope = tmp_scope(p)
-    where = f"{scratch.root()}" + (f" and {p.state / 'tmp'}" if scope[0] else "")
+    where = " and ".join(map(str, [scratch.root(), *(scratch.bases(p) if scope[0] else [])]))
     if not dry_run:
         dirs, n = scratch.clean(*scope)
         print(f"removed {dirs} leftover windvane temp dir{'s' * (dirs != 1)} ({n} files) from {where}")
@@ -518,6 +558,7 @@ def main(p=None, clean=False, dry_run=False):
     if clean or dry_run:
         clean_tmp(p, dry_run)
         clean_states(p, dry_run)
+        clean_placeholders(p, dry_run)
         if dry_run:
             return 0
     rows = checks(p)

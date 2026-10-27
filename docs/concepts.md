@@ -403,7 +403,7 @@ On this machine only, under `~/.local/state/windvane/<name>/`:
 | `critic.jsonl`, `critic/<ID>/` | the critic's verdicts, and each ticket's evidence pack |
 | `quiet.txt` | quiet times |
 | `held.json`, `held_why.json`, `closed_plans.json` | changes kept on a local branch to land when pushed again, and why their push was refused; plan branches whose PRs were closed |
-| `tmp/<ID>/` | the `TMPDIR` of a ticket's sessions and checks, removed when it merges or fails; the driver also removes `windvane-*` dirs over an hour old that nothing uses from the machine's temp dir, at the start and between tickets |
+| `tmp/<ID>/` | the `TMPDIR` of a ticket's sessions and checks (under `tmp_root` instead when it's set), removed when it merges or fails; the driver also removes `windvane-*` dirs over an hour old that nothing uses from the machine's temp dir, at the start and between tickets |
 | `dropped/` | the changes of a plan or periodic session dropped for want of its end line (or cut off), one patch each, whose new tickets' ids stay taken until it's removed after `keep_days`, like old transcripts |
 | `id_claims/`, `ids.lock` | the ticket ids a running plan or periodic session was handed, so `windvane new` skips them until its branch is pushed; a claim whose process is gone is removed. The lock is held while an id is picked and reserved |
 | `work/`, `ci/`, `plan/` | worktrees: the sessions', the driver's checks and merges, the planner's (`work-1/`, `ci-1/` and so on for extra slots) |

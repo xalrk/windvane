@@ -399,6 +399,15 @@ def tmp_full(p, patch, s):
     return {"Temp dir nearly full": ("93% full of inodes", "isn't windvane's")}
 
 
+def disk_ran_out(p, patch, s):
+    pl = pilot(p)
+    patch(pl, "clean_tmp", lambda: None)
+    patch(pl, "nap", lambda until: None)
+    pl.disk_ran_out("T-001", "check", "CHECK FAILED (exit 1) in 1.0 min; the disk holding /x ran out of space (12 MB "
+                    "free now): not the change's fault, free space or set tmp_root; log /l")
+    return {"Check ran out of disk": ("The disk holding /x ran out of space", "set tmp_root")}
+
+
 def not_taken_up(p, patch, s):
     patch(driver, "exe", lambda: [str(s.tmp / "venv/bin/windvane")])
     pilot(p).can_restart()
@@ -415,7 +424,7 @@ SITES = [set_aside, own_limit, dollar_budget, partials, held_for_good, stashed, 
          answer_held, quiet_unreadable, quiet_over, paused, started_and_stopped, couldnt_start, killed, start_gone, teardown_failed, leftovers, restarted, update_reverted, crashed_stopped,
          held, secret_aside, push_refused, draft_held, kept_secret, unmerged_local, unmerged_remote, plan_not_pushed, planned,
          plan_dropped, experiment_rejected, plateaued, weekly_trend, tmp_full, protected_aside, kept_protected,
-         not_taken_up, scale_warned]
+         not_taken_up, scale_warned, disk_ran_out]
 
 
 def drive(site):

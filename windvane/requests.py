@@ -451,11 +451,35 @@ def rehold(branches):
 def worker_deny(p):
     """Edits a worker may never make: windvane's own files and the inbox, whatever project it works in (a request
     reaches windvane only through `windvane request`). windvane's home is left out when it holds the worker's tree
-    (windvane run from a checkout working on itself in place)."""
+    (windvane run from a checkout working on itself in place), and only its working files and the checkout's own
+    index, HEAD, config and hooks (a hook, or a config naming one, runs on the user's commits) are denied when the
+    tree is a worktree of it: that worktree's git dir, objects and refs live in `<home>/.git`, and Claude Code makes
+    these rules the Bash sandbox's write denials, so denying the whole home would fail every sandboxed commit, switch
+    and branch."""
     out, work = [], Path(p.work_dir).resolve()
     for d in (inbox(), HOME):
         if d == HOME and (work == HOME or HOME in work.parents):
             continue
-        for tool in ("Edit", "Write", "NotebookEdit"):
-            out.append(f"{tool}(/{d}/**)")
+        if d == HOME and common_git_dir(work) == (HOME / ".git").resolve():
+            git = HOME / ".git"
+            paths = [e for e in sorted(HOME.iterdir()) if e.name != ".git"]
+            # only those there: the sandbox would leave a placeholder file for a missing one
+            paths += [git / n for n in ("index", "HEAD", "config", "hooks") if (git / n).exists()]
+            rules = [f"/{e}/**" if e.is_dir() else f"/{e}" for e in paths]
+        else:
+            rules = [f"/{d}/**"]
+        out += [f"{tool}({r})" for r in rules for tool in ("Edit", "Write", "NotebookEdit")]
     return out
+
+
+def common_git_dir(work):
+    """The git dir shared by all worktrees of the repo holding `work` (resolved), read from its `.git` file, or None
+    for a main checkout or no repo: no git call, as the rules are built for every worker run."""
+    try:
+        line = (work / ".git").read_text().strip()
+        if not line.startswith("gitdir: "):
+            return None
+        own = (work / line[len("gitdir: "):]).resolve()
+        return (own / (own / "commondir").read_text().strip()).resolve()
+    except OSError:
+        return None

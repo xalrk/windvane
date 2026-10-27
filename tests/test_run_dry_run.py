@@ -63,6 +63,7 @@ class DryRun(unittest.TestCase):
                       "plateau after 5 rejected in a row", out)
         self.assertIn("periodic playtest: every 4 merges; tickets land near", out)
         self.assertIn("periodic scout: scout every 12 tickets finished on main", out)
+        self.assertRegex(out, r"periodic scout: [^\n]*; tickets land near\n")  # no `land`: where the driver puts them
         self.assertNotIn("running now", out)
 
     def test_a_flag_overrides_the_config_value_printed(self):

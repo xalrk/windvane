@@ -25,7 +25,7 @@ from pathlib import Path
 from . import heavy, scratch, util
 from .config import exe
 from .heavy import JOB_ENV, STOP_AT
-from .runner import GRACE, IN_JOB, NEST, ROLE, TICKET, outside_sandbox, signal_group
+from .runner import GRACE, IN_JOB, IN_SANDBOX, NEST, ROLE, TICKET, outside_sandbox, signal_group
 from .util import append_jsonl, gout, now, read_jsonl
 
 _LOGS = itertools.count(1)  # a check log's number in this process
@@ -39,6 +39,8 @@ HEARTBEAT = 60
 KEEP_PASSED = 3 * 86400
 KEEP_ANY = 21 * 86400
 KEEP_FAILED = 5
+NO_SPACE = (b"No space left on device", b"ENOSPC")  # what a write to a full disk says in a check's log
+DISK_FULL = ": not the change's fault, free space or set tmp_root"  # ends the note a failed check's summary gets then
 NOT_RUN, AGAIN = "CHECK NOT RUN: ", "; run it again"  # a heavy check that never got the machine
 STOPPING = "; the run is stopping, so don't run it again now"  # ...because a stop ended its wait: a retry would too
 # A kept job (`bg --heavy --keep`) outlives its session: the run's stop (a Unix time), which the driver gives its
@@ -87,7 +89,131 @@ def placeholder(path, rel=""):
         st = os.lstat(path)
     except OSError:
         return False
-    return stat.S_ISCHR(st.st_mode) or (stat.S_ISREG(st.st_mode) and not st.st_size and rel.startswith("."))
+    return stat.S_ISCHR(st.st_mode) or mount_file(st, rel)
+
+
+def mount_file(st, rel):
+    """Whether a file (its lstat) could be the empty mount point the sandbox makes on the host for a guarded path."""
+    return stat.S_ISREG(st.st_mode) and not st.st_size and rel.startswith(".")
+
+
+PROC = "/proc"  # where the mount tables are read
+
+
+def mount_points(proc=None):
+    """Every path a live process has as a mount point, each mount namespace's table read once. A sandboxed command's
+    namespace lists the paths it binds over, its placeholders among them. None when `/proc` can't be read: then no
+    placeholder can be told stale."""
+    proc, seen, out = Path(proc or PROC), set(), set()
+    try:
+        pids = [d for d in os.listdir(proc) if d.isdigit()]
+    except OSError:
+        return None
+    for pid in pids:
+        try:
+            ns = os.readlink(proc / pid / "ns/mnt")
+        except OSError:
+            ns = pid
+        if ns in seen:
+            continue
+        seen.add(ns)
+        try:
+            table = (proc / pid / "mountinfo").read_text(errors="replace")
+        except OSError:  # gone, or another user's
+            continue
+        for line in table.splitlines():
+            fields = line.split(" ")
+            if len(fields) > 4:  # the mount point, its blanks and backslashes escaped in octal
+                out.add(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4]))
+    return out
+
+
+def stale_placeholder(path, rel, held):
+    """Whether `path` is a placeholder a killed sandboxed command left: the empty mount point (`mount_file`) with no
+    write bit, which no live process (`held`, from `mount_points`) mounts over. Git's own leftover lock after a
+    crash is writable, so it never counts. One still held must stay: removing it drops that command's guard."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return (mount_file(st, rel) and not st.st_mode & 0o222
+            and str(path) not in held and os.path.realpath(path) not in held)
+
+
+def guarded(top, git_dir=False):
+    """(path, its path as the sandbox guards it) for what a sandbox may make a placeholder of in `top`: a git dir's
+    top-level locks (as `.git/<name>`), else a tree's top-level dot entries and what's directly in its `.claude/`."""
+    top = Path(top)
+
+    def names(d):
+        try:
+            return sorted(os.listdir(d))
+        except OSError:  # missing, or a placeholder file itself
+            return []
+    if git_dir:  # git's locks only: every other file there git made itself, not a sandbox
+        return [(top / n, f".git/{n}") for n in names(top) if n.endswith(".lock")]
+    return ([(top / n, n) for n in names(top) if n.startswith(".")]
+            + [(top / ".claude" / n, f".claude/{n}") for n in names(top / ".claude")])
+
+
+def placeholder_places(p):
+    """(what, base, [(dir, is a git dir)], ours) per place a stale placeholder is looked for: the repo's git dir,
+    which every worktree shares; the user's checkout, never `ours` (the driver leaves it to `doctor --clean`); and
+    windvane's state: the state root, the project's state dir and each dir in it (its worktrees, `trials/`)."""
+    root = p.main_root()
+    common = gout(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    out = [("the repo's git dir", Path(common).parent, [(Path(common), True)], True)] if common else []
+    out.append(("the checkout", root, [(root, False)], False))
+    if p.state.is_dir():
+        kids = sorted(d for d in p.state.iterdir() if d.is_dir() and not d.is_symlink() and d.name != "tmp")
+        out.append(("windvane's state dir", p.state.parent,
+                    [(p.state.parent, False), (p.state, False)] + [(d, False) for d in kids], True))
+    return out
+
+
+def stale_placeholders(p, held=None):
+    """(what, base, [stale placeholder paths]) per place of `placeholder_places` with any, and whether it's ours.
+    Nothing off Linux: no sandbox there makes them."""
+    if held is None:
+        if not sys.platform.startswith("linux"):
+            return []
+        held = mount_points()
+    if held is None:
+        return []
+    out = []
+    for what, base, dirs, ours in placeholder_places(p):
+        found = [path for d, git_dir in dirs for path, rel in guarded(d, git_dir) if stale_placeholder(path, rel, held)]
+        if found:
+            out.append((what, base, found, ours))
+    return out
+
+
+def shown(base, paths, most=3):
+    """A few of `paths`, relative to `base`, and how many more."""
+    names = [os.path.relpath(f, base) for f in paths]
+    return ", ".join(names[:most]) + (f" and {len(names) - most} more" if len(names) > most else "")
+
+
+def blind():
+    """Why stale placeholders can't be told from live ones here, or "": inside a sandbox `/proc` shows only its own
+    processes, so another session's live guard would look stale."""
+    return "inside the Bash sandbox, which hides the other sandboxes" if os.environ.get(IN_SANDBOX) else ""
+
+
+def remove_placeholders(paths):
+    """The ones of `paths` removed, each checked again first: a sandbox that started meanwhile may hold it now.
+    None inside a sandbox (`blind`)."""
+    if blind():
+        return []
+    held, gone = mount_points() if sys.platform.startswith("linux") else set(), []
+    if held is None:
+        return []
+    for f in paths:
+        if stale_placeholder(f, ".", held):
+            with contextlib.suppress(OSError):
+                os.unlink(f)
+                gone.append(f)
+    return gone
 
 
 def top(cwd):
@@ -168,8 +294,9 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=Fal
             passes.mkdir(parents=True, exist_ok=True)
             (passes / key).write_text(f"{now():%Y-%m-%d %H:%M} ({gout(cwd, 'rev-parse', '--short', 'HEAD')})")
         return True, f"CHECK PASSED in {mins:.1f} min" + ("" if key else unrecorded(cwd)), log
+    tmp = scratch.session_dir(p, t) if (t := ticket or os.environ.get(TICKET)) else scratch.root()
     return False, (f"CHECK FAILED ({'quick pass, ' if quick_failed else ''}exit {code}) in {mins:.1f} min"
-                   f"{busy_note(log)}; log {log}"), log
+                   f"{busy_note(log)}{disk_note(log, tmp)}; log {log}"), log
 
 
 def busy_note(log):
@@ -181,6 +308,25 @@ def busy_note(log):
         return ""
     return (f", load peaked {heavy.loadf(top)} (quiet is ≤ {limit:.10g}): timing failures may be load; rerun them "
             "on the upstream at the same load to tell")
+
+
+def disk_note(log, tmp):
+    """What a failed check's summary says when its log shows a write that found the disk full and the disk holding
+    its TMPDIR is nearly full still (scratch.FULL, scratch.FLOOR): the worker, the fix session and the driver would
+    otherwise read it as a bug in the change. "" for any other failure, one whose log only names ENOSPC (a test of
+    it) on a disk with room among them."""
+    try:
+        with open(log, "rb") as f:
+            said = any(m in line for line in f for m in NO_SPACE)
+        if not said:
+            return ""
+        inodes, space = scratch.fullness(scratch.existing(tmp))
+        left = scratch.free(scratch.existing(tmp))
+    except OSError:
+        return ""
+    if max(inodes, space) <= scratch.FULL and left >= scratch.FLOOR:
+        return ""
+    return f"; the disk holding {tmp} ran out of space ({scratch.mb(left)} MB free now){DISK_FULL}"
 
 
 def unrecorded(cwd):
