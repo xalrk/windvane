@@ -162,6 +162,8 @@ def cmd_run(a, p):
         too_short(None if window else deadline - now(), a.min_slot, a.ticket_hours)
     if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
         sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
+    if why := scratch.tmp_root_problem(p):  # every session's TMPDIR goes there
+        sys.exit(why)
     p.state.mkdir(parents=True, exist_ok=True)
     if a.detach and in_tmux(p):  # (the detached run itself starts inside that session)
         sys.exit(f"already running in tmux session {p.tmux}")

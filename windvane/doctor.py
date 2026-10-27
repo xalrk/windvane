@@ -431,16 +431,15 @@ def tmp_scope(p):
 
 
 def tmp_warnings(p=None):
-    """The temp dir nearly full (a full tmpfs stops every command), and windvane's leftovers in it, biggest first."""
-    out, tmp = [], scratch.root()
-    try:
-        inodes, space = scratch.fullness(tmp)
-    except OSError:
-        inodes = space = 0
-    if max(inodes, space) > scratch.FULL:
-        out.append(("warn", f"the temp dir {tmp} is {inodes:.0f}% full of inodes and {space:.0f}% of space: when "
-                    "either is full, no command runs", "remove what fills it; windvane doctor --clean removes "
-                    "windvane's own leftovers"))
+    """A bad `tmp_root` (no session could start), the temp dir or the tickets' TMPDIRs' disk nearly full (a full tmpfs
+    stops every command, a full disk fails checks), and windvane's leftovers in them, biggest first."""
+    out, (scope, _) = [], tmp_scope(p)
+    if scope is not None and (why := scratch.tmp_root_problem(scope)):
+        return [("need", why, "windvane run refuses to start until it's fixed")]
+    for full in scratch.nearly_full(scope):
+        out.append(("warn", scratch.full_line(*full) + ": when it's full, commands and checks fail",
+                    "remove what fills it; windvane doctor --clean removes windvane's own leftovers"
+                    + (f"; or {scratch.way_out(full[1])}" if scratch.way_out(full[1]) else "")))
     left = scratch.leftovers(*tmp_scope(p))
     if left:
         files = lambda n: f"{n} file{'s' * (n != 1)}"
@@ -511,7 +510,7 @@ def clean_placeholders(p, dry_run):
 
 def clean_tmp(p, dry_run):
     scope = tmp_scope(p)
-    where = f"{scratch.root()}" + (f" and {p.state / 'tmp'}" if scope[0] else "")
+    where = " and ".join(map(str, [scratch.root(), *(scratch.bases(p) if scope[0] else [])]))
     if not dry_run:
         dirs, n = scratch.clean(*scope)
         print(f"removed {dirs} leftover windvane temp dir{'s' * (dirs != 1)} ({n} files) from {where}")

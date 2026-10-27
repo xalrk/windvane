@@ -95,7 +95,7 @@ from windvane.config import Project
 from windvane.util import now
 from test_pipeline import args
 net.probe, net.waiter, login.waiter, login.back_at = (lambda: True), None, None, 0.0
-scratch.fullness = lambda path=None: (10, 10)
+scratch.fullness, scratch.free = (lambda path=None: (10, 10)), (lambda path=None: 100 * 1024 ** 3)
 pushes = []
 driver.push = lambda title, msg="", *a, **k: pushes.append((title, msg))
 driver.Pilot(Project(sys.argv[3]), args()).run(now() + timedelta(hours=1))

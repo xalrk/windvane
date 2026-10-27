@@ -79,6 +79,9 @@ SPLIT = "Split it into smaller tickets (`windvane new`), then mark it `done:` in
 RETRY = "RETRY"  # in the state dir: the failed tickets `windvane retry` puts back in the running autopilot's queue
 NAP = 5  # seconds between a waiting driver's looks at STOP and the deadline
 REPLAN_WAIT = 60  # minutes an endless run (`--replan forever`) waits to plan again when nothing merged since its last
+DISK_WAIT = 600  # seconds the gate waits before running again a check that ran out of disk (cleaning ran meanwhile)
+DISK_TRIES = 3  # checks in a row that run out of disk before the ticket fails (the disk stays full, or the change
+# fills it)
 STASH_WAIT = 30  # seconds between tries to stash the checkout's changes before an approved ticket's check or merge
 RESTARTS = 3  # crashes in an hour a detached run's driver is restarted from; the next one ends the run
 RESTART_PAUSE = 30  # seconds before such a restart, so a driver that dies at once doesn't spin
@@ -487,7 +490,8 @@ class Pilot(Desk, Periodic, Experiments):
         # `began` is when each running attempt started, `spent` the seconds a ticket's finished attempts ran.
         self.limit, self.peak, self.conflicts, self.beside = self.n, 1, 0, set()
         self.began, self.spent = {}, {}
-        self.tmp_full = False  # pushed that the temp dir is nearly full, and it hasn't dropped back under the bar
+        self.tmp_full = set()  # the temp files' filesystems pushed as nearly full that haven't dropped back since
+        self.out_of_disk = {}  # ticket: its checks in a row that ran out of disk
         self.minutes = s.get("minutes", [])
         # Self-update between tickets (`selfupdate`): the install it pulls (None: off, as in the tests) and how the
         # driver restarts itself when its own code changed.
@@ -1352,9 +1356,16 @@ class Pilot(Desk, Periodic, Experiments):
         about the ticket, so it costs no worker run and no bounce, only a line in the log for each wait. (None, ...)
         when a stop or the deadline comes first. A ticket's check waits for the machine until the run's end, keeping
         its place in line (not its worker's time box: that started with the worker and may be spent), so it runs
-        again only when the deadline moved later while it waited."""
+        again only when the deadline moved later while it waited. A check that ran out of disk (jobs.disk_note) isn't
+        the change's either: it runs again after a clean and a wait, and fails the ticket only DISK_TRIES times in a
+        row, without a worker run."""
         while True:
             ok, summary, logf = run()
+            if ok is False and jobs.DISK_FULL in summary:
+                if not self.disk_ran_out(tid, what, summary):
+                    return None, summary, logf
+                continue
+            self.out_of_disk.pop(tid, None)
             if ok is not None:
                 return ok, summary, logf
             if self.stopping_now() or (self.p.state / "STOP").exists() or now() >= self.end():
@@ -1362,6 +1373,29 @@ class Pilot(Desk, Periodic, Experiments):
                 return ok, summary, logf
             self.log(f"{tid}: {what}: {waited(summary)}; the autopilot runs it again, nothing to do")
             self.nap(now() + timedelta(seconds=STASH_WAIT))  # a short heavy_wait mustn't spin
+
+    def disk_ran_out(self, tid, what, summary):
+        """After a check that ran out of disk: whether to run it again (after cleaning and DISK_WAIT); False when the
+        run stops first, or it was the DISK_TRIES-th in a row (the ticket fails, saying so)."""
+        n = self.out_of_disk[tid] = self.out_of_disk.get(tid, 0) + 1
+        m = re.search(r"the disk holding (.+?)" + re.escape(jobs.DISK_FULL), summary)
+        note = m.group(1) if m else "the check's TMPDIR ran out of space"
+        if n >= DISK_TRIES:
+            self.out_of_disk.pop(tid, None)
+            self.fail(tid, f"its check ran out of disk {n} times in a row (the disk holding {note}): free space or "
+                           "set tmp_root, then windvane retry")
+            return False
+        self.log(f"{tid}: {what}: the disk holding {note}; not the change's fault: cleaning, and running it again "
+                 f"in {DISK_WAIT // 60} min")
+        if n == 1:
+            push(f"Check ran out of disk: {self.name(tid)}", f"The disk holding {note}. windvane runs it again in "
+                 f"{DISK_WAIT // 60} min; free space there or set tmp_root in machine.toml to a roomier disk.",
+                 4, "warning")
+        self.clean_tmp()
+        if self.stopping_now() or (self.p.state / "STOP").exists() or now() >= self.end():
+            return False
+        self.nap(now() + timedelta(seconds=DISK_WAIT))
+        return not (self.stopping_now() or (self.p.state / "STOP").exists() or now() >= self.end())
 
     def check_at(self, rev, ticket=None, stop_at=None):
         cd = self.cd
@@ -2565,22 +2599,27 @@ class Pilot(Desk, Periodic, Experiments):
             self.log(f"state dir: freed {statedir.human(freed)} ({n} item{'s' * (n > 1)})")
 
     def warn_tmp_full(self):
-        """One push when the temp dir is nearly full even after cleaning (nobody runs doctor at 3am), and another
-        only once it has dropped back under the bar and filled again."""
+        """One push for each filesystem temp files land on (the temp dir, the tickets' TMPDIRs: scratch.places) when
+        it is nearly full even after cleaning (nobody runs doctor at 3am), and another only once it has dropped back
+        under the bar and filled again."""
         try:
-            inodes, space = scratch.fullness()
+            full = scratch.nearly_full(self.p)
         except OSError:
             return
-        full = max(inodes, space) > scratch.FULL
-        if full and not self.tmp_full:
-            tmp, leaks = scratch.root(), scratch.old_leaks()
-            young = len(leaks) - len(scratch.stale(leaks, scratch.DAY))
-            mine = f"{young} dirs older windvane tests leaked go once a day old; the rest" if young else "the rest"
-            msg = (f"{tmp} is {inodes:.0f}% full of inodes and {space:.0f}% of space after cleaning: {mine} isn't "
-                   f"windvane's. See what fills it: du --inodes -s {tmp}/* | sort -n | tail")
+        for path, what, inodes, space, left in full:
+            if path in self.tmp_full:
+                continue
+            msg = scratch.full_line(path, what, inodes, space, left, " after cleaning")
+            if path == scratch.root():
+                leaks = scratch.old_leaks()
+                young = len(leaks) - len(scratch.stale(leaks, scratch.DAY))
+                mine = f"{young} dirs older windvane tests leaked go once a day old; the rest" if young else "the rest"
+                msg += f": {mine} isn't windvane's. See what fills it: du --inodes -s {path}/* | sort -n | tail"
+            if "TMPDIR" in what:
+                msg += f". Each ticket's checks write there: free space or {scratch.way_out(what)}"
             self.log(msg)
-            push("Temp dir nearly full", msg, 4, "warning")
-        self.tmp_full = full
+            push("Temp dir nearly full" if path == scratch.root() else "Disk nearly full", msg, 4, "warning")
+        self.tmp_full = {f[0] for f in full}
 
     def loop(self):
         p = self.p
