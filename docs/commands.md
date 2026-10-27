@@ -51,6 +51,7 @@ Options of `windvane run`:
 | `--cap`, `--week-cap`, `--ticket-hours`, `--min-slot`, `--answer-wait` | Override the matching [config keys](configuration.md#autopilot) for this run. |
 | `--replan N [--goal G]` | When the queue runs dry, plan new tickets, up to N times (default: the config's `replan`). `--replan forever` plans every time it runs dry (an hour apart while nothing merges) and pushes a weekly trend ([the endless loop](concepts.md#the-critic-and-calibration)). |
 | `--no-preflight` | Start without asking the next tickets' questions. |
+| `--dry-run` | Print the settings the run would use, a line each, and start nothing: the stop time or daily window, parallel, the caps, ticket hours and min slot, replan and the goal's first line, the protected paths, the experiments' budget and plateau, and each `[[periodic]]` entry with its trigger and where its tickets land. The other options override the config as they would for the run, and it refuses what the run would refuse (no stop time, a run too short for any worker, a bad config). It needs no `claude`, writes nothing, and works while a run is going. |
 
 ## Watching
 

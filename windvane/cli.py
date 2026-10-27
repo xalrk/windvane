@@ -20,7 +20,7 @@ from . import (bench, budget, doctor, driver, experiment, heavy, install, jobs, 
                privacy, publiccheck, questions, requests, schedule, scratch, util, watch)
 from . import held as held_mod
 from . import periodic as periodic_mod
-from .config import DIR, HOME, Project, TokenError, exe, find, replan, slots, toplevel
+from .config import DIR, HOME, LAND, Project, TokenError, exe, find, replan, slots, toplevel
 from .config import periodic as periodic_entries
 from .queue import Queue
 from .runner import LIVE, ROLE, Usage, inherited_stop, outside_sandbox, plain_error, scope_github
@@ -146,24 +146,11 @@ def too_short(left, min_slot, ticket_hours):
 
 def cmd_run(a, p):
     need(p)
+    if a.dry_run:
+        return dry_run(a, p)
     if not shutil.which("claude") and not os.environ.get(driver.SUPERVISED):  # (a restart's crash gets pushed)
         sys.exit("windvane run needs Claude Code (`claude`) on PATH: `windvane doctor` says how to install it")
-    try:
-        window = schedule.first(a.from_, a.until, a.for_, a.daily)
-    except ValueError as e:
-        sys.exit(str(e))
-    if not (window or a.until or a.for_):
-        sys.exit("say when to stop: --until HH:MM or --for 6h")
-    if window and not (a.detach or a.supervise):
-        sys.exit("--from and --daily wait in a tmux session, as a terminal won't stay open; run: windvane "
-                 + " ".join(shlex.quote(x) for x in sys.argv[1:]) + " --detach")
-    deadline = window[1] if window else parse_deadline(a.until, a.for_)
-    if not os.environ.get(driver.SUPERVISED):  # (a restarted run still winds down)
-        too_short(None if window else deadline - now(), a.min_slot, a.ticket_hours)
-    if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
-        sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
-    if why := scratch.tmp_root_problem(p):  # every session's TMPDIR goes there
-        sys.exit(why)
+    window, deadline = run_times(a, p)
     p.state.mkdir(parents=True, exist_ok=True)
     if a.detach and in_tmux(p):  # (the detached run itself starts inside that session)
         sys.exit(f"already running in tmux session {p.tmux}")
@@ -204,6 +191,81 @@ def cmd_run(a, p):
         os.kill(os.getpid(), pilot.signalled)
     if not ready:
         sys.exit(driver.SETUP_FAILED)  # it couldn't start (a failed setup): scripts see it
+
+
+def run_times(a, p, dry=False):
+    """A run's first window (None for a plain run) and its stop, or the refusal a run with these flags gets: no stop,
+    too short for any worker, a checkout that isn't clean for `isolate = false`. A `dry` run's printout says what
+    --detach a window needs rather than refusing it."""
+    try:
+        window = schedule.first(a.from_, a.until, a.for_, a.daily)
+    except ValueError as e:
+        sys.exit(str(e))
+    if not (window or a.until or a.for_):
+        sys.exit("say when to stop: --until HH:MM or --for 6h")
+    if window and not (a.detach or a.supervise or dry):
+        sys.exit("--from and --daily wait in a tmux session, as a terminal won't stay open; run: windvane "
+                 + " ".join(shlex.quote(x) for x in sys.argv[1:]) + " --detach")
+    deadline = window[1] if window else parse_deadline(a.until, a.for_)
+    if not os.environ.get(driver.SUPERVISED):  # (a restarted run still winds down)
+        too_short(None if window else deadline - now(), a.min_slot, a.ticket_hours)
+    if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
+        sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
+    if why := scratch.tmp_root_problem(p):  # every session's TMPDIR goes there
+        sys.exit(why)
+    return window, deadline
+
+
+def dry_run(a, p):
+    """`run --dry-run`: the settings a run with these flags would use, from what the driver itself reads, after the
+    same refusals. It starts and writes nothing, so it needs no `claude` and works beside a running autopilot."""
+    if p.perm_problems:
+        sys.exit(f"windvane: bad permission rules in config.toml: {'; '.join(p.perm_problems)}")
+    window, deadline = run_times(a, p, dry=True)
+    out = ["dry run: nothing starts"
+           + "; an autopilot is running now (`windvane stop` ends it before a real run)" * running(p)]
+    if a.daily:
+        out.append(f"window: daily {a.daily} until windvane stop, the first {hhmm(window[0])} to {hhmm(deadline)}"
+                   + " (a run needs --detach for it)" * (not a.detach))
+    elif window:
+        out.append(f"window: {hhmm(window[0])} to {hhmm(deadline)}" + " (a run needs --detach for it)" * (not a.detach))
+    else:
+        out.append(f"stop: {deadline:%Y-%m-%d %H:%M}")
+    par = a.parallel or p.ap["parallel"]
+    out += [f"parallel: {slots(p, a.parallel)}" + (" at most (auto)" if str(par).lower() == "auto" else ""),
+            f"caps: 5-hour {a.cap:g}%, weekly {a.week_cap:g}%",
+            f"ticket hours: {a.ticket_hours:g}; min slot: {a.min_slot:g} min"]
+    goal = driver.Pilot.goal(argparse.Namespace(a=a, p=p)).strip().splitlines()  # as the run's plans read it
+    plans = "forever" if a.replan == math.inf else f"up to {a.replan} plan{'s' * (a.replan != 1)}" if a.replan else "off"
+    out.append(f"replan: {plans}" + (f"; goal: {goal[0]}" if a.replan and goal else
+                                     "; no goal set (--goal or goal = in config)" * bool(a.replan)))
+    out.append(f"protected: {', '.join(p.protected) or 'nothing'}")
+    x = p.cfg["experiments"]
+    out.append(f"experiments: benches start below {x['week_below']:g}% weekly usage and use up to "
+               f"{budget.Budget(x).cap:g}% of the week; plateau after {x['plateau']} rejected in a row")
+    chained = {e["then"] for e in p.periodic.values() if e["then"]}
+    for e in p.periodic.values():
+        land = e["land"] or (f"as its chain does, else {LAND}" if e["name"] in chained else LAND)
+        out.append(f"periodic {e['name']}: {periodic_trigger(e, chained)}; tickets land {land}")
+    print("\n".join(out))
+
+
+def periodic_trigger(e, chained):
+    """When a `[[periodic]]` entry runs, in the words of its own keys, as `Periodic.periodic_due` reads them."""
+    if e["builtin"] == "bench":
+        return (f"bench after tickets touching {', '.join(e['after_touch'])} merge" if e["after_touch"]
+                else "bench, by hand only (no after_touch)")
+    if e["builtin"] == "seed":
+        return f"seed every {e['seed_every']} kept experiments (pool of {e['pool_size']})"
+    if e["builtin"] == "scout":
+        return f"scout every {e['scout_every']} tickets finished on main, and in each plateau's exploration round"
+    when = [f"every {e['every']} merge{'s' * (e['every'] != 1)}"] * bool(e["every"])
+    when += [f"when a group finishes (after_group {e['after_group']})"] * bool(e["after_group"])
+    when += ["while requests wait for triage"] * e["requests"]
+    when += ["after the entry chaining it (then)"] * (e["name"] in chained)
+    what = f"{e['builtin']} " if e["builtin"] else ""
+    return what + (", or ".join(when) or "by hand only (windvane periodic " + e["name"] + ")") \
+        + (f", then {e['then']}" if e["then"] else "")
 
 
 def ask_first(p, hours, parallel=None):
@@ -906,6 +968,9 @@ def parser():
                    help='when the queue runs dry, plan new tickets (goal + critic notes), up to N times, or '
                    '"forever" (default from config: 0)')
     s.add_argument("--goal", help="the goal for --replan (default: config's goal)")
+    s.add_argument("--dry-run", action="store_true",
+                   help="print the settings this run would use (stop, caps, replan, protected paths, experiments, "
+                   "periodic entries) and start nothing")
     s = sub.add_parser("preflight", help="the questions the next tickets will need, to answer now")
     s.add_argument("--for", dest="for_", default="4h", help="how long the run will be (default 4h)")
     s.add_argument("--json", action="store_true", help="print them for a Claude session to ask")

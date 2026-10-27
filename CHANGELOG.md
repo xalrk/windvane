@@ -7,6 +7,9 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane run --dry-run` prints the settings a run with those flags would use (stop or window, parallel, caps,
+  ticket hours, replan and goal, protected paths, the experiments' budget and plateau, each `[[periodic]]` entry's
+  trigger and landing) and starts nothing: no lock, no session, no state files, no `claude` needed.
 - `tmp_root` (in `machine.toml`, or a project's config) puts the tickets' `TMPDIR`s on a roomier disk than the
   state directory's. `windvane doctor` and the driver now also watch the disk holding them, and call a disk with
   under 2 GB free nearly full whatever its percent. A check that fails with "No space left on device" says so in its

@@ -45,7 +45,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import bench, budget, critic, jobs, phone, pool, requests, scout
-from .config import DIR, POOL, exe, periodic as periodic_entries, permissions
+from .config import DIR, LAND, POOL, exe, periodic as periodic_entries, permissions
 from .questions import quiet_now
 from .queue import Queue, mend_queue, title as title_of
 from .runner import NO_REQUEST, plain_error
@@ -223,7 +223,7 @@ class Periodic:
             try:
                 landed, held = [], {}
                 if kept and (kept[0] or kept[3] or kept[2][0] != kept[2][1]):
-                    landed, held = self.land_periodic(cd, *kept, land or "near", last, reply)
+                    landed, held = self.land_periodic(cd, *kept, land or LAND, last, reply)
                 for reqs, text, name in self.triaged:
                     self.verdicts(reqs, text, landed, held, name)
             finally:
@@ -683,7 +683,7 @@ class Periodic:
             old_q = gout(cd, "show", f"HEAD:{p.queue_rel}")
             try:
                 landed, held = self.land_periodic(cd, {f"{p.tickets_rel}/{tid}.md": regression_ticket(tid, st)}, [tid],
-                                                  (old_q, old_q), {}, e["land"] or "near", name, st["numbers"])
+                                                  (old_q, old_q), {}, e["land"] or LAND, name, st["numbers"])
             finally:
                 clean_detach(p, cd, p.upstream)
         finally:
