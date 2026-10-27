@@ -27,6 +27,8 @@ OURS = {"runs", "settings.json", "windvane-mentioned", "Critic", "critic.jsonl",
 # What Claude Code gives a sandboxed Bash command as its TMPDIR, the first one set: it sets CLAUDE_TMPDIR itself, to
 # its own dir under TMPDIR (`claude-<uid>`), and every command it runs inherits it, in the sandbox or outside it
 SANDBOX_VARS = ("CLAUDE_CODE_TMPDIR", "CLAUDE_TMPDIR")
+TMP_DIR = "windvane-tmp"  # the folder of windvane's own under `tmp_root`, a dir per project in it
+MARK = ".windvane-tmp"  # in a project's dir there: windvane made it, so its ticket dirs are the cleaner's to remove
 ORIGIN = re.compile(r'^\[remote "origin"\]\s*$((?:\n[^\[].*$)*)', re.M)
 
 
@@ -118,10 +120,18 @@ def tmp_root(p):
 
 
 def base(p):
-    """Where `p`'s per-ticket TMPDIRs go: `<tmp_root>/<project>`, else the state dir's tmp/. A check's clones and
-    builds land there, so a small disk under the state dir fills while the project's own disk has room."""
+    """Where `p`'s per-ticket TMPDIRs go: `<tmp_root>/windvane-tmp/<project>`, else the state dir's tmp/. A check's
+    clones and builds land there, so a small disk under the state dir fills while the project's own disk has room.
+    A folder of windvane's own under `tmp_root`: the cleaner removes what's in it, and `tmp_root` may well be the
+    folder that holds the user's projects."""
     r = tmp_root(p)
-    return r / p.name if r else p.state / "tmp"
+    return r / TMP_DIR / p.name if r else p.state / "tmp"
+
+
+def ours(p):
+    """Whether the cleaner may empty `p`'s `base`: the state dir's, or one under `tmp_root` that windvane made (its
+    MARK file says so)."""
+    return tmp_root(p) is None or (base(p) / MARK).is_file()
 
 
 def tmp_root_problem(p):
@@ -137,12 +147,23 @@ def tmp_root_problem(p):
         return f"tmp_root ({where}) is {r}, which isn't a directory: create it or unset tmp_root"
     if not os.access(r, os.W_OK | os.X_OK):
         return f"tmp_root ({where}) is {r}, which you can't write to: fix its permissions or unset tmp_root"
+    b, top = base(p).resolve(), Path(p.main_root()).resolve()
+    if top == b or top in b.parents or b in top.parents:
+        return f"tmp_root ({where}) puts the tickets' TMPDIRs at {b}, overlapping the checkout {top}: pick a folder " \
+               "outside it"
+    if b.exists() and not (b / MARK).is_file():
+        return f"tmp_root ({where}) puts the tickets' TMPDIRs at {b}, which already holds files windvane didn't make " \
+               "(the cleaner would remove them): pick another tmp_root"
     return None
 
 
 def session_dir(p, key):
     """The TMPDIR of a ticket's sessions and checks (or of a ticketless session, by its label)."""
-    d = base(p) / key
+    b = base(p)
+    if tmp_root(p) is not None and not b.exists():
+        b.mkdir(parents=True, exist_ok=True)
+        (b / MARK).touch()
+    d = b / key
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -227,7 +248,7 @@ def candidates(p=None, running=()):
         out = [d for d in root().iterdir() if d.name.startswith(PREFIX)]
     except OSError:
         out = []
-    if p is not None and base(p).is_dir():
+    if p is not None and base(p).is_dir() and ours(p):
         out += [d for d in base(p).iterdir() if d.name not in running]
     return out
 
@@ -310,10 +331,11 @@ def device(path):
 
 
 def places(p=None):
-    """[(path, what it holds)] of the filesystems temp files land on: the temp dir, and `p`'s per-ticket TMPDIRs
-    (`base`), each filesystem once."""
+    """[(path, what it is, named with its path)] of the filesystems temp files land on: the temp dir, and `p`'s
+    per-ticket TMPDIRs (`base`), each filesystem once."""
     out, seen = [], {}
-    for path, what in [(root(), "the temp dir")] + ([(base(p), "each ticket's TMPDIR")] if p is not None else []):
+    ticket = [(base(p), f"the tickets' TMPDIRs under {base(p)}")] if p is not None else []
+    for path, what in [(root(), f"the temp dir {root()}")] + ticket:
         try:
             dev = device(existing(path))
         except OSError:
@@ -344,7 +366,7 @@ def nearly_full(p=None):
 
 def full_line(path, what, inodes, space, left, when=""):
     """How doctor and the driver's push say a nearly full filesystem (`places`, `nearly_full`)."""
-    return f"{what} {path} is {inodes:.0f}% full of inodes and {space:.0f}% of space ({mb(left)} MB free){when}"
+    return f"{what} is {inodes:.0f}% full of inodes and {space:.0f}% of space ({mb(left)} MB free){when}"
 
 
 def way_out(what):

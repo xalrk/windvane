@@ -47,8 +47,9 @@ class TmpRoot(unittest.TestCase):
     def test_machine_toml_moves_sessions_and_checks_and_drop_and_clean_find_them_there(self):
         self.machine(f'tmp_root = "{self.root}"\n')
         p = Project(self.s.root)
-        d = self.root / p.name / "T-007"
+        d = self.root / "windvane-tmp" / p.name / "T-007"
         self.assertEqual(scratch.session_dir(p, "T-007"), d)
+        self.assertIsNone(scratch.tmp_root_problem(p))  # the dir it made is its own
         jobs.run_logged(p, "T-007", 'echo "$TMPDIR" > seen', self.s.root, self.s.tmp / "check.log")
         self.assertEqual((self.s.root / "seen").read_text().strip(), str(d))
         self.assertFalse((p.state / "tmp" / "T-007").exists())
@@ -66,7 +67,7 @@ class TmpRoot(unittest.TestCase):
         self.s.write(".windvane/config.toml", f'tmp_root = "{self.root}"\n'
                      + (self.s.root / ".windvane/config.toml").read_text())  # before any table
         p = Project(self.s.root)
-        self.assertEqual(scratch.session_dir(p, "T-001"), self.root / p.name / "T-001")
+        self.assertEqual(scratch.session_dir(p, "T-001"), self.root / "windvane-tmp" / p.name / "T-001")
 
     def test_a_missing_or_relative_root_refuses_the_run_and_doctor_says_why(self):
         self.machine(f'tmp_root = "{self.s.tmp / "gone"}"\n')
@@ -75,12 +76,26 @@ class TmpRoot(unittest.TestCase):
         rows = doctor.tmp_warnings(p)
         self.assertEqual(rows[0][0], "need")
         self.assertIn("isn't a directory", rows[0][1])
+        self.addCleanup(os.chdir, os.getcwd())  # `-C` moves into the sandbox, which close deletes
         with mock.patch.object(cli.shutil, "which", return_value="/bin/claude"), \
                 self.assertRaises(SystemExit) as e:
             cli.main(["-C", str(self.s.root), "run", "--for", "2h", "--no-preflight"])
         self.assertIn("tmp_root (machine.toml)", str(e.exception.code))
         self.machine('tmp_root = "rel/dir"\n')
         self.assertIn("give an absolute path", scratch.tmp_root_problem(Project(self.s.root)))
+        self.machine(f'tmp_root = "{self.s.root / "scratch"}"\n')
+        (self.s.root / "scratch").mkdir()
+        self.assertIn("overlapping the checkout", scratch.tmp_root_problem(Project(self.s.root)))
+
+    def test_a_folder_windvane_didnt_make_is_refused_and_never_cleaned(self):
+        self.machine(f'tmp_root = "{self.root}"\n')
+        p = Project(self.s.root)
+        mine = self.root / "windvane-tmp" / p.name / "docs"
+        mine.mkdir(parents=True)
+        os.utime(mine, (0, 0))
+        self.assertIn("already holds files windvane didn't make", scratch.tmp_root_problem(p))
+        self.assertEqual(scratch.clean(p), (0, 0))
+        self.assertTrue(mine.exists())
 
 
 class NearlyFull(unittest.TestCase):
@@ -101,7 +116,8 @@ class NearlyFull(unittest.TestCase):
             rows = doctor.tmp_warnings(self.p)
         self.assertEqual(len(full), 1)  # the temp dir and the TMPDIRs share a filesystem here: said once
         self.assertEqual(rows[0][0], "warn")
-        self.assertRegex(rows[0][1], r"each ticket's TMPDIR .* is 10% full of inodes and 97% of space \(573 MB free\)")
+        self.assertRegex(rows[0][1], rf"^the temp dir .* and the tickets' TMPDIRs under {self.p.state}/tmp is 10% full "
+                                     r"of inodes and 97% of space \(573 MB free\)")
         self.assertIn("set tmp_root", rows[0][2])
         sent = []
         pilot = driver.Pilot(self.p, args())
@@ -128,8 +144,9 @@ class NearlyFull(unittest.TestCase):
         with mock.patch.object(scratch, "device", dev), mock.patch("os.statvfs", lambda path: seen.append(path)
                                                                      or statvfs(0.5)(path)):
             full = scratch.nearly_full(p)
-        self.assertEqual([(f[0], f[1]) for f in full], [(scratch.root(), "the temp dir"),
-                                                        (root / p.name, "each ticket's TMPDIR")])
+        base = root / "windvane-tmp" / p.name
+        self.assertEqual([(f[0], f[1]) for f in full], [(scratch.root(), f"the temp dir {scratch.root()}"),
+                                                        (base, f"the tickets' TMPDIRs under {base}")])
         self.assertIn(root, seen)  # the ticket dir isn't made yet: its nearest parent is measured
 
 
@@ -144,12 +161,17 @@ class DiskFullCheck(unittest.TestCase):
         with mock.patch.object(jobs, "tree_key", return_value=None):
             return jobs.check(self.p, self.s.root, ticket="T-009")
 
-    def test_a_check_whose_log_says_enospc_gets_the_note(self):
-        ok, summary, _ = self.check("echo 'OSError: [Errno 28] No space left on device'; exit 1")
+    def test_a_check_whose_log_says_enospc_on_a_nearly_full_disk_gets_the_note(self):
+        enospc = "echo 'OSError: [Errno 28] No space left on device'; exit 1"
+        with mock.patch.object(scratch, "free", return_value=573 * 1024 ** 2):
+            ok, summary, _ = self.check(enospc)
+            self.assertNotIn("ran out of space", self.check("echo 'AssertionError'; exit 1")[1])
         self.assertFalse(ok)
-        self.assertRegex(summary, rf"; the disk holding {self.p.state}/tmp/T-009 ran out of space \([\d,]+ MB free "
+        self.assertRegex(summary, rf"; the disk holding {self.p.state}/tmp/T-009 ran out of space \(573 MB free "
                                   r"now\): not the change's fault, free space or set tmp_root; log ")
-        self.assertNotIn("ran out of space", self.check("echo 'AssertionError'; exit 1")[1])
+        ok, summary, _ = self.check(enospc)  # a disk with room: a test that names ENOSPC, or a real bug
+        self.assertFalse(ok)
+        self.assertNotIn("ran out of space", summary)
 
     def test_the_gate_runs_it_again_instead_of_bouncing_and_fails_after_three(self):
         pilot = driver.Pilot(self.p, args())

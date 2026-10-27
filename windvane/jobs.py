@@ -311,20 +311,22 @@ def busy_note(log):
 
 
 def disk_note(log, tmp):
-    """What a failed check's summary says when its log shows a write that found the disk full: the worker, the fix
-    session and the driver would otherwise read it as a bug in the change. "" for any other failure."""
+    """What a failed check's summary says when its log shows a write that found the disk full and the disk holding
+    its TMPDIR is nearly full still (scratch.FULL, scratch.FLOOR): the worker, the fix session and the driver would
+    otherwise read it as a bug in the change. "" for any other failure, one whose log only names ENOSPC (a test of
+    it) on a disk with room among them."""
     try:
         with open(log, "rb") as f:
-            full = any(m in line for line in f for m in NO_SPACE)
+            said = any(m in line for line in f for m in NO_SPACE)
+        if not said:
+            return ""
+        inodes, space = scratch.fullness(scratch.existing(tmp))
+        left = scratch.free(scratch.existing(tmp))
     except OSError:
         return ""
-    if not full:
+    if max(inodes, space) <= scratch.FULL and left >= scratch.FLOOR:
         return ""
-    try:
-        left = f"{scratch.mb(scratch.free(scratch.existing(tmp)))} MB free now"
-    except OSError:
-        left = "free space unknown"
-    return f"; the disk holding {tmp} ran out of space ({left}){DISK_FULL}"
+    return f"; the disk holding {tmp} ran out of space ({scratch.mb(left)} MB free now){DISK_FULL}"
 
 
 def unrecorded(cwd):
