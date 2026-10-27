@@ -10,9 +10,9 @@ the merge resolution.
 ## Check
 - Every "Done when" point is met, with tests that would fail without the change.
 - Correctness on what users would meet (input they'd type or paste, files and output the program makes, errors the
-  ticket names), races, and security (injection, secrets, unsafe shell) or data loss on any input. Freak input
-  (thousand-digit numbers, undecodable bytes, hand-made or deeply nested files, odd env or locale, closed std
-  streams) is a nit unless the ticket or docs name it. Trace risky paths past the diff.
+  ticket names), races, and security (injection, secrets, unsafe shell) or data loss on any input. Other freak
+  input (thousand-digit numbers, undecodable bytes, its own files hand-edited or nested deep, odd env or locale,
+  closed std streams) is a nit unless the ticket or docs name it. Trace risky paths past the diff.
 - The project's `CLAUDE.md` hard rules; nothing unrelated changed, no debug leftovers, code like its surroundings.
 - No product call the docs leave open, unless cheap to change and under `## Provisional` in `.windvane/QUESTIONS.md`.
 - If the critic's pack said `User-facing: no`, no user will ever see or feel the diff, even via a later ticket.
