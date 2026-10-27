@@ -16,9 +16,10 @@ import test_bench_periodic as tbp  # noqa: E402
 
 from windvane import bench, driver, jobs, periodic  # noqa: E402
 from windvane.heavy import JOB_ENV  # noqa: E402
-from windvane.util import now  # noqa: E402
+from windvane.util import hhmm, now  # noqa: E402
 
-WAITING = (r"^[\d: -]+bench: waiting for other T-009's bench, running since \d\d:\d\d before its bench starts "
+WAITING = (r"^[\d: -]+bench: waiting for other T-009's bench, running since \d\d:\d\d before its bench starts, "
+           r"until \d\d:\d\d at the latest "
            r"\(windvane bench --status to check; windvane stop ends the wait\)$")
 
 
@@ -123,9 +124,10 @@ class RunWaits(tbp.Base):
         log = self.log()
         self.assertEqual(len(self.calls), 1, log)
         self.assertGreaterEqual(len(pauses), 3)
-        waited = log.index("bench round waits for other T-009's bench")
+        self.assertEqual(len(re.findall(WAITING, log, re.M)), 1, log)  # one line for the whole wait
+        self.assertIn(f"until {hhmm(pilot.end() - timedelta(minutes=120))} at the latest", log)
+        self.assertLess(log.index("bench: waiting for other"), log.index("bench: bench started in the background"))
         started = log.index("bench: bench started in the background")
-        self.assertLess(waited, started)
         self.assertGreater(log.index("no regression", started), started)  # its verdict read before the run ended
         self.assertNotIn("ended with the run", log)
 
@@ -137,7 +139,7 @@ class RunWaits(tbp.Base):
             pilot.run(now() + timedelta(hours=1))  # 120 min don't fit
         self.assertEqual(self.calls, [])
         self.assertIn("bench: skipped: 120 min don't fit before the deadline", self.log())
-        self.assertNotIn("bench round waits for", self.log())
+        self.assertNotIn("waiting for the bench bench round", self.log())
 
 
 class WaitLine(unittest.TestCase):

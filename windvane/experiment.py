@@ -341,16 +341,18 @@ class Experiments:
             self.nap(now() + timedelta(seconds=POLL))
         return True
 
-    def bench_held(self, who):
+    def bench_held(self, who, until=None):
         """The bench holding the machine's lock, if another does: `who`'s wait for it is logged once, until it's
-        free. An experiment's bench and a periodic round both ask before they start, rather than leave `windvane
-        bench` to block in its lock, a wait their deadline wouldn't count."""
+        free, with `until` when a round's wait gives up before the deadline. An experiment's bench and a
+        periodic round both ask before they start, rather than leave `windvane bench` to block in its lock, a wait
+        their deadline wouldn't count."""
         h = bench.holder()
         if h is None:
             self.bench_said.discard(who)
         elif who not in self.bench_said:
             self.bench_said.add(who)
-            self.log(f"{who}: waiting for {bench.describe(h)} before its bench starts (windvane bench --status to "
+            by = f", until {hhmm(until)} at the latest" if until else ""
+            self.log(f"{who}: waiting for {bench.describe(h)} before its bench starts{by} (windvane bench --status to "
                      "check; windvane stop ends the wait)")
         return h
 
