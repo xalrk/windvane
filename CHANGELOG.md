@@ -183,6 +183,12 @@ release on the same day adds a number (`2026.10.9.1`).
   failing, and the run takes it up again once the answer comes.
 
 ### Changed
+- The worker plans how a user first meets its change before building it. After reading the ticket it lists its trials:
+  the main promise, a newcomer's first contact where there is one (the program run with nothing, with `--help`, a
+  wrong argument or a missing file, or a first screen), and each of the project's `CLAUDE.md` hard rules on the paths
+  it touches (error lines, exit codes, output shape), each with the command that runs it. It runs them on the final
+  head and fixes what fails before the critic, which gets the list in its notes. A change that only checked its own
+  "Done when" used to pass with a two-line usage error, help on the wrong stream or no way to learn the commands.
 - The reviewer sends a change back for what a user of the project would meet: input they'd type or paste, the files
   and output the program makes, the errors the ticket names, and security or data-loss risks on any input. Freak
   input (thousand-digit numbers, undecodable bytes, the program's own files hand-edited or nested deep, odd

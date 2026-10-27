@@ -35,10 +35,33 @@ class UserFacing(unittest.TestCase):
         self.assertIn("no user will ever see or feel the diff, even via a later ticket", self.rule("REVIEW.md"))
 
 
+class TrialsFirst(unittest.TestCase):
+    """T-319: each ticket's "Done when" names its own feature, so a worker that only checks those never meets the
+    program the way a newcomer does. It plans the user's trials before building and runs them on the final head."""
+
+    def setUp(self):
+        s = Sandbox()
+        self.addCleanup(s.close)
+        self.text = " ".join(rules(Project(s.root), "WORKER.md").split())
+
+    def test_the_trials_are_listed_before_building(self):
+        self.assertIn("Before building, list your **trials**, each with its command, a user's way: the main "
+                      "promise; a newcomer's first contact where there is one (the program run bare, with `--help`, a "
+                      "wrong argument, a missing file; a first screen); each `CLAUDE.md` hard rule on the paths you touch (error lines, "
+                      "exit codes, output shape).",
+                      self.text)
+        self.assertLess(self.text.index("list your **trials**"), self.text.index("4. **Build it**"))
+
+    def test_the_trials_run_on_the_final_head_and_reach_the_critic(self):
+        self.assertIn("5. **Check it yourself** on the final head: run every trial and fix what fails, check each "
+                      '"Done when" point', self.text)
+        self.assertIn("Then your trials, and only what the critic can't run itself", self.text)
+
+
 # Each prompt's size in bytes when it was capped (T-295): every session re-reads its prompt on every turn, so new
 # text replaces old. Bytes, not lines, so a longer line can't dodge the cap. A prompt that shrinks lowers its cap here.
 CAPS = {"CRITIC.md": 3824, "CRITIC-numeric.md": 2164, "CRITIC-project.md": 842, "FIX.md": 987, "JUDGE.md": 844,
-        "PERIODIC.md": 1089, "PLAN.md": 3090, "PREFLIGHT.md": 1299, "REVIEW.md": 2148, "SCOUT.md": 1108, "SEED.md": 1991, "TRIAGE-REQUESTS.md": 1499, "WORKER.md": 7880}
+        "PERIODIC.md": 1089, "PLAN.md": 3090, "PREFLIGHT.md": 1299, "REVIEW.md": 2148, "SCOUT.md": 1108, "SEED.md": 1991, "TRIAGE-REQUESTS.md": 1499, "WORKER.md": 7875}
 
 
 def over_cap(sizes):
