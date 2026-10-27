@@ -49,8 +49,8 @@ from .config import DIR, POOL, exe, periodic as periodic_entries, permissions
 from .questions import quiet_now
 from .queue import Queue, mend_queue, title as title_of
 from .runner import NO_REQUEST, plain_error
-from .util import (append_jsonl, edit_json, git, gout, hhmm, last_match, load_json, now, push, read_jsonl, run_limited,
-                   save_json)
+from .util import (append_jsonl, edit_json, git, gout, groups_dir, hhmm, last_match, load_json, now, push, read_jsonl,
+                   run_limited, save_json)
 
 PERIODIC_RE = re.compile(r"PERIODIC:[ \t]*(.*)")
 SEED_RE = re.compile(r"SEED:[ \t]*(.*)")
@@ -246,7 +246,7 @@ class Periodic:
         any stop ends it (nothing is paid for yet). Why it failed, or ""."""
         until = min(now() + timedelta(minutes=e["setup_minutes"]), self.end() - timedelta(minutes=e["minutes"]))
         stopped = lambda: "stopped" if (self.p.state / "STOP").exists() else ""  # noqa: E731
-        code, why, lines = run_limited(e["setup"], cd, until, stopped)
+        code, why, lines = run_limited(e["setup"], cd, until, stopped, groups=groups_dir(self.p))
         last = phone.cut(lines[0], log=self.log) if lines else "no output"
         return why or (f"exit {code}: {last}" if code else "")
 

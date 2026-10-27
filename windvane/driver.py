@@ -459,7 +459,7 @@ class Pilot(Desk, Periodic, Experiments):
         self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
         self.kept_given = 0  # the latest stop this run has given its kept jobs (`keep_until`), a Unix time
         self.signalled, self.ending = None, False  # the SIGTERM or SIGHUP that ended the run; past its `finally`
-        self.oom_kills = oom.oom_kills()  # the cgroup's count so far: one more at a SIGTERM says why it came
+        self.oom = oom.OomWatch()  # the cgroup's OOM kills just now: one more at a SIGTERM says why it came
         self.presses = 0  # the run's Ctrl-Cs from the one that ended it: the third ends its wind-down at once
         self.guarded = 0  # how deep the main thread is in `critical` steps: a signal waits for them to end
         self.left = ""  # the pid in the lock file a run that ended without its teardown left (`take_lock`)
@@ -2953,6 +2953,8 @@ class Pilot(Desk, Periodic, Experiments):
             self.log(f"phone hooks: not tidied ({e})")
         restarted = os.environ.pop("WINDVANE_RESTARTED", None)
         from . import schedule  # (it imports this module)
+        if not restarted:  # an earlier run's restarts aren't this one's (`windvane status`)
+            (p.state / oom.RESTARTED).unlink(missing_ok=True)
         if not (restarted or schedule.called_off(p)):  # a stop asked for while it restarted, or started, holds
             (p.state / "STOP").unlink(missing_ok=True)
         (p.state / "DEADLINE").unlink(missing_ok=True)  # an earlier run's
@@ -2972,6 +2974,8 @@ class Pilot(Desk, Periodic, Experiments):
         swept = sweep_nested(p)  # under the lock: no live run owns them
         if swept:
             self.log(f"killed {swept} process group{'s' * (swept > 1)} left running by an earlier run's sessions")
+        util.DRIVER_GROUPS = p.state / "nested" / f"driver-{os.getpid()}"  # a setup's, swept like those if killed
+        self.oom.start()
         if self.left and not restarted and p.cfg["teardown"]:  # we hold its lock now, so that driver is gone
             self.log(f"the last run (pid {self.left}) ended without its teardown (killed?): running it before setup")
             tear_down(p)  # a failure is named in the "started" push
@@ -3057,6 +3061,8 @@ class Pilot(Desk, Periodic, Experiments):
                 report_leftovers(p, began)
             fcntl.flock(self.lockfile, fcntl.LOCK_UN)  # now, not at the close: a thread's fork may still have the fd
             self.lockfile.close()
+            util.DRIVER_GROUPS = None
+            self.oom.stop()
             for sig, h in handlers.items():
                 signal.signal(sig, h)
             if sys.stdout is not streams[0]:  # on_signal's /dev/null
@@ -3085,7 +3091,7 @@ class Pilot(Desk, Periodic, Experiments):
         self.interrupted.set()
         if sig == signal.SIGHUP:  # its terminal is gone: a print there fails (EIO) and would cost the run its end
             sys.stdout = sys.stderr = open(os.devnull, "w")
-        said = OOM_STOPPED if sig == signal.SIGTERM and oom.rose(self.oom_kills) else SIGNALLED[sig]
+        said = OOM_STOPPED if sig == signal.SIGTERM and self.oom.rose() else SIGNALLED[sig]
         log(self.p, f"{said}: stopping now")
         self.stop_reason = f"{said}; the running sessions were killed"
         if self.guarded:

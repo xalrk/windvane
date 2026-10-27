@@ -88,7 +88,7 @@ class Detach(Base):
         with mock.patch.object(supervise.phone, "has_systemd", lambda: True), \
                 mock.patch.object(supervise, "default_policy", lambda: "stop"):
             self.assertEqual(warned(), [])  # systemd-run works: --detach uses it
-            (self.s.bin / "systemd-run").unlink()
+            (self.s.bin / "systemd-run").write_text("#!/bin/sh\nexit 1\n")  # (not unlinked: /usr/bin has the real one)
             self.assertIn("a single runaway command will end a run", warned()[0][1])
             with mock.patch.object(supervise, "default_policy", lambda: "continue"):
                 self.assertEqual(warned(), [])
@@ -113,6 +113,17 @@ class StopWhy(Base):
     def test_a_sigterm_without_one_says_what_it_said(self):
         self.assertEqual(self.stop_reason(3, 3),
                          "the driver got SIGTERM (a kill or a shutdown); the running sessions were killed")
+
+    def test_an_oom_kill_long_before_a_sigterm_is_not_blamed_for_it(self):
+        """In a scope with OOMPolicy=continue a session's OOM kill is survived; a shutdown hours later is a shutdown."""
+        self.cgroup(0)
+        pilot = driver.Pilot(self.p, args())
+        self.cgroup(1)
+        pilot.oom.look()  # the run's looks every OOM_LOOK seconds catch up with it
+        pilot.oom.look()
+        with self.assertRaises(driver.Signalled):
+            pilot.on_signal(signal.SIGTERM, None)
+        self.assertTrue(pilot.stop_reason.startswith("the driver got SIGTERM (a kill or a shutdown)"))
 
     def test_no_cgroup_to_read_says_what_it_said(self):
         self.cgroup(0)
@@ -219,6 +230,32 @@ class Restarts(Base):
                 cli.main(["-C", str(self.s.root), "status"])
         self.assertIn("restarted: 2 times; the last at ", out.getvalue())
         self.assertIn(": the driver was killed (SIGSEGV)", out.getvalue())
+
+    def test_a_new_run_starts_with_no_restarts(self):
+        self.supervise(-signal.SIGKILL)
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.main(["-C", str(self.s.root), "run", "--for", "1h", "--no-preflight"])
+        self.assertFalse((self.p.state / supervise.RESTARTED).exists())
+
+    @unittest.skipUnless(LINUX, "it reads /proc")
+    def test_a_killed_drivers_setup_is_swept_by_the_restart(self):
+        """A setup (`run_limited`) runs in a group of its own: recorded while it runs, swept once its driver is gone."""
+        groups, seen = self.p.state / "nested" / "driver-1", self.s.tmp / "marks"
+        code, _, _ = util.run_limited(f"ls {groups} > {seen}", self.s.root, now() + timedelta(1), groups=groups)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(seen.read_text().split()), 1)  # its own mark, while it ran
+        self.assertEqual(list(groups.iterdir()), [])  # gone once it ended
+        left = subprocess.Popen(["sleep", "60"], start_new_session=True)  # a setup its killed driver left running
+        self.addCleanup(left.kill)
+        util.record_group(groups, left.pid)
+        self.assertEqual(runner.sweep_nested(self.p), 1)
+        self.assertEqual(left.wait(10), -signal.SIGTERM)
+        self.assertFalse(groups.exists())
+
+    def test_where_a_group_is_recorded(self):
+        self.assertIsNone(util.groups_dir(self.p))  # a desk command's groups are its own
+        with mock.patch.dict(os.environ, {"WINDVANE_SESSION": "w1"}):
+            self.assertEqual(util.groups_dir(self.p), self.p.state / "nested" / "w1")  # ended with its session
 
     @unittest.skipUnless(LINUX, "it reads /proc")
     def test_what_a_killed_driver_left_in_the_group_is_ended(self):

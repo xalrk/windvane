@@ -9,12 +9,14 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 from . import phone
 
 SCOPE = ["systemd-run", "--user", "--scope", "--quiet", "-p", "OOMPolicy=continue", "--"]
+OOM_LOOK = 5  # seconds between a run's looks at its cgroup's OOM-kill count
 PROBE_S = 10  # seconds the scope's probe may take: a user manager that doesn't answer means no scope
 PROC = Path("/proc")
 CGROUP = Path("/sys/fs/cgroup")
@@ -78,6 +80,34 @@ def rose(before):
     """Whether an OOM kill happened in this cgroup since `before` (an `oom_kills()`)."""
     after = oom_kills()
     return before is not None and after is not None and after > before
+
+
+class OomWatch:
+    """The cgroup's OOM-kill count as it was a few seconds ago (`base`), looked at every OOM_LOOK seconds while a run
+    goes: systemd's OOMPolicy=stop sends its SIGTERM right after the kill, while in a scope with OOMPolicy=continue a
+    session's kill hours earlier is no cause of a later shutdown."""
+
+    def __init__(self):
+        self.base = self.last = oom_kills()
+        self.done = threading.Event()
+
+    def start(self):
+        if self.last is not None:
+            threading.Thread(target=self.watch, daemon=True).start()
+
+    def watch(self):
+        while not self.done.wait(OOM_LOOK):
+            self.look()
+
+    def look(self):
+        self.base, self.last = self.last, oom_kills()
+
+    def stop(self):
+        self.done.set()
+
+    def rose(self):
+        """Whether an OOM kill came in the last OOM_LOOK to 2 * OOM_LOOK seconds."""
+        return rose(self.base)
 
 
 def ancestors():

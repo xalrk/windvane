@@ -35,7 +35,7 @@ from . import heavy, net, privacy, renumber, worktree
 from .config import DIR, HOME, exe, user_dir
 from .phone import cut
 from .runner import plain_error, run_claude
-from .util import append_jsonl, git, gout, last_match, load_json, log, now, read_jsonl, run_limited
+from .util import append_jsonl, git, gout, groups_dir, last_match, load_json, log, now, read_jsonl, run_limited
 
 OLD_RE = re.compile(r"CRITIC: (\d+(?:\.\d+)?)/10 (\S+) fixes=(\d+)[ \t]*(.*)")
 CRITIC_RE = re.compile(r"CRITIC: (\S+) ((?:[\w-]+=(?:\d+(?:\.\d+)?|-)[ \t]+)+?)fixes=(\d+)[ \t]*(.*)")
@@ -1088,7 +1088,7 @@ def show(p, tid, d, tree, git_env, stop_if=None):
         env[heavy.STOP_ENV] = str(p.state / "STOP")  # a stop ends its wait for the machine
     t0 = time.time()
     code, why, lines = run_limited(run, tree, now() + timedelta(minutes=mins), stop_if or (lambda: ""),
-                                   keep=SHOW_LINES, env=env)
+                                   keep=SHOW_LINES, env=env, groups=groups_dir(p))
     minutes = round((time.time() - t0) / 60, 2)
     last = f": {cut(lines[-1])}" if lines else ""
     failed = (f"it ran past show_minutes = {mins:g}" if why == "out of time" else f"stopped ({why})" if why else

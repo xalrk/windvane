@@ -353,8 +353,8 @@ def oom_warnings():
         return []
     return [("warn", "systemd stops a whole run when the out-of-memory killer ends one of its processes "
              "(DefaultOOMPolicy=stop), and `windvane run --detach` can't use systemd-run to avoid it: a single "
-             "runaway command will end a run", "install systemd-run, or start runs inside "
-             "`systemd-run --user --scope -p OOMPolicy=continue -- windvane run ...`")]
+             "runaway command will end a run", "put `DefaultOOMPolicy=continue` under `[Manager]` in "
+             "~/.config/systemd/user.conf, then run `systemctl --user daemon-reexec`")]
 
 
 def moved_warnings(p):
