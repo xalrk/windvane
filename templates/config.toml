@@ -22,7 +22,7 @@ scan_allow = []           # leak kinds answers and pushes may hold (["private-te
 
 [models]                  # model and effort per role
 worker = "opus"
-worker_effort = "high"
+worker_effort = "medium"
 reviewer = "opus"
 reviewer_effort = "high"
 critic = "opus"
