@@ -92,6 +92,27 @@ class FullRun(Base):
         self.assertNotIn("ran out of time", log)
 
 
+class RevisionRuns(Base):
+    """Whole worker runs, each recording a `revise` (the fake critic scores 5) and ending PARTIAL: `work` hands
+    `handle` the run's start, so none is a strike toward `partials` while `revisions` last."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ.update(FAKE_WORKER="partial", FAKE_REASON=LEFT, FAKE_WORKER_RUN="windvane critic T-001",
+                          FAKE_CRITIC="5 2")
+
+    def test_a_revision_loop_isnt_set_aside(self):
+        pilot = driver.Pilot(self.p, args(parallel=1))
+        pilot.run(now() + timedelta(minutes=40))
+        log = self.log()
+        for n in (1, 2, 3):
+            self.assertIn(f"{PARTIAL_LOG.format(tid='T-001')} (critic revision {n} of 3, not counted)", log)
+        self.assertNotIn("ran out of time", log)
+        self.assertNotIn("T-001", pilot.aside)
+        self.assertIn("T-001: critic 5/10 (accept", log)  # revisions spent: the critic lets it go
+        self.assertEqual(pilot.merged, ["T-001"])
+
+
 class HandleBase(Base):
     """`Pilot.handle` on a PARTIAL line, with the branch pushed (or not) and a verdict recorded by hand."""
 
