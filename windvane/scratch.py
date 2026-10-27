@@ -14,12 +14,16 @@ import time
 from pathlib import Path
 
 from . import util
+from .config import user_dir
 
 PREFIX = "windvane-"  # what the tests and tools/check_pythons.sh name their temp dirs, so the cleaner knows them
 AGE = 3600  # seconds a leftover must have sat untouched: a running check writes into its dirs all the time
 FULL = 90  # percent of the temp dir's inodes or space at which doctor warns and the driver pushes
 FLOOR = 2 * 1024 ** 3  # bytes free under which a filesystem is nearly full whatever its percent: 98% of a large disk
 # still holds a check's clones, 98% of a small one doesn't
+ROOMY = 20 * 1024 ** 3  # bytes free over which a disk past FULL percent of its space isn't nearly full: a big disk's
+# last tenth holds many checks' clones and builds, and a warning there every day reads as noise
+WARNED = "disk-full.json"  # in the state root: the filesystems pushed as nearly full, for every project's driver
 DAY = 86400  # seconds an old leak must have sat untouched: a `tmpXXXXXXXX` dir might be anyone's work in progress
 LEAK = re.compile(r"tmp[a-z0-9_]{8}")  # tempfile.mkdtemp's names, which the tests used before they named theirs
 OURS = {"runs", "settings.json", "windvane-mentioned", "Critic", "critic.jsonl", "windvane-heavy.lock",
@@ -355,8 +359,8 @@ def places(p=None):
 
 
 def nearly_full(p=None):
-    """[(path, what it holds, % inodes used, % space used, bytes free)] of the filesystems in `places` over FULL,
-    or with under FLOOR free."""
+    """[(path, what it holds, % inodes used, % space used, bytes free)] of the filesystems in `places` that are
+    `tight`."""
     out = []
     for path, what in places(p):
         try:
@@ -364,9 +368,38 @@ def nearly_full(p=None):
             left = free(existing(path))
         except OSError:
             continue
-        if max(inodes, space) > FULL or left < FLOOR:
+        if tight(inodes, space, left):
             out.append((path, what, inodes, space, left))
     return out
+
+
+def tight(inodes, space, left):
+    """Nearly full: over FULL percent of its inodes, under FLOOR free, or over FULL percent of its space with under
+    ROOMY free. A small disk past FULL has little left; a big one has room by the gigabyte."""
+    return inodes > FULL or left < FLOOR or (space > FULL and left < ROOMY)
+
+
+def first_warned(p, full):
+    """The entries of `full` (`nearly_full`) no driver on the machine has pushed yet, recorded as pushed now. Every
+    project's driver watches the same disks, and one restarting with its new code forgets what it pushed: a record
+    of their own each would say the same disk twice. A filesystem of `p`'s `places` that isn't full any more is
+    dropped from the record, so it's pushed again once it fills again."""
+    def dev(path):
+        try:
+            return str(device(existing(path)))
+        except OSError:
+            return None
+    checked = {dev(path) for path, _ in places(p)} - {None}
+    now = {dev(f[0]): f for f in full}
+    now.pop(None, None)
+
+    def change(seen):
+        for d in [d for d in seen if d in checked and d not in now]:
+            del seen[d]
+        new = [f for d, f in now.items() if d not in seen]
+        seen.update({d: f"{util.now():%Y-%m-%d %H:%M}" for d in now if d not in seen})
+        return new
+    return util.edit_json(user_dir("XDG_STATE_HOME", ".local/state") / WARNED, change, {})
 
 
 def full_line(path, what, inodes, space, left, when=""):

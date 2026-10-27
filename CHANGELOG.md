@@ -183,6 +183,9 @@ release on the same day adds a number (`2026.10.9.1`).
   failing, and the run takes it up again once the answer comes.
 
 ### Changed
+- A big disk past 90% of its space is nearly full only with under 20 GB free (under 2 GB, or past 90% of
+  its inodes, as before): its last tenth still holds many checks. And the push about a nearly full disk goes out
+  once for the machine: a driver restarting with its new code, or another project's on the same disk, only logs it.
 - The worker runs at `medium` effort by default (`[models] worker_effort`); the reviewer, critic, planner and fix
   stay at `high`. Most of a worker's output is thinking, so this should cut its output tokens. A project that sets
   `worker_effort` keeps its value, and `windvane init` wrote `"high"` into every config until now: delete that line

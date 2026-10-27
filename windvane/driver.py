@@ -2660,9 +2660,11 @@ class Pilot(Desk, Periodic, Experiments):
     def warn_tmp_full(self):
         """One push for each filesystem temp files land on (the temp dir, the tickets' TMPDIRs: scratch.places) when
         it is nearly full even after cleaning (nobody runs doctor at 3am), and another only once it has dropped back
-        under the bar and filled again."""
+        under the bar and filled again: one for the machine, whichever project's driver sees it first and however
+        often they restart (scratch.first_warned). Each driver still logs it once."""
         try:
             full = scratch.nearly_full(self.p)
+            fresh = {f[0] for f in scratch.first_warned(self.p, full)}
         except OSError:
             return
         for path, what, inodes, space, left in full:
@@ -2677,7 +2679,8 @@ class Pilot(Desk, Periodic, Experiments):
             if "TMPDIR" in what:
                 msg += f". Each ticket's checks write there: free space or {scratch.way_out(what)}"
             self.log(msg)
-            push("Temp dir nearly full" if path == scratch.root() else "Disk nearly full", msg, 4, "warning")
+            if path in fresh:
+                push("Temp dir nearly full" if path == scratch.root() else "Disk nearly full", msg, 4, "warning")
         self.tmp_full = {f[0] for f in full}
 
     def loop(self):

@@ -95,7 +95,8 @@ class FullPush(unittest.TestCase):
 
     def test_one_push_while_full_and_another_only_after_it_went_under_and_back(self):
         sent = []
-        with mock.patch.object(driver, "push", side_effect=lambda *a: sent.append(a)):
+        with mock.patch.object(driver, "push", side_effect=lambda *a: sent.append(a)), \
+                mock.patch.object(scratch, "free", return_value=5 * 1024 ** 3):  # a small disk: the percent counts
             for f in ((93.4, 20), (95, 20), (40, 89), (10, 91.2), (10, 99)):
                 with mock.patch.object(scratch, "fullness", return_value=f):
                     self.pilot.clean_tmp()

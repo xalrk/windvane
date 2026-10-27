@@ -321,7 +321,7 @@ def busy_note(log):
 
 def disk_note(log, tmp):
     """What a failed check's summary says when its log shows a write that found the disk full and the disk holding
-    its TMPDIR is nearly full still (scratch.FULL, scratch.FLOOR): the worker, the fix session and the driver would
+    its TMPDIR is nearly full still (scratch.tight): the worker, the fix session and the driver would
     otherwise read it as a bug in the change. "" for any other failure, one whose log only names ENOSPC (a test of
     it) on a disk with room among them."""
     try:
@@ -333,7 +333,7 @@ def disk_note(log, tmp):
         left = scratch.free(scratch.existing(tmp))
     except OSError:
         return ""
-    if max(inodes, space) <= scratch.FULL and left >= scratch.FLOOR:
+    if not scratch.tight(inodes, space, left):
         return ""
     return f"; the disk holding {tmp} ran out of space ({scratch.mb(left)} MB free now){DISK_FULL}"
 

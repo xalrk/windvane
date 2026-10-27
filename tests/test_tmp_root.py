@@ -144,6 +144,32 @@ class NearlyFull(unittest.TestCase):
                 pilot.warn_tmp_full()  # filled again after going under: pushed again
         self.assertEqual(len(sent), 2)
 
+    def test_a_big_disk_past_the_percent_with_room_by_the_gigabyte_isnt_nearly_full(self):
+        with mock.patch("os.statvfs", statvfs(27, total_gb=300)):  # 91%: 27G free
+            self.assertEqual(scratch.nearly_full(self.p), [])
+            self.assertEqual(doctor.tmp_warnings(self.p), [])
+        with mock.patch("os.statvfs", statvfs(15, total_gb=300)):  # 95%: under ROOMY free
+            self.assertEqual(len(scratch.nearly_full(self.p)), 1)
+        with mock.patch("os.statvfs", statvfs(2.1)):  # 90% of 22G: the percent still counts on a small disk
+            self.assertEqual(len(scratch.nearly_full(self.p)), 1)
+
+    def test_a_driver_restarting_or_another_project_s_doesnt_push_the_same_disk_again(self):
+        sent = []
+        with mock.patch.object(driver, "push", side_effect=lambda *a: sent.append(a)), \
+                mock.patch("os.statvfs", statvfs(0.56)):
+            driver.Pilot(self.p, args()).warn_tmp_full()
+            again = driver.Pilot(self.p, args())  # the same driver with its new code, or another project's
+            with mock.patch.object(again, "log") as log:
+                again.warn_tmp_full()
+        self.assertEqual(len(sent), 1)
+        self.assertIn("573 MB free", log.call_args[0][0])  # it still says so in its own log
+        with mock.patch.object(driver, "push", side_effect=lambda *a: sent.append(a)):
+            with mock.patch("os.statvfs", statvfs(30)):
+                driver.Pilot(self.p, args()).warn_tmp_full()  # dropped back: forgotten machine-wide
+            with mock.patch("os.statvfs", statvfs(1)):
+                driver.Pilot(self.p, args()).warn_tmp_full()
+        self.assertEqual(len(sent), 2)
+
     def test_two_filesystems_are_each_measured_and_named(self):
         root = self.s.tmp / "roomy"
         root.mkdir()
