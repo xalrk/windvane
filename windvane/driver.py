@@ -1061,6 +1061,12 @@ class Pilot(Desk, Periodic, Experiments):
             kept = jobs.kept_jobs(self.p, tid)
             if kept:  # not out of time either: the queue holds it until its job ends, then resumes it
                 return self.log(f"{tid}: held until its kept job {', '.join(repr(b.name) for b in kept)} ends: {rest}")
+            sha = self.only_check_left(tid, branch)
+            if sha:  # not out of time: what's left is the check the driver runs on every READY head anyway
+                self.log(f"{tid}: only the check was left; the driver checks {sha[:7]}")
+                self.open_pr(tid, branch)
+                self.feedback.pop(tid, None)
+                return self.after(tid, branch, sha)
             self.partials[tid] = self.partials.get(tid, 0) + 1
             self.log(f"{PARTIAL_LOG.format(tid=tid)} ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
@@ -1085,6 +1091,35 @@ class Pilot(Desk, Periodic, Experiments):
             return self.bounce(tid, "branch")
         self.feedback.pop(tid, None)
         self.after(tid, branch, sha)
+
+    def only_check_left(self, tid, branch):
+        """The head of a PARTIAL run that left only the check, or "": the critic's last verdict a done step on that
+        very head, the tree clean, the remote branch at it, and no check that ended on it failed (`jobs.failed_on`).
+        A run cut off while its check ran (a long suite, a queue for the machine) would otherwise cost a whole new
+        run, and a strike toward `partials`, to rerun one command the driver runs on the head next anyway."""
+        p = self.p
+        if not (p.critic["enabled"] and branch):
+            return ""
+        past, head = critic.history(p, tid), gout(self.wd, "rev-parse", "HEAD")
+        if not (head and past and past[-1]["step"] in critic.DONE and past[-1].get("sha")
+                and head.startswith(past[-1]["sha"])) or jobs.blockers(self.wd) != []:
+            return ""
+        self.fetch()
+        there = gout(p.main_root(), "rev-parse", "-q", "--verify", f"refs/remotes/{p.remote}/{branch}")
+        return head if there == head and not jobs.failed_on(p, tid, head) else ""
+
+    def open_pr(self, tid, branch):
+        """On a GitHub project, the PR a run cut off before opening it: the merge goes through it. A gh that fails
+        (or can't say whether there is one) leaves it to the landing, which waits for gh or asks the worker."""
+        p = self.p
+        if p.cfg["forge"] != "github" or pr_lookup(p, branch) != "":
+            return
+        q = getattr(self, "queue", None)
+        title = privacy.censor(f"{tid}: {q.titles.get(tid, tid) if q else tid}", privacy.own_names(p))
+        body = "The worker run ended with only the check left; windvane checks the head, reviews and merges it."
+        pr = net.sh(p.main_root(), "gh", "pr", "create", "--head", branch, "--base", p.main, "--title", title,
+                    "--body", body)
+        self.log(f"{tid}: opened {pr}" if pr else f"{tid}: couldn't open a PR for {branch}")
 
     def not_pushed(self, tid, branch, sha):
         """A READY whose branch isn't on the remote, or whose remote branch the pre-push scan kept behind its head:

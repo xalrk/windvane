@@ -139,7 +139,10 @@ run as written feedback. Each kind of send-back spends its own budget, so a flak
 rounds. A ticket that keeps bouncing is **set aside** for the rest of the run: after `review_rounds` reviews asking
 for changes, more than `check_retries` red checks, `conflict_retries` merge conflicts or `[critic] revisions` critic
 send-backs, `partials` runs in a row out of time, or a run longer than `ticket_hours` (or out of its own turns).
-The run's summary and the phone say which budget ran out and why.
+The run's summary and the phone say which budget ran out and why. A `PARTIAL` run that left only the check isn't
+out of time: when the critic passed its pushed head, its tree is clean and no check on that head failed, the
+driver checks, reviews and merges that head as it would a `READY` one (opening its pull request on GitHub if the
+run hadn't), and a red check goes back against `check_retries`.
 
 A session that dies outside its ticket's control (API error, crash) is rerun after a growing pause (`retries`,
 `retry_minutes`). When one ticket's sessions have died more than `retries` times while other sessions worked, that

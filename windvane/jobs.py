@@ -259,6 +259,14 @@ def ledger(p, ticket, row, event="check"):
                                                 "role": os.environ.get(ROLE) or "driver", **row})
 
 
+def failed_on(p, ticket, sha):
+    """Whether the last check that ended on the commit `sha` for `ticket` failed, whoever ran it. A check cut off or
+    one that never got the machine says nothing of the tree, so it isn't a failure; nor is a head never checked."""
+    rows = [r for r in read_jsonl(p.state / "ledger.jsonl") if r.get("event") == "check" and r.get("ticket") == ticket
+            and r.get("sha") and sha.startswith(r["sha"]) and not r.get("not_run") and r.get("finished", True)]
+    return bool(rows) and not rows[-1].get("passed")
+
+
 def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=False, by="driver"):
     """Run the project's check at the top level of `cwd`'s checkout (`top`). Returns (passed, summary line, log
     path); passed is None when a heavy check never ran: its wait for the machine timed out, which says nothing about the tree, so callers try it again.
@@ -273,8 +281,9 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=Fal
     cwd = top(cwd)
     passes = p.state / "passes"
     key = tree_key(p, cwd)
+    sha = gout(cwd, "rev-parse", "--short", "HEAD")  # in its rows: `failed_on` tells a head a check failed on
     if key and (passes / key).exists():
-        ledger(p, ticket, {"minutes": 0, "passed": True, "reused": True})
+        ledger(p, ticket, {"minutes": 0, "passed": True, "reused": True, "sha": sha})
         return True, f"CHECK PASSED (reused the pass from {(passes / key).read_text().strip()} for this tree)", None
     logs = p.state / "checks"
     logs.mkdir(parents=True, exist_ok=True)
@@ -283,7 +292,7 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=Fal
     if announce:
         print(f"{CHECK_LOG}{log}", flush=True)
     quick = p.cfg.get("check_quick") if by == "worker" else ""
-    code, mins, waited, quick_failed = run_logged(p, ticket, cmd, cwd, log, stop_at, mem, quick, by)
+    code, mins, waited, quick_failed = run_logged(p, ticket, cmd, cwd, log, stop_at, mem, quick, by, sha)
     if waited:
         what, stopped = waited
         if stopped:
@@ -344,7 +353,7 @@ def log_name():
     return f"{now():%Y%m%d-%H%M%S}-{os.getpid()}-{next(_LOGS)}.log"
 
 
-def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="driver"):
+def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="driver", sha=""):
     """Run the check into `log`, with a ledger row on each side, so a check that's cut off still counts: a
     `check-start` row first (all a SIGKILL or a killed driver leaves; `stats` calls it cut off), then the end row
     with the same `start`, written on the way out even for an exception or Ctrl-C (`finished: false`, the minutes
@@ -356,7 +365,8 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
     got, or None, and whether `quick` failed): such a row says `not_run`, and `stats` doesn't count it a failure. A
     heavy check's end row also says how many of its seconds went to waiting for the machine (`waited_s`: all of them
     when it never ran). `quick` (`check_quick`) runs first into the same log, never queued for the machine: it's
-    meant to take a minute; its failure is the check's, and its minutes are in the row's (`quick_minutes` too)."""
+    meant to take a minute; its failure is the check's, and its minutes are in the row's (`quick_minutes` too).
+    `sha`: the short head it ran on, in both rows."""
     start = time.time()
     code = waited = None
     quick_failed, quick_mins = False, None
@@ -368,7 +378,8 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
         with log.open("w+") as f:  # readable too: `heavy.fresh_line` reads its last byte
             fcntl.flock(f, fcntl.LOCK_EX)  # blocking: `running` may hold a momentary shared probe
             env.update({CHANGED: str(write_changed(p, cwd, changed)), CHECK_BY: by})  # locked: no prune takes it
-            ledger(p, ticket, {"start": round(start, 3), "log": log.name}, event="check-start")
+            ledger(p, ticket, {"start": round(start, 3), "log": log.name, **({"sha": sha} if sha else {})},
+                   event="check-start")
             beat = heartbeat(log)
             try:
                 if quick:
@@ -406,6 +417,7 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
         mins = (time.time() - start) / 60
         wait_s = round(mins * 60) if waited else heavy.waited(log) if p.cfg["heavy_check"] and not quick_failed else 0
         ledger(p, ticket, {"minutes": round(mins, 2), "passed": code == 0, "reused": False, "start": round(start, 3),
+                           **({"sha": sha} if sha else {}),
                            **({} if code is not None else {"finished": False}), **({"not_run": True} if waited else {}),
                            **({"waited_s": wait_s} if wait_s else {}),
                            **({"quick_minutes": round(quick_mins, 2)} if quick_mins is not None else {})})

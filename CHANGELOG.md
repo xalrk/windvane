@@ -178,6 +178,10 @@ release on the same day adds a number (`2026.10.9.1`).
   failing, and the run takes it up again once the answer comes.
 
 ### Changed
+- A worker run that ends `PARTIAL` with only the check left (the critic passed its pushed head, the tree is clean,
+  no check failed on that head) is handed to the driver's check, review and merge instead of counting as out of
+  time, so a long suite cut off at wrap-up no longer costs a whole new run and a strike toward `partials`. On
+  GitHub the driver opens the pull request if the run hadn't. Check rows in the ledger now name the head they ran on.
 - `windvane experiments allow +N` also raises `week_below` by N, up to 100%, until the week resets. A bench held
   at `weekly usage at 76% (benches start below 75%)` named `allow +10` as the way out, but `allow` raised only the
   share, so the bench stayed held. The phone's answer at the share still raises the share alone.
