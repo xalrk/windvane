@@ -261,6 +261,12 @@ class Identity(Base):
         who = self.s.git("log", "-1", "--format=%an <%ae> / %cn <%ce>", "origin/t-001-work")
         self.assertEqual(who, f"{NOREPLY} / {NOREPLY}")
 
+    def test_a_workers_new_branch_sets_no_upstream_so_git_never_writes_the_config(self):
+        """A worker on windvane's own checkout may not write its `.git/config` (requests.worker_deny)."""
+        env = self.work()
+        self.assertIn(("branch.autoSetupMerge", "false"), runner.git_config(env))
+        self.assertIn(self.hooks(), [v for k, v in runner.git_config(env) if k.startswith("includeIf.gitdir:")])
+
     def test_doctor_warns_on_an_identity_github_would_publish(self):
         self.assertEqual(doctor.identity_warnings(self.p), [])
         self.p.cfg["author"] = "Me <me@example.com>"

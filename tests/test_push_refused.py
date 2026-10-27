@@ -67,7 +67,7 @@ class Refused(Base):
                                  r"public a token at settings\.py:1 in \w{7}\)\. Fix that and push again, then finish "
                                  r"READY\.")
         self.assertIn("In progress on branch `t-001-work`, which isn't on origin yet. Resume it, then push it "
-                      "(`git push -u origin t-001-work`).", second)
+                      "(`git push origin t-001-work`).", second)
         self.assertEqual(second.count("it would make public"), 1)  # the feedback says it: once is enough
         self.assertNotIn(TOKEN, second)
         self.assertIn("T-001", pilot.skip)
@@ -79,7 +79,7 @@ class Refused(Base):
         self.assertIn("Its push was refused twice: it would make public a token at settings.py:1 in ", msg)
         self.assertIn("In your checkout, `git switch t-001-work` and take it out of the commits that add it (`git "
                       "commit --amend` for the last one, or `git reset --soft ", msg)
-        self.assertIn("then `git push -u origin t-001-work`. `windvane retry T-001` sends it back. Its branch is only "
+        self.assertIn("then `git push origin t-001-work`. `windvane retry T-001` sends it back. Its branch is only "
                       "on this machine.", msg)
         self.assertNotIn(TOKEN, msg + log)
         self.assertIn("git reset --soft", pilot.fixes["T-001"])  # `windvane queue` names the fix too
@@ -125,7 +125,7 @@ class NeverPushed(Base):
     def test_a_branch_never_pushed_is_told_to_push_without_a_check(self):
         pilot = self.ready(self.local)
         self.assertEqual(pilot.feedback["T-001"], "Your branch `t-001-work` isn't on origin: push it "
-                                                  "(`git push -u origin t-001-work`), then finish READY.")
+                                                  "(`git push origin t-001-work`), then finish READY.")
         self.assertFalse(self.checks.exists())
         self.assertEqual(pilot.bounces["T-001"]["push"], 1)
         self.assertNotIn("T-001", pilot.skip)
@@ -171,7 +171,7 @@ class NeverPushed(Base):
         pilot.take_retries()
         pilot.not_pushed("T-001", "t-001-work", "0" * 40)
         self.assertEqual(pilot.feedback["T-001"], "Your branch `t-001-work` isn't on origin: push it "
-                                                  "(`git push -u origin t-001-work`), then finish READY.")
+                                                  "(`git push origin t-001-work`), then finish READY.")
 
     def test_a_pushed_branch_isnt_shadowed_by_an_older_local_attempt(self):
         ensure_worktree(self.p, self.p.work_dir, setup=False)
@@ -193,7 +193,7 @@ class NeverPushed(Base):
         pilot.run(now() + timedelta(hours=1))
         prompt = self.prompts()[0]
         self.assertIn("In progress on branch `t-001-work`, which isn't on origin yet. Resume it, then push it "
-                      "(`git push -u origin t-001-work`).", prompt)
+                      "(`git push origin t-001-work`).", prompt)
         self.assertNotIn("A new ticket", prompt)
         self.assertEqual(pilot.merged, ["T-001"])
 

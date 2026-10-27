@@ -14,6 +14,10 @@ release on the same day adds a number (`2026.10.9.1`).
   a crashed one, at most 3 times an hour, once what it left running is ended; `windvane status` counts the
   restarts. A SIGTERM that follows an out-of-memory kill says so in the stop's "Why", and `windvane doctor` warns
   when systemd would stop a run on one and `--detach` can't avoid it.
+- `tmp_root` (in `machine.toml`, or a project's config) puts the tickets' `TMPDIR`s on a roomier disk than the
+  state directory's. `windvane doctor` and the driver now also watch the disk holding them, and call a disk with
+  under 2 GB free nearly full whatever its percent. A check that fails with "No space left on device" says so in its
+  summary, and the driver runs it again after cleaning instead of sending it back to the worker as a bug.
 - `check_measure = true` (with `heavy_check`) runs a check that holds timing tests as a `--measure` heavy job, so it
   waits for a quiet CPU. Every check's log now says the load at its start, end and peak, and a failed check whose
   load peaked over `measure_load` says so in its summary: `CHECK FAILED (exit 1) in 12.0 min, load peaked 34.12
@@ -171,6 +175,9 @@ release on the same day adds a number (`2026.10.9.1`).
   failing, and the run takes it up again once the answer comes.
 
 ### Changed
+- `windvane experiments allow +N` also raises `week_below` by N, up to 100%, until the week resets. A bench held
+  at `weekly usage at 76% (benches start below 75%)` named `allow +10` as the way out, but `allow` raised only the
+  share, so the bench stayed held. The phone's answer at the share still raises the share alone.
 - `windvane await` on a heavy job that waits for memory or a quiet CPU names who holds it now, as
   `heavy --status` does, each process with how long it has run (`running 3 h 10 min`) and this project's own helpers
   marked, instead of only how much is free; the log's list from when the wait began is left out. A waiting job's
@@ -232,6 +239,17 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- The empty read-only files a killed sandboxed command leaves no longer break git silently. A stale
+  `.git/config.lock` made every `git push -u` and tracking branch fail with `could not lock config file`; the driver
+  now removes these in the repo's git dir, its worktrees and the state dir at a run's start and between tickets (never
+  one a running sandbox holds), and `windvane doctor` names them per place, the checkout's too, for `--clean` to
+  remove. Workers and the driver's push hints push without `-u`, which needs that lock even when nothing is stale.
+- A worker on windvane's own checkout can commit, switch and branch inside its Bash sandbox again. Its edit denials
+  covered the whole checkout, its `.git` too, and the sandbox makes them write denials, so nearly every git write
+  failed with `index.lock': Read-only file system` and was retried with the sandbox off. It is now denied the
+  checkout's working files and the checkout's own index, HEAD, config and hooks, and nothing else in `.git`. A
+  worker's new branch no longer sets an upstream (`branch.autoSetupMerge=false`), as that writes `.git/config`. A
+  `windvane request` run in the sandbox says to run it on its own instead of a traceback.
 - `windvane stats` and `stats --projects` tell a heavy check's wait for the machine from its run: the `checks:` line
   gives run minutes and minutes waiting for the machine apart (`minutes` and `waited` in `--json`), and the minutes per
   checked ticket are run minutes. A check killed while it still waited in the queue counts as cancelled in the queue,

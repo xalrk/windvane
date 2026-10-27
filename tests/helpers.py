@@ -542,6 +542,7 @@ class Sandbox:
         net.probe, net.waiter = (lambda: True), None  # never probe the real network; a test fakes an outage
         login.waiter, login.back_at = None, 0.0  # nor an earlier test's run, in this same process
         self.fullness, scratch.fullness = scratch.fullness, lambda path=None: (10, 10)  # nor the real disk (a full one pushes)
+        self.free, scratch.free = scratch.free, lambda path=None: 100 * 1024 ** 3
         from windvane import held, jobs
         self.await_poll, jobs.AWAIT_POLL = jobs.AWAIT_POLL, AWAIT_POLL  # an `await` here sees a job end at once
         self.merge_wait, held.MERGE_WAIT = held.MERGE_WAIT, 0  # a fake gh's PR is as mergeable as it will get
@@ -594,6 +595,7 @@ class Sandbox:
         net.probe, net.waiter = None, None
         login.waiter = None
         scratch.fullness = getattr(self, "fullness", scratch.fullness)
+        scratch.free = getattr(self, "free", scratch.free)
         from windvane import held, jobs
         jobs.AWAIT_POLL = getattr(self, "await_poll", jobs.AWAIT_POLL)
         held.MERGE_WAIT = getattr(self, "merge_wait", held.MERGE_WAIT)

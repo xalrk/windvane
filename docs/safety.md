@@ -255,6 +255,10 @@ call for the user. The role checks and a worker's cap of 2 are kept by the comma
 environment the runner sets (a session that claims to be the desk is still the session its `WINDVANE_SESSION`
 names, from any directory), so they stop mistakes, not a shell set on getting round them; a worker's edit tools are denied the inbox and
 windvane's files, but its shell could still write there: that is why every R-file is read as untrusted.
+A worker on windvane's own checkout, in a worktree outside it, is denied the checkout's files one by one instead: it
+may write that checkout's `.git` (its own worktree's index and HEAD, the objects and refs) but not the checkout's
+own index, HEAD, config or hooks, so it commits and switches in its Bash sandbox while the checkout stays as the user
+left it, and no hook it could write runs on the user's commits.
 
 ## Secrets and personal data
 
@@ -303,6 +307,13 @@ the tickets on `main`, the config, your answers, the prompts. Everything else is
   login: `windvane` and `git` commands run outside the sandbox (a background job must outlive its call, a critic's
   session must log in), a command that fails in it may be retried outside it, and without bubblewrap and socat
   (Linux; `windvane doctor` says so) it doesn't start. On macOS the login is in the Keychain.
+- **What a killed sandboxed command leaves.** On Linux the sandbox guards a path that doesn't exist yet (a
+  `.git/config.lock`, a `.mcp.json`, files under `.claude/`) by binding a read-only file over it, and leaves the
+  empty, read-only file it made for that on disk when the command is killed. A stale `.git/config.lock` makes
+  every git config write fail in every worktree (`git push -u`, a tracking branch). Between tickets the driver
+  removes the ones in the repo's git dir (its locks), its own worktrees and the state dir, never one a running
+  sandbox still holds; the ones in your checkout `windvane doctor` names and only `windvane doctor --clean`
+  removes. Inside the sandbox, which hides the other sandboxes, it removes none.
 
 What a session can still read: any other file your user can (your home directory included), and the web. Run
 windvane on a machine or account that holds only what its projects need.

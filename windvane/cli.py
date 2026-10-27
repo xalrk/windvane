@@ -24,7 +24,7 @@ from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, replan, slots, toplevel
 from .config import periodic as periodic_entries
 from .queue import Queue
-from .runner import LIVE, ROLE, Usage, inherited_stop, plain_error, scope_github
+from .runner import LIVE, ROLE, Usage, inherited_stop, outside_sandbox, plain_error, scope_github
 from .stats import cmd_stats, projects_stats, shared_line  # cmd_stats: main runs `stats` by its name
 from .util import git, gout, hhmm, last_log, load_json, now, read_jsonl
 
@@ -163,6 +163,8 @@ def cmd_run(a, p):
         too_short(None if window else deadline - now(), a.min_slot, a.ticket_hours)
     if not p.cfg["isolate"] and gout(p.main_root(), "status", "--porcelain"):
         sys.exit("isolate = false runs in the checkout itself: commit or stash your changes first")
+    if why := scratch.tmp_root_problem(p):  # every session's TMPDIR goes there
+        sys.exit(why)
     p.state.mkdir(parents=True, exist_ok=True)
     if a.detach and in_tmux(p):  # (the detached run itself starts inside that session)
         sys.exit(f"already running in tmux session {p.tmux}")
@@ -448,8 +450,9 @@ def cmd_request(a):
     if a.status:
         print("\n".join(requests.status_lines()))
         return
+    outside_sandbox("filing or answering a request")  # the inbox is read-only there, on purpose
     if a.answer:
-        code, line = requests.answer(a.answer, a.title or "")
+        code, line = request_step(requests.answer, a.answer, a.title or "")
         print(line)
         if code:
             sys.exit(code)
@@ -462,10 +465,18 @@ def cmd_request(a):
         body = sys.stdin.read() if a.body == "-" else Path(a.body).read_text(errors="replace") if a.body else ""
     except OSError as err:
         sys.exit(f"windvane request: can't read the body: {err.strerror}")
-    code, line = requests.file(a.title, body)
+    code, line = request_step(requests.file, a.title, body)
     print(line)
     if code:
         sys.exit(code)
+
+
+def request_step(step, *args):
+    """(exit code, line) of a request's filing or answer, an inbox it can't write said in one line, not a traceback."""
+    try:
+        return step(*args)
+    except OSError as err:
+        return 1, f"windvane request: can't write the inbox: {err.filename or requests.inbox()}: {err.strerror or err}"
 
 
 def cmd_overview(a, p):
@@ -739,7 +750,8 @@ def cmd_experiments(a, p):
         sys.exit("experiments: `windvane experiments` shows this week's budget; `windvane experiments allow +10` "
                  "lets benches use 10% more of the weekly limit, this week only")
     b.allow(more)
-    print(f"experiments: {more:g}% more allowed this week: cap {b.cap:g}% until the week resets {b.ends()}")
+    print(f"experiments: {more:g}% more allowed this week: cap {b.cap:g}%, benches start below {b.below:g}% until "
+          f"the week resets {b.ends()}")
 
 
 def cmd_mode(a, p):
