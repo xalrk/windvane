@@ -969,13 +969,14 @@ class Pilot(Desk, Periodic, Experiments):
         ]))
         self.log(f"{tid}: worker run ({kind}{', ' + ' '.join(branches) if branches else ''})")
         allow, deny = worker_perms(p)
+        before = (len(critic.history(p, tid)), gout(wd, "rev-parse", "-q", "--verify", ref))
         # in the system prompt, as a rule: a quiet time now, or one starting before the session can end
         text, killed, error = self.claude("worker", tid, prompt, self.worker_rules + quiet_note(p, kill_at), wd, limit,
                                           allow, deny, tid, session_env)
         if error:
             self.crashed(tid, error, tid)  # the loop picks the ticket again, with its branch as it now is
         else:
-            self.handle(tid, text, killed, branches)
+            self.handle(tid, text, killed, branches, before)
         if start_five is not None and self.usage.five is not None and self.usage.five >= start_five:
             self.costs.append(round(self.usage.five - start_five, 1))
         self.save()
@@ -1030,7 +1031,8 @@ class Pilot(Desk, Periodic, Experiments):
                     out.append(b)
         return out[:10]
 
-    def handle(self, tid, text, killed, branches=()):
+    def handle(self, tid, text, killed, branches=(), before=None):
+        """A worker run's end. `before`: (the ticket's critic verdicts, the head it began on) when the run started."""
         if killed:
             if killed == "time" and now() < self.end() - timedelta(minutes=5):
                 self.set_aside_limit(tid, f"the {self.a.ticket_hours:g}-hour limit for one run",
@@ -1067,6 +1069,9 @@ class Pilot(Desk, Periodic, Experiments):
                 self.open_pr(tid, branch)
                 self.feedback.pop(tid, None)
                 return self.after(tid, branch, sha)
+            revision = self.critic_revision(tid, before)
+            if revision:  # the critic's loop going round, bounded by `revisions`: not a ticket too big for its runs
+                return self.log(f"{PARTIAL_LOG.format(tid=tid)} ({revision}, not counted): {rest}")
             self.partials[tid] = self.partials.get(tid, 0) + 1
             self.log(f"{PARTIAL_LOG.format(tid=tid)} ({self.partials[tid]}): {rest}")
             if self.partials[tid] >= self.p.ap["partials"]:
@@ -1091,6 +1096,20 @@ class Pilot(Desk, Periodic, Experiments):
             return self.bounce(tid, "branch")
         self.feedback.pop(tid, None)
         self.after(tid, branch, sha)
+
+    def critic_revision(self, tid, before):
+        """"critic revision <n> of <max>" when the run recorded a new `revise` or `rethink` verdict on a head newer
+        than the one it began on, within `[critic] revisions`; else "". A revision can be a rebuild and a re-measure,
+        so a run may fit only one: counted toward `partials`, a ticket was set aside ("split it") before the
+        revisions its project chose were spent. Once they are, the critic accepts, so the next PARTIAL counts."""
+        if not (before and self.p.critic["enabled"]):
+            return ""
+        seen, start = before
+        past = critic.history(self.p, tid)
+        new = [e for e in past[seen:] if e.get("step") in ("revise", "rethink") and e.get("sha")
+               and not (start or "").startswith(e["sha"])]
+        n, most = critic.revisions(past), self.p.critic["revisions"]
+        return f"critic revision {n} of {most}" if new and n <= most else ""
 
     def only_check_left(self, tid, branch):
         """The head of a PARTIAL run that left only the check, or "": the critic's last verdict a done step on that
