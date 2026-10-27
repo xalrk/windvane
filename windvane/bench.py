@@ -532,9 +532,10 @@ def holder():
         except OSError:
             pass
         try:
-            return json.loads(f.read_text() or "{}")
+            h = json.loads(f.read_text() or "{}")
         except (OSError, ValueError):
             return {}
+        return h if isinstance(h, dict) else {}
     finally:
         os.close(fd)
 
@@ -571,7 +572,7 @@ def take_lock(p):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             if (h := holder()) is not None:
-                print(f"bench: waiting for {describe(h)}", flush=True)
+                print(f"bench: waiting for {describe(h)} (Ctrl-C or a stop ends the wait, nothing run)", flush=True)
             fcntl.flock(fd, fcntl.LOCK_EX)
     except BaseException:
         os.close(fd)
@@ -620,10 +621,13 @@ def main(a, p):
     if a.last:
         runs = runs_of(p)
         return print(table(list(runs.values())[-1]) if runs else "bench: no results yet (windvane bench runs one)")
-    before = week_now()
-    which, why = size(a.full, a.small, before, week_limit())
-    print(f"bench: {which} ({why}), {'the training pool' if a.pool else 'the holdout'}", flush=True)
-    return locked(p, a, lambda: one(p, a, a.ref, which, before)[0])
+
+    def go():  # once the lock is held: a bench that waited reads the week as it is after the other one's spend
+        before = week_now()
+        which, why = size(a.full, a.small, before, week_limit())
+        print(f"bench: {which} ({why}), {'the training pool' if a.pool else 'the holdout'}", flush=True)
+        return one(p, a, a.ref, which, before)[0]
+    return locked(p, a, go)
 
 
 def week_limit():

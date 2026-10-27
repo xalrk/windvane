@@ -1,6 +1,7 @@
 """One bench at a time on a machine: `windvane bench` holds a flock in the state root for its whole run, whoever
 started it; a second waits (saying so once), a stop during the wait ends it with nothing run, and a lock whose process
 died is free. An experiment waits for it before its fit is reckoned."""
+import fcntl
 import os
 import re
 import signal
@@ -85,7 +86,9 @@ class OneAtATime(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, out.text() + proc.stderr.read())
         for out in outs:
             self.assertEqual(len(re.findall(r"^bench: waiting for other weekly round's bench, running since "
-                                            r"\d\d:\d\d$", out.text(), re.M)), 1, out.text())
+                                            r"\d\d:\d\d \(Ctrl-C or a stop ends the wait, nothing run\)$",
+                                            out.text(), re.M)), 1, out.text())
+            self.assertTrue(out.text().startswith("bench: waiting"))  # the week is read, the size picked, after it
         a, b = sorted(outs, key=lambda o: o.first(r": running, log in"))
         self.assertGreater(b.first(r": running, log in"), a.lines[-1][0])  # B's seeds start after A printed its table
         self.assertEqual(len(bench.runs_of(Project(self.s.root))), 2)
@@ -103,8 +106,8 @@ class OneAtATime(unittest.TestCase):
         b = self.start("--hours", "1")
         out = Lines(b)
         self.wait_for(lambda: out.first("waiting"))
-        self.assertRegex(out.text(), r"^bench: \w+ \(.*\), the holdout\nbench: waiting for sandbox T-009's bench, "
-                                     r"running since \d\d:\d\d\n$")
+        self.assertRegex(out.text(), r"^bench: waiting for sandbox T-009's bench, running since \d\d:\d\d \(Ctrl-C "
+                                     r"or a stop ends the wait, nothing run\)\n$")
         b.send_signal(signal.SIGTERM)
         b.wait(60)
         err = b.stderr.read()
@@ -127,6 +130,17 @@ class OneAtATime(unittest.TestCase):
         stdout, err = out.communicate(timeout=120)
         self.assertEqual(out.returncode, 0, stdout + err)
         self.assertNotIn("waiting", stdout)
+
+    def test_a_garbled_lock_file_still_names_a_holder(self):
+        bench.lock_file().parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(bench.lock_file(), os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        for text in ("not json", "[1]", ""):
+            with self.subTest(text=text):
+                os.ftruncate(fd, 0)
+                os.pwrite(fd, text.encode(), 0)
+                self.assertEqual(bench.describe(bench.holder()), "another project's bench")
 
     def test_a_dry_run_doesnt_wait(self):
         holder = hold(600)
