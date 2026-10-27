@@ -88,7 +88,7 @@ The Claude model and effort level for each kind of session. Models are anything 
 | Key | Default | Meaning |
 |---|---|---|
 | `worker` | `"opus"` | Builds each ticket. |
-| `worker_effort` | `"high"` | |
+| `worker_effort` | `"medium"` | Most of a worker's output is thinking; set `"high"` for hard tickets. |
 | `reviewer` | `"opus"` | Reads the diff and approves or asks for changes. |
 | `reviewer_effort` | `"high"` | |
 | `critic` | `"opus"` | Scores each ticket's outcome. |

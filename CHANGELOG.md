@@ -183,6 +183,9 @@ release on the same day adds a number (`2026.10.9.1`).
   failing, and the run takes it up again once the answer comes.
 
 ### Changed
+- The worker runs at `medium` effort by default (`[models] worker_effort`); the reviewer, critic, planner and fix
+  stay at `high`. Most of a worker's output is thinking, so this should cut its output tokens; a project that
+  sets `worker_effort` keeps its value.
 - The worker plans how a user first meets its change before building it. After reading the ticket it lists its trials:
   the main promise, a newcomer's first contact where there is one (the program run with nothing, with `--help`, a
   wrong argument or a missing file, or a first screen), and each of the project's `CLAUDE.md` hard rules on the paths
