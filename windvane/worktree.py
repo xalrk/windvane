@@ -10,7 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from . import net, privacy
-from .util import git, load_json, log, now, run_limited, same_process, save_json, stamp
+from .util import git, groups_dir, load_json, log, now, run_limited, same_process, save_json, stamp
 
 
 def ensure_worktree(p, path, setup=True, stop=lambda: ""):
@@ -29,7 +29,7 @@ def ensure_worktree(p, path, setup=True, stop=lambda: ""):
         log(p, f"setting up {path}: {p.cfg['setup']}…")
         limit = p.cfg["setup_minutes"]
         code, why, lines = run_limited(p.cfg["setup"], path, now() + timedelta(minutes=limit), stop, echo=True,
-                                       keep=15)
+                                       keep=15, groups=groups_dir(p))
         if code or why:  # a half-made tree fails every check: remove it, so the next start sets it up afresh
             git(root, "worktree", "remove", "--force", str(path))
             shutil.rmtree(path, ignore_errors=True)
@@ -342,7 +342,7 @@ def teardown(p):
             return failed(p, cmd, "not run", r.stderr.strip())
     limit = p.cfg["teardown_minutes"]
     try:
-        code, why, lines = run_limited(cmd, path, now() + timedelta(minutes=limit), keep=15)
+        code, why, lines = run_limited(cmd, path, now() + timedelta(minutes=limit), keep=15, groups=groups_dir(p))
     finally:
         if temp:
             git(p.main_root(), "worktree", "remove", "--force", str(temp))
@@ -425,7 +425,8 @@ def trial(p, cwd, rev, tid, stop=lambda: ""):
         note = ""
         if p.cfg["setup"]:
             limit = p.cfg["setup_minutes"]
-            code, why, lines = run_limited(p.cfg["setup"], path, now() + timedelta(minutes=limit), stop, keep=3)
+            code, why, lines = run_limited(p.cfg["setup"], path, now() + timedelta(minutes=limit), stop, keep=3,
+                                           groups=groups_dir(p))
             if code or why:
                 note = (f"its setup `{p.cfg['setup']}` {'timed out' if why == TIMED_OUT else why or f'failed (exit {code})'}"
                         f"{': ' + lines[-1] if lines else ''}")

@@ -46,7 +46,7 @@ Options of `windvane run`:
 
 | Option | Meaning |
 |---|---|
-| `--detach` | Run in a tmux session (`windvane-<name>`). A driver that crashes there is restarted with the same deadline and what it had done, pushing the error each time; a fourth crash within an hour ends the run. |
+| `--detach` | Run in a tmux session (`windvane-<name>`). On Linux with systemd it runs in a `systemd-run --user --scope` with `OOMPolicy=continue`, so an out-of-memory kill takes only the process that ran away. A driver that crashes there, or is killed by a signal nobody sends to stop it (an out-of-memory kill), is restarted with the same deadline and what it had done, pushing the cause each time; a fourth within an hour ends the run. |
 | `--parallel N\|auto` | The most tickets at a time (default from config). |
 | `--cap`, `--week-cap`, `--ticket-hours`, `--min-slot`, `--answer-wait` | Override the matching [config keys](configuration.md#autopilot) for this run. |
 | `--replan N [--goal G]` | When the queue runs dry, plan new tickets, up to N times (default: the config's `replan`). `--replan forever` plans every time it runs dry (an hour apart while nothing merges) and pushes a weekly trend ([the endless loop](concepts.md#the-critic-and-calibration)). |

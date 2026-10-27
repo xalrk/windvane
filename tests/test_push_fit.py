@@ -180,8 +180,8 @@ def couldnt_start(p, patch, s):
 
 def killed(p, patch, s):
     p.state.mkdir(parents=True, exist_ok=True)
-    driver.supervise(p, ["run"], now() + timedelta(hours=2), start=lambda a, e: -signal.SIGKILL)
-    return {"windvane stopped": ("killed (SIGKILL)", "Not restarted.")}
+    driver.supervise(p, ["run"], now() + timedelta(hours=2), start=lambda a, e: -signal.SIGKILL, sleep=lambda s: None)
+    return {"windvane stopped": ("killed (SIGKILL)", "not restarted: killed 4 times in an hour.")}
 
 
 def start_gone(p, patch, s):

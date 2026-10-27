@@ -430,6 +430,8 @@ def tmpdir(test, prefix="windvane-"):
 RAM = Path("/dev/shm")  # a RAM-backed dir, where the system has one
 IN_TMPDIR = "WINDVANE_TESTS_IN_TMPDIR"  # "1": the tests' files stay in TMPDIR, for a test of what they leave there
 STALE_S = 3600  # a test process's dir there untouched this long, its process gone, was left by a killed run
+# systemd-run as `run --detach` and `doctor` use it: the command after `--`, in no scope (a sandbox never makes one)
+FAKE_SYSTEMD_RUN = '#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n'
 AWAIT_POLL = 0.1  # seconds between `await`'s looks at a running job in a sandbox, for its 3
 # git as a Sandbox runs it (its own, the driver's, the fake sessions'): no fsync, since a test's repos needn't survive
 # a crash and on macOS each is a flush of the whole disk (the one a push still does is a plain fsync); and no
@@ -520,6 +522,8 @@ class Sandbox:
         # `python3` is the Python running the tests: bin/windvane and the fake run it from PATH, and /usr/bin's can be
         # too old for windvane (macOS ships 3.9)
         (self.bin / "python3").symlink_to(sys.executable)
+        (self.bin / "systemd-run").write_text(FAKE_SYSTEMD_RUN)
+        (self.bin / "systemd-run").chmod(0o755)
         (self.bin / "windvane").symlink_to(REPO / "bin/windvane")
         path = [str(self.bin), *([GIT_DIR] if GIT_DIR else []), "/usr/bin", "/bin"]
         self.env = {"PATH": ":".join(path), "HOME": str(self.tmp / "home"),

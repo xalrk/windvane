@@ -372,20 +372,20 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
             beat = heartbeat(log)
             try:
                 if quick:
-                    code = subprocess.run(quick, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
+                    code = subprocess.run(util.doomed(quick), shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
                                           env=env).returncode
                     quick_failed, quick_mins = code != 0, (time.time() - start) / 60
                 if quick_failed:
                     pass  # it says what `check` would, sooner
                 elif p.cfg["heavy_check"]:  # one machine-heavy job at a time, across slots and projects
                     mem = p.cfg.get("heavy_mem") if mem is None else mem  # unset: machine.toml's min_free_gb
-                    code = subprocess.run([sys.executable, "-c", "import json, sys; from windvane.heavy import run; "
+                    code = subprocess.run(util.doomed([sys.executable, "-c", "import json, sys; from windvane.heavy import run; "
                                            "sys.exit(run(sys.argv[1], cwd=sys.argv[2], "
                                            "mem=float(sys.argv[3]) if sys.argv[3] else None, "
                                            "reuse=json.loads(sys.argv[4]), measure=sys.argv[5] == '1'))",
                                            cmd, str(cwd), "" if mem is None else str(mem),
                                            json.dumps(heavy.reuse_of(p)),
-                                           "1" if p.cfg.get("check_measure") else "0"], cwd=cwd,
+                                           "1" if p.cfg.get("check_measure") else "0"]), cwd=cwd,
                                           stdout=f, stderr=subprocess.STDOUT,
                                           env={**env, "PYTHONPATH": str(Path(__file__).parents[1]),
                                                heavy.STOP_ENV: str(p.state / "STOP"),  # a stop ends the wait
@@ -394,8 +394,8 @@ def run_logged(p, ticket, cmd, cwd, log, stop_at=None, mem=None, quick="", by="d
                                           ).returncode
                 else:  # its load lines as a heavy job's, so a timing failure on a busy machine shows as one
                     with heavy.watch_load(lambda m: (f.write(m + "\n"), f.flush()), f.fileno()):
-                        code = subprocess.run(cmd, shell=True, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
-                                              env=env).returncode
+                        code = subprocess.run(util.doomed(cmd), shell=True, cwd=cwd, stdout=f,
+                                              stderr=subprocess.STDOUT, env=env).returncode
             finally:
                 beat.set()
         if p.cfg["heavy_check"] and code == heavy.TIMED_OUT and not quick_failed:

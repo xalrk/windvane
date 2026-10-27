@@ -7,6 +7,13 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- A run outlives running out of memory. `windvane run --detach` on Linux with systemd starts the run in a
+  `systemd-run --user --scope` with `OOMPolicy=continue`, so the kernel's out-of-memory kill of a runaway command
+  no longer stops the whole run, and every session, check and command the driver starts is the kernel's pick before
+  the driver (`oom_score_adj` 300 above it). A detached driver killed anyway (SIGKILL, a segfault) is restarted like
+  a crashed one, at most 3 times an hour, once what it left running is ended; `windvane status` counts the
+  restarts. A SIGTERM that follows an out-of-memory kill says so in the stop's "Why", and `windvane doctor` warns
+  when systemd would stop a run on one and `--detach` can't avoid it.
 - `windvane run --dry-run` prints the settings a run with those flags would use (stop or window, parallel, caps,
   ticket hours, replan and goal, protected paths, the experiments' budget and plateau, each `[[periodic]]` entry's
   trigger and landing) and starts nothing: no lock, no session, no state files, no `claude` needed.

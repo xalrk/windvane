@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from . import actions, critic, heavy, install, jobs, phone, runner, scratch, selfupdate, statedir, util
+from . import supervise as oom
 from .config import CHECKOUT, DIR, HOME, TOKEN_FIX, Project, author, github_token, user_dir
 from .util import gout, load_json
 
@@ -279,6 +280,7 @@ def checks(p=None):
     if github and getattr(p, "root", None):
         out += identity_warnings(p)
     add(shutil.which("tmux"), False, "tmux (for `windvane run --detach`)", "install tmux (e.g. sudo apt install tmux)")
+    out += oom_warnings()
     own_tools, c = shutil.which("notify") and shutil.which("notify-ask"), phone.conf()
     add(own_tools or phone.on(c), False, "phone pushes and questions (ntfy"
         + ("" if own_tools or not phone.on(c) else f", {phone.where(c)}") + ")",
@@ -340,6 +342,19 @@ def wsl_warnings(p=None):
                    else "install Claude Code inside WSL: curl -fsSL https://claude.ai/install.sh | bash")
             out.append(("warn", f"`{tool}` on PATH is a Windows program ({where}) that can't see Linux paths", fix))
     return out
+
+
+def oom_warnings():
+    """A warning when systemd stops a whole unit on an out-of-memory kill (DefaultOOMPolicy=stop) and `--detach`
+    can't start the run in a scope that doesn't (no `systemd-run` that works): one runaway command ends the run."""
+    if not (sys.platform.startswith("linux") and phone.has_systemd()) or oom.scope_ok():
+        return []
+    if oom.default_policy() != "stop":
+        return []
+    return [("warn", "systemd stops a whole run when the out-of-memory killer ends one of its processes "
+             "(DefaultOOMPolicy=stop), and `windvane run --detach` can't use systemd-run to avoid it: a single "
+             "runaway command will end a run", "put `DefaultOOMPolicy=continue` under `[Manager]` in "
+             "~/.config/systemd/user.conf, then run `systemctl --user daemon-reexec`")]
 
 
 def moved_warnings(p):

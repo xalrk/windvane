@@ -84,11 +84,12 @@ class Supervised(Base):
             return driver.supervise(self.p, ["run"], now() + timedelta(hours=1), start=start, sleep=lambda s: None)
 
     def test_a_driver_killed_by_the_system_is_torn_down_once_after_the_push(self):
+        """Its restarts keep the helpers; the kill that ends the run (the 4th in an hour) tears them down."""
         self.assertEqual(self.supervise(-9), -9)
-        self.assertEqual(len(self.calls), 1)  # not restarted
+        self.assertEqual(len(self.calls), 4)
         self.assertEqual(self.runs(), ["x"])
-        self.assertEqual([(t, n) for t, _, n in self.pushes], [("windvane stopped", 0)])
-        self.assertIn("killed (SIGKILL)", self.pushes[0][1])
+        self.assertEqual([(t, n) for t, _, n in self.pushes], [("windvane restarted", 0)] * 3 + [("windvane stopped", 0)])
+        self.assertIn("killed (SIGKILL)", self.pushes[-1][1])
 
     def test_a_driver_ended_by_sigterm_tore_down_itself(self):
         self.assertEqual(self.supervise(-signal.SIGTERM), -signal.SIGTERM)

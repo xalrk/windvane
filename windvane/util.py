@@ -68,12 +68,62 @@ def no_prompts(cwd, env=None):
     return env
 
 
-def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1, env=None):
+OOM_STEP = 300  # how much likelier the kernel's out-of-memory killer is to pick what the driver starts than the driver
+
+
+def oom_adj():
+    """The oom_score_adj for what this process starts: its own + OOM_STEP, at most 1000 (raising it needs no
+    privilege). None off Linux, and inside a session, whose commands inherit the session's raised one already."""
+    if not sys.platform.startswith("linux") or os.environ.get("WINDVANE_SESSION"):
+        return None
+    try:
+        return min(1000, int(Path("/proc/self/oom_score_adj").read_text()) + OOM_STEP)
+    except (OSError, ValueError):
+        return None
+
+
+def doomed(cmd):
+    """`cmd` (a shell string or an argv list) made the kernel's pick before the driver when memory runs out: a session
+    whose test reads /dev/full whole is killed, not the run. The child sets it itself, before it runs anything, so
+    nothing it forks starts with the driver's (`oom_adj`; unchanged when that's None)."""
+    adj = oom_adj()
+    if adj is None:
+        return cmd
+    first = f"{{ echo {adj} >/proc/self/oom_score_adj; }} 2>/dev/null"
+    return f"{first}; {cmd}" if isinstance(cmd, str) else ["/bin/sh", "-c", f'{first}; exec "$@"', "sh", *cmd]
+
+
+DRIVER_GROUPS = None  # where the running driver records the process groups it starts (`groups_dir`)
+
+
+def groups_dir(p):
+    """Where a process group started here is recorded, so it ends with what started it: a session's own
+    `nested/<session>` (`runner.kill_nested` ends it with the session), or the driver's, which the next driver's
+    sweep ends when this one was killed. None for anything else (a desk command): its groups are its own."""
+    s = os.environ.get("WINDVANE_SESSION")
+    return p.state / "nested" / s if s else DRIVER_GROUPS
+
+
+def record_group(groups, pid):
+    """The mark that names group `pid` in `groups` (a `groups_dir`), or None; the caller removes it once it ends."""
+    if not groups:
+        return None
+    try:
+        groups.mkdir(parents=True, exist_ok=True)
+        mark = groups / str(pid)
+        mark.write_text(stamp(pid) or "")
+        return mark
+    except OSError:
+        return None
+
+
+def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1, env=None, groups=None):
     """Run shell `cmd` with no input in a process group of its own until it ends, `until` passes or `stop()` gives a
     reason; then the whole group is killed (a build's own children too). (exit code, why it was stopped or "", its
     last `keep` lines); `echo` shows its output as it comes, so a long `npm ci` doesn't look stuck. It runs without
     the driver's tmux pane (`without_tmux`): a setup's install scripts come from the repo, and a teardown that stops a
-    helper in tmux finds it on the default server, where a pane-less command looks. `env` adds to its environment."""
+    helper in tmux finds it on the default server, where a pane-less command looks. `env` adds to its environment;
+    `groups` (a `groups_dir`) records its group while it runs."""
     lines = deque(maxlen=keep)
 
     def read(out):
@@ -81,12 +131,12 @@ def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1, env=None):
             if echo:
                 print(line, end="", flush=True)
             lines.append(line.rstrip())
-    with subprocess.Popen(cmd, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+    with subprocess.Popen(doomed(cmd), shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True,
                           env={**without_tmux(os.environ), **(env or {})}) as proc:
         reader = threading.Thread(target=read, args=(proc.stdout,), daemon=True)
         reader.start()
-        why = ""
+        why, mark = "", record_group(groups, proc.pid)
         try:
             while proc.poll() is None and not why:
                 why = stop() or ("out of time" if now() >= until else "")
@@ -95,6 +145,9 @@ def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1, env=None):
         except BaseException:  # a Ctrl-C reaches only us: kill the group, or closing its pipe waits for it to end
             _kill_group(proc)
             raise
+        finally:
+            if mark:
+                mark.unlink(missing_ok=True)
         if why:
             _kill_group(proc)
         reader.join(5)
