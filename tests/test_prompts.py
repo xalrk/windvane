@@ -38,7 +38,7 @@ class UserFacing(unittest.TestCase):
 # Each prompt's size in bytes when it was capped (T-295): every session re-reads its prompt on every turn, so new
 # text replaces old. Bytes, not lines, so a longer line can't dodge the cap. A prompt that shrinks lowers its cap here.
 CAPS = {"CRITIC.md": 3824, "CRITIC-numeric.md": 2164, "CRITIC-project.md": 842, "FIX.md": 987, "JUDGE.md": 844,
-        "PERIODIC.md": 1089, "PLAN.md": 3090, "PREFLIGHT.md": 1299, "REVIEW.md": 2149, "SCOUT.md": 1108, "SEED.md": 1991, "TRIAGE-REQUESTS.md": 1499, "WORKER.md": 7880}
+        "PERIODIC.md": 1089, "PLAN.md": 3090, "PREFLIGHT.md": 1299, "REVIEW.md": 2143, "SCOUT.md": 1108, "SEED.md": 1991, "TRIAGE-REQUESTS.md": 1499, "WORKER.md": 7880}
 
 
 def over_cap(sizes):
@@ -92,6 +92,17 @@ class WhoJudgesWhat(unittest.TestCase):
         self.assertIn('Any other verdict, or none, settles nothing: judge "Done when" from the code and tests, running '
                       'nothing new', self.text("REVIEW.md"))
 
+    def test_the_reviewer_sends_back_what_users_meet(self):
+        """T-318: a correctness bar of "every input there is" bounced tickets over input no user types; that goes
+        under nits, while security and data loss count whatever the input."""
+        review = self.text("REVIEW.md")
+        self.assertIn("Correctness on what users would meet (input they'd type or paste, files and output the program "
+                      "makes, errors the ticket names)", review)
+        self.assertIn("security (injection, secrets, unsafe shell) or data loss on any input", review)
+        self.assertIn("Freak input (thousand-digit numbers, undecodable bytes, hand-made or deeply nested files, odd "
+                      "env or locale, closed std streams) is a nit unless the ticket or docs name it", review)
+        self.assertIn("list nits under `Nits:` and approve", review)
+
     def test_the_planner_drops_test_only_critic_notes(self):
         self.assertIn("A critic note asking only for a test or a pack measurement is dropped, not ticketed, unless it "
                       "names a fault a user would meet", self.text("PLAN.md"))
@@ -102,6 +113,7 @@ class WhoJudgesWhat(unittest.TestCase):
         self.addCleanup(s.close)
         p = Project(s.root)
         for name, words in (("CRITIC.md", "is never a point"), ("REVIEW.md", "don't redo that trial"),
+                            ("REVIEW.md", "is a nit unless the ticket or docs name it"),
                             ("PLAN.md", "dropped, not ticketed")):
             self.assertIn(words, " ".join(rules(p, name).split()), name)
 
