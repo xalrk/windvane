@@ -732,7 +732,8 @@ def cmd_experiments(a, p):
         sys.exit("experiments: `windvane experiments` shows this week's budget; `windvane experiments allow +10` "
                  "lets benches use 10% more of the weekly limit, this week only")
     b.allow(more)
-    print(f"experiments: {more:g}% more allowed this week: cap {b.cap:g}% until the week resets {b.ends()}")
+    print(f"experiments: {more:g}% more allowed this week: cap {b.cap:g}%, benches start below {b.below:g}% until "
+          f"the week resets {b.ends()}")
 
 
 def cmd_mode(a, p):
