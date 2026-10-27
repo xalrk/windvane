@@ -113,7 +113,7 @@ def job_env(cmd, who):
 def tmp_root(p):
     """`tmp_root` as set (the project's config over machine.toml's), expanded, or None when neither sets it."""
     from . import heavy  # (heavy imports the runner, which imports this module)
-    v = p.cfg.get("tmp_root") or heavy.machine().get("tmp_root")
+    v = getattr(p, "cfg", {}).get("tmp_root") or heavy.machine().get("tmp_root")  # (a stand-in project may have none)
     return Path(os.path.expanduser(str(v))) if v else None
 
 
@@ -130,7 +130,7 @@ def tmp_root_problem(p):
     r = tmp_root(p)
     if r is None:
         return None
-    where = ".windvane/config.toml" if p.cfg.get("tmp_root") else "machine.toml"
+    where = ".windvane/config.toml" if getattr(p, "cfg", {}).get("tmp_root") else "machine.toml"
     if not r.is_absolute():
         return f"tmp_root ({where}) is {r}: give an absolute path"
     if not r.is_dir():
