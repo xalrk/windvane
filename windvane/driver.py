@@ -135,9 +135,9 @@ def unpushed_line(local, branches, r, remote):
 
 
 def push_hint(remote, branch):
-    """How to push a ticket branch, with the way past a config lock a running sandbox holds: `-u` writes the
-    upstream into `.git/config`, and git refuses that while `.git/config.lock` exists; the push itself needs no lock."""
-    return f"`git push -u {remote} {branch}`; without `-u` if git can't lock its config"
+    """How to push a ticket branch: without `-u`, which writes the upstream into `.git/config` and fails while a
+    sandbox holds `.git/config.lock`. Nothing reads a ticket branch's upstream; the push itself needs no lock."""
+    return f"`git push {remote} {branch}`"
 
 
 def worker_perms(p):
@@ -1091,7 +1091,7 @@ class Pilot(Desk, Periodic, Experiments):
         if self.refused.get(tid) == same_refusal(r["line"]):
             fix = (f"In your checkout, `git switch {branch}` and take it out of the commits that add it (`git commit "
                    f"--amend` for the last one, or `git reset --soft {r.get('base') or p.upstream}` and commit "
-                   f"again), then `git push -u {p.remote} {branch}`.")
+                   f"again), then {push_hint(p.remote, branch)}.")
             held = self.put_aside(tid, f"its push was refused twice in a row: {why}", fix)
             self.log(f"{tid}: set aside: its push was refused twice in a row ({why}){held}")
             push(f"Set aside: {self.name(tid)}", whole("Its push was refused twice: ", why, ".", log=self.log)
