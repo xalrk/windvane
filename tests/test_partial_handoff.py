@@ -1,5 +1,6 @@
 """A worker run that ends PARTIAL with only the check left (the critic done on its pushed head, no failed check on it)
-hands the head to the driver's check instead of counting as out of time; any other PARTIAL counts as before."""
+hands the head to the driver's check instead of counting as out of time, as does one that recorded a new critic
+revision within `[critic] revisions`; any other PARTIAL counts as before."""
 import os
 import sys
 import unittest
@@ -89,6 +90,27 @@ class FullRun(Base):
         self.assertIn("T-001: check on", log)
         self.assertIn("the check sent it back 2 times; `[autopilot] check_retries` = 1 allows 1", log)
         self.assertNotIn("ran out of time", log)
+
+
+class RevisionRuns(Base):
+    """Whole worker runs, each recording a `revise` (the fake critic scores 5) and ending PARTIAL: `work` hands
+    `handle` the run's start, so none is a strike toward `partials` while `revisions` last."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ.update(FAKE_WORKER="partial", FAKE_REASON=LEFT, FAKE_WORKER_RUN="windvane critic T-001",
+                          FAKE_CRITIC="5 2")
+
+    def test_a_revision_loop_isnt_set_aside(self):
+        pilot = driver.Pilot(self.p, args(parallel=1))
+        pilot.run(now() + timedelta(minutes=40))
+        log = self.log()
+        for n in (1, 2, 3):
+            self.assertIn(f"{PARTIAL_LOG.format(tid='T-001')} (critic revision {n} of 3, not counted)", log)
+        self.assertNotIn("ran out of time", log)
+        self.assertNotIn("T-001", pilot.aside)
+        self.assertIn("T-001: critic 5/10 (accept", log)  # revisions spent: the critic lets it go
+        self.assertEqual(pilot.merged, ["T-001"])
 
 
 class HandleBase(Base):
@@ -181,6 +203,60 @@ class Handle(HandleBase):
                                                      "passed": False})
         self.handle()
         self.assertEqual(len(self.after), 1)
+
+
+class Revisions(HandleBase):
+    """A PARTIAL whose run recorded a new `revise` on a newer head, with `[critic] revisions` left, is the critic's
+    loop going round: it isn't a strike toward `partials` (3 here, as is `revisions`)."""
+
+    runs = 0
+
+    def run_ends(self, step="revise", moved=True):
+        """One run's end: a new head pushed (`moved`), a verdict on it (`step`), then `handle` with the run's start."""
+        self.runs += 1
+        before = (len(critic.history(self.p, "T-001")), self.s.git("rev-parse", "HEAD", cwd=self.wd))
+        if moved:
+            self.commit(f"run {self.runs}")
+            self.s.git("push", "-q", cwd=self.wd)
+        if step:
+            self.verdict(self.s.git("rev-parse", "HEAD", cwd=self.wd), step)
+        self.pilot.handle("T-001", f"RESULT: PARTIAL T-001 {LEFT}", None, ("t-001-x",), before)
+
+    def test_revisions_arent_counted_until_spent(self):
+        for _ in range(3):
+            self.run_ends()
+        self.assertEqual(self.pilot.partials, {})
+        self.assertNotIn("T-001", self.pilot.aside)
+        log = self.log()
+        for n in (1, 2, 3):
+            self.assertIn(f"{PARTIAL_LOG.format(tid='T-001')} (critic revision {n} of 3, not counted): {LEFT}\n", log)
+        self.run_ends(step=None)  # revisions spent, no new verdict: counted as before
+        self.assertEqual(self.pilot.partials, {"T-001": 1})
+        self.assertIn(f"{PARTIAL_LOG.format(tid='T-001')} (1): {LEFT}\n", self.log())
+        self.assertEqual(self.after, [])
+
+    def test_runs_with_no_new_verdict_are_set_aside_as_before(self):
+        self.verdict(self.head, "revise")  # an older verdict, from before these runs
+        for _ in range(3):
+            self.run_ends(step=None)
+        self.assertEqual(self.pilot.partials, {"T-001": 3})
+        self.assertEqual(self.pilot.aside["T-001"], "3 runs in a row ran out of time")
+        self.assertIn("Set aside: ", self.pushes[-1][0])
+
+    def test_a_revise_past_the_budget_or_on_the_head_it_began_on_counts(self):
+        self.p.critic["revisions"] = 1
+        self.run_ends()
+        self.assertEqual(self.pilot.partials, {})
+        self.run_ends()  # revision 2 of 1: the budget is spent
+        self.assertEqual(self.pilot.partials, {"T-001": 1})
+        self.p.critic["revisions"] = 5
+        self.run_ends(moved=False)  # a verdict on the very head the run began on: no new work
+        self.assertEqual(self.pilot.partials, {"T-001": 2})
+
+    def test_critic_off_counts(self):
+        self.p.critic["enabled"] = False
+        self.run_ends()
+        self.assertEqual(self.pilot.partials, {"T-001": 1})
 
 
 class CriticOff(HandleBase):

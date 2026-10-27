@@ -136,7 +136,7 @@ See [Concepts: the critic](concepts.md#the-critic-and-calibration).
 | `review_rounds` | `3` | Reviews in a row asking for changes before the ticket is set aside for you. A head sent back for a missing PR spends these too. |
 | `check_retries` | `2` | Red checks (on the head, or on it merged with main) a ticket may go back to its worker for. One more sets it aside. A slow or flaky check spends only this, never the reviewer's rounds. |
 | `conflict_retries` | `2` | Merge conflicts with main a ticket may go back to its worker for. One more sets it aside. Conflicts windvane resolves itself (`[[append_only]]` entries) don't count. |
-| `partials` | `3` | Worker runs in a row that run out of time before the ticket is set aside (it is probably too big: split it). |
+| `partials` | `3` | Worker runs in a row that run out of time before the ticket is set aside (it is probably too big: split it). A run that recorded a new critic `revise` or `rethink` on a newer head, within `[critic] revisions`, isn't counted: the critic's revision loop is bounded by `revisions` alone. |
 | `subagents` | `false` | Let worker sessions spawn subagents. Off by default: one fresh session per ticket is the design, and subagents multiply token use. |
 | `inline_diff_lines` | `1200` | Diffs up to this many lines are put straight into the reviewer's prompt, saving it the tool calls to fetch them; larger ones it reads itself. |
 | `retries` | `3` | How many times a session that dies outside its ticket's control (API error, network drop, crash) is rerun before its ticket is set aside (other sessions work) or the run stops with the error (they don't). |

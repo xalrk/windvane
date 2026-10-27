@@ -178,6 +178,11 @@ release on the same day adds a number (`2026.10.9.1`).
   failing, and the run takes it up again once the answer comes.
 
 ### Changed
+- A worker run that ends `PARTIAL` after recording a new critic `revise` or `rethink` on a newer head, with
+  `[critic] revisions` left, is no longer a strike toward `partials`; the log says
+  `partial (critic revision 2 of 5, not counted)`. A project with more `revisions` than `partials`, where one
+  revision fills a run, had tickets set aside ("split it") before the revisions it chose were spent. Once they are,
+  the critic accepts and the next `PARTIAL` counts as before.
 - A worker run that ends `PARTIAL` with only the check left (the critic passed its pushed head, the tree is clean,
   no check failed on that head) is handed to the driver's check, review and merge instead of counting as out of
   time, so a long suite cut off at wrap-up no longer costs a whole new run and a strike toward `partials`. On
