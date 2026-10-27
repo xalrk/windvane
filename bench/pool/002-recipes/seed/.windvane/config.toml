@@ -1,0 +1,8 @@
+name = "recipes"
+forge = "git"
+check = "python3 -m unittest discover -s tests"
+goal = "A small command-line recipe scaler: show, scale and shop for plain-text recipes, with quantities a cook can read."
+
+[critic]
+enabled = true
+pass = 8
