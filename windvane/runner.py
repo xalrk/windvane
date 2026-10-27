@@ -13,8 +13,8 @@ from pathlib import Path
 
 from . import actions, scratch
 from .config import HOME, author, github_token, user_dir
-from .util import (append_jsonl, last_match, load_json, recorded_stamp, same_process, save_json, stamp, started_at,
-                   without_tmux)
+from .util import (append_jsonl, doomed, last_match, load_json, recorded_stamp, same_process, save_json, stamp,
+                   started_at, without_tmux)
 
 TICKET = "WINDVANE_TICKET"  # the ticket a session works on, so a `windvane check` it runs is counted for it
 NEST = "WINDVANE_SESSION"  # names the session a command runs in, so a session started inside it can register
@@ -485,7 +485,7 @@ def run_claude(p, role, label, prompt, system, cwd, allow=(), deny=(), usage=Non
     own.parent.mkdir(parents=True, exist_ok=True)
     # `windvane request` from outside its tree: who it is (requests.py), written first: the session may ask at once
     (own.parent / "role").write_text(role)
-    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    proc = subprocess.Popen(doomed(cmd), cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             start_new_session=True, env=env(extra, p))
     mark = p.state / "nested" / parent / str(proc.pid) if parent else None
     own.write_text(owner_line(proc.pid))

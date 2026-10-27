@@ -140,18 +140,13 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(self.titles(), ["windvane started", "windvane stopped"])
         self.assertIn("not restarted: asked to stop", self.pushes[-1][1])
 
-    def test_a_killed_driver_is_pushed_not_restarted(self):
-        """Its sessions may still be running: a restart would resume their worktrees beside them. Someone's own
-        stop (SIGTERM, Ctrl-C) says nothing."""
-        for sig, pushes in ((signal.SIGKILL, 1), (signal.SIGTERM, 0), (signal.SIGINT, 0)):
+    def test_someones_stop_is_not_restarted_and_says_nothing(self):
+        """SIGTERM, SIGHUP and Ctrl-C are how people and service managers stop a run (test_detach_oom: a kill)."""
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             self.calls, self.pushes = [], []
             rc = driver.supervise(self.p, ["run", "--for", "2h"], now() + timedelta(hours=2),
                                   start=lambda args, env: self.calls.append(args) or -sig, sleep=lambda s: None)
-            self.assertEqual((rc, len(self.calls), len(self.pushes)), (-sig, 1, pushes))
-        self.p.state.mkdir(parents=True, exist_ok=True)
-        driver.supervise(self.p, ["run"], now() + timedelta(hours=2), start=lambda a, e: -signal.SIGKILL)
-        self.assertEqual(self.pushes, [("windvane stopped", "Why: the driver was killed (SIGKILL). Not restarted.\n"
-                                        "Its sessions may still be running in the worktrees.")])
+            self.assertEqual((rc, len(self.calls), len(self.pushes)), (-sig, 1, 0))
 
     def test_a_moved_deadline_is_the_restarts(self):
         moved = (now() + timedelta(hours=5)).replace(second=0, microsecond=0)

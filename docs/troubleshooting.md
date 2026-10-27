@@ -112,6 +112,17 @@ don't count toward "two failed tickets in a row". An outage over 10 minutes is p
 ### A run was killed (reboot, `stop --now`, closed terminal)
 Start it again. Unfinished tickets are resumed from their branches and worktrees; nothing pushed is lost.
 
+### A run stopped on an out-of-memory kill
+The stop's "Why" says `the kernel's out-of-memory killer stopped a process in this run, and its service manager
+stopped the run with it`. A command a session ran (a test that read a file without end, say) took the memory; the
+kernel killed it, and systemd, whose default `OOMPolicy=stop` ends the whole unit a killed process lived in, stopped
+the run with it. `windvane run --detach` avoids that on Linux: it starts the run with
+`systemd-run --user --scope -p OOMPolicy=continue`, so only the runaway dies, and every session, check and command
+the driver starts is the kernel's pick before the driver. A run you start yourself in a systemd unit needs
+`-p OOMPolicy=continue` too (`-p MemoryMax=12G` also keeps a runaway from slowing the whole machine first).
+`windvane doctor` warns when `--detach` can't use `systemd-run` there. A detached driver that is killed anyway (an
+out-of-memory kill, a segfault) is restarted, at most 3 times an hour; `windvane status` counts the restarts.
+
 ### "plan not pushed" (or "not merged") with a local branch
 A plan, periodic change or desk answer whose push was refused waits on a local branch (`plan-...`), and the push says
 why and what to do:

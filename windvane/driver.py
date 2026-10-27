@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import (actions, critic, heavy, install, jobs, login, net, phone, privacy, renumber, requests, scratch,
-               selfupdate, statedir, util, worktree)
+               selfupdate, statedir, supervise as oom, util, worktree)
 from .renumber import noted, old_numbers, said
 from .desk import Desk
 from .experiment import Experiments
@@ -89,6 +89,10 @@ BEGAN = "WINDVANE_BEGAN"  # when the supervisor started the run, for `run_began`
 SIGNALLED = {signal.SIGTERM: "the driver got SIGTERM (a kill or a shutdown)",
              signal.SIGHUP: "the driver's terminal or tmux session closed (SIGHUP)",
              signal.SIGINT: "Ctrl-C during a merge, a push or a pull"}  # outside such a step it's KeyboardInterrupt
+# A SIGTERM after an OOM kill in the run's own cgroup: systemd's OOMPolicy=stop ended the unit the run lives in
+OOM_STOPPED = ("the kernel's out-of-memory killer stopped a process in this run, and its service manager stopped the "
+               "run with it (SIGTERM). Start the run with `windvane run --detach`, or in a unit with "
+               "`-p OOMPolicy=continue`, so an out-of-memory kill takes only the process that ran away")
 
 
 class Signalled(BaseException):
@@ -455,6 +459,7 @@ class Pilot(Desk, Periodic, Experiments):
         self.deadline, self.kill_all = None, False  # set by run(); `windvane stop --now` sets kill_all
         self.kept_given = 0  # the latest stop this run has given its kept jobs (`keep_until`), a Unix time
         self.signalled, self.ending = None, False  # the SIGTERM or SIGHUP that ended the run; past its `finally`
+        self.oom_kills = oom.oom_kills()  # the cgroup's count so far: one more at a SIGTERM says why it came
         self.presses = 0  # the run's Ctrl-Cs from the one that ended it: the third ends its wind-down at once
         self.guarded = 0  # how deep the main thread is in `critical` steps: a signal waits for them to end
         self.left = ""  # the pid in the lock file a run that ended without its teardown left (`take_lock`)
@@ -3080,8 +3085,9 @@ class Pilot(Desk, Periodic, Experiments):
         self.interrupted.set()
         if sig == signal.SIGHUP:  # its terminal is gone: a print there fails (EIO) and would cost the run its end
             sys.stdout = sys.stderr = open(os.devnull, "w")
-        log(self.p, f"{SIGNALLED[sig]}: stopping now")
-        self.stop_reason = f"{SIGNALLED[sig]}; the running sessions were killed"
+        said = OOM_STOPPED if sig == signal.SIGTERM and oom.rose(self.oom_kills) else SIGNALLED[sig]
+        log(self.p, f"{said}: stopping now")
+        self.stop_reason = f"{said}; the running sessions were killed"
         if self.guarded:
             log(self.p, "  the step under way (a merge, a push, a pull) finishes first")
             return
@@ -3305,12 +3311,16 @@ def undo_update(p, cd, home, trial, how, log):
 def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
     """`run --detach`'s loop around the driver (`windvane <argv>`): a driver that dies of an exception is restarted
     with the run's deadline as it now is and what it had done (`carry_over`), up to RESTARTS times an hour; each
-    restart is logged and pushed with the error. A stop, the deadline, an empty queue or a failed setup end the run
-    as they end the driver. A driver killed by the system (OOM) is only pushed: its sessions, in process groups of
-    their own, may still be at work in the worktrees a restart would resume. New code on trial (a self-update's) that
+    restart is logged and pushed with the error. A driver killed by a signal nobody sends to stop a run (SIGKILL from
+    the kernel's out-of-memory killer, a segfault) is restarted the same way, once what it left running in this
+    process group is ended (`end_orphans`; its sessions have groups of their own, which the restarted driver's
+    `sweep_nested` ends). A stop (SIGTERM, SIGHUP, Ctrl-C, `windvane stop`), the deadline, an empty queue or a failed
+    setup end the run as they end the driver. The restarts so far are in RESTARTED, for `windvane status`. New code on trial (a self-update's) that
     crashes twice (an exit with an error before its run began counts as a crash, a failed setup's SETUP_FAILED doesn't)
     is reverted (`undo_update`), and the driver restarted on the good code, with one push for both crashes. Returns the driver's last exit code."""
+    ours = start is None  # the real driver in a process of its own: what it leaves behind is ours to end
     start = start or (lambda args, env: subprocess.run([*runnable(exe()), *args], env=env).returncode)
+    (p.state / oom.RESTARTED).unlink(missing_ok=True)
     began = util.clock()  # now, not this process's start: a schedule's process supervises each window in turn
     env = {**os.environ, SUPERVISED: "1", **({BEGAN: repr(began)} if began is not None else {})}
     env.pop("WINDVANE_RESTARTED", None)
@@ -3318,6 +3328,7 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
     while True:
         crash = p.state / "crash.json"
         crash.unlink(missing_ok=True)
+        kills = oom.oom_kills()
         try:
             rc = start(args, env)
         except OSError as e:  # the install moved (a reinstall, a Python upgrade): no driver to start or restart
@@ -3332,14 +3343,15 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
         info, trial = load_json(crash, None), selfupdate.on_trial(p.state)
         if info is None and trial and rc > 0 and rc != SETUP_FAILED:  # new code on trial that died before its run could say why: a crash too
             info = {"error": f"it exited with code {rc} before its run began", "summary": ""}
+        died = "crashed"
         if info is None:
-            if rc < 0 and -rc not in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # not someone's stop: the system's
-                why = f"the driver was killed ({signal.Signals(-rc).name})"
-                log(p, f"{why}; not restarted: its sessions may still be running in the worktrees")
-                push("windvane stopped", whole("Why: ", why, ". Not restarted.", log=lambda m: log(p, m))
-                     + "\nIts sessions may still be running in the worktrees.", 4, "rotating_light", ("Status=status",))
-                tear_down(p, lock=True, tell=True)  # its `finally` never ran (a SIGTERM's or SIGHUP's did: it tore down itself)
-            return rc  # its own end (a stop, the deadline, the queue, a failed setup), or a kill
+            if rc >= 0 or -rc in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                return rc  # its own end (a stop, the deadline, the queue, a failed setup), or someone's stop
+            died, name = "was killed", signal.Signals(-rc).name  # not someone's stop: the system's
+            info = {"error": f"out of memory: the kernel's OOM killer, {name}" if oom.rose(kills) else name,
+                    "summary": ""}
+            if ours and (n := oom.end_orphans()):
+                log(p, f"ended {n} process{'es' * (n > 1)} the killed driver left running")
         why = info["error"]
         try:
             deadline = datetime.fromisoformat((p.state / "DEADLINE").read_text().strip())  # moved meanwhile
@@ -3354,26 +3366,28 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
                 bad = undo_update(p, p.ci_dir, home or HOME, trial, f"crashed the driver twice on trial ({why})",
                                   lambda m: log(p, m)) or ""
         asked = lambda: "asked to stop" if (p.state / "STOP").exists() else None
-        stop = bad or (f"crashed {len(crashes)} times in an hour" if len(crashes) > RESTARTS
+        stop = bad or (f"{died.split()[-1]} {len(crashes)} times in an hour" if len(crashes) > RESTARTS
                        else asked() or ("deadline" if now() >= deadline else None))
         if not stop and bad == "":  # its push said so
             log(p, f"driver restarted on {trial['good'][:8]}")
             sleep(RESTART_PAUSE)
             stop = asked()
         elif not stop:
-            log(p, f"driver crashed ({why}); restart {len(crashes)} of {RESTARTS} this hour"
+            log(p, f"driver {died} ({why}); restart {len(crashes)} of {RESTARTS} this hour"
                    + "; new code on trial: pushed only if it crashes again" * bool(trial))
+            n = load_json(p.state / oom.RESTARTED, {}).get("restarts", 0) + 1
+            save_json(p.state / oom.RESTARTED, {"restarts": n, "last": f"{died} ({why})", "at": f"{now():%H:%M}"})
             if not trial:  # a crash on trial is told once, by the revert's push, if a second one follows
-                push("windvane restarted", whole("The driver crashed: ", why,
+                push("windvane restarted", whole(f"The driver {died}: ", why,
                                                 f". Restart {len(crashes)} of {RESTARTS} this hour.",
                                                 log=lambda m: log(p, m))
                      + f"\nIt goes on until {hhmm(deadline)}.", 3, "repeat", ("Status=status",))
             sleep(RESTART_PAUSE)
             stop = asked()
         if stop:
-            log(p, f"driver crashed ({why}); not restarted: {stop}")
+            log(p, f"driver {died} ({why}); not restarted: {stop}")
             push("windvane stopped", (whole("Why: ", stop, ".", log=lambda m: log(p, m)) if bad else
-                                      whole("Why: the driver crashed (", why, f"); not restarted: {stop}.",
+                                      whole(f"Why: the driver {died} (", why, f"); not restarted: {stop}.",
                                             log=lambda m: log(p, m))) + "\n"
                  + info["summary"], 4, "rotating_light", ("Usage=usage",))
             tear_down(p, lock=True, tell=True)  # after the push, as the driver's own end does

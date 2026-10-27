@@ -18,6 +18,7 @@ from . import actions
 from . import critic as critic_mod
 from . import (bench, budget, doctor, driver, experiment, heavy, install, jobs, mix, net, phone, planner, preflight,
                privacy, publiccheck, questions, requests, schedule, scratch, util, watch)
+from . import supervise as oom
 from . import held as held_mod
 from . import periodic as periodic_mod
 from .config import DIR, HOME, Project, TokenError, exe, find, replan, slots, toplevel
@@ -183,7 +184,10 @@ def cmd_run(a, p):
                 continue
             args.append(x)
         args += [] if "--no-preflight" in args else ["--no-preflight"]  # asked here already, if at all
-        cmd = " ".join(json.dumps(x) for x in [*exe(), "-C", str(p.main_root()), *args, "--supervise"])
+        # exec: the supervisor leads the pane's process group (`supervise.end_orphans`); the scope keeps an OOM kill
+        # to the process that ran away
+        cmd = "exec " + " ".join(json.dumps(x) for x in oom.scoped([*exe(), "-C", str(p.main_root()), *args,
+                                                                      "--supervise"]))
         subprocess.run(["tmux", "new-session", "-d", "-s", p.tmux, "-c", str(p.main_root()), cmd], check=True)
         waits = window and window[0] > now()
         print(f"autopilot {'waiting' if waits else 'running'} in tmux session {p.tmux}"
@@ -334,6 +338,9 @@ def cmd_status(a, p):
     print("autopilot: " + (f"{schedule.word(st)}{', ' * bool(tmux)}{tmux}" if st
                            else f"running {tmux}".strip() if on else "not running"))
     print(questions.told(p))
+    if on and (r := load_json(p.state / oom.RESTARTED, {})).get("restarts"):
+        print(f"restarted: {r['restarts']} time{'s' * (r['restarts'] > 1)}; the last at {r['at']}: the driver "
+              f"{r['last']}")
     st = load_json(p.state / "state.json", {})
     for tid, slot in sorted(st.get("running", {}).items(), key=lambda kv: kv[1]) if on else ():
         print(f"slot {slot}: {tid}")

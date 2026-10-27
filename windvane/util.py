@@ -68,6 +68,31 @@ def no_prompts(cwd, env=None):
     return env
 
 
+OOM_STEP = 300  # how much likelier the kernel's out-of-memory killer is to pick what the driver starts than the driver
+
+
+def oom_adj():
+    """The oom_score_adj for what this process starts: its own + OOM_STEP, at most 1000 (raising it needs no
+    privilege). None off Linux, and inside a session, whose commands inherit the session's raised one already."""
+    if not sys.platform.startswith("linux") or os.environ.get("WINDVANE_SESSION"):
+        return None
+    try:
+        return min(1000, int(Path("/proc/self/oom_score_adj").read_text()) + OOM_STEP)
+    except (OSError, ValueError):
+        return None
+
+
+def doomed(cmd):
+    """`cmd` (a shell string or an argv list) made the kernel's pick before the driver when memory runs out: a session
+    whose test reads /dev/full whole is killed, not the run. The child sets it itself, before it runs anything, so
+    nothing it forks starts with the driver's (`oom_adj`; unchanged when that's None)."""
+    adj = oom_adj()
+    if adj is None:
+        return cmd
+    first = f"{{ echo {adj} >/proc/self/oom_score_adj; }} 2>/dev/null"
+    return f"{first}; {cmd}" if isinstance(cmd, str) else ["/bin/sh", "-c", f'{first}; exec "$@"', "sh", *cmd]
+
+
 def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1, env=None):
     """Run shell `cmd` with no input in a process group of its own until it ends, `until` passes or `stop()` gives a
     reason; then the whole group is killed (a build's own children too). (exit code, why it was stopped or "", its
@@ -81,7 +106,7 @@ def run_limited(cmd, cwd, until, stop=lambda: "", echo=False, keep=1, env=None):
             if echo:
                 print(line, end="", flush=True)
             lines.append(line.rstrip())
-    with subprocess.Popen(cmd, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+    with subprocess.Popen(doomed(cmd), shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True,
                           env={**without_tmux(os.environ), **(env or {})}) as proc:
         reader = threading.Thread(target=read, args=(proc.stdout,), daemon=True)
