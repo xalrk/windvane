@@ -7,6 +7,9 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `windvane run --dry-run` prints the settings a run with those flags would use (stop or window, parallel, caps,
+  ticket hours, replan and goal, protected paths, the experiments' budget and plateau, each `[[periodic]]` entry's
+  trigger and landing) and starts nothing: no lock, no session, no state files, no `claude` needed.
 - `check_measure = true` (with `heavy_check`) runs a check that holds timing tests as a `--measure` heavy job, so it
   waits for a quiet CPU. Every check's log now says the load at its start, end and peak, and a failed check whose
   load peaked over `measure_load` says so in its summary: `CHECK FAILED (exit 1) in 12.0 min, load peaked 34.12
