@@ -220,7 +220,7 @@ def dry_run(a, p):
     if p.perm_problems:
         sys.exit(f"windvane: bad permission rules in config.toml: {'; '.join(p.perm_problems)}")
     window, deadline = run_times(a, p, dry=True)
-    out = ["dry run: nothing starts" + ("; an autopilot is running now (stop it before a real run)" * running(p))]
+    out = ["dry run: nothing starts" + ("; an autopilot is running now (`windvane stop` ends it before a real run)" * running(p))]
     if a.daily:
         out.append(f"window: daily {a.daily} until windvane stop, the first {hhmm(window[0])} to {hhmm(deadline)}"
                    + " (a run needs --detach for it)" * (not a.detach))
