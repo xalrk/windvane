@@ -45,9 +45,9 @@ class TrialsFirst(unittest.TestCase):
         self.text = " ".join(rules(Project(s.root), "WORKER.md").split())
 
     def test_the_trials_are_listed_before_building(self):
-        self.assertIn("Before building, list your **trials**, a user's way: the main promise; a newcomer's first "
-                      "contact where there is one (the program run bare, with `--help`, a wrong argument, a missing "
-                      "file; a first screen); each `CLAUDE.md` hard rule on the paths you touch (error lines, "
+        self.assertIn("Before building, list your **trials**, each with its command, a user's way: the main "
+                      "promise; a newcomer's first contact where there is one (the program run bare, with `--help`, a "
+                      "wrong argument, a missing file; a first screen); each `CLAUDE.md` hard rule on the paths you touch (error lines, "
                       "exit codes, output shape).",
                       self.text)
         self.assertLess(self.text.index("list your **trials**"), self.text.index("4. **Build it**"))
@@ -55,7 +55,7 @@ class TrialsFirst(unittest.TestCase):
     def test_the_trials_run_on_the_final_head_and_reach_the_critic(self):
         self.assertIn("5. **Check it yourself** on the final head: run every trial and fix what fails, check each "
                       '"Done when" point', self.text)
-        self.assertIn("Then your trials, each with its command, and only what the critic can't run itself", self.text)
+        self.assertIn("Then your trials, and only what the critic can't run itself", self.text)
 
 
 # Each prompt's size in bytes when it was capped (T-295): every session re-reads its prompt on every turn, so new
