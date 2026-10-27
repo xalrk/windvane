@@ -737,6 +737,7 @@ class Periodic:
             self.asked_taken(e)
         self.fetch()
         clean_detach(p, cd, p.upstream)
+        pool.sweep(cd)  # an earlier session's leftovers
         head, st = gout(cd, "rev-parse", "HEAD"), load_json(seed_file(p, name), {})
         tries = st.get("tries", 0) + 1 if st.get("head") == head else 1
         save_json(seed_file(p, name), {"head": head, "tries": tries})  # before any session is paid for: a kill counts
@@ -752,6 +753,7 @@ class Periodic:
                     self.seed_land(e, cd, new, said)
         finally:
             clean_detach(p, cd, p.upstream)
+            pool.sweep(cd)
 
     def seed_session(self, e, cd, keep):
         """The seed session, then its seed checked (`pool.check`): (a copy of it in `keep`, its SEED line) when it may

@@ -50,6 +50,14 @@ def staged(root):
     return found[0], ""
 
 
+def sweep(root):
+    """Remove the `new-<kind>` folders under the pool in the driver's tree `root`. `git clean` keeps a folder that
+    holds anything a gitignore covers (a sandbox's marker dirs, a machine-wide ignore), and the next round would count
+    it as a second seed."""
+    for d in (Path(root) / POOL).glob("new-*"):
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def no_reference(new):
     """A copytree `ignore` leaving out the seed folder `new`'s own `reference/`, and nothing deeper of that name."""
     return lambda d, found: ["reference"] if Path(d) == Path(new) and "reference" in found else []

@@ -146,8 +146,9 @@ def rejected_part(cd):
 
 
 def vet_plan(p, cd, q, order_ids):
-    """Drop the new experiment tickets the round's mix or the novelty rule doesn't keep (`mix.vet`): their files go
-    and their queue bullets with them. Returns (the ids dropped, the new experiments kept)."""
+    """Drop the new experiment tickets the round's mix or the novelty rule doesn't keep (`mix.vet`), and the new
+    tickets depending on them: their files go and their queue bullets with them. Returns (the ids dropped, the new
+    experiments kept)."""
     from .mix import is_experiment, vet
     tick = cd / p.tickets_rel
     new = {}
@@ -158,6 +159,7 @@ def vet_plan(p, cd, q, order_ids):
             new[p.norm(f.stem)] = f.read_text(errors="replace")
     new.pop("", None)
     drop = vet(p, cd, new, order_ids(), q, lambda m: log(p, m))
+    drop += dependents(p, new, drop)
     for tid in drop:
         (tick / f"{tid}.md").unlink(missing_ok=True)
     qf = cd / p.queue_rel
@@ -165,6 +167,19 @@ def vet_plan(p, cd, q, order_ids):
         gone = re.compile(rf"^\s*-\s*(?:\*\*)?(?:{'|'.join(map(re.escape, drop))})\b.*\n?", re.M | re.I)
         qf.write_text(gone.sub("", qf.read_text()))
     return drop, [t for t, text in new.items() if t not in drop and is_experiment(text)]
+
+
+def dependents(p, new, drop):
+    """The new tickets that depend, directly or through another, on one `drop`ped: kept, they'd wait for good."""
+    from .queue import depends_on
+    deps = {t: set(depends_on("\n".join(text.splitlines()[:8]), p)) for t, text in new.items()}
+    gone, out = set(drop), []
+    while more := [t for t in new if t not in gone and deps[t] & gone]:
+        for t in more:
+            log(p, f"plan: dropped {t}: it depends on {', '.join(sorted(deps[t] & gone))}, dropped")
+        gone.update(more)
+        out += more
+    return out
 
 
 DIGEST_SHOWN = 8000  # characters of the cross-project digest an endless plan's prompt gets

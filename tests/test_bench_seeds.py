@@ -154,6 +154,20 @@ class SeedRound(Base):
         self.assertEqual(self.s.git("log", "-1", "--format=%s", "origin/main"),
                          "Seed: 003-quiz joins the bench pool, 001-todo leaves")
 
+    def test_a_seed_folder_git_clean_keeps_doesnt_refuse_the_next_round(self):
+        self.make()
+        pilot = self.pilot()
+        cd = self.p.ci_dir
+        ensure_worktree(self.p, cd, setup=False)
+        exclude = Path(git(cd, "rev-parse", "--git-common-dir").stdout.strip())
+        exclude = (exclude if exclude.is_absolute() else cd / exclude) / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_text("**/.marks/\n")  # like a machine-wide ignore of a sandbox's marker dirs
+        (cd / "bench/pool/new-old/hidden/.marks").mkdir(parents=True)
+        self.round(pilot, "todo")
+        self.assertEqual(self.pushes[-1][0], "Bench seed added", self.pushes)
+        self.assertEqual(list((cd / "bench/pool").glob("new-*")), [])  # and none left for the next round
+
     def test_a_full_pool_is_due_again_after_seed_every_kept_experiments(self):
         self.make(SEED + "seed_every = 2\n")
         pilot = self.pilot()

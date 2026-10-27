@@ -274,6 +274,11 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- A seed round no longer refuses every seed after the first because of an earlier session's folder: `git clean`
+  keeps a `bench/pool/new-<kind>/` that holds anything a gitignore covers (a sandbox's marker dirs, a machine-wide
+  ignore), and the next round counted it as a second seed. The round now clears those folders itself.
+- A plan drops the new tickets that depend on a ticket it dropped (a repeat, or past its kind's share), rather than
+  keep them waiting for a ticket that will never exist.
 - A periodic bench round waits for another bench before it starts, rather than starting a job that blocks in the
   bench lock: the run logs the wait once, with when it gives up (once the round's minutes no longer fit), starts the
   round on a later pass once the machine is free, and sizes it and checks its fit before the deadline then; a run

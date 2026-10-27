@@ -28,7 +28,8 @@ RECORD = ("\n### T-050: a stricter review (2026-10-20)\n- Idea: a stricter revie
 WRITE = ("import json, os, sys\n"
          "os.makedirs('.windvane/tickets', exist_ok=True)\n"
          "for tid, idea, mech, touches, extra in json.load(open(sys.argv[1])):\n"
-         "    open(f'.windvane/tickets/{tid}.md', 'w').write(f'# {tid}: idea {tid}\\nDepends on: nothing.\\n'\n"
+         "    dep, extra = (extra, '') if extra.startswith('Depends on:') else ('Depends on: nothing.', extra)\n"
+         "    open(f'.windvane/tickets/{tid}.md', 'w').write(f'# {tid}: idea {tid}\\n{dep}\\n'\n"
          "        f'Touches: {touches}.\\n' + (f'Kind: experiment · Idea: {idea} · Mechanism: {mech}\\n' if idea\n"
          "        else 'Kind: feature\\n') +\n"
          "        f'{extra}\\n\\n## Goal\\nx\\n')\n"
@@ -168,6 +169,16 @@ class Novelty(Base):
         self.assertIn("plan: dropped T-002: it changes the same mechanism (worker prompt) and files as T-050, which "
                       "the bench rejected, with no `Different because:` line", log)
         self.assertTrue({"T-003", "T-004"} <= on_main)  # a revisit and a fix of two: each within its share
+
+    def test_a_new_ticket_depending_on_a_dropped_one_goes_with_it(self):
+        self.make()
+        _, on_main, log = self.plan([
+            ("T-002", "fix", "worker prompt", "prompts/WORKER.md", ""),
+            ("T-003", "revisit", "worker check", "windvane/driver.py", "Depends on: T-002."),
+            ("T-004", "", "", "docs/x.md", "Depends on: T-003.")])
+        self.assertFalse({"T-002", "T-003", "T-004"} & on_main)
+        self.assertIn("plan: dropped T-003: it depends on T-002, dropped", log)
+        self.assertIn("plan: dropped T-004: it depends on T-003, dropped", log)
 
     def test_only_the_last_20_rejected_count(self):
         old = "".join(RECORD.replace("T-050", f"T-{i:03}").replace("worker prompt", f"m{i}") for i in range(100, 120))
