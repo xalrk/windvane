@@ -350,7 +350,8 @@ class Experiments:
             self.bench_said.discard(who)
         elif who not in self.bench_said:
             self.bench_said.add(who)
-            self.log(f"{who}: bench: waiting for {bench.describe(h)} ({bench.WAIT_HINT})")
+            self.log(f"{who}: waiting for {bench.describe(h)} before its bench starts (windvane bench --status to "
+                     "check; windvane stop ends the wait)")
         return h
 
     def bench_ended(self, tid, job):
