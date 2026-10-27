@@ -178,6 +178,11 @@ release on the same day adds a number (`2026.10.9.1`).
   failing, and the run takes it up again once the answer comes.
 
 ### Changed
+- The reviewer sends a change back for what a user of the project would meet: input they'd type or paste, the files
+  and output the program makes, the errors the ticket names, and security or data-loss risks on any input. Freak
+  input (thousand-digit numbers, undecodable bytes, the program's own files hand-edited or nested deep, odd
+  environment variables or locales, closed standard streams) is a nit with an approve unless the ticket or the
+  project's docs name it, so a ticket no longer goes round worker, critic and review again over input no user types.
 - A worker run that ends `PARTIAL` after recording a new critic `revise` or `rethink` on a newer head, with
   `[critic] revisions` left, is no longer a strike toward `partials`; the log says
   `partial (critic revision 2 of 5, not counted)`. A project with more `revisions` than `partials`, where one
