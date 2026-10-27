@@ -850,6 +850,21 @@ class Periodic:
         return [f"waiting for the {name} bench round to end (started {datetime.fromtimestamp(started):%H:%M}), "
                 f"at the latest until the deadline ({hhmm(self.end())})" for name, _, started in live_benches(self.p)]
 
+    def bench_held_waits(self):
+        """The idle lines of a run whose queue is done while a due bench round waits for another bench: the run waits
+        too, so the round starts on the pass after the lock frees rather than being dropped with the run's end; the
+        deadline or a stop still ends the wait, and a round whose minutes no longer fit ends it at once."""
+        lines, asked_e = [], self.asked_due()
+        entries = [e for e in self.p.periodic.values() if e["builtin"] == "bench" and self.bench_due(e) == "start"]
+        if asked_e and asked_e["builtin"] == "bench" and asked_e["name"] not in {e["name"] for e in entries}:
+            entries.append(asked_e)
+        for e in entries:
+            h = self.bench_held(e["name"])
+            if h is not None and self.periodic_fits(e):
+                lines.append(f"the {e['name']} bench round waits for {bench.describe(h)}, at the latest until the "
+                             f"deadline ({hhmm(self.end())})")
+        return lines
+
     def bench_unread(self):
         """Whether a bench entry's round has ended with its verdict not yet read, or a regression's ticket not yet
         written (and not put off by a busy checkout): a run about to end passes once more, so a bench that ended

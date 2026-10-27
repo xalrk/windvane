@@ -176,8 +176,9 @@ the first and says so once (`bench: waiting for <project> T-012's bench, running
 --status to check; Ctrl-C ends the wait, nothing run)`; a bench in a background job names its `windvane bg --cancel`
 instead); `windvane bench --status` and `windvane status` name the one running. An experiment or a periodic round
 waits before its bench starts, so the wait doesn't count against its fit before the deadline or its minutes; the run
-goes on with tickets meanwhile, and a stop or the deadline during the wait sets the bench over to the next run, not a
-failure. A bench whose process is gone holds nothing.
+goes on with tickets meanwhile, and with its queue done it waits for the lock and then the round rather than end. A
+stop, the deadline, or a round's minutes no longer fitting before it ends the wait and sets the bench over to the next
+run, not a failure. A bench whose process is gone holds nothing.
 
 ## [[periodic]]
 

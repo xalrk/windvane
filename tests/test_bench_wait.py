@@ -4,6 +4,7 @@ reached meanwhile starts nothing. `windvane bench` is never left to block in the
 import os
 import re
 import sys
+import time
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_bench_one_at_a_time import hold  # noqa: E402
 import test_bench_periodic as tbp  # noqa: E402
 
-from windvane import bench, jobs, periodic  # noqa: E402
+from windvane import bench, driver, jobs, periodic  # noqa: E402
 from windvane.heavy import JOB_ENV  # noqa: E402
 from windvane.util import now  # noqa: E402
 
@@ -99,6 +100,44 @@ class RoundWaits(tbp.Base):
         self.assertEqual(pushed.call_count, 0)
         self.assertEqual(periodic.asked(self.p), [])
         self.assertEqual(len(re.findall(WAITING, self.log(), re.M)), 1, self.log())
+
+
+class RunWaits(tbp.Base):
+    """A round due after the queue is done, while another bench holds the machine: the run waits for the lock rather
+    than end and leave the round to the next run, then starts it and waits for its verdict."""
+    setUp = tbp.Caps.setUp
+
+    def test_an_empty_queue_waits_for_the_lock_then_runs_the_round(self):
+        self.holder, pauses = hold(600), []
+        self.addCleanup(lambda: (self.holder.kill(), self.holder.wait()))
+
+        def pause(pilot, seconds=30):
+            pauses.append(seconds)
+            if len(pauses) == 3:  # the other bench ends a few passes in
+                self.holder.kill()
+                self.holder.wait()
+            time.sleep(.1)
+        pilot = driver.Pilot(self.p, tbp.args())
+        with self.fake([{}], sleep=1), mock.patch.object(driver.Pilot, "pause", pause):
+            pilot.run(now() + timedelta(hours=3))
+        log = self.log()
+        self.assertEqual(len(self.calls), 1, log)
+        self.assertGreaterEqual(len(pauses), 3)
+        waited = log.index("bench round waits for other T-009's bench")
+        started = log.index("bench: bench started in the background")
+        self.assertLess(waited, started)
+        self.assertGreater(log.index("no regression", started), started)  # its verdict read before the run ended
+        self.assertNotIn("ended with the run", log)
+
+    def test_a_round_that_no_longer_fits_ends_the_run(self):
+        holder = hold(600)
+        self.addCleanup(lambda: (holder.kill(), holder.wait()))
+        pilot = driver.Pilot(self.p, tbp.args())
+        with self.fake([{}]), mock.patch.object(driver.Pilot, "pause", lambda pilot, seconds=30: time.sleep(.1)):
+            pilot.run(now() + timedelta(hours=1))  # 120 min don't fit
+        self.assertEqual(self.calls, [])
+        self.assertIn("bench: skipped: 120 min don't fit before the deadline", self.log())
+        self.assertNotIn("bench round waits for", self.log())
 
 
 class WaitLine(unittest.TestCase):

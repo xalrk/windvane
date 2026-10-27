@@ -2794,6 +2794,10 @@ class Pilot(Desk, Periodic, Experiments):
                     self.idle_note(self.bench_waits())
                     self.pause(60)
                     continue
+                if waits := self.bench_held_waits():  # a due round starts once the other bench ends
+                    self.idle_note(waits)
+                    self.pause(60)
+                    continue
                 if self.bench_unread():  # it ended during this pass: read it, and land its ticket, before the end
                     continue
                 if endless:  # only the deadline, a stop or the caps end it; a ticket merged meanwhile is picked up
