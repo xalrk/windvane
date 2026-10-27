@@ -1,0 +1,8 @@
+name = "habits"
+forge = "git"
+check = "python3 -m unittest discover -s tests"
+goal = "A small command-line streak tracker: add habits, mark days done, and see streaks and the week at a glance, from a plain-text file."
+
+[critic]
+enabled = true
+pass = 8
