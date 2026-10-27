@@ -60,7 +60,8 @@ class OneAtATime(unittest.TestCase):
     setUp = test_bench.Bench.setUp
 
     def start(self, *args, **env):
-        proc = subprocess.Popen(["windvane", "-C", str(self.s.root), "bench", *args], env={**os.environ, **env},
+        mine = {k: v for k, v in os.environ.items() if k != JOB_ENV}  # by hand, even in a suite run as a job
+        proc = subprocess.Popen(["windvane", "-C", str(self.s.root), "bench", *args], env={**mine, **env},
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: (proc.poll() is None and (proc.kill(), proc.wait()), proc.stdout.close(),
                                  proc.stderr.close()))
@@ -86,7 +87,8 @@ class OneAtATime(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, out.text() + proc.stderr.read())
         for out in outs:
             self.assertEqual(len(re.findall(r"^bench: waiting for other weekly round's bench, running since "
-                                            r"\d\d:\d\d \(Ctrl-C or a stop ends the wait, nothing run\)$",
+                                            r"\d\d:\d\d \(windvane bench --status to check; Ctrl-C ends the wait, "
+                                            r"nothing run\)$",
                                             out.text(), re.M)), 1, out.text())
             self.assertTrue(out.text().startswith("bench: waiting"))  # the week is read, the size picked, after it
         a, b = sorted(outs, key=lambda o: o.first(r": running, log in"))
@@ -106,8 +108,8 @@ class OneAtATime(unittest.TestCase):
         b = self.start("--hours", "1")
         out = Lines(b)
         self.wait_for(lambda: out.first("waiting"))
-        self.assertRegex(out.text(), r"^bench: waiting for sandbox T-009's bench, running since \d\d:\d\d \(Ctrl-C "
-                                     r"or a stop ends the wait, nothing run\)\n$")
+        self.assertRegex(out.text(), r"^bench: waiting for sandbox T-009's bench, running since \d\d:\d\d \(windvane "
+                                     r"bench --status to check; Ctrl-C ends the wait, nothing run\)\n$")
         b.send_signal(signal.SIGTERM)
         b.wait(60)
         err = b.stderr.read()
@@ -164,9 +166,11 @@ class ExperimentWaits(unittest.TestCase):
         holder.wait()
         self.assertEqual(pilot.merged, ["T-001"])
         log = self.log()
-        self.assertEqual(len(re.findall(r"^T-001: bench: waiting for other T-009's bench, running since \d\d:\d\d$",
+        self.assertEqual(len(re.findall(r"^T-001: waiting for other T-009's bench, running since \d\d:\d\d before its "
+                                        r"bench starts \(windvane bench --status to check; windvane stop ends the "
+                                        r"wait\)$",
                                         log, re.M)), 1, log)
-        self.assertLess(log.index("T-001: bench: waiting"), log.index("T-001: experiment bench 1 of 2"))
+        self.assertLess(log.index("T-001: waiting for other"), log.index("T-001: experiment bench 1 of 2"))
 
     def test_a_stop_during_the_wait_leaves_it_for_the_next_run(self):
         self.make()

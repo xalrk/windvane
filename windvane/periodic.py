@@ -72,16 +72,19 @@ class Periodic:
         """An entry asked for with `windvane periodic <name>` (`asked_due`), else the first [[periodic]] entry whose
         `every` merges have passed since it last ran this run (restarts carry the count), or with a group finished
         since then, or with requests in the inbox no round this run was given (one that failed waits for the next
-        run, never loops), or None."""
+        run, never loops), or None. A bench round isn't due while another bench holds the machine: it starts on a
+        later pass once that one ends, its hours sized and its fit before the deadline reckoned then."""
         e = self.asked_due()
         if e:
-            if e["builtin"] == "bench":  # a regression's ticket first: a new round would overwrite its verdict
-                return dict(e, bench="land" if self.bench_due(e) == "land" else "start")
-            return e
+            if e["builtin"] != "bench":
+                return e
+            due = "land" if self.bench_due(e) == "land" else "start"  # a regression's ticket first: a new round
+            if due == "land" or not self.round_waits(e):  # would overwrite its verdict
+                return dict(e, bench=due)
         for e in self.p.periodic.values():
             if e["builtin"] == "bench":
                 due = self.bench_due(e)
-                if due:
+                if due == "land" or due and not self.round_waits(e):  # another bench: a later pass
                     return dict(e, bench=due)
                 continue
             if e["builtin"] == "seed":
@@ -846,6 +849,23 @@ class Periodic:
         regression's ticket) rather than end and throw the round away; the deadline still ends it."""
         return [f"waiting for the {name} bench round to end (started {datetime.fromtimestamp(started):%H:%M}), "
                 f"at the latest until the deadline ({hhmm(self.end())})" for name, _, started in live_benches(self.p)]
+
+    def bench_round_held(self):
+        """Whether a due bench round (from the config or asked for) waits for another bench and its minutes still fit:
+        a run whose queue is done waits too, so the round starts on the pass after the lock frees rather than being
+        dropped with the run's end. Its wait was logged once already, with when it gives up; a stop or the deadline
+        still ends it, and a round that no longer fits starts on the next pass, to be skipped."""
+        entries = [e for e in self.p.periodic.values() if e["builtin"] == "bench" and self.bench_due(e) == "start"]
+        e = self.asked_due()
+        if e and e["builtin"] == "bench" and e["name"] not in {x["name"] for x in entries}:
+            entries.append(e)
+        return any(self.round_waits(e) for e in entries)
+
+    def round_waits(self, e):
+        """Whether bench round `e` waits for another bench, logged once with when it gives up: when its minutes stop
+        fitting before the deadline. One that doesn't fit now doesn't wait: it's skipped as it starts."""
+        until = self.end() - timedelta(minutes=e["minutes"])
+        return until > now() and self.bench_held(e["name"], until) is not None
 
     def bench_unread(self):
         """Whether a bench entry's round has ended with its verdict not yet read, or a regression's ticket not yet

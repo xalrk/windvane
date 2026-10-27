@@ -561,6 +561,14 @@ def status_line():
     return f"bench: {describe(h)} (pid {h.get('pid', '?')})" if h is not None else "bench: none running on this machine"
 
 
+def wait_hint():
+    """How a waiting `windvane bench` ends, for whoever reads its wait line: Ctrl-C by hand, but a background job's
+    terminal is no one's, and `windvane stop` ends a run, not a bench, so a job names its own `bg --cancel`."""
+    job = Path(os.environ.get(JOB_ENV, "")).name
+    end = f"windvane bg --cancel {job} ends it" if job else "Ctrl-C ends the wait"
+    return f"windvane bench --status to check; {end}, nothing run"
+
+
 def take_lock(p):
     """Wait for the machine's bench lock and take it: the open file, held until it is closed or this process ends.
     A wait says so once; a signal during it (Stopped, KeyboardInterrupt) leaves the holder's file as it was."""
@@ -572,7 +580,7 @@ def take_lock(p):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             if (h := holder()) is not None:
-                print(f"bench: waiting for {describe(h)} (Ctrl-C or a stop ends the wait, nothing run)", flush=True)
+                print(f"bench: waiting for {describe(h)} ({wait_hint()})", flush=True)
             fcntl.flock(fd, fcntl.LOCK_EX)
     except BaseException:
         os.close(fd)

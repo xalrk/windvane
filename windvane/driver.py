@@ -518,7 +518,7 @@ class Pilot(Desk, Periodic, Experiments):
         self.asks_wait, self.asked_chain = {}, {}  # the same for an asked round; the entries an asked round chains in
         # bench rounds: main's head each was last looked at for (and whether it was due), and the merge count a busy
         # checkout put its regression ticket off to
-        self.bench_seen, self.bench_wait = {}, {}
+        self.bench_seen, self.bench_wait, self.bench_said = {}, {}, set()
         self.overfit_read = None  # bench.jsonl's mtime when `overfit_watch` last looked
         self.seed_seen = {}  # a seed entry -> ((main's head, the ledger's mtime), whether it was due then)
         self.scout_read = None  # the ledger's mtime when the scout's model watch last read it
@@ -2795,6 +2795,9 @@ class Pilot(Desk, Periodic, Experiments):
                     continue
                 if live_benches(p):  # its verdict is read at the first pass after it ends
                     self.idle_note(self.bench_waits())
+                    self.pause(60)
+                    continue
+                if self.bench_round_held():  # a due round starts once the other bench ends; its wait is logged
                     self.pause(60)
                     continue
                 if self.bench_unread():  # it ended during this pass: read it, and land its ticket, before the end
