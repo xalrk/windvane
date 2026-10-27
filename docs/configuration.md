@@ -167,7 +167,7 @@ A bench that doesn't fit isn't started: an experiment ticket waits, set aside bu
 with other tickets; `windvane status` says so on one line. At the share, the run asks once a week per cap on the
 phone (`+10%`, `+20%`, or wait for the reset; no answer in `answer_wait`: wait). `windvane experiments` prints this
 week's spend, the cap, what you allowed and when the week resets; `windvane experiments allow +10` allows 10 points
-more, this week only. The week is the usage window's own, ending at its seven-day reset. All three keys are protected
+more, this week only, and raises `week_below` by as much (up to 100%; the phone's answer raises the share alone). The week is the usage window's own, ending at its seven-day reset. All three keys are protected
 with the bench.
 
 ## [[periodic]]

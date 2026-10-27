@@ -2,7 +2,8 @@
 loop with no end could eat the whole week; benches (experiments' and the periodic bench's) start only while the
 weekly usage is under `week_below`, and while what they spent this week plus the next run's estimate stays within
 `week_share` points of the weekly limit, plus whatever the user allowed for this week (`windvane experiments allow`,
-or the one phone question a week at the cap).
+or the one phone question a week at the cap). What the desk allows raises `week_below` by as much too, up to 100%:
+the phone's question comes only at the share, so its answer raises the share alone.
 
 The account is the machine's, not a project's, so all of it is machine-wide, under `<state root>/_budget/`:
 `spend.jsonl` gets a row at the end of every bench run (what it spent), `budget.json` this week's allowance and the
@@ -152,7 +153,7 @@ class Budget:
     """This week's budget as it stands: the reading, what the bench spent, what's allowed, the cap."""
 
     def __init__(self, cfg, at=None):
-        self.below, self.share = float(cfg["week_below"]), float(cfg["week_share"])
+        self.base, self.share = float(cfg["week_below"]), float(cfg["week_share"])
         self.at = at or time.time()
         r = reading()
         self.reset = current_reset(r.get("reset"), self.at)
@@ -165,9 +166,11 @@ class Budget:
         mine = st.get("until") and (self.reset and abs(st["until"] - self.reset) < 3600
                                     or not self.reset and st["until"] > self.at)
         self.allowed = float(st.get("allowed", 0)) if mine else 0.0
+        self.lifted = float(st.get("lifted", 0)) if mine else 0.0  # the desk's part of `allowed`: on week_below too
         # the caps asked about on the phone this week: {"cap", "qid", "taken"} (its answer applied)
         self.asked = [a for a in st.get("asked", []) if isinstance(a, dict)] if mine else []
         self.cap = self.share + self.allowed
+        self.below = min(100.0, self.base + self.lifted)
 
     def question_at(self, cap):
         """This week's phone question at `cap`, or None."""
@@ -189,18 +192,22 @@ class Budget:
 
     def save(self):
         """This week's allowance and asked caps, kept until the week resets."""
-        save_json(state_file(), {"until": self.reset or self.at + WEEK, "allowed": self.allowed, "asked": self.asked})
+        save_json(state_file(), {"until": self.reset or self.at + WEEK, "allowed": self.allowed, "lifted": self.lifted,
+                                 "asked": self.asked})
 
     def allow(self, more, cap=None):
-        """`more` points on top of the share, for this week only; with `cap`, the answer to the question asked at that
-        cap, applied once however many times it is read."""
+        """`more` points on top of the share, for this week only, and from the desk (no `cap`) on week_below too; with
+        `cap`, the answer to the question asked at that cap, applied once however many times it is read."""
         if cap is not None:
             q = self.question_at(cap)
             if not q or q.get("taken"):
                 return
             q["taken"] = True
         self.allowed = round(self.allowed + more, 2)
+        if cap is None:
+            self.lifted = round(self.lifted + more, 2)
         self.cap = self.share + self.allowed
+        self.below = min(100.0, self.base + self.lifted)
         self.save()
 
     def asking(self, cap, qid):
@@ -220,9 +227,10 @@ class Budget:
         week = "?" if self.week is None else f"{self.week:g}%"
         scouts = sum(x.get("size") == "scout" for x in self.rows)
         n = len(self.rows) - scouts
+        lift = f" ({self.base:g}% + {self.lifted:g}% you allowed this week)" if self.lifted else ""
         out = [f"experiments: {self.spent:g}% of this week spent on benches ({n} run{'s' * (n != 1)}"
                + (f", {scouts} scout{'s' * (scouts != 1)}" if scouts else "") + f"), cap {self.cap:g}%{extra}",
-               f"weekly usage {week}; benches start below {self.below:g}%; the week resets {self.ends()}"]
+               f"weekly usage {week}; benches start below {self.below:g}%{lift}; the week resets {self.ends()}"]
         sizes = {x.get("size") for x in runs() if not x.get("open")}
         est = [f"{w} {estimate(w):g}%" if w in sizes else f"{w} ? (none recorded)" for w in ("small", "full")]
         out.append(f"a run takes about: {', '.join(est)}")

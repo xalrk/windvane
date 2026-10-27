@@ -168,6 +168,9 @@ release on the same day adds a number (`2026.10.9.1`).
   failing, and the run takes it up again once the answer comes.
 
 ### Changed
+- `windvane experiments allow +N` also raises `week_below` by N, up to 100%, until the week resets. A bench held
+  at `weekly usage at 76% (benches start below 75%)` named `allow +10` as the way out, but `allow` raised only the
+  share, so the bench stayed held. The phone's answer at the share still raises the share alone.
 - `windvane await` on a heavy job that waits for memory or a quiet CPU names who holds it now, as
   `heavy --status` does, each process with how long it has run (`running 3 h 10 min`) and this project's own helpers
   marked, instead of only how much is free; the log's list from when the wait began is left out. A waiting job's

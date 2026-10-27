@@ -226,13 +226,32 @@ class Week(unittest.TestCase):
         self.assertIn("experiments: 31% of this week spent on benches (1 run), cap 30%", out)
         self.assertIn("weekly usage 60%; benches start below 75%; the week resets", out)
         self.assertIn("benches wait: benches used 31% of this week", out)
-        self.assertIn("cap 40% until the week resets", run("allow", "+10").stdout)
+        self.assertIn("cap 40%, benches start below 85% until the week resets", run("allow", "+10").stdout)
         out = run().stdout
         self.assertIn("cap 40% (share 30% + 10% you allowed this week)", out)
         self.assertIn("benches may start", out)
         for bad in ("lots", "nan", "inf", "-5", "0"):
             self.assertEqual(run("allow", bad).returncode, 1, bad)
         self.assertEqual(budget.Budget(CFG).cap, 40)
+
+    def test_what_the_desk_allows_lifts_the_weekly_gate_until_the_reset_and_a_phone_answer_doesnt(self):
+        t = time.time()
+        reset = t + DAY
+        usage("one", 76, t, reset)
+        b = budget.Budget(CFG, at=t)
+        self.assertEqual(b.blocks("full"), ("week", "weekly usage at 76% (benches start below 75%)"))
+        b.asking(30, "q")
+        b.allow(10, cap=30)  # the phone's answer at the share
+        b = budget.Budget(CFG, at=t)
+        self.assertEqual((b.cap, b.below, b.blocks("full")[0]), (40, 75, "week"))
+        b.allow(25)  # the desk's
+        b = budget.Budget(CFG, at=t)
+        self.assertEqual((b.cap, b.below, b.lifted, b.blocks("full")), (65, 100, 25, None))
+        self.assertIn("benches start below 100% (75% + 25% you allowed this week)", "\n".join(b.lines()))
+        b.allow(10)
+        self.assertEqual(budget.Budget(CFG, at=t).below, 100)  # never past the whole week
+        after = budget.Budget(CFG, at=reset + 60)
+        self.assertEqual((after.below, after.lifted, after.cap), (75, 0, 30))
 
     def test_a_bench_killed_before_its_end_counts_as_its_estimate_until_it_ends(self):
         for spent in (4, 6):
