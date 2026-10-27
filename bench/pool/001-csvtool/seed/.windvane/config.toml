@@ -1,0 +1,8 @@
+name = "csvtool"
+forge = "git"
+check = "python3 -m unittest discover -s tests"
+goal = "A small, exact command-line tool for CSV files: sum a column, filter rows, and total a column by group."
+
+[critic]
+enabled = true
+pass = 8
