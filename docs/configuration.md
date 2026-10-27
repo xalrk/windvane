@@ -170,6 +170,13 @@ week's spend, the cap, what you allowed and when the week resets; `windvane expe
 more, this week only, and raises `week_below` by as much (up to 100%; the phone's answer raises the share alone). The week is the usage window's own, ending at its seven-day reset. All three keys are protected
 with the bench.
 
+Benches run one at a time per machine, whichever project, round or person started them: two side by side would need
+twice the memory and slow each other, so neither's minutes would mean anything. A second `windvane bench` waits for
+the first and says so once (`bench: waiting for <project> T-012's bench, running since 01:40`); `windvane bench
+--status` and `windvane status` name the one running. An experiment waits before its bench starts, so the wait
+doesn't count against its fit before the deadline or its minutes; a stop or the deadline during the wait sets the
+bench over to the next run, not a failure. A bench whose process is gone holds nothing.
+
 ## [[periodic]]
 
 Sessions of the project's own (a playtest, then a triage into tickets) run between tickets, when no ticket is

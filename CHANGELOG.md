@@ -7,6 +7,11 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- One bench at a time on a machine. `windvane bench` holds a lock in the state root for its whole run, whoever
+  started it (an experiment, a periodic round, you); a second waits for it and says once whose bench it waits for.
+  An experiment waits before its bench starts, so the wait doesn't count against its fit before the deadline, and a
+  stop during the wait leaves its bench to the next run. `windvane bench --status` (and `windvane status`) name the
+  bench running; a lock whose process is gone is free.
 - A run outlives running out of memory. `windvane run --detach` on Linux with systemd starts the run in a
   `systemd-run --user --scope` with `OOMPolicy=continue`, so the kernel's out-of-memory kill of a runaway command
   no longer stops the whole run, and every session, check and command the driver starts is the kernel's pick before
