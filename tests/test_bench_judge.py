@@ -129,12 +129,14 @@ class Parts(unittest.TestCase):
         self.assertEqual([x["answer"] for x in bench.answers("", checks)], ["no"] * 3)
 
     def test_every_real_seed_has_about_eight_checks_answered_by_running_it(self):
-        for d in sorted((REPO / "bench").iterdir()):
-            with self.subTest(seed=d.name):
-                checks = bench.judge_checks({"dir": d, "name": d.name}, REPO)
+        found = [*bench.seeds(REPO / "bench").values(), *bench.seeds(REPO / bench.POOL).values()]
+        self.assertTrue(found)
+        for s in found:
+            with self.subTest(seed=s["name"]):
+                checks = bench.judge_checks(s, REPO)
                 self.assertTrue(6 <= len(checks) <= 10, len(checks))
                 self.assertEqual([i for i, _ in checks], [f"J{n}" for n in range(1, len(checks) + 1)])
-                text = (d / "hidden/JUDGE.md").read_text()
+                text = (s["dir"] / "hidden/JUDGE.md").read_text()
                 self.assertNotRegex(text.lower(), r"\b(clear|good|nice|clean|intuitive|helpful|well)\b")
 
     def test_an_older_ref_borrows_the_checkouts_checks(self):
