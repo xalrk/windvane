@@ -48,7 +48,9 @@ The push and the log say why: reviews kept asking for changes (`review_rounds`),
 come from `CLAUDE_CODE_MAX_TURNS` in the environment you start windvane from: windvane passes no `--max-turns`, and
 the Claude CLI has no turn limit without one, so raise or unset it, then start `windvane run` again once the current run ends: a run keeps the value it started with. The work so far is on the ticket's branch.
 Usually the ticket is too big or too vague: split it or sharpen "Done when", then run again; the next worker resumes
-the branch.
+the branch. A run cut off while only its check was left (a long suite, a wait for the machine) doesn't count toward
+`partials`: with the critic on and passed on its pushed head, the driver runs the check itself (the log says
+`only the check was left; the driver checks <sha>`).
 If its push was refused twice by the scan for secrets, its branch is only on this machine: take the finding out of
 the commits that add it (`git commit --amend`, or `git reset --soft` and commit again), push it, and
 `windvane retry T-007` puts it back in the running autopilot's queue (any set-aside ticket goes back that way).
