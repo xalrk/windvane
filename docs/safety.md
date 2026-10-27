@@ -255,6 +255,10 @@ call for the user. The role checks and a worker's cap of 2 are kept by the comma
 environment the runner sets (a session that claims to be the desk is still the session its `WINDVANE_SESSION`
 names, from any directory), so they stop mistakes, not a shell set on getting round them; a worker's edit tools are denied the inbox and
 windvane's files, but its shell could still write there: that is why every R-file is read as untrusted.
+A worker on windvane's own checkout, in a worktree outside it, is denied the checkout's files one by one instead: it
+may write that checkout's `.git` (its own worktree's index and HEAD, the objects and refs) but not the checkout's
+own index, HEAD, config or hooks, so it commits and switches in its Bash sandbox while the checkout stays as the user
+left it, and no hook it could write runs on the user's commits.
 
 ## Secrets and personal data
 
