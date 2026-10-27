@@ -452,9 +452,10 @@ def worker_deny(p):
     """Edits a worker may never make: windvane's own files and the inbox, whatever project it works in (a request
     reaches windvane only through `windvane request`). windvane's home is left out when it holds the worker's tree
     (windvane run from a checkout working on itself in place), and only its working files and the checkout's own
-    index, HEAD and hooks are denied when the tree is a worktree of it: that worktree's git dir, objects and refs live
-    in `<home>/.git`, and Claude Code makes these rules the Bash sandbox's write denials, so denying the whole home
-    would fail every sandboxed commit, switch and branch."""
+    index, HEAD, config and hooks (a hook, or a config naming one, runs on the user's commits) are denied when the
+    tree is a worktree of it: that worktree's git dir, objects and refs live in `<home>/.git`, and Claude Code makes
+    these rules the Bash sandbox's write denials, so denying the whole home would fail every sandboxed commit, switch
+    and branch."""
     out, work = [], Path(p.work_dir).resolve()
     for d in (inbox(), HOME):
         if d == HOME and (work == HOME or HOME in work.parents):
@@ -463,7 +464,7 @@ def worker_deny(p):
             git = HOME / ".git"
             paths = [e for e in sorted(HOME.iterdir()) if e.name != ".git"]
             # only those there: the sandbox would leave a placeholder file for a missing one
-            paths += [git / n for n in ("index", "HEAD", "hooks") if (git / n).exists()]
+            paths += [git / n for n in ("index", "HEAD", "config", "hooks") if (git / n).exists()]
             rules = [f"/{e}/**" if e.is_dir() else f"/{e}" for e in paths]
         else:
             rules = [f"/{d}/**"]

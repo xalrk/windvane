@@ -46,7 +46,7 @@ from .questions import (answered, desk_answers, drop_answers, give_answer, keys,
                         provisional, qkey, quiet_note, quiet_now, sections, shown, ticket_of, tickets, unseen, waiting_on,
                         with_ids)
 from .queue import OPEN_Q, Queue, branch_depends
-from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested
+from .runner import NO_REQUEST, Usage, over_caps, plain_error, rules, run_claude, sweep_nested, with_git_config
 from .util import (PARTIAL_LOG, append_jsonl, git, gout, hhmm, last_match, load_json, log, log_paths, now, push,
                    read_jsonl, save_json, shell_path)
 from .worktree import (TEARDOWN_FAILED, TIMED_OUT, SetupFailed, clean_detach, clear_scrub_stubs, ensure_worktree,
@@ -138,6 +138,11 @@ def push_hint(remote, branch):
     """How to push a ticket branch: without `-u`, which writes the upstream into `.git/config` and fails while a
     sandbox holds `.git/config.lock`. Nothing reads a ticket branch's upstream; the push itself needs no lock."""
     return f"`git push {remote} {branch}`"
+
+
+# A worker's `git switch -c b origin/main` sets no upstream: it would write `.git/config`, which a worker on windvane's
+# own checkout may not (requests.worker_deny) and a sandbox's stale `config.lock` blocks. Nothing reads it (push_hint).
+NO_TRACKING = (("branch.autoSetupMerge", "false"),)
 
 
 def worker_perms(p):
@@ -926,7 +931,8 @@ class Pilot(Desk, Periodic, Experiments):
         known = self.answered(tid, ref)
         push_env = guard_pushes(p, wd)  # first: worker_git's hooks, when it sets any, link from its folder
         git_env, skip_line = actions.worker_git(p, wd)
-        session_env = {**push_env, **git_env, **actions.gh_guard(p, wd), jobs.RUN_STOP: str(self.keep_until(True))}
+        session_env = with_git_config({**push_env, **git_env, **actions.gh_guard(p, wd),
+                                       jobs.RUN_STOP: str(self.keep_until(True))}, NO_TRACKING)
         kept = jobs.ended_kept(p, tid)
         prompt = "\n\n".join(filter(None, [
             f"Ticket {tid}. Follow the worker rules in your system prompt and end with the RESULT line.",

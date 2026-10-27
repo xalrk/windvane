@@ -138,10 +138,11 @@ class Requests(unittest.TestCase):
             """Whether a rule denies Edit of `path`, as the rules' `//abs` and `//abs/**` forms read."""
             return any(path == r[6:-1] or path.startswith(r[6:-4] + "/") and r.endswith("/**)")
                        for r in rules if r.startswith("Edit(//"))
-        for path in (home.resolve() / "README.md", home.resolve() / "windvane" / "x.py", git / "index", git / "HEAD"):
+        for path in (home.resolve() / "README.md", home.resolve() / "windvane" / "x.py", git / "index", git / "HEAD",
+                     git / "config", git / "hooks" / "pre-commit"):
             self.assertTrue(covers(str(path)), path)
         for path in (git / "worktrees" / "work" / "index", git / "worktrees" / "work" / "HEAD", git / "objects" / "ab",
-                     git / "refs" / "heads" / "b", git / "packed-refs", git / "config"):
+                     git / "refs" / "heads" / "b", git / "packed-refs"):
             self.assertFalse(covers(str(path)), path)
         self.assertNotIn(f"Edit(/{home.resolve()}/**)", rules)
         self.assertIn(f"Edit(/{requests.inbox()}/**)", rules)

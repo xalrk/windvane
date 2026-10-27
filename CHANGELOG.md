@@ -233,7 +233,8 @@ release on the same day adds a number (`2026.10.9.1`).
 - A worker on windvane's own checkout can commit, switch and branch inside its Bash sandbox again. Its edit denials
   covered the whole checkout, its `.git` too, and the sandbox makes them write denials, so nearly every git write
   failed with `index.lock': Read-only file system` and was retried with the sandbox off. It is now denied the
-  checkout's working files and the checkout's own index, HEAD and hooks, and nothing else in `.git`. A
+  checkout's working files and the checkout's own index, HEAD, config and hooks, and nothing else in `.git`. A
+  worker's new branch no longer sets an upstream (`branch.autoSetupMerge=false`), as that writes `.git/config`. A
   `windvane request` run in the sandbox says to run it on its own instead of a traceback.
 - `windvane stats` and `stats --projects` tell a heavy check's wait for the machine from its run: the `checks:` line
   gives run minutes and minutes waiting for the machine apart (`minutes` and `waited` in `--json`), and the minutes per
