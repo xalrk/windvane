@@ -225,6 +225,11 @@ release on the same day adds a number (`2026.10.9.1`).
   waits at most 65 s (the 50 s try and the next poll), not 105 s.
 
 ### Fixed
+- The empty read-only files a killed sandboxed command leaves no longer break git silently. A stale
+  `.git/config.lock` made every `git push -u` and tracking branch fail with `could not lock config file`; the driver
+  now removes these in the repo's git dir, its worktrees and the state dir at a run's start and between tickets (never
+  one a running sandbox holds), and `windvane doctor` names them per place, the checkout's too, for `--clean` to
+  remove. The push hint names `git push <remote> <branch>` for when a live sandbox holds the lock.
 - `windvane stats` and `stats --projects` tell a heavy check's wait for the machine from its run: the `checks:` line
   gives run minutes and minutes waiting for the machine apart (`minutes` and `waited` in `--json`), and the minutes per
   checked ticket are run minutes. A check killed while it still waited in the queue counts as cancelled in the queue,

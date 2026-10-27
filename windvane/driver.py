@@ -131,7 +131,13 @@ def unpushed_line(local, branches, r, remote):
            ":" if ahead else " yet. Resume it, then")
     lead = (f"`{local}` has commits {remote} lacks" if ahead else
             f"In progress on branch `{local}`, which isn't on {remote}")
-    return f"{lead}{why} push it (`git push -u {remote} {local}`)."
+    return f"{lead}{why} push it ({push_hint(remote, local)})."
+
+
+def push_hint(remote, branch):
+    """How to push a ticket branch, with the way past a config lock a running sandbox holds: `-u` writes the
+    upstream into `.git/config`, and git refuses that while `.git/config.lock` exists; the push itself needs no lock."""
+    return f"`git push -u {remote} {branch}`; without `-u` if git can't lock its config"
 
 
 def worker_perms(p):
@@ -1077,7 +1083,7 @@ class Pilot(Desk, Periodic, Experiments):
             return False
         where = f"`{p.remote}/{branch}` isn't at your head" if there else f"Your branch `{branch}` isn't on {p.remote}"
         if not r:
-            self.feedback[tid] = f"{where}: push it (`git push -u {p.remote} {branch}`), then finish READY."
+            self.feedback[tid] = f"{where}: push it ({push_hint(p.remote, branch)}), then finish READY."
             self.log(f"{tid}: READY, but {branch} isn't on {p.remote}; back to the worker")
             self.bounce(tid, "push")
             return True
@@ -2515,6 +2521,27 @@ class Pilot(Desk, Periodic, Experiments):
             self.log(f"removed {dirs} leftover temp dir{'s' * (dirs > 1)} ({n} files)")
         self.warn_tmp_full()
         self.clean_state(between)
+        self.clear_placeholders(between)
+
+    def clear_placeholders(self, between):
+        """The empty read-only files a killed sandboxed command left (jobs.stale_placeholders): a stale
+        `.git/config.lock` makes every config write fail (`git push -u`, a tracking branch) in every worktree. Ours
+        (the git dir, the state dir and its worktrees) go; one a live sandbox holds stays until a later call. The
+        user's checkout is only named, at the run's start: `doctor --clean` is theirs to run."""
+        try:
+            places = jobs.stale_placeholders(self.p)
+        except OSError as e:  # a vanished dir: the next call looks again
+            self.log(f"sandbox placeholders: not looked for ({e})")
+            return
+        for what, base, found, ours in places:
+            if ours:
+                gone = jobs.remove_placeholders(found)
+                if gone:
+                    self.log(f"removed {len(gone)} stale sandbox placeholder{'s' * (len(gone) > 1)} from {what}: "
+                             f"{jobs.shown(base, gone)}")
+            elif not between:
+                self.log(f"{len(found)} stale sandbox placeholder{'s' * (len(found) > 1)} in {what} "
+                         f"({jobs.shown(base, found)}): left there -> windvane doctor --clean")
 
     def clean_state(self, between):
         """What the state dir no longer needs (statedir.py). Between tickets the loop may prepare any slot at any
