@@ -91,8 +91,8 @@ SIGNALLED = {signal.SIGTERM: "the driver got SIGTERM (a kill or a shutdown)",
              signal.SIGINT: "Ctrl-C during a merge, a push or a pull"}  # outside such a step it's KeyboardInterrupt
 # A SIGTERM after an OOM kill in the run's own cgroup: systemd's OOMPolicy=stop ended the unit the run lives in
 OOM_STOPPED = ("the kernel's out-of-memory killer stopped a process in this run, and its service manager stopped the "
-               "run with it (SIGTERM). Start the run with `windvane run --detach`, or in a unit with "
-               "`-p OOMPolicy=continue`, so an out-of-memory kill takes only the process that ran away")
+               "run with it (SIGTERM). `windvane run --detach` starts a run where such a kill takes only the process "
+               "that ran away; `windvane doctor` says what to do where it can't")
 
 
 class Signalled(BaseException):
@@ -3334,7 +3334,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
     while True:
         crash = p.state / "crash.json"
         crash.unlink(missing_ok=True)
-        kills = oom.oom_kills()
+        kills = oom.OomWatch()  # the OOM killer's SIGKILL is told by a kill in the seconds before the driver died
+        kills.start()
         try:
             rc = start(args, env)
         except OSError as e:  # the install moved (a reinstall, a Python upgrade): no driver to start or restart
@@ -3346,6 +3347,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
                  ("Status=status",))
             tear_down(p, lock=True, tell=True)  # a driver that crashed before it left its helpers up
             return 1
+        finally:
+            kills.stop()
         info, trial = load_json(crash, None), selfupdate.on_trial(p.state)
         if info is None and trial and rc > 0 and rc != SETUP_FAILED:  # new code on trial that died before its run could say why: a crash too
             info = {"error": f"it exited with code {rc} before its run began", "summary": ""}
@@ -3354,8 +3357,8 @@ def supervise(p, argv, deadline, start=None, sleep=time.sleep, home=None):
             if rc >= 0 or -rc in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
                 return rc  # its own end (a stop, the deadline, the queue, a failed setup), or someone's stop
             died, name = "was killed", signal.Signals(-rc).name  # not someone's stop: the system's
-            info = {"error": f"out of memory: the kernel's OOM killer, {name}" if oom.rose(kills) else name,
-                    "summary": ""}
+            info = {"error": f"out of memory: the kernel's OOM killer, {name}"
+                     if -rc == signal.SIGKILL and kills.rose() else name, "summary": ""}
             if ours and (n := oom.end_orphans()):
                 log(p, f"ended {n} process{'es' * (n > 1)} the killed driver left running")
         why = info["error"]

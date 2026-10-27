@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import textwrap
+import time
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -107,7 +108,7 @@ class StopWhy(Base):
         why = self.stop_reason(0, 1)
         self.assertIn("the kernel's out-of-memory killer stopped a process in this run, and its service manager "
                       "stopped the run with it", why)
-        self.assertIn("OOMPolicy=continue", why)
+        self.assertIn("`windvane run --detach` starts a run where such a kill takes only the process", why)
         self.assertIn("out-of-memory killer", (self.p.state / "autopilot.log").read_text())
 
     def test_a_sigterm_without_one_says_what_it_said(self):
@@ -198,6 +199,23 @@ class Restarts(Base):
             return -signal.SIGKILL
         self.assertEqual(self.supervise(oom), (0, 2))
         self.assertIn("The driver was killed: out of memory: the kernel's OOM killer, SIGKILL.", self.pushes[0][1])
+
+    def test_only_a_sigkill_just_after_an_oom_kill_is_put_down_to_it(self):
+        self.cgroup(0)
+
+        def segfault():
+            self.cgroup(1)  # a session's contained OOM kill: the OOM killer only ever sends SIGKILL
+            return -signal.SIGSEGV
+        self.supervise(segfault)
+        self.assertIn("The driver was killed: SIGSEGV.", self.pushes[0][1])
+        self.pushes = []
+        with mock.patch.object(supervise, "OOM_LOOK", 0.05):
+            def later():
+                self.cgroup(2)
+                time.sleep(0.3)  # the supervisor's looks catch up: a kill -9 a while after is no OOM kill
+                return -signal.SIGKILL
+            self.supervise(later)
+        self.assertIn("The driver was killed: SIGKILL.", self.pushes[0][1])
 
     def test_a_clean_end_or_a_stop_is_not_restarted(self):
         for code in (0, driver.SETUP_FAILED, -signal.SIGTERM, -signal.SIGHUP, -signal.SIGINT):
