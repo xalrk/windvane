@@ -25,6 +25,7 @@ NO_TEXT = {"dollar_budget", "paused", "started_and_stopped:windvane started", "k
            "secret_aside", "kept_secret", "push_refused",  # a secret's push: a kind and a place, never text
            "not_taken_up", "protected_aside", "kept_protected",  # protected paths and the commands to land by hand
            "scale_warned",  # a scale's id and path
+           "disk_ran_out",  # a path and megabytes
            "plateaued", "weekly_trend"}  # the week's trend: counts and measures
 
 

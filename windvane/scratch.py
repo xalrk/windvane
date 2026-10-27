@@ -1,9 +1,9 @@
-"""Temp space. Each session and check gets a TMPDIR of its own in the project's state dir, dropped when its ticket
-merges or fails, so what a session or a leaky test leaves behind can't fill the machine's temp dir (a tmpfs runs out of
-inodes long before space, and then no shell command runs). A cleaner removes what leaked anyway: `windvane-*` dirs in
-the temp dir and the session dirs of tickets no longer running, once they're an hour old and in use by no process; and
-the `tmpXXXXXXXX` dirs tests leaked before windvane named them (old leaks), once they're a day old and hold only what
-windvane makes."""
+"""Temp space. Each session and check gets a TMPDIR of its own in the project's state dir (or under `tmp_root`, on a
+roomier disk), dropped when its ticket merges or fails, so what a session or a leaky test leaves behind can't fill the
+machine's temp dir (a tmpfs runs out of inodes long before space, and then no shell command runs). A cleaner removes
+what leaked anyway: `windvane-*` dirs in the temp dir and the session dirs of tickets no longer running, once they're
+an hour old and in use by no process; and the `tmpXXXXXXXX` dirs tests leaked before windvane named them (old leaks),
+once they're a day old and hold only what windvane makes."""
 import filecmp
 import os
 import re
@@ -18,6 +18,8 @@ from . import util
 PREFIX = "windvane-"  # what the tests and tools/check_pythons.sh name their temp dirs, so the cleaner knows them
 AGE = 3600  # seconds a leftover must have sat untouched: a running check writes into its dirs all the time
 FULL = 90  # percent of the temp dir's inodes or space at which doctor warns and the driver pushes
+FLOOR = 2 * 1024 ** 3  # bytes free under which a filesystem is nearly full whatever its percent: 98% of a large disk
+# still holds a check's clones, 98% of a small one doesn't
 DAY = 86400  # seconds an old leak must have sat untouched: a `tmpXXXXXXXX` dir might be anyone's work in progress
 LEAK = re.compile(r"tmp[a-z0-9_]{8}")  # tempfile.mkdtemp's names, which the tests used before they named theirs
 OURS = {"runs", "settings.json", "windvane-mentioned", "Critic", "critic.jsonl", "windvane-heavy.lock",
@@ -108,16 +110,46 @@ def job_env(cmd, who):
     return {"TMPDIR": str(inner)}
 
 
+def tmp_root(p):
+    """`tmp_root` as set (the project's config over machine.toml's), expanded, or None when neither sets it."""
+    from . import heavy  # (heavy imports the runner, which imports this module)
+    v = p.cfg.get("tmp_root") or heavy.machine().get("tmp_root")
+    return Path(os.path.expanduser(str(v))) if v else None
+
+
+def base(p):
+    """Where `p`'s per-ticket TMPDIRs go: `<tmp_root>/<project>`, else the state dir's tmp/. A check's clones and
+    builds land there, so a small disk under the state dir fills while the project's own disk has room."""
+    r = tmp_root(p)
+    return r / p.name if r else p.state / "tmp"
+
+
+def tmp_root_problem(p):
+    """Why `p`'s `tmp_root` can't hold its TMPDIRs (missing, not a directory, not writable), or None. Checked at a
+    run's start: a session can't make its TMPDIR there, and every command in it would fail."""
+    r = tmp_root(p)
+    if r is None:
+        return None
+    where = ".windvane/config.toml" if p.cfg.get("tmp_root") else "machine.toml"
+    if not r.is_absolute():
+        return f"tmp_root ({where}) is {r}: give an absolute path"
+    if not r.is_dir():
+        return f"tmp_root ({where}) is {r}, which isn't a directory: create it or unset tmp_root"
+    if not os.access(r, os.W_OK | os.X_OK):
+        return f"tmp_root ({where}) is {r}, which you can't write to: fix its permissions or unset tmp_root"
+    return None
+
+
 def session_dir(p, key):
     """The TMPDIR of a ticket's sessions and checks (or of a ticketless session, by its label)."""
-    d = p.state / "tmp" / key
+    d = base(p) / key
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def drop(p, key):
     """A ticket's leftovers once it ends: its sessions' TMPDIR and its `windvane bg` jobs (jobs.job_base)."""
-    shutil.rmtree(p.state / "tmp" / key, ignore_errors=True)
+    shutil.rmtree(base(p) / key, ignore_errors=True)
     shutil.rmtree(p.state / "bg" / key, ignore_errors=True)
 
 
@@ -195,8 +227,8 @@ def candidates(p=None, running=()):
         out = [d for d in root().iterdir() if d.name.startswith(PREFIX)]
     except OSError:
         out = []
-    if p is not None and (p.state / "tmp").is_dir():
-        out += [d for d in (p.state / "tmp").iterdir() if d.name not in running]
+    if p is not None and base(p).is_dir():
+        out += [d for d in base(p).iterdir() if d.name not in running]
     return out
 
 
@@ -257,3 +289,68 @@ def fullness(path=None):
     inodes = 100 * (st.f_files - st.f_ffree) / st.f_files if st.f_files else 0  # some filesystems report none
     space = 100 * (st.f_blocks - st.f_bfree) / st.f_blocks if st.f_blocks else 0
     return inodes, space
+
+
+def free(path=None):
+    """Bytes free to us on the filesystem holding `path` (the temp dir)."""
+    st = os.statvfs(path or root())
+    return st.f_bavail * st.f_frsize
+
+
+def existing(path):
+    """`path`, or its nearest parent that exists: a ticket dir not made yet is on its parent's filesystem."""
+    path = Path(path)
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return path
+
+
+def device(path):
+    return os.stat(path).st_dev
+
+
+def places(p=None):
+    """[(path, what it holds)] of the filesystems temp files land on: the temp dir, and `p`'s per-ticket TMPDIRs
+    (`base`), each filesystem once."""
+    out, seen = [], {}
+    for path, what in [(root(), "the temp dir")] + ([(base(p), "each ticket's TMPDIR")] if p is not None else []):
+        try:
+            dev = device(existing(path))
+        except OSError:
+            continue
+        if dev in seen:
+            i = seen[dev]
+            out[i] = (out[i][0], f"{out[i][1]} and {what}")
+            continue
+        seen[dev] = len(out)
+        out.append((path, what))
+    return out
+
+
+def nearly_full(p=None):
+    """[(path, what it holds, % inodes used, % space used, bytes free)] of the filesystems in `places` over FULL,
+    or with under FLOOR free."""
+    out = []
+    for path, what in places(p):
+        try:
+            inodes, space = fullness(existing(path))
+            left = free(existing(path))
+        except OSError:
+            continue
+        if max(inodes, space) > FULL or left < FLOOR:
+            out.append((path, what, inodes, space, left))
+    return out
+
+
+def full_line(path, what, inodes, space, left, when=""):
+    """How doctor and the driver's push say a nearly full filesystem (`places`, `nearly_full`)."""
+    return f"{what} {path} is {inodes:.0f}% full of inodes and {space:.0f}% of space ({mb(left)} MB free){when}"
+
+
+def way_out(what):
+    """`tmp_root`, when tickets' TMPDIRs are on the filesystem: free space isn't the only fix then."""
+    return "set tmp_root (machine.toml) to a roomier disk" if "TMPDIR" in what else ""
+
+
+def mb(n):
+    return f"{n / 1024 ** 2:,.0f}"

@@ -170,7 +170,7 @@ class Doctor(unittest.TestCase):
 
     def test_it_warns_of_a_nearly_full_temp_dir_and_names_the_biggest_leftovers(self):
         self.assertNotIn("WARNING", self.doctor())
-        self.assertRegex(self.doctor(fullness=(93.4, 20)), rf"WARNING +the temp dir {re.escape(str(self.tmp))} is 93% full of inodes "
+        self.assertRegex(self.doctor(fullness=(93.4, 20)), rf"WARNING +the temp dir (and each ticket.s TMPDIR )?{re.escape(str(self.tmp))} is 93% full of inodes "
                                                            r"and 20% of space.*-> remove what fills it")
         for name, n in (("windvane-venv-x", 40), ("windvane-test-y", 0), ("windvane-inst-z", 9)):
             d = self.tmp / name

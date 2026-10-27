@@ -39,6 +39,8 @@ HEARTBEAT = 60
 KEEP_PASSED = 3 * 86400
 KEEP_ANY = 21 * 86400
 KEEP_FAILED = 5
+NO_SPACE = (b"No space left on device", b"ENOSPC")  # what a write to a full disk says in a check's log
+DISK_FULL = ": not the change's fault, free space or set tmp_root"  # ends the note a failed check's summary gets then
 NOT_RUN, AGAIN = "CHECK NOT RUN: ", "; run it again"  # a heavy check that never got the machine
 STOPPING = "; the run is stopping, so don't run it again now"  # ...because a stop ended its wait: a retry would too
 # A kept job (`bg --heavy --keep`) outlives its session: the run's stop (a Unix time), which the driver gives its
@@ -292,8 +294,9 @@ def check(p, cwd, quiet=False, ticket=None, stop_at=None, mem=None, announce=Fal
             passes.mkdir(parents=True, exist_ok=True)
             (passes / key).write_text(f"{now():%Y-%m-%d %H:%M} ({gout(cwd, 'rev-parse', '--short', 'HEAD')})")
         return True, f"CHECK PASSED in {mins:.1f} min" + ("" if key else unrecorded(cwd)), log
+    tmp = scratch.session_dir(p, t) if (t := ticket or os.environ.get(TICKET)) else scratch.root()
     return False, (f"CHECK FAILED ({'quick pass, ' if quick_failed else ''}exit {code}) in {mins:.1f} min"
-                   f"{busy_note(log)}; log {log}"), log
+                   f"{busy_note(log)}{disk_note(log, tmp)}; log {log}"), log
 
 
 def busy_note(log):
@@ -305,6 +308,23 @@ def busy_note(log):
         return ""
     return (f", load peaked {heavy.loadf(top)} (quiet is ≤ {limit:.10g}): timing failures may be load; rerun them "
             "on the upstream at the same load to tell")
+
+
+def disk_note(log, tmp):
+    """What a failed check's summary says when its log shows a write that found the disk full: the worker, the fix
+    session and the driver would otherwise read it as a bug in the change. "" for any other failure."""
+    try:
+        with open(log, "rb") as f:
+            full = any(m in line for line in f for m in NO_SPACE)
+    except OSError:
+        return ""
+    if not full:
+        return ""
+    try:
+        left = f"{scratch.mb(scratch.free(scratch.existing(tmp)))} MB free now"
+    except OSError:
+        left = "free space unknown"
+    return f"; the disk holding {tmp} ran out of space ({left}){DISK_FULL}"
 
 
 def unrecorded(cwd):

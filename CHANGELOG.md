@@ -7,6 +7,10 @@ release on the same day adds a number (`2026.10.9.1`).
 ## Unreleased
 
 ### Added
+- `tmp_root` (in `machine.toml`, or a project's config) puts the tickets' `TMPDIR`s on a roomier disk than the
+  state directory's. `windvane doctor` and the driver now also watch the disk holding them, and call a disk with
+  under 2 GB free nearly full whatever its percent. A check that fails with "No space left on device" says so in its
+  summary, and the driver runs it again after cleaning instead of sending it back to the worker as a bug.
 - `check_measure = true` (with `heavy_check`) runs a check that holds timing tests as a `--measure` heavy job, so it
   waits for a quiet CPU. Every check's log now says the load at its start, end and peak, and a failed check whose
   load peaked over `measure_load` says so in its summary: `CHECK FAILED (exit 1) in 12.0 min, load peaked 34.12

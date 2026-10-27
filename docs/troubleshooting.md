@@ -201,7 +201,16 @@ windvane's state directory (`~/.local/state/windvane/`) holds each project's wor
 session's transcript and the critic's screenshots. `windvane doctor --clean --dry-run` lists what of it can go, with
 sizes, for every project; `windvane doctor --clean` removes it (a project whose autopilot is running is skipped: stop
 it first, or let its run clean at its end). Work is never removed: a worktree with uncommitted changes or commits
-`main` lacks stays. To free more, lower `keep_days` or turn on `trim_build` in [`[state]`](configuration.md#state).
+`main` lacks stays. To free more, lower `keep_days` or turn on `trim_build` in [`[state]`](configuration.md#state);
+to keep the tickets' temp files off that disk, set [`tmp_root`](configuration.md#machinetoml).
+
+### A check fails with "No space left on device" (`ran out of space ... not the change's fault`)
+Each ticket's sessions and checks get a `TMPDIR` of their own, by default in windvane's state directory, so on the
+disk that holds your home: when that disk is small, a test that clones or builds into `TMPDIR` can fill it while the
+project's own disk has room. Such a failed check says `the disk holding <TMPDIR> ran out of space`, the driver pushes
+"Check ran out of disk" and runs the check again after cleaning (failing the ticket after three in a row) instead of
+sending it back to the worker, and `windvane doctor` warns once that disk has under 2 GB free. Free space there, or
+set [`tmp_root`](configuration.md#machinetoml) in `machine.toml` to a directory on a roomier disk.
 
 ### No pushes arrive on the phone
 `windvane doctor` checks the phone. Make sure the app is subscribed to the topic `windvane phone setup` showed (and
