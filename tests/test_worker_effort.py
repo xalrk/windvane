@@ -1,14 +1,18 @@
+import argparse
+import io
 import json
 import sys
+import tomllib
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from windvane import runner  # noqa: E402
-from windvane.config import Project  # noqa: E402
-from helpers import Sandbox  # noqa: E402
+from windvane import cli, runner  # noqa: E402
+from windvane.config import DEFAULTS, Project  # noqa: E402
+from helpers import REPO, Sandbox  # noqa: E402
 
 
 class WorkerEffort(unittest.TestCase):
@@ -32,6 +36,22 @@ class WorkerEffort(unittest.TestCase):
         for role in ("reviewer", "critic", "planner", "fix"):
             with self.subTest(role=role):
                 self.assertEqual(self.effort(role), "high")
+
+    def test_a_project_windvane_init_makes_runs_its_worker_at_medium(self):
+        s = Sandbox()
+        self.addCleanup(s.close)
+        root = s.tmp / "new"
+        root.mkdir()
+        s.git("init", "-q", "-b", "main", cwd=root)
+        with redirect_stdout(io.StringIO()):
+            cli.cmd_init(argparse.Namespace(dir=str(root), name=None, check="true", forge="git"))
+        self.assertIn('worker_effort = "medium"', (root / ".windvane/config.toml").read_text())
+        self.assertEqual(Project(root).models["worker_effort"], "medium")
+
+    def test_the_template_init_copies_names_the_defaults(self):
+        """A value the template writes overrides the default for good, so the two must agree."""
+        template = tomllib.loads((REPO / "templates/config.toml").read_text())
+        self.assertEqual(template["models"], DEFAULTS["models"])
 
 
 if __name__ == "__main__":
