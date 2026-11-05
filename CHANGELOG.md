@@ -6,6 +6,8 @@ release on the same day adds a number (`2026.10.9.1`).
 
 ## Unreleased
 
+## 2026.11.5 - 2026-11-05
+
 ### Added
 - One bench at a time on a machine. `windvane bench` holds a lock in the state root for its whole run, whoever
   started it (an experiment, a periodic round, you); a second waits for it and says once whose bench it waits for.
