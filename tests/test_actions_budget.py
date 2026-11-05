@@ -126,7 +126,8 @@ class Budget(unittest.TestCase):
         self.assertEqual(actions.count(self.s.root, NOW)["used"], 2)
 
     def test_only_runs_created_this_month_utc(self):
-        self.add("me/proj", 3, [job(60)], created=datetime(2026, 10, 1, 0, 0, 5, tzinfo=timezone.utc))
+        self.add("me/proj", 3, [job(60, start=datetime(2026, 10, 1, 0, 1, tzinfo=timezone.utc))],
+                 created=datetime(2026, 10, 1, 0, 0, 5, tzinfo=timezone.utc))  # its job too runs in the month counted
         self.add("me/proj", 2, [job(600)], created=datetime(2026, 9, 30, 23, 59, 50, tzinfo=timezone.utc))
         self.add("me/proj", 1, [job(600)], created=datetime(2026, 9, 2, tzinfo=timezone.utc))
         self.assertEqual(actions.count(self.s.root, datetime(2026, 10, 5, tzinfo=timezone.utc))["used"], 1)

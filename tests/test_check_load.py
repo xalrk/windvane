@@ -52,9 +52,12 @@ class Fixture(unittest.TestCase):
     real_run = staticmethod(subprocess.run)
 
     def run_fast(self, argv, *args, **kw):
-        """A heavy check's `python -c` with PRELUDE first; anything else as it is."""
-        if isinstance(argv, list) and argv[1:2] == ["-c"]:
-            argv = [argv[0], "-c", PRELUDE + argv[2], *argv[3:]]
+        """A heavy check's `python -c` with PRELUDE first; anything else as it is. The `python -c` may come after
+        the shell that sets its OOM score (`sh -c '...; exec "$@"' sh python -c ...`), so find the Python's own."""
+        if isinstance(argv, list):
+            i = next((i for i, a in enumerate(argv[:-2]) if "python" in Path(a).name and argv[i + 1] == "-c"), None)
+            if i is not None:
+                argv = [*argv[:i + 2], PRELUDE + argv[i + 2], *argv[i + 3:]]
         return self.real_run(argv, *args, **kw)
 
     def load(self, one):
